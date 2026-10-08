@@ -1,9 +1,11 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from amora.api import create_api
 from amora.app import AmoraCore
+from amora.time import SimulatedClock
 
 
 def _core(tmp_path: Path, monkeypatch) -> AmoraCore:
@@ -67,6 +69,29 @@ def test_appraisal_route_updates_directed_affect_mood_and_bid(tmp_path: Path, mo
         state = client.get("/v1/emotion/state", headers=headers)
         assert state.status_code == 200
         assert state.json()["pending_bids"]
+    finally:
+        core.close()
+
+
+def test_state_route_applies_affect_decay_before_returning_snapshot(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    clock = SimulatedClock(datetime(2026, 10, 8, 22, 0, tzinfo=timezone.utc))
+    core = AmoraCore.bootstrap(clock=clock)
+    try:
+        client, headers = _client(core)
+        response = client.post("/v1/emotion/appraise", headers=headers, json=_anger_payload())
+        assert response.status_code == 200
+        anger_before = response.json()["target_affect"]["anger"]
+
+        clock.advance(timedelta(hours=3))
+        state = client.get("/v1/emotion/state", headers=headers)
+        assert state.status_code == 200
+        bk = next(item for item in state.json()["affect"] if item["entity_id"] == "PERSON_BK")
+        assert 0.0 <= bk["anger"] < anger_before
+
+        persisted = core.emotion.store.get_affect("PERSON_BK")
+        assert persisted is not None
+        assert persisted.anger == bk["anger"]
     finally:
         core.close()
 
