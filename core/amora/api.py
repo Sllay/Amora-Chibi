@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from amora import __version__
 from amora.app import AmoraCore
 from amora.audio import AudioSegment, SpeakerResult, SttCredentialsError, SttError, SttRateLimitedError
+from amora.emotion.routes import register_emotion_routes
 from amora.events import AmoraEvent, PrivacyScope
 from amora.identity import PrivacyContext
 from amora.language import PerspectiveFrame, PerspectiveStack
@@ -69,6 +70,7 @@ def create_api(core: AmoraCore) -> FastAPI:
 
     register_memory_routes(app, core, require_auth)
     register_world_routes(app, core, require_auth)
+    register_emotion_routes(app, core, require_auth)
 
     @app.get("/health")
     def health() -> dict[str, object]:
