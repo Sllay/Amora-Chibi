@@ -136,4 +136,75 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links(target_memory_id, link_type);
         """,
     ),
+    (
+        4,
+        """
+        CREATE TABLE IF NOT EXISTS world_claims (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL CHECK(kind IN ('observation','report','belief','inference','hypothesis')),
+            statement TEXT NOT NULL,
+            subject_id TEXT,
+            predicate TEXT NOT NULL,
+            object_json TEXT NOT NULL,
+            context_key TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL,
+            source_entity_id TEXT,
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            valid_from TEXT NOT NULL,
+            valid_until TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            canonical INTEGER NOT NULL DEFAULT 0 CHECK(canonical IN (0,1)),
+            supersedes_claim_id TEXT REFERENCES world_claims(id) ON DELETE SET NULL,
+            privacy_scope TEXT NOT NULL,
+            remote_processing_allowed INTEGER NOT NULL DEFAULT 1 CHECK(remote_processing_allowed IN (0,1)),
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_world_claim_key ON world_claims(subject_id, predicate, context_key, valid_from DESC);
+        CREATE INDEX IF NOT EXISTS idx_world_current ON world_claims(canonical, kind, valid_until, valid_from DESC);
+        CREATE INDEX IF NOT EXISTS idx_world_source ON world_claims(source_entity_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS world_evidence (
+            claim_id TEXT NOT NULL REFERENCES world_claims(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('event','memory','claim','external')),
+            ref_id TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            note TEXT,
+            PRIMARY KEY(claim_id, ordinal)
+        );
+        CREATE INDEX IF NOT EXISTS idx_world_evidence_ref ON world_evidence(kind, ref_id);
+
+        CREATE TABLE IF NOT EXISTS self_entries (
+            id TEXT PRIMARY KEY,
+            layer TEXT NOT NULL CHECK(layer IN ('core_identity','traits','preferences','relationships','self_narrative','current_state')),
+            key TEXT NOT NULL,
+            value_json TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            source TEXT NOT NULL,
+            locked INTEGER NOT NULL DEFAULT 0 CHECK(locked IN (0,1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            UNIQUE(layer, key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_self_layer ON self_entries(layer, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS relationship_revisions (
+            id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            relation_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            source_of_truth TEXT NOT NULL,
+            valid_from TEXT NOT NULL,
+            valid_until TEXT,
+            created_at TEXT NOT NULL,
+            supersedes_id TEXT REFERENCES relationship_revisions(id) ON DELETE SET NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_relationship_revision_key ON relationship_revisions(source_id, relation_type, target_id, valid_from DESC);
+        CREATE INDEX IF NOT EXISTS idx_relationship_revision_active ON relationship_revisions(source_id, target_id, valid_until);
+        """,
+    ),
 )

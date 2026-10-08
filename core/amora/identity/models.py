@@ -56,7 +56,28 @@ class EntityRegistry:
     def add_relationship(self, relationship: Relationship) -> None:
         if relationship.source not in self._entities or relationship.target not in self._entities:
             raise ValueError("relationship endpoints must exist in registry")
+        key = (relationship.source, relationship.relation_type, relationship.target)
+        if any((item.source, item.relation_type, item.target) == key for item in self._relationships):
+            raise ValueError(f"relationship already exists: {key}")
         self._relationships.append(relationship)
+
+    def upsert_relationship(self, relationship: Relationship) -> None:
+        if relationship.source not in self._entities or relationship.target not in self._entities:
+            raise ValueError("relationship endpoints must exist in registry")
+        key = (relationship.source, relationship.relation_type, relationship.target)
+        for index, item in enumerate(self._relationships):
+            if (item.source, item.relation_type, item.target) == key:
+                self._relationships[index] = relationship
+                return
+        self._relationships.append(relationship)
+
+    def remove_relationship(self, source: str, relation_type: str, target: str) -> bool:
+        key = (source, relation_type, target)
+        for index, item in enumerate(self._relationships):
+            if (item.source, item.relation_type, item.target) == key:
+                self._relationships.pop(index)
+                return True
+        return False
 
     def get(self, entity_id: str) -> Entity | None:
         return self._entities.get(entity_id)
@@ -67,6 +88,12 @@ class EntityRegistry:
 
     def related(self, source: str, relation_type: str) -> tuple[Entity, ...]:
         return tuple(self._entities[item.target] for item in self._relationships if item.source == source and item.relation_type == relation_type)
+
+    def relationship(self, source: str, relation_type: str, target: str) -> Relationship | None:
+        for item in self._relationships:
+            if item.source == source and item.relation_type == relation_type and item.target == target:
+                return item
+        return None
 
     @property
     def entities(self) -> tuple[Entity, ...]:

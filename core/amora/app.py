@@ -17,6 +17,14 @@ from amora.settings import RuntimePaths
 from amora.social import AddresseeEngine, SocialSceneTracker
 from amora.storage import AmoraDatabase
 from amora.time import Clock, Scheduler, SystemClock
+from amora.world import (
+    PerspectiveConsolidator,
+    RelationshipEvolutionService,
+    SelfLayer,
+    SelfModelService,
+    WorldModelService,
+    WorldStore,
+)
 
 
 @dataclass(slots=True)
@@ -31,6 +39,11 @@ class AmoraCore:
     pairing: PairingManager
     database: AmoraDatabase
     memory: MemoryService
+    world_store: WorldStore
+    world: WorldModelService
+    self_model: SelfModelService
+    relationships: RelationshipEvolutionService
+    perspective_consolidator: PerspectiveConsolidator
     models: ModelRouter
     social: SocialSceneTracker
     addressee: AddresseeEngine
@@ -72,6 +85,18 @@ class AmoraCore:
         addressee = AddresseeEngine(identities)
         perspective = PerspectiveResolver(identities)
         memory = MemoryService(MemoryStore(paths.database, active_clock, identities), active_clock)
+        world_store = WorldStore(paths.database, active_clock)
+        world = WorldModelService(world_store, active_clock)
+        self_model = SelfModelService(world_store, active_clock)
+        self_model.ensure_core_identity()
+        relationships = RelationshipEvolutionService(
+            world_store,
+            active_clock,
+            identities,
+            persist_registry=database.save_registry,
+        )
+        relationships.seed_registry_relationships()
+        perspective_consolidator = PerspectiveConsolidator(world)
         return cls(
             paths=paths,
             clock=active_clock,
@@ -83,6 +108,11 @@ class AmoraCore:
             pairing=PairingManager(paths.cache / "pairing.json", active_clock),
             database=database,
             memory=memory,
+            world_store=world_store,
+            world=world,
+            self_model=self_model,
+            relationships=relationships,
+            perspective_consolidator=perspective_consolidator,
             models=ModelRouter(),
             social=social,
             addressee=addressee,
@@ -104,6 +134,7 @@ class AmoraCore:
     def health_report(self) -> dict[str, object]:
         bk = self.identities.resolve_alias("BK")
         integrity = self.database.integrity_check()
+        core_identity = self.self_model.get(SelfLayer.CORE_IDENTITY, "entity_id")
         return {
             "status": "ok" if integrity == "ok" else "degraded",
             "version": __version__,
@@ -112,6 +143,10 @@ class AmoraCore:
             "event_count": self.database.event_count(),
             "memory_count": self.memory.store.count(),
             "memory_fts_enabled": self.memory.store.fts_enabled,
+            "world_claim_count": self.world_store.claim_count(),
+            "canonical_world_state_count": len(self.world.current_state()),
+            "self_entry_count": len(self.world_store.list_self_entries()),
+            "self_core_identity": core_identity.value if core_identity else None,
             "entity_count": len(self.identities.entities),
             "relationship_count": len(self.identities.relationships),
             "active_sessions": self.database.active_session_count(self.clock.now()),
@@ -130,5 +165,6 @@ class AmoraCore:
         return self.database.backup_to(self.paths.backups / filename)
 
     def close(self) -> None:
+        self.world_store.close()
         self.memory.close()
         self.database.close()

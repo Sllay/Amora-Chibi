@@ -14,6 +14,7 @@ from amora.events import AmoraEvent, PrivacyScope
 from amora.identity import PrivacyContext
 from amora.language import PerspectiveFrame, PerspectiveStack
 from amora.memory.routes import register_memory_routes
+from amora.world.routes import register_world_routes
 
 
 MAX_LOCAL_AUDIO_BYTES = 12 * 1024 * 1024
@@ -67,6 +68,7 @@ def create_api(core: AmoraCore) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
     register_memory_routes(app, core, require_auth)
+    register_world_routes(app, core, require_auth)
 
     @app.get("/health")
     def health() -> dict[str, object]:
