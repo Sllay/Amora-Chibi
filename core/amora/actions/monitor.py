@@ -17,12 +17,14 @@ class ExecutionMonitor:
             result.monitor_outcome = MonitorOutcome.ABORT
             return MonitorOutcome.ABORT
         if result.status == ToolExecutionStatus.TIMED_OUT:
-            outcome = MonitorOutcome.RETRY if step.retry_policy.retry_on_timeout else step.retry_policy.on_exhausted
+            can_retry = step.retry_policy.retry_on_timeout and result.attempt < step.retry_policy.max_attempts
+            outcome = MonitorOutcome.RETRY if can_retry else step.retry_policy.on_exhausted
             result.verified = False
             result.monitor_outcome = outcome
             return outcome
         if result.status == ToolExecutionStatus.FAILED:
-            outcome = MonitorOutcome.RETRY if step.retry_policy.retry_on_failure else step.retry_policy.on_exhausted
+            can_retry = step.retry_policy.retry_on_failure and result.attempt < step.retry_policy.max_attempts
+            outcome = MonitorOutcome.RETRY if can_retry else step.retry_policy.on_exhausted
             result.verified = False
             result.monitor_outcome = outcome
             return outcome
