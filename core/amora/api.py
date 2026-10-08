@@ -6,6 +6,7 @@ from dataclasses import asdict
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
 
+from amora import __version__
 from amora.app import AmoraCore
 from amora.events import AmoraEvent, PrivacyScope
 from amora.identity import PrivacyContext
@@ -17,7 +18,7 @@ class SessionCreateRequest(BaseModel):
 
 
 def create_api(core: AmoraCore) -> FastAPI:
-    app = FastAPI(title="Amora Core API", version="0.1.0.dev1")
+    app = FastAPI(title="Amora Core API", version=__version__)
 
     def expected_token() -> str:
         value = core.secrets.get("LOCAL_API_TOKEN")
