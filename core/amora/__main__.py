@@ -12,6 +12,7 @@ from amora.api import create_api
 from amora.app import AmoraCore
 from amora.audio import AudioSegment, SttError
 from amora.language import PerspectiveFrame, PerspectiveStack
+from amora.memory import MemoryCandidate, MemoryKind, MemoryProvenance, MemoryQuery, ProvenanceKind
 
 
 def doctor() -> int:
@@ -156,6 +157,62 @@ def transcribe(path: str, *, language: str | None) -> int:
         core.close()
 
 
+def memory_remember(
+    text: str,
+    *,
+    kind: str,
+    actor: str,
+    entities: list[str],
+    tags: list[str],
+    importance: float,
+    novelty: float,
+) -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        entity_refs = {entity_id: 1.0 for entity_id in entities}
+        if actor and actor not in entity_refs:
+            entity_refs[actor] = 1.0
+        result = core.memory.remember(
+            MemoryCandidate(
+                kind=MemoryKind(kind),
+                content=text,
+                provenance=MemoryProvenance(
+                    kind=ProvenanceKind.USER_ASSERTION,
+                    source="cli:memory",
+                    actor_id=actor,
+                    confidence=1.0,
+                ),
+                entity_refs=entity_refs,
+                tags=set(tags),
+                importance=importance,
+                novelty=novelty,
+                relationship_relevance=0.7 if entity_refs else 0.0,
+                future_consequence=0.35,
+                rarity=0.35,
+                goal_relevance=0.35,
+            )
+        )
+        print(json.dumps({
+            "decision": result.decision.model_dump(mode="json"),
+            "memory": result.memory.model_dump(mode="json") if result.memory else None,
+        }, indent=2, ensure_ascii=False))
+        return 0 if result.memory is not None else 1
+    finally:
+        core.close()
+
+
+def memory_recall(text: str, *, entities: list[str], limit: int) -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        hits = core.memory.recall(
+            MemoryQuery(text=text, entity_ids=set(entities), limit=limit)
+        )
+        print(json.dumps([hit.model_dump(mode="json") for hit in hits], indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        core.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="amora")
     parser.add_argument("--version", action="version", version=__version__)
@@ -193,6 +250,21 @@ def main() -> int:
     transcribe_parser.add_argument("path")
     transcribe_parser.add_argument("--language", default="pt")
 
+    memory_parser = sub.add_parser("memory", help="Debug local da memória V0.3")
+    memory_sub = memory_parser.add_subparsers(dest="memory_command", required=True)
+    memory_remember_parser = memory_sub.add_parser("remember", help="Submete uma lembrança ao Memory Write Gate")
+    memory_remember_parser.add_argument("text")
+    memory_remember_parser.add_argument("--kind", choices=[kind.value for kind in MemoryKind], default=MemoryKind.EPISODIC.value)
+    memory_remember_parser.add_argument("--actor", default="PERSON_BK")
+    memory_remember_parser.add_argument("--entity", action="append", default=[])
+    memory_remember_parser.add_argument("--tag", action="append", default=[])
+    memory_remember_parser.add_argument("--importance", type=float, default=0.8)
+    memory_remember_parser.add_argument("--novelty", type=float, default=0.8)
+    memory_recall_parser = memory_sub.add_parser("recall", help="Busca memória com retrieval híbrido local")
+    memory_recall_parser.add_argument("text")
+    memory_recall_parser.add_argument("--entity", action="append", default=[])
+    memory_recall_parser.add_argument("--limit", type=int, default=8)
+
     args = parser.parse_args()
     if args.command == "doctor":
         return doctor()
@@ -221,6 +293,19 @@ def main() -> int:
             return secret_delete(args.name)
     if args.command == "transcribe":
         return transcribe(args.path, language=args.language)
+    if args.command == "memory":
+        if args.memory_command == "remember":
+            return memory_remember(
+                args.text,
+                kind=args.kind,
+                actor=args.actor,
+                entities=args.entity,
+                tags=args.tag,
+                importance=args.importance,
+                novelty=args.novelty,
+            )
+        if args.memory_command == "recall":
+            return memory_recall(args.text, entities=args.entity, limit=args.limit)
     return 2
 
 
