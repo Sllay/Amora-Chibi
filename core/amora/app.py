@@ -5,6 +5,7 @@ from pathlib import Path
 
 from amora import __version__
 from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
+from amora.autonomy import AutonomyEngine, AutonomyStore
 from amora.emotion import EmotionEngine, EmotionStore
 from amora.events import AsyncEventBus
 from amora.identity import DeviceIdentity, DeviceTrust, EntityRegistry, SessionService, build_initial_registry
@@ -46,6 +47,7 @@ class AmoraCore:
     relationships: RelationshipEvolutionService
     perspective_consolidator: PerspectiveConsolidator
     emotion: EmotionEngine
+    autonomy: AutonomyEngine
     models: ModelRouter
     social: SocialSceneTracker
     addressee: AddresseeEngine
@@ -83,6 +85,7 @@ class AmoraCore:
                 )
             )
         events = AsyncEventBus(event_store=database)
+        scheduler = Scheduler(active_clock)
         social = SocialSceneTracker()
         addressee = AddresseeEngine(identities)
         perspective = PerspectiveResolver(identities)
@@ -105,11 +108,19 @@ class AmoraCore:
             identities,
             events,
         )
+        autonomy = AutonomyEngine(
+            AutonomyStore(paths.database, active_clock),
+            active_clock,
+            identities,
+            emotion,
+            world,
+            events,
+        )
         return cls(
             paths=paths,
             clock=active_clock,
             events=events,
-            scheduler=Scheduler(active_clock),
+            scheduler=scheduler,
             identities=identities,
             sessions=sessions,
             secrets=secrets,
@@ -122,6 +133,7 @@ class AmoraCore:
             relationships=relationships,
             perspective_consolidator=perspective_consolidator,
             emotion=emotion,
+            autonomy=autonomy,
             models=ModelRouter(),
             social=social,
             addressee=addressee,
@@ -145,6 +157,8 @@ class AmoraCore:
         integrity = self.database.integrity_check()
         core_identity = self.self_model.get(SelfLayer.CORE_IDENTITY, "entity_id")
         mood = self.emotion.current_mood()
+        current_intention = self.autonomy.store.current_intention()
+        drives = {item.drive.value: round(item.need, 6) for item in self.autonomy.current_drives()}
         return {
             "status": "ok" if integrity == "ok" else "degraded",
             "version": __version__,
@@ -162,6 +176,9 @@ class AmoraCore:
             "mood_arousal": round(mood.arousal, 6),
             "mood_dominance": round(mood.dominance, 6),
             "pending_social_bids": len(self.emotion.pending_bids()),
+            "autonomy_decision_count": self.autonomy.store.decision_count(),
+            "active_intention_kind": current_intention.kind.value if current_intention else None,
+            "drives": drives,
             "entity_count": len(self.identities.entities),
             "relationship_count": len(self.identities.relationships),
             "active_sessions": self.database.active_session_count(self.clock.now()),
@@ -180,6 +197,7 @@ class AmoraCore:
         return self.database.backup_to(self.paths.backups / filename)
 
     def close(self) -> None:
+        self.autonomy.close()
         self.emotion.close()
         self.world_store.close()
         self.memory.close()
