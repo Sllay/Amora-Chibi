@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Web
 from pydantic import BaseModel, Field
 
 from amora import __version__
+from amora.actions.routes import register_action_routes
 from amora.app import AmoraCore
 from amora.audio import AudioSegment, SpeakerResult, SttCredentialsError, SttError, SttRateLimitedError
 from amora.autonomy.routes import register_autonomy_routes
@@ -73,6 +74,7 @@ def create_api(core: AmoraCore) -> FastAPI:
     register_world_routes(app, core, require_auth)
     register_emotion_routes(app, core, require_auth)
     register_autonomy_routes(app, core, require_auth)
+    register_action_routes(app, core, require_auth)
 
     @app.get("/health")
     def health() -> dict[str, object]:
