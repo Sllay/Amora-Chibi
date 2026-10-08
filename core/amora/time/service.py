@@ -76,6 +76,11 @@ class Scheduler:
     def schedule_idle(self, job_id: str, delay_seconds: float, callback: JobCallback) -> None:
         self._schedule(job_id, delay_seconds, callback, interval=None, idle_only=True)
 
+    def schedule_idle_interval(self, job_id: str, interval_seconds: float, callback: JobCallback) -> None:
+        if interval_seconds <= 0:
+            raise ValueError("interval_seconds must be positive")
+        self._schedule(job_id, interval_seconds, callback, interval=interval_seconds, idle_only=True)
+
     def cancel(self, job_id: str) -> bool:
         job = self._jobs.pop(job_id, None)
         if job is None:
@@ -99,7 +104,11 @@ class Scheduler:
                 await result
             executed.append(job.job_id)
             if job.interval is None:
-                self._jobs.pop(job.job_id, None)
+                # The callback may intentionally replace this one-shot job with
+                # another job using the same ID. Only remove the ID if it still
+                # points at the job that just ran.
+                if self._jobs.get(job.job_id) is job:
+                    self._jobs.pop(job.job_id, None)
             else:
                 job.due = now + job.interval
                 job.order = next(self._counter)

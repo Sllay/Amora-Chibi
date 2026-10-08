@@ -11,6 +11,7 @@ from amora.identity.models import Entity, EntityRegistry, EntityType, Relationsh
 from amora.identity.session import DeviceIdentity, DeviceTrust, PrivacyContext, SessionIdentity
 
 from .migrations import MIGRATIONS
+from .migrations_v06 import MIGRATION_V06
 
 
 class AmoraDatabase:
@@ -34,7 +35,7 @@ class AmoraDatabase:
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             applied = {row[0] for row in self._conn.execute("SELECT version FROM schema_migrations")}
             count = 0
-            for version, sql in MIGRATIONS:
+            for version, sql in (*MIGRATIONS, MIGRATION_V06):
                 if version in applied:
                     continue
                 script = f"BEGIN IMMEDIATE;\n{sql}\nINSERT INTO schema_migrations(version) VALUES ({int(version)});\nCOMMIT;"

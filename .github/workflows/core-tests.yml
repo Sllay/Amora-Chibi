@@ -33,6 +33,12 @@ jobs:
         env:
           AMORA_HOME: ${{ runner.temp }}/amora-runtime
         run: python -m amora doctor
+      - name: Autonomy smoke test
+        env:
+          AMORA_HOME: ${{ runner.temp }}/amora-runtime
+        run: |
+          amora-autonomy state
+          amora-autonomy cycle --dedupe-key ci-autonomy-cycle
       - name: Backup smoke test
         env:
           AMORA_HOME: ${{ runner.temp }}/amora-runtime

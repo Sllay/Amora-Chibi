@@ -12,11 +12,14 @@ def test_bootstrap_survives_restart_with_same_identity(tmp_path: Path, monkeypat
         assert second.identities.resolve_alias("Slay").id == "PERSON_BK"
         assert second.secrets.get("LOCAL_API_TOKEN") == token
         report = second.health_report()
-        assert report["schema_version"] == 5
+        assert report["schema_version"] == 6
         assert report["memory_count"] == 0
         assert report["world_claim_count"] == 0
         assert report["self_core_identity"] == "ENTITY_AMORA"
         assert report["self_entry_count"] >= 3
         assert report["emotion_event_count"] == 0
         assert report["pending_social_bids"] == 0
+        assert report["autonomy_decision_count"] == 0
+        assert report["active_intention_kind"] is None
+        assert len(report["drives"]) == 7
     finally: second.close()

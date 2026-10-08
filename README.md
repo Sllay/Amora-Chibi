@@ -6,7 +6,7 @@ Monorepo oficial da **Amora**, uma IA-companheira persistente, mobile-first e mu
 
 ## Estado atual
 
-**V0.5 — Emotion / Appraisal** em fechamento.
+**V0.6 — Autonomy / BDI** em fechamento.
 
 A base implementada até aqui inclui:
 
@@ -14,7 +14,8 @@ A base implementada até aqui inclui:
 - V0.2: Social Scene, Addressee, Perspective Resolver/Stack, ACIR, contratos VAD/Speaker/STT, Groq Whisper adapter e app Android nativo com áudio/VAD local e pareamento seguro;
 - V0.3: Raw Event Log auditável + memória episódica/semântica/relacional, provenance, Memory Write Gate, retrieval híbrido local FTS5/BM25 + entidades/relações + RRF/MMR, soft forgetting e memória incluída em backup/restore;
 - V0.4: World Model com observation/report/belief/inference/hypothesis, belief revision temporal, Canonical World State, Self Model protegido, relationship revisions e consolidação de perspectiva sobre ACIR resolvido;
-- V0.5: Appraisal determinístico, Emotion Events com target/cause/blame/intentionality/spillover, Global Mood valence/arousal/dominance, Entity Affect por entidade, decay via TimeService e Social Bids candidatos com TTL.
+- V0.5: Appraisal determinístico, Emotion Events com target/cause/blame/intentionality/spillover, Global Mood valence/arousal/dominance, Entity Affect por entidade, decay via TimeService e Social Bids candidatos com TTL;
+- V0.6: Drives persistentes, Utility determinística, BDI, hysteresis/switch cost, silêncio explícito, contexto de interrupção, intenção persistente, decisão idempotente e idle scheduling via TimeService/Scheduler. Planejamento e execução permanecem para V0.7.
 
 Os documentos canônicos do projeto são `ARCHITECTURE.md`, `GDD.md` e `SKILL.md`, atualmente mantidos como arquivos anexados do Projeto ChatGPT. `AGENTS.md` contém os guardrails essenciais para agentes que trabalham neste repositório. Implementações por estágio ficam documentadas em `docs/`.
 
@@ -133,6 +134,27 @@ amora emotion bids
 ```
 
 O esperado é `anger` dirigido a `PERSON_BK`, mood global parcialmente negativo, `anger` de `ENTITY_CHATGPT` permanecendo em zero e um Social Bid candidato como `set_boundary`. Repetir o mesmo appraisal com a mesma `--dedupe-key` não deve duplicar o impacto.
+
+### Teste local da Autonomy V0.6
+
+```bash
+amora-autonomy state
+
+# Pressão homeostática social auditável e idempotente:
+amora-autonomy drive social 0.55 \
+  --reason "longo período sem interação" \
+  --dedupe-key demo-social-drive
+
+# Um ciclo escolhe intenção ou silêncio, mas não executa a ação:
+amora-autonomy cycle \
+  --available PERSON_BK \
+  --dedupe-key demo-autonomy-cycle
+
+amora-autonomy state
+amora-autonomy decisions
+```
+
+Repetir o mesmo `cycle` com a mesma `--dedupe-key` deve retornar a mesma decisão/intenção sem duplicar efeitos. Rodar um novo ciclo enquanto a mesma intenção continua melhor deve produzir `kept_current` por hysteresis. Social Bids fortes da V0.5 também entram na arbitragem; selecioná-los não os consome, porque a execução pertence à V0.7.
 
 Runtime padrão:
 
