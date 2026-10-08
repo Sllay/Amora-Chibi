@@ -64,6 +64,7 @@ class ActionEngine:
             granted_permissions=set(self.DEFAULT_PERMISSIONS),
             privacy_scope=privacy_scope,
             remote_processing_allowed=False,
+            allow_non_idempotent=False,
             max_risk=RiskLevel.LOW,
             max_total_cost=0.10,
         )
@@ -159,7 +160,8 @@ class ActionEngine:
             plan.reason_codes.append("AUTH_EXECUTION_DENIED")
             self.store.put_plan(plan)
             terminal = PlanExecutionResult(plan=plan, executions=[], monitor_outcome=MonitorOutcome.ABORT)
-            self._persist_terminal(terminal, dedupe_key)
+            terminal = self._persist_terminal(terminal, dedupe_key)
+            await self._publish_terminal(terminal)
             return terminal
 
         plan.status = PlanStatus.RUNNING
@@ -221,10 +223,11 @@ class ActionEngine:
         if final_outcome == MonitorOutcome.VERIFIED:
             plan.status = PlanStatus.COMPLETED
             plan.reason_codes.extend(["ALL_STEPS_VERIFIED", "INTENTION_EXECUTED"])
+            source_kind = plan.metadata.get("source_kind")
+            source_ref_id = plan.metadata.get("source_ref_id")
+            if source_kind == "social_bid" and source_ref_id:
+                self.emotion.store.set_bid_status(str(source_ref_id), SocialBidStatus.CONSUMED)
             self.autonomy.store.set_intention_status(plan.intention_id, IntentionStatus.COMPLETED)
-            intention = self._intention_for_plan(plan)
-            if intention is not None and intention.source_kind == "social_bid" and intention.source_ref_id:
-                self.emotion.store.set_bid_status(intention.source_ref_id, SocialBidStatus.CONSUMED)
 
         plan.updated_at = self.clock.now()
         self.store.put_plan(plan)
@@ -232,16 +235,6 @@ class ActionEngine:
         terminal = self._persist_terminal(terminal, dedupe_key)
         await self._publish_terminal(terminal)
         return terminal
-
-    def _intention_for_plan(self, plan: ActionPlan):
-        # The plan references a durable autonomy row; listing current intention is insufficient
-        # after completion, so hydrate directly from the plan's source when still active first.
-        current = self.autonomy.store.current_intention()
-        if current is not None and current.id == plan.intention_id:
-            return current
-        # V0.7 only needs source metadata before marking completion; plans copy target/kind but
-        # not source refs, so fall back to the latest known current row when unavailable.
-        return None
 
     def _persist_terminal(self, result: PlanExecutionResult, dedupe_key: str | None) -> PlanExecutionResult:
         if self.store.put_run(result, dedupe_key=dedupe_key):
