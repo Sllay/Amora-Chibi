@@ -151,12 +151,7 @@ def test_self_core_identity_is_protected_but_preferences_can_evolve(tmp_path: Pa
         assert entity_id.value == "ENTITY_AMORA"
         assert entity_id.locked is True
         with pytest.raises(PermissionError):
-            core.self_model.set(
-                SelfLayer.CORE_IDENTITY,
-                "entity_id",
-                "SOMEONE_ELSE",
-                source="test",
-            )
+            core.self_model.set(SelfLayer.CORE_IDENTITY, "entity_id", "SOMEONE_ELSE", source="test")
 
         first = core.self_model.set(SelfLayer.PREFERENCES, "favorite_snack", "morango", source="test", confidence=0.7)
         second = core.self_model.set(SelfLayer.PREFERENCES, "favorite_snack", "chocolate", source="test", confidence=0.8)
@@ -223,11 +218,7 @@ def test_perspective_consolidation_defers_ambiguity_and_accepts_canonical_roles(
         )
         consolidated = core.perspective_consolidator.consolidate(
             resolved,
-            PerspectiveClaimDraft(
-                kind=EpistemicKind.REPORT,
-                statement="BK diz que gosta de café",
-                predicate="likes_drink",
-            ),
+            PerspectiveClaimDraft(kind=EpistemicKind.REPORT, statement="BK diz que gosta de café", predicate="likes_drink"),
         )
         assert consolidated.status == PerspectiveConsolidationStatus.CONSOLIDATED
         assert consolidated.claim is not None
@@ -264,6 +255,6 @@ def test_world_state_survives_restart(tmp_path: Path, monkeypatch) -> None:
         assert len(state) == 1
         assert state[0].predicate == "preferred_drawing_period"
         assert state[0].object_value == "night"
-        assert second.health_report()["schema_version"] == 4
+        assert second.health_report()["schema_version"] == 5
     finally:
         second.close()
