@@ -6,13 +6,14 @@ Monorepo oficial da **Amora**, uma IA-companheira persistente, mobile-first e mu
 
 ## Estado atual
 
-**V0.3 — Memory** em fechamento.
+**V0.4 — Identity Advanced / World Model** em fechamento.
 
 A base implementada até aqui inclui:
 
 - V0.1: Event Bus idempotente, TimeService/Scheduler, identidade pessoa/device/session, SQLite WAL+migrations, Secrets Vault, API localhost, backup/restore e ModelRouter base;
 - V0.2: Social Scene, Addressee, Perspective Resolver/Stack, ACIR, contratos VAD/Speaker/STT, Groq Whisper adapter e app Android nativo com áudio/VAD local e pareamento seguro;
-- V0.3: Raw Event Log auditável + memória episódica/semântica/relacional, provenance, Memory Write Gate, retrieval híbrido local FTS5/BM25 + entidades/relações + RRF/MMR, soft forgetting e memória incluída em backup/restore.
+- V0.3: Raw Event Log auditável + memória episódica/semântica/relacional, provenance, Memory Write Gate, retrieval híbrido local FTS5/BM25 + entidades/relações + RRF/MMR, soft forgetting e memória incluída em backup/restore;
+- V0.4: World Model com observation/report/belief/inference/hypothesis, belief revision temporal, Canonical World State, Self Model protegido, relationship revisions e consolidação de perspectiva sobre ACIR resolvido.
 
 Os documentos canônicos do projeto são `ARCHITECTURE.md`, `GDD.md` e `SKILL.md`, atualmente mantidos como arquivos anexados do Projeto ChatGPT. `AGENTS.md` contém os guardrails essenciais para agentes que trabalham neste repositório. Implementações por estágio ficam documentadas em `docs/`.
 
@@ -80,6 +81,30 @@ amora memory remember "BK mostrou um desenho novo para Amora" \
   --entity PERSON_BK --entity ENTITY_AMORA --tag desenho
 
 amora memory recall "desenho" --entity PERSON_BK
+```
+
+### Teste local do World Model V0.4
+
+```bash
+amora world record "BK não gosta de café" \
+  --kind belief \
+  --subject PERSON_BK \
+  --predicate likes_coffee \
+  --value false \
+  --confidence 0.98
+
+amora world state --subject PERSON_BK
+
+amora world record "BK agora gosta de café" \
+  --kind belief \
+  --subject PERSON_BK \
+  --predicate likes_coffee \
+  --value true \
+  --confidence 0.97
+
+amora world state --subject PERSON_BK
+amora world history --subject PERSON_BK --predicate likes_coffee
+amora self show
 ```
 
 Runtime padrão:
