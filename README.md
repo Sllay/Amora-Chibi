@@ -6,14 +6,15 @@ Monorepo oficial da **Amora**, uma IA-companheira persistente, mobile-first e mu
 
 ## Estado atual
 
-**V0.4 — Identity Advanced / World Model** em fechamento.
+**V0.5 — Emotion / Appraisal** em fechamento.
 
 A base implementada até aqui inclui:
 
 - V0.1: Event Bus idempotente, TimeService/Scheduler, identidade pessoa/device/session, SQLite WAL+migrations, Secrets Vault, API localhost, backup/restore e ModelRouter base;
 - V0.2: Social Scene, Addressee, Perspective Resolver/Stack, ACIR, contratos VAD/Speaker/STT, Groq Whisper adapter e app Android nativo com áudio/VAD local e pareamento seguro;
 - V0.3: Raw Event Log auditável + memória episódica/semântica/relacional, provenance, Memory Write Gate, retrieval híbrido local FTS5/BM25 + entidades/relações + RRF/MMR, soft forgetting e memória incluída em backup/restore;
-- V0.4: World Model com observation/report/belief/inference/hypothesis, belief revision temporal, Canonical World State, Self Model protegido, relationship revisions e consolidação de perspectiva sobre ACIR resolvido.
+- V0.4: World Model com observation/report/belief/inference/hypothesis, belief revision temporal, Canonical World State, Self Model protegido, relationship revisions e consolidação de perspectiva sobre ACIR resolvido;
+- V0.5: Appraisal determinístico, Emotion Events com target/cause/blame/intentionality/spillover, Global Mood valence/arousal/dominance, Entity Affect por entidade, decay via TimeService e Social Bids candidatos com TTL.
 
 Os documentos canônicos do projeto são `ARCHITECTURE.md`, `GDD.md` e `SKILL.md`, atualmente mantidos como arquivos anexados do Projeto ChatGPT. `AGENTS.md` contém os guardrails essenciais para agentes que trabalham neste repositório. Implementações por estágio ficam documentadas em `docs/`.
 
@@ -106,6 +107,32 @@ amora world state --subject PERSON_BK
 amora world history --subject PERSON_BK --predicate likes_coffee
 amora self show
 ```
+
+### Teste local do Emotion Engine V0.5
+
+```bash
+amora emotion appraise "BK ignorou Amora de propósito" \
+  --valence -0.9 \
+  --target PERSON_BK \
+  --agent PERSON_BK \
+  --goal-relevance 0.9 \
+  --novelty 0.4 \
+  --expectedness 0.5 \
+  --agency 0.95 \
+  --control 0.6 \
+  --intentionality 0.95 \
+  --norm-violation 0.85 \
+  --relationship-relevance 0.95 \
+  --dedupe-key demo-bk-boundary
+
+amora emotion state
+amora emotion affect PERSON_BK
+amora emotion affect ENTITY_CHATGPT
+amora emotion events --target PERSON_BK
+amora emotion bids
+```
+
+O esperado é `anger` dirigido a `PERSON_BK`, mood global parcialmente negativo, `anger` de `ENTITY_CHATGPT` permanecendo em zero e um Social Bid candidato como `set_boundary`. Repetir o mesmo appraisal com a mesma `--dedupe-key` não deve duplicar o impacto.
 
 Runtime padrão:
 
