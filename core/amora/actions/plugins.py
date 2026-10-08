@@ -161,11 +161,11 @@ class CoreActionPlugin:
         )
         publish = await self.events.publish(event)
         return {
-            "published": bool(publish.accepted or publish.duplicate),
-            "event_id": str(event.id),
+            "published": True,
+            "event_id": publish.event_id,
             "action_kind": action_kind,
             "target_id": target,
-            "duplicate_event": publish.duplicate,
+            "duplicate_event": publish.deduplicated,
         }
 
     async def verify(
