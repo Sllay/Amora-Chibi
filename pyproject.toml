@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "amora-chibi"
-version = "0.6.0.dev0"
+version = "0.7.0.dev0"
 description = "Core da Amora — IA-companheira persistente mobile-first"
 requires-python = ">=3.11"
 dependencies = [
@@ -26,9 +26,11 @@ dev = [
 [project.scripts]
 amora = "amora.__main__:main"
 amora-autonomy = "amora.autonomy.cli:main"
+amora-actions = "amora.actions.cli:main"
 
 [tool.setuptools]
-package-dir = {"" = "core"}
+package-dir = {"" = "core"
+}
 
 [tool.setuptools.packages.find]
 where = ["core"]
