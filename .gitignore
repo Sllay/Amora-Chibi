@@ -33,6 +33,8 @@ secrets/
 local.properties
 *.apk
 *.aab
+android/app/libs/*.aar
+android/app/src/main/assets/silero_vad.onnx
 
 # Node/avatar
 node_modules/
