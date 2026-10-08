@@ -29,8 +29,7 @@ amora-autonomy = "amora.autonomy.cli:main"
 amora-actions = "amora.actions.cli:main"
 
 [tool.setuptools]
-package-dir = {"" = "core"
-}
+package-dir = {"" = "core"}
 
 [tool.setuptools.packages.find]
 where = ["core"]
