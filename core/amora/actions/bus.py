@@ -9,7 +9,6 @@ from .models import (
     ExecutionContext,
     ExecutionScope,
     PluginHealth,
-    RiskLevel,
     ToolCall,
     ToolExecutionResult,
     ToolExecutionStatus,
@@ -18,7 +17,7 @@ from .plugins import PluginRegistry
 
 
 class ActionBus:
-    """Permission/privacy/risk gate and isolated tool invocation boundary."""
+    """Permission/privacy/risk/cost/idempotency gate and isolated tool invocation boundary."""
 
     def __init__(self, registry: PluginRegistry, clock: Clock) -> None:
         self.registry = registry
@@ -49,6 +48,12 @@ class ActionBus:
             return self._result(
                 call, started, ToolExecutionStatus.DENIED, attempt,
                 error_code="REMOTE_PROCESSING_NOT_ALLOWED", error_message="remote processing permission is required",
+            )
+        if not spec.idempotent and not context.allow_non_idempotent:
+            return self._result(
+                call, started, ToolExecutionStatus.DENIED, attempt,
+                error_code="NON_IDEMPOTENT_APPROVAL_REQUIRED",
+                error_message="non-idempotent tool requires explicit execution approval",
             )
 
         required_permissions = set(manifest.permissions) | set(spec.permissions)
