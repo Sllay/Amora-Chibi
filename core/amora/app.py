@@ -8,6 +8,7 @@ from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
 from amora.events import AsyncEventBus
 from amora.identity import DeviceIdentity, DeviceTrust, EntityRegistry, SessionService, build_initial_registry
 from amora.language import ACIRCompiler, LanguageSocialPipeline, PerspectiveResolver
+from amora.memory import MemoryService, MemoryStore
 from amora.models import ModelRouter
 from amora.observability import configure_logging
 from amora.pairing import PairingManager
@@ -29,6 +30,7 @@ class AmoraCore:
     secrets: SecretStore
     pairing: PairingManager
     database: AmoraDatabase
+    memory: MemoryService
     models: ModelRouter
     social: SocialSceneTracker
     addressee: AddresseeEngine
@@ -69,6 +71,7 @@ class AmoraCore:
         social = SocialSceneTracker()
         addressee = AddresseeEngine(identities)
         perspective = PerspectiveResolver(identities)
+        memory = MemoryService(MemoryStore(paths.database, active_clock, identities), active_clock)
         return cls(
             paths=paths,
             clock=active_clock,
@@ -79,6 +82,7 @@ class AmoraCore:
             secrets=secrets,
             pairing=PairingManager(paths.cache / "pairing.json", active_clock),
             database=database,
+            memory=memory,
             models=ModelRouter(),
             social=social,
             addressee=addressee,
@@ -106,6 +110,8 @@ class AmoraCore:
             "database_integrity": integrity,
             "schema_version": self.database.schema_version(),
             "event_count": self.database.event_count(),
+            "memory_count": self.memory.store.count(),
+            "memory_fts_enabled": self.memory.store.fts_enabled,
             "entity_count": len(self.identities.entities),
             "relationship_count": len(self.identities.relationships),
             "active_sessions": self.database.active_session_count(self.clock.now()),
@@ -124,4 +130,5 @@ class AmoraCore:
         return self.database.backup_to(self.paths.backups / filename)
 
     def close(self) -> None:
+        self.memory.close()
         self.database.close()
