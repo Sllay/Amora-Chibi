@@ -6,7 +6,7 @@ Monorepo oficial da **Amora**, uma IA-companheira persistente, mobile-first e mu
 
 ## Estado atual
 
-**V0.6 — Autonomy / BDI** em fechamento.
+**V0.7 — Actions / Planner / Skills** em fechamento.
 
 A base implementada até aqui inclui:
 
@@ -15,7 +15,8 @@ A base implementada até aqui inclui:
 - V0.3: Raw Event Log auditável + memória episódica/semântica/relacional, provenance, Memory Write Gate, retrieval híbrido local FTS5/BM25 + entidades/relações + RRF/MMR, soft forgetting e memória incluída em backup/restore;
 - V0.4: World Model com observation/report/belief/inference/hypothesis, belief revision temporal, Canonical World State, Self Model protegido, relationship revisions e consolidação de perspectiva sobre ACIR resolvido;
 - V0.5: Appraisal determinístico, Emotion Events com target/cause/blame/intentionality/spillover, Global Mood valence/arousal/dominance, Entity Affect por entidade, decay via TimeService e Social Bids candidatos com TTL;
-- V0.6: Drives persistentes, Utility determinística, BDI, hysteresis/switch cost, silêncio explícito, contexto de interrupção, intenção persistente, decisão idempotente e idle scheduling via TimeService/Scheduler. Planejamento e execução permanecem para V0.7.
+- V0.6: Drives persistentes, Utility determinística, BDI, hysteresis/switch cost, silêncio explícito, contexto de interrupção, intenção persistente, decisão idempotente e idle scheduling via TimeService/Scheduler;
+- V0.7: Skill Library, Planner hierárquico, Action Bus com gates de permission/privacy/risk/cost/idempotency/timeout, contratos de plugin, Execution Monitor, retry/replan/abort, persistência de planos/ToolCalls/runs e ações semânticas verificadas. Voz/Turn Manager continuam na V0.8.
 
 Os documentos canônicos do projeto são `ARCHITECTURE.md`, `GDD.md` e `SKILL.md`, atualmente mantidos como arquivos anexados do Projeto ChatGPT. `AGENTS.md` contém os guardrails essenciais para agentes que trabalham neste repositório. Implementações por estágio ficam documentadas em `docs/`.
 
@@ -138,23 +139,37 @@ O esperado é `anger` dirigido a `PERSON_BK`, mood global parcialmente negativo,
 ### Teste local da Autonomy V0.6
 
 ```bash
-amora-autonomy state
+python -m amora.autonomy state
 
-# Pressão homeostática social auditável e idempotente:
-amora-autonomy drive social 0.55 \
+python -m amora.autonomy drive social 0.55 \
   --reason "longo período sem interação" \
   --dedupe-key demo-social-drive
 
-# Um ciclo escolhe intenção ou silêncio, mas não executa a ação:
-amora-autonomy cycle \
+python -m amora.autonomy cycle \
   --available PERSON_BK \
   --dedupe-key demo-autonomy-cycle
 
-amora-autonomy state
-amora-autonomy decisions
+python -m amora.autonomy state
+python -m amora.autonomy decisions
 ```
 
-Repetir o mesmo `cycle` com a mesma `--dedupe-key` deve retornar a mesma decisão/intenção sem duplicar efeitos. Rodar um novo ciclo enquanto a mesma intenção continua melhor deve produzir `kept_current` por hysteresis. Social Bids fortes da V0.5 também entram na arbitragem; selecioná-los não os consome, porque a execução pertence à V0.7.
+Repetir o mesmo `cycle` com a mesma `--dedupe-key` deve retornar a mesma decisão/intenção sem duplicar efeitos. Rodar um novo ciclo enquanto a mesma intenção continua melhor deve produzir `kept_current` por hysteresis.
+
+### Teste local de Actions / Planner V0.7
+
+Primeiro crie uma intenção ativa pela V0.6; depois:
+
+```bash
+python -m amora.actions state
+python -m amora.actions plan --dedupe-key demo-v07-plan
+python -m amora.actions execute --dedupe-key demo-v07-execute
+python -m amora.actions plans
+python -m amora.actions executions
+```
+
+Uma intenção social como `initiate_contact` deve usar a skill `core.semantic_intention`, gerar um ToolCall `core.actions.emit_intention`, publicar `action.semantic_request`, verificar o efeito e então marcar a intenção como concluída. Repetir `execute` com a mesma dedupe key deve devolver o run anterior sem executar a tool novamente.
+
+Ações não idempotentes, remotas, de risco acima do permitido ou sem permission são bloqueadas pelo Action Bus. Conteúdo `AUTH` nunca entra na execução de tools.
 
 Runtime padrão:
 
