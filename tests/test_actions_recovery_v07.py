@@ -5,6 +5,7 @@ from amora.actions import ActionStore
 from amora.app import AmoraCore
 from amora.autonomy import DecisionContext, DriveType
 from amora.storage import AmoraDatabase
+from amora.time import SystemClock
 
 
 def _seed_and_execute(core: AmoraCore):
@@ -63,7 +64,7 @@ def test_backup_restore_preserves_action_state(tmp_path: Path, monkeypatch) -> N
     finally:
         restored_db.close()
 
-    store = ActionStore(restored_path, AmoraCore.bootstrap.__func__.__globals__["SystemClock"]())
+    store = ActionStore(restored_path, SystemClock())
     try:
         plan = store.get_plan(plan_id)
         assert plan is not None and plan.status.value == "completed"
