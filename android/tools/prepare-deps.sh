@@ -9,7 +9,7 @@ mkdir -p "$AAR_DIR" "$ASSET_DIR"
 SHERPA_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar"
 SHERPA_SHA="633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96"
 MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
-MODEL_SHA="1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
+MODEL_SHA="ce8b2d70c5dd46fc6ec6860204ae8e913b381281876ceff691d66b6732bddf02"
 
 fetch_checked() {
   local url="$1" dest="$2" expected="$3"
