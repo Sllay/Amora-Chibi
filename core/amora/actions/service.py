@@ -26,6 +26,9 @@ from .skills import SkillLibrary
 from .store import ActionStore
 
 
+TERMINAL_PLAN_STATUSES = {PlanStatus.COMPLETED, PlanStatus.FAILED, PlanStatus.ABORTED}
+
+
 class ActionEngine:
     """V0.7 boundary: intention -> plan -> guarded tools -> verified effect."""
 
@@ -153,16 +156,20 @@ class ActionEngine:
         plan = self.store.get_plan(plan_id)
         if plan is None:
             raise KeyError(f"unknown plan: {plan_id}")
+        if plan.status in TERMINAL_PLAN_STATUSES:
+            replay = self.store.latest_run_for_plan(plan.id)
+            if replay is not None:
+                return replay
+            raise RuntimeError("terminal action plan is missing its persisted run")
+
         active_context = context or self.default_context()
         if active_context.privacy_scope == PrivacyScope.AUTH:
-            plan.status = PlanStatus.ABORTED
-            plan.updated_at = self.clock.now()
-            plan.reason_codes.append("AUTH_EXECUTION_DENIED")
-            self.store.put_plan(plan)
-            terminal = PlanExecutionResult(plan=plan, executions=[], monitor_outcome=MonitorOutcome.ABORT)
-            terminal = self._persist_terminal(terminal, dedupe_key)
-            await self._publish_terminal(terminal)
-            return terminal
+            return await self._abort_without_execution(plan, "AUTH_EXECUTION_DENIED", dedupe_key)
+
+        estimated_cost = self._estimated_max_cost(plan)
+        plan.metadata["estimated_max_cost"] = estimated_cost
+        if estimated_cost > active_context.max_total_cost:
+            return await self._abort_without_execution(plan, "PLAN_COST_LIMIT_EXCEEDED", dedupe_key)
 
         plan.status = PlanStatus.RUNNING
         plan.updated_at = self.clock.now()
@@ -232,6 +239,33 @@ class ActionEngine:
         plan.updated_at = self.clock.now()
         self.store.put_plan(plan)
         terminal = PlanExecutionResult(plan=plan, executions=executions, monitor_outcome=final_outcome)
+        terminal = self._persist_terminal(terminal, dedupe_key)
+        await self._publish_terminal(terminal)
+        return terminal
+
+    def _estimated_max_cost(self, plan: ActionPlan) -> float:
+        total = 0.0
+        for step in plan.steps:
+            resolved = self.registry.resolve_tool(step.plugin_id, step.tool_name)
+            if resolved is None:
+                continue
+            plugin, spec = resolved
+            per_attempt = min(1.0, plugin.manifest.cost + spec.cost)
+            total += per_attempt * step.retry_policy.max_attempts
+        return min(1.0, total)
+
+    async def _abort_without_execution(
+        self,
+        plan: ActionPlan,
+        reason_code: str,
+        dedupe_key: str | None,
+    ) -> PlanExecutionResult:
+        plan.status = PlanStatus.ABORTED
+        plan.updated_at = self.clock.now()
+        if reason_code not in plan.reason_codes:
+            plan.reason_codes.append(reason_code)
+        self.store.put_plan(plan)
+        terminal = PlanExecutionResult(plan=plan, executions=[], monitor_outcome=MonitorOutcome.ABORT)
         terminal = self._persist_terminal(terminal, dedupe_key)
         await self._publish_terminal(terminal)
         return terminal
