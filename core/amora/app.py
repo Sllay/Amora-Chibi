@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from amora import __version__
+from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
 from amora.events import AsyncEventBus
 from amora.identity import DeviceIdentity, DeviceTrust, EntityRegistry, SessionService, build_initial_registry
 from amora.language import ACIRCompiler, PerspectiveResolver
@@ -31,6 +32,8 @@ class AmoraCore:
     addressee: AddresseeEngine
     perspective: PerspectiveResolver
     acir: ACIRCompiler
+    vad: EnergyVad
+    stt: GroqWhisperSTT
 
     @classmethod
     def bootstrap(cls, *, clock: Clock | None = None) -> "AmoraCore":
@@ -75,7 +78,12 @@ class AmoraCore:
             addressee=AddresseeEngine(identities),
             perspective=perspective,
             acir=ACIRCompiler(perspective),
+            vad=EnergyVad(),
+            stt=GroqWhisperSTT(secrets),
         )
+
+    def create_speaker_tracker(self, session_id: str) -> SessionSpeakerTracker:
+        return SessionSpeakerTracker(session_id)
 
     def health_report(self) -> dict[str, object]:
         bk = self.identities.resolve_alias("BK")
@@ -93,6 +101,7 @@ class AmoraCore:
             "model_providers_registered": self.models.provider_count,
             "social_participant_count": len(self.social.scene.participants),
             "social_active_addressee": self.social.scene.active_addressee,
+            "groq_stt_configured": self.secrets.get("GROQ_API_KEY") is not None,
         }
 
     def create_backup(self, name: str | None = None) -> Path:
