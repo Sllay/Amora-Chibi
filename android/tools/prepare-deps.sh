@@ -13,16 +13,34 @@ MODEL_SHA="ce8b2d70c5dd46fc6ec6860204ae8e913b381281876ceff691d66b6732bddf02"
 
 fetch_checked() {
   local url="$1" dest="$2" expected="$3"
-  if [[ -f "$dest" ]] && printf '%s  %s\n' "$expected" "$dest" | sha256sum -c - >/dev/null 2>&1; then
-    echo "[android-deps] OK: $dest"
-    return
+  if [[ -f "$dest" ]]; then
+    local existing
+    existing="$(sha256sum "$dest" | awk '{print $1}')"
+    if [[ "$existing" == "$expected" ]]; then
+      echo "[android-deps] OK: $dest"
+      return
+    fi
   fi
+
   local tmp="${dest}.tmp"
   rm -f "$tmp"
   echo "[android-deps] Baixando $(basename "$dest")..."
   curl -fL --retry 3 --retry-delay 2 "$url" -o "$tmp"
-  printf '%s  %s\n' "$expected" "$tmp" | sha256sum -c -
+
+  local actual size
+  actual="$(sha256sum "$tmp" | awk '{print $1}')"
+  size="$(wc -c < "$tmp" | tr -d ' ')"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "[android-deps] ERRO: digest inesperado para $(basename "$dest")" >&2
+    echo "[android-deps] esperado: $expected" >&2
+    echo "[android-deps] recebido: $actual" >&2
+    echo "[android-deps] bytes: $size" >&2
+    rm -f "$tmp"
+    exit 1
+  fi
+
   mv "$tmp" "$dest"
+  echo "[android-deps] OK: $dest ($size bytes)"
 }
 
 fetch_checked "$SHERPA_URL" "$AAR_DIR/sherpa-onnx-1.13.8.aar" "$SHERPA_SHA"
