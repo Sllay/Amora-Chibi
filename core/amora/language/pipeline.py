@@ -10,7 +10,7 @@ from .perspective import PerspectiveFrame
 
 
 class UtteranceObservation(BaseModel):
-    text: str
+    text: str | None
     speaker_id: str
     addressee: AddresseeResult
     perspective: PerspectiveFrame
@@ -60,13 +60,17 @@ class LanguageSocialPipeline:
             confidence=scene_confidence,
         )
 
+        is_auth = privacy_scope == PrivacyScope.AUTH
         payload: dict[str, object] = {
-            "text": text,
             "observation_type": "utterance",
             "addressee_kind": result.kind.value,
             "addressee_confidence": result.confidence,
             "addressee_reason_codes": result.reason_codes,
         }
+        if is_auth:
+            payload["auth_redacted"] = True
+        else:
+            payload["text"] = text
         if extra_payload:
             payload.update(extra_payload)
 
@@ -83,14 +87,11 @@ class LanguageSocialPipeline:
             dedupe_key=dedupe_key,
         )
 
-        # AUTH utterances may be processed ephemerally but are never written to
-        # the event store. Secret values belong in SecretStore, not cognition.
-        published = await self.events.publish(
-            event,
-            persist=privacy_scope != PrivacyScope.AUTH,
-        )
+        # AUTH content never enters durable state. Its raw text is also omitted
+        # from the event payload so subscribers cannot accidentally log/forward it.
+        published = await self.events.publish(event, persist=not is_auth)
         return UtteranceObservation(
-            text=text,
+            text=None if is_auth else text,
             speaker_id=speaker_id,
             addressee=result,
             perspective=PerspectiveFrame(

@@ -39,6 +39,7 @@ async def test_observed_text_updates_social_scene_and_persists_observation() -> 
         speaker_id="PERSON_BK",
         session_id="SESSION_X",
     )
+    assert observed.text == "Amora, olha isso"
     assert observed.addressee.entity_id == "ENTITY_AMORA"
     assert observed.perspective.speaker_id == "PERSON_BK"
     assert observed.perspective.addressee_id == "ENTITY_AMORA"
@@ -50,17 +51,28 @@ async def test_observed_text_updates_social_scene_and_persists_observation() -> 
     assert event.event_type == "language.utterance.observed"
     assert event.actor == "PERSON_BK"
     assert event.target == "ENTITY_AMORA"
+    assert event.payload["text"] == "Amora, olha isso"
     assert event.payload["observation_type"] == "utterance"
 
 
-async def test_auth_utterance_is_ephemeral_and_not_written_to_event_store() -> None:
+async def test_auth_utterance_is_redacted_and_not_written_to_event_store() -> None:
     pipeline, _, store, _ = make_pipeline()
-    await pipeline.observe_text(
-        "Amora, código secreto",
+    received = []
+
+    async def capture(event) -> None:
+        received.append(event)
+
+    await pipeline.events.subscribe("language.utterance.observed", capture)
+    observed = await pipeline.observe_text(
+        "Amora, meu token é segredo",
         speaker_id="PERSON_BK",
         privacy_scope=PrivacyScope.AUTH,
     )
     assert store.events == []
+    assert observed.text is None
+    assert len(received) == 1
+    assert "text" not in received[0].payload
+    assert received[0].payload["auth_redacted"] is True
 
 
 async def test_transcript_keeps_stt_and_speaker_provenance() -> None:
