@@ -13,6 +13,7 @@ from amora.app import AmoraCore
 from amora.audio import AudioSegment, SttError
 from amora.language import PerspectiveFrame, PerspectiveStack
 from amora.memory import MemoryCandidate, MemoryKind, MemoryProvenance, MemoryQuery, ProvenanceKind
+from amora.world import EpistemicKind, WorldClaimDraft
 
 
 def doctor() -> int:
@@ -213,6 +214,72 @@ def memory_recall(text: str, *, entities: list[str], limit: int) -> int:
         core.close()
 
 
+def _jsonish(value: str):
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def world_record(
+    statement: str,
+    *,
+    kind: str,
+    subject: str | None,
+    predicate: str,
+    value: str,
+    confidence: float,
+    source: str,
+) -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        result = core.world.record(
+            WorldClaimDraft(
+                kind=EpistemicKind(kind),
+                statement=statement,
+                subject_id=subject,
+                predicate=predicate,
+                object_value=_jsonish(value),
+                source=source,
+                source_entity_id="PERSON_BK" if source == "cli:world" else None,
+                confidence=confidence,
+            )
+        )
+        print(json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        core.close()
+
+
+def world_state(*, subject: str | None) -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        state = core.world.current_state(subject_id=subject)
+        print(json.dumps([claim.model_dump(mode="json") for claim in state], indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        core.close()
+
+
+def world_history(*, subject: str | None, predicate: str | None, limit: int) -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        history = core.world.history(subject_id=subject, predicate=predicate, limit=limit)
+        print(json.dumps([claim.model_dump(mode="json") for claim in history], indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        core.close()
+
+
+def self_show() -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        print(json.dumps(core.self_model.snapshot(), indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        core.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="amora")
     parser.add_argument("--version", action="version", version=__version__)
@@ -265,6 +332,27 @@ def main() -> int:
     memory_recall_parser.add_argument("--entity", action="append", default=[])
     memory_recall_parser.add_argument("--limit", type=int, default=8)
 
+    world_parser = sub.add_parser("world", help="Debug local do World Model V0.4")
+    world_sub = world_parser.add_subparsers(dest="world_command", required=True)
+    world_record_parser = world_sub.add_parser("record", help="Registra observation/report/belief/inference/hypothesis")
+    world_record_parser.add_argument("statement")
+    world_record_parser.add_argument("--kind", choices=[kind.value for kind in EpistemicKind], default=EpistemicKind.REPORT.value)
+    world_record_parser.add_argument("--subject", default=None)
+    world_record_parser.add_argument("--predicate", required=True)
+    world_record_parser.add_argument("--value", required=True, help="JSON simples ou texto")
+    world_record_parser.add_argument("--confidence", type=float, default=1.0)
+    world_record_parser.add_argument("--source", default="cli:world")
+    world_state_parser = world_sub.add_parser("state", help="Mostra beliefs canônicos ativos")
+    world_state_parser.add_argument("--subject", default=None)
+    world_history_parser = world_sub.add_parser("history", help="Mostra histórico epistêmico, inclusive revisões expiradas")
+    world_history_parser.add_argument("--subject", default=None)
+    world_history_parser.add_argument("--predicate", default=None)
+    world_history_parser.add_argument("--limit", type=int, default=100)
+
+    self_parser = sub.add_parser("self", help="Debug local do Self Model V0.4")
+    self_sub = self_parser.add_subparsers(dest="self_command", required=True)
+    self_sub.add_parser("show", help="Mostra snapshot do Self Model")
+
     args = parser.parse_args()
     if args.command == "doctor":
         return doctor()
@@ -306,6 +394,23 @@ def main() -> int:
             )
         if args.memory_command == "recall":
             return memory_recall(args.text, entities=args.entity, limit=args.limit)
+    if args.command == "world":
+        if args.world_command == "record":
+            return world_record(
+                args.statement,
+                kind=args.kind,
+                subject=args.subject,
+                predicate=args.predicate,
+                value=args.value,
+                confidence=args.confidence,
+                source=args.source,
+            )
+        if args.world_command == "state":
+            return world_state(subject=args.subject)
+        if args.world_command == "history":
+            return world_history(subject=args.subject, predicate=args.predicate, limit=args.limit)
+    if args.command == "self" and args.self_command == "show":
+        return self_show()
     return 2
 
 
