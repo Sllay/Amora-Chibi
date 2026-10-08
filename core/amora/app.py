@@ -6,10 +6,12 @@ from pathlib import Path
 from amora import __version__
 from amora.events import AsyncEventBus
 from amora.identity import DeviceIdentity, DeviceTrust, EntityRegistry, SessionService, build_initial_registry
+from amora.language import ACIRCompiler, PerspectiveResolver
 from amora.models import ModelRouter
 from amora.observability import configure_logging
 from amora.secrets import SecretStore
 from amora.settings import RuntimePaths
+from amora.social import AddresseeEngine, SocialSceneTracker
 from amora.storage import AmoraDatabase
 from amora.time import Clock, Scheduler, SystemClock
 
@@ -25,6 +27,10 @@ class AmoraCore:
     secrets: SecretStore
     database: AmoraDatabase
     models: ModelRouter
+    social: SocialSceneTracker
+    addressee: AddresseeEngine
+    perspective: PerspectiveResolver
+    acir: ACIRCompiler
 
     @classmethod
     def bootstrap(cls, *, clock: Clock | None = None) -> "AmoraCore":
@@ -53,6 +59,8 @@ class AmoraCore:
                     last_seen=active_clock.now(),
                 )
             )
+        social = SocialSceneTracker()
+        perspective = PerspectiveResolver(identities)
         return cls(
             paths=paths,
             clock=active_clock,
@@ -63,6 +71,10 @@ class AmoraCore:
             secrets=secrets,
             database=database,
             models=ModelRouter(),
+            social=social,
+            addressee=AddresseeEngine(identities),
+            perspective=perspective,
+            acir=ACIRCompiler(perspective),
         )
 
     def health_report(self) -> dict[str, object]:
@@ -79,6 +91,8 @@ class AmoraCore:
             "active_sessions": self.database.active_session_count(self.clock.now()),
             "primary_person": bk.id if bk else None,
             "model_providers_registered": self.models.provider_count,
+            "social_participant_count": len(self.social.scene.participants),
+            "social_active_addressee": self.social.scene.active_addressee,
         }
 
     def create_backup(self, name: str | None = None) -> Path:
