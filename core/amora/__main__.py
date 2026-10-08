@@ -11,6 +11,7 @@ from amora import __version__
 from amora.api import create_api
 from amora.app import AmoraCore
 from amora.audio import AudioSegment, SttError
+from amora.emotion import AppraisalInput
 from amora.language import PerspectiveFrame, PerspectiveStack
 from amora.memory import MemoryCandidate, MemoryKind, MemoryProvenance, MemoryQuery, ProvenanceKind
 from amora.world import EpistemicKind, WorldClaimDraft
@@ -205,9 +206,7 @@ def memory_remember(
 def memory_recall(text: str, *, entities: list[str], limit: int) -> int:
     core = AmoraCore.bootstrap()
     try:
-        hits = core.memory.recall(
-            MemoryQuery(text=text, entity_ids=set(entities), limit=limit)
-        )
+        hits = core.memory.recall(MemoryQuery(text=text, entity_ids=set(entities), limit=limit))
         print(json.dumps([hit.model_dump(mode="json") for hit in hits], indent=2, ensure_ascii=False))
         return 0
     finally:
@@ -275,6 +274,100 @@ def self_show() -> int:
     core = AmoraCore.bootstrap()
     try:
         print(json.dumps(core.self_model.snapshot(), indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        core.close()
+
+
+def emotion_appraise(
+    description: str,
+    *,
+    valence: float,
+    target: str | None,
+    agent: str | None,
+    goal_relevance: float,
+    novelty: float,
+    expectedness: float,
+    agency: float,
+    control: float,
+    intentionality: float,
+    norm_violation: float,
+    relationship_relevance: float,
+    dedupe_key: str | None,
+) -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        try:
+            result = asyncio.run(
+                core.emotion.process(
+                    AppraisalInput(
+                        description=description,
+                        outcome_valence=valence,
+                        target_id=target,
+                        agent_id=agent,
+                        goal_relevance=goal_relevance,
+                        novelty=novelty,
+                        expectedness=expectedness,
+                        agency=agency,
+                        control=control,
+                        intentionality=intentionality,
+                        norm_violation=norm_violation,
+                        relationship_relevance=relationship_relevance,
+                        dedupe_key=dedupe_key,
+                    )
+                )
+            )
+        except ValueError as exc:
+            print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
+            return 2
+        print(json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        core.close()
+
+
+def emotion_state() -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        payload = {
+            "mood": core.emotion.current_mood().model_dump(mode="json"),
+            "affect": [item.model_dump(mode="json") for item in core.emotion.store.list_affect()],
+            "pending_bids": [item.model_dump(mode="json") for item in core.emotion.pending_bids()],
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        core.close()
+
+
+def emotion_affect(entity_id: str) -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        try:
+            affect = core.emotion.affect_for(entity_id)
+        except ValueError as exc:
+            print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
+            return 2
+        print(json.dumps(affect.model_dump(mode="json"), indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        core.close()
+
+
+def emotion_events(*, target: str | None, limit: int) -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        items = core.emotion.store.list_events(target_id=target, limit=limit)
+        print(json.dumps([item.model_dump(mode="json") for item in items], indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        core.close()
+
+
+def emotion_bids(*, limit: int) -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        print(json.dumps([item.model_dump(mode="json") for item in core.emotion.pending_bids(limit=limit)], indent=2, ensure_ascii=False))
         return 0
     finally:
         core.close()
@@ -353,6 +446,31 @@ def main() -> int:
     self_sub = self_parser.add_subparsers(dest="self_command", required=True)
     self_sub.add_parser("show", help="Mostra snapshot do Self Model")
 
+    emotion_parser = sub.add_parser("emotion", help="Debug local do Emotion Engine V0.5")
+    emotion_sub = emotion_parser.add_subparsers(dest="emotion_command", required=True)
+    emotion_appraise_parser = emotion_sub.add_parser("appraise", help="Avalia um acontecimento pelo Appraisal Engine")
+    emotion_appraise_parser.add_argument("description")
+    emotion_appraise_parser.add_argument("--valence", type=float, required=True, help="impacto -1..1")
+    emotion_appraise_parser.add_argument("--target", default=None)
+    emotion_appraise_parser.add_argument("--agent", default=None)
+    emotion_appraise_parser.add_argument("--goal-relevance", type=float, default=0.5)
+    emotion_appraise_parser.add_argument("--novelty", type=float, default=0.5)
+    emotion_appraise_parser.add_argument("--expectedness", type=float, default=0.5)
+    emotion_appraise_parser.add_argument("--agency", type=float, default=0.5)
+    emotion_appraise_parser.add_argument("--control", type=float, default=0.5)
+    emotion_appraise_parser.add_argument("--intentionality", type=float, default=0.5)
+    emotion_appraise_parser.add_argument("--norm-violation", type=float, default=0.0)
+    emotion_appraise_parser.add_argument("--relationship-relevance", type=float, default=0.0)
+    emotion_appraise_parser.add_argument("--dedupe-key", default=None)
+    emotion_sub.add_parser("state", help="Mostra mood, entity affect e social bids pendentes")
+    emotion_affect_parser = emotion_sub.add_parser("affect", help="Mostra afeto direcionado a uma entidade")
+    emotion_affect_parser.add_argument("entity_id")
+    emotion_events_parser = emotion_sub.add_parser("events", help="Lista Emotion Events persistidos")
+    emotion_events_parser.add_argument("--target", default=None)
+    emotion_events_parser.add_argument("--limit", type=int, default=50)
+    emotion_bids_parser = emotion_sub.add_parser("bids", help="Lista Social Bids candidatos ainda pendentes")
+    emotion_bids_parser.add_argument("--limit", type=int, default=50)
+
     args = parser.parse_args()
     if args.command == "doctor":
         return doctor()
@@ -363,13 +481,7 @@ def main() -> int:
     if args.command == "serve":
         return serve(args.port)
     if args.command == "resolve":
-        return resolve_reference(
-            args.expression,
-            speaker=args.speaker,
-            addressee=args.addressee,
-            focus=args.focus,
-            candidates=args.candidate,
-        )
+        return resolve_reference(args.expression, speaker=args.speaker, addressee=args.addressee, focus=args.focus, candidates=args.candidate)
     if args.command == "addressee":
         return infer_addressee(args.text, speaker=args.speaker)
     if args.command == "secret":
@@ -383,34 +495,43 @@ def main() -> int:
         return transcribe(args.path, language=args.language)
     if args.command == "memory":
         if args.memory_command == "remember":
-            return memory_remember(
-                args.text,
-                kind=args.kind,
-                actor=args.actor,
-                entities=args.entity,
-                tags=args.tag,
-                importance=args.importance,
-                novelty=args.novelty,
-            )
+            return memory_remember(args.text, kind=args.kind, actor=args.actor, entities=args.entity, tags=args.tag, importance=args.importance, novelty=args.novelty)
         if args.memory_command == "recall":
             return memory_recall(args.text, entities=args.entity, limit=args.limit)
     if args.command == "world":
         if args.world_command == "record":
-            return world_record(
-                args.statement,
-                kind=args.kind,
-                subject=args.subject,
-                predicate=args.predicate,
-                value=args.value,
-                confidence=args.confidence,
-                source=args.source,
-            )
+            return world_record(args.statement, kind=args.kind, subject=args.subject, predicate=args.predicate, value=args.value, confidence=args.confidence, source=args.source)
         if args.world_command == "state":
             return world_state(subject=args.subject)
         if args.world_command == "history":
             return world_history(subject=args.subject, predicate=args.predicate, limit=args.limit)
     if args.command == "self" and args.self_command == "show":
         return self_show()
+    if args.command == "emotion":
+        if args.emotion_command == "appraise":
+            return emotion_appraise(
+                args.description,
+                valence=args.valence,
+                target=args.target,
+                agent=args.agent,
+                goal_relevance=args.goal_relevance,
+                novelty=args.novelty,
+                expectedness=args.expectedness,
+                agency=args.agency,
+                control=args.control,
+                intentionality=args.intentionality,
+                norm_violation=args.norm_violation,
+                relationship_relevance=args.relationship_relevance,
+                dedupe_key=args.dedupe_key,
+            )
+        if args.emotion_command == "state":
+            return emotion_state()
+        if args.emotion_command == "affect":
+            return emotion_affect(args.entity_id)
+        if args.emotion_command == "events":
+            return emotion_events(target=args.target, limit=args.limit)
+        if args.emotion_command == "bids":
+            return emotion_bids(limit=args.limit)
     return 2
 
 
