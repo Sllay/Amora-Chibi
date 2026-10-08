@@ -73,7 +73,7 @@ async def test_backup_restore_preserves_autonomy_state(tmp_path, monkeypatch) ->
     restored_db = AmoraDatabase(restored_path)
     try:
         assert restored_db.integrity_check() == "ok"
-        assert restored_db.schema_version() == 6
+        assert restored_db.schema_version() == 7
     finally:
         restored_db.close()
 
