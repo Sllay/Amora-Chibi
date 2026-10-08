@@ -69,6 +69,10 @@ class EntityRegistry:
         return tuple(self._entities[item.target] for item in self._relationships if item.source == source and item.relation_type == relation_type)
 
     @property
+    def entities(self) -> tuple[Entity, ...]:
+        return tuple(self._entities.values())
+
+    @property
     def relationships(self) -> tuple[Relationship, ...]:
         return tuple(self._relationships)
 

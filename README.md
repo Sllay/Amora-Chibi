@@ -6,40 +6,43 @@ Monorepo oficial da **Amora**, uma IA-companheira persistente, mobile-first e mu
 
 ## Estado atual
 
-**V0.1 — Core Foundations** em desenvolvimento.
+**V0.1 — Core Foundations**.
 
-Escopo inicial:
+A fundação atual inclui:
 
-- Event Bus idempotente;
+- Event Bus idempotente com deduplicação persistente no SQLite;
 - TimeService/Scheduler com relógio simulado;
-- Entity Registry e Relationship Graph mínimos;
-- SQLite com migrations;
-- runtime separado do repositório;
-- interfaces iniciais do ModelRouter;
-- testes automatizados.
+- Entity Registry + Relationship Graph persistentes;
+- Device/Session Identity;
+- Secrets Vault local fora do Git;
+- SQLite WAL + migrations + backup/restore;
+- API local autenticada (`127.0.0.1`);
+- ModelRouter desacoplado de providers;
+- logging estruturado;
+- testes de restart/recovery.
 
-Os documentos canônicos são:
+Documentos canônicos na raiz:
 
-- `ARCHITECTURE.md` — arquitetura técnica;
-- `GDD.md` — produto e comportamento;
-- `SKILL.md` — regras de continuidade do desenvolvimento.
+- `ARCHITECTURE.md`
+- `GDD.md`
+- `SKILL.md`
 
 ## Estrutura
 
 ```text
 Amora-Chibi/
 ├── core/        # cérebro Python / Termux
-├── android/     # app Android Kotlin (futuro estágio V0.8+)
-├── avatar/      # renderer web compartilhado (V0.9)
+├── android/     # app Android Kotlin
+├── avatar/      # renderer web compartilhado
 ├── plugins/     # integrações modulares
 ├── tests/       # testes do Core
 ├── tools/       # scripts de desenvolvimento/Termux
 └── docs/        # documentação complementar
 ```
 
-## Termux
+## Termux + GitSync
 
-A recomendação é **não executar o projeto diretamente no armazenamento compartilhado do Android**. Use o GitSync para sincronizar o repositório e copie o código para o armazenamento privado do Termux:
+Use o GitSync para manter o repositório em uma pasta compartilhada e copie o código para o filesystem privado do Termux antes de executar:
 
 ```bash
 pkg install python git rsync
@@ -50,18 +53,28 @@ source .venv/bin/activate
 pip install -U pip
 pip install -e '.[dev]'
 pytest
-python -m amora doctor
+amora doctor
 ```
 
-O runtime fica por padrão em:
+Runtime padrão:
 
 ```text
 ~/.amora/
-├── data/
+├── data/amora.db
 ├── backups/
 ├── cache/
-├── logs/
+├── logs/amora.jsonl
 └── secrets/
 ```
 
-Nada dessa pasta deve ser versionado no Git.
+O token da API local é criado automaticamente em `~/.amora/secrets/LOCAL_API_TOKEN` e **nunca deve ser commitado**.
+
+## Comandos
+
+```bash
+amora doctor
+amora backup
+amora serve --port 8765
+```
+
+A API V0.1 escuta somente `127.0.0.1`.

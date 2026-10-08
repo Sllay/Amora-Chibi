@@ -33,3 +33,9 @@ jobs:
         env:
           AMORA_HOME: ${{ runner.temp }}/amora-runtime
         run: python -m amora doctor
+      - name: Backup smoke test
+        env:
+          AMORA_HOME: ${{ runner.temp }}/amora-runtime
+        run: |
+          python -m amora backup --name ci.db
+          test -f "$AMORA_HOME/backups/ci.db"

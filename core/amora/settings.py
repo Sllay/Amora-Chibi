@@ -32,6 +32,7 @@ class RuntimePaths:
         for path in (self.home, self.data, self.backups, self.cache, self.logs, self.secrets):
             path.mkdir(parents=True, exist_ok=True)
         try:
+            self.home.chmod(0o700)
             self.secrets.chmod(0o700)
         except OSError:
             pass

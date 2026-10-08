@@ -4,10 +4,15 @@ import asyncio
 from collections import OrderedDict, defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Protocol
 
 from .models import AmoraEvent
 
 EventHandler = Callable[[AmoraEvent], Awaitable[None]]
+
+
+class EventStore(Protocol):
+    def append_event(self, event: AmoraEvent) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,12 +24,13 @@ class PublishResult:
 
 
 class AsyncEventBus:
-    def __init__(self, *, dedupe_capacity: int = 4096) -> None:
+    def __init__(self, *, event_store: EventStore | None = None, dedupe_capacity: int = 4096) -> None:
         if dedupe_capacity <= 0:
             raise ValueError("dedupe_capacity must be positive")
         self._handlers: dict[str, list[EventHandler]] = defaultdict(list)
         self._seen: OrderedDict[str, None] = OrderedDict()
         self._dedupe_capacity = dedupe_capacity
+        self._event_store = event_store
         self._lock = asyncio.Lock()
 
     async def subscribe(self, event_type: str, handler: EventHandler) -> None:
@@ -42,8 +48,12 @@ class AsyncEventBus:
             if not handlers:
                 self._handlers.pop(event_type, None)
 
-    async def publish(self, event: AmoraEvent) -> PublishResult:
+    async def publish(self, event: AmoraEvent, *, persist: bool = True) -> PublishResult:
         dedupe_key = event.dedupe_key or str(event.id)
+
+        if persist and self._event_store is not None and not self._event_store.append_event(event):
+            return PublishResult(str(event.id), True, 0)
+
         async with self._lock:
             if dedupe_key in self._seen:
                 return PublishResult(str(event.id), True, 0)

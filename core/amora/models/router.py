@@ -40,3 +40,7 @@ class ModelRouter:
         def score(provider: ProviderDescriptor) -> float:
             return provider.quality * 0.55 + provider.latency_score * 0.25 + (1.0 - provider.cost_score) * 0.20
         return max(candidates, key=score)
+
+    @property
+    def provider_count(self) -> int:
+        return len(self._providers)
