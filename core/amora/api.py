@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import hmac
 from dataclasses import asdict
+from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
 
 from amora import __version__
 from amora.app import AmoraCore
+from amora.audio import AudioSegment, SpeakerResult, SttCredentialsError, SttError, SttRateLimitedError
 from amora.events import AmoraEvent, PrivacyScope
 from amora.identity import PrivacyContext
 from amora.language import PerspectiveFrame, PerspectiveStack
+
+
+MAX_LOCAL_AUDIO_BYTES = 12 * 1024 * 1024
 
 
 class SessionCreateRequest(BaseModel):
@@ -135,6 +140,63 @@ def create_api(core: AmoraCore) -> FastAPI:
             source="api:text",
         )
         return result.model_dump(mode="json")
+
+    @app.post("/v1/audio/transcribe", dependencies=[Depends(require_auth)])
+    async def transcribe_audio(
+        request: Request,
+        language: str | None = Query(default="pt", min_length=2, max_length=16),
+        speaker_id: str = Query(default="SESSION_ANDROID_SPEAKER_1", min_length=1, max_length=128),
+        speaker_confidence: float = Query(default=0.35, ge=0.0, le=1.0),
+        session_id: str | None = Query(default=None, max_length=128),
+        privacy_scope: PrivacyScope = Query(default=PrivacyScope.PERSONAL),
+    ) -> dict[str, object]:
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if content_type not in {"audio/wav", "audio/x-wav", "audio/wave"}:
+            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="expected audio/wav")
+
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty audio body")
+        if len(body) > MAX_LOCAL_AUDIO_BYTES:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="audio body too large")
+
+        incoming = core.paths.cache / "incoming"
+        incoming.mkdir(parents=True, exist_ok=True)
+        audio_path = incoming / f"{uuid4().hex}.wav"
+        audio_path.write_bytes(body)
+
+        try:
+            transcript = await core.stt.transcribe(
+                AudioSegment(path=audio_path, mime_type="audio/wav", language=language)
+            )
+            speaker = SpeakerResult(
+                speaker_id=speaker_id,
+                confidence=speaker_confidence,
+                reason_codes=["ANDROID_CLIENT_DECLARED_SPEAKER"],
+            )
+            observation = await core.language_social.observe_transcript(
+                transcript,
+                speaker,
+                session_id=session_id,
+                privacy_scope=privacy_scope,
+                dedupe_key=f"stt:{transcript.request_id}" if transcript.request_id else None,
+            )
+            return {
+                "transcript": transcript.model_dump(mode="json"),
+                "observation": observation.model_dump(mode="json"),
+            }
+        except SttCredentialsError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        except SttRateLimitedError as exc:
+            headers = {"Retry-After": exc.retry_after} if exc.retry_after else None
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc), headers=headers) from exc
+        except SttError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        finally:
+            try:
+                audio_path.unlink()
+            except FileNotFoundError:
+                pass
 
     @app.websocket("/v1/events/stream")
     async def event_stream(websocket: WebSocket) -> None:
