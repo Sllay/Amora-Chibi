@@ -20,6 +20,7 @@ from amora.time import Clock, Scheduler, SystemClock
 from amora.world import (
     PerspectiveConsolidator,
     RelationshipEvolutionService,
+    SelfLayer,
     SelfModelService,
     WorldModelService,
     WorldStore,
@@ -128,7 +129,7 @@ class AmoraCore:
     def health_report(self) -> dict[str, object]:
         bk = self.identities.resolve_alias("BK")
         integrity = self.database.integrity_check()
-        core_identity = self.self_model.get(__import__("amora.world", fromlist=["SelfLayer"]).SelfLayer.CORE_IDENTITY, "entity_id")
+        core_identity = self.self_model.get(SelfLayer.CORE_IDENTITY, "entity_id")
         return {
             "status": "ok" if integrity == "ok" else "degraded",
             "version": __version__,
