@@ -4,12 +4,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from amora import __version__
+from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
 from amora.events import AsyncEventBus
 from amora.identity import DeviceIdentity, DeviceTrust, EntityRegistry, SessionService, build_initial_registry
+from amora.language import ACIRCompiler, LanguageSocialPipeline, PerspectiveResolver
 from amora.models import ModelRouter
 from amora.observability import configure_logging
 from amora.secrets import SecretStore
 from amora.settings import RuntimePaths
+from amora.social import AddresseeEngine, SocialSceneTracker
 from amora.storage import AmoraDatabase
 from amora.time import Clock, Scheduler, SystemClock
 
@@ -25,6 +28,13 @@ class AmoraCore:
     secrets: SecretStore
     database: AmoraDatabase
     models: ModelRouter
+    social: SocialSceneTracker
+    addressee: AddresseeEngine
+    perspective: PerspectiveResolver
+    acir: ACIRCompiler
+    language_social: LanguageSocialPipeline
+    vad: EnergyVad
+    stt: GroqWhisperSTT
 
     @classmethod
     def bootstrap(cls, *, clock: Clock | None = None) -> "AmoraCore":
@@ -53,17 +63,36 @@ class AmoraCore:
                     last_seen=active_clock.now(),
                 )
             )
+        events = AsyncEventBus(event_store=database)
+        social = SocialSceneTracker()
+        addressee = AddresseeEngine(identities)
+        perspective = PerspectiveResolver(identities)
         return cls(
             paths=paths,
             clock=active_clock,
-            events=AsyncEventBus(event_store=database),
+            events=events,
             scheduler=Scheduler(active_clock),
             identities=identities,
             sessions=sessions,
             secrets=secrets,
             database=database,
             models=ModelRouter(),
+            social=social,
+            addressee=addressee,
+            perspective=perspective,
+            acir=ACIRCompiler(perspective),
+            language_social=LanguageSocialPipeline(
+                clock=active_clock,
+                events=events,
+                social=social,
+                addressee=addressee,
+            ),
+            vad=EnergyVad(),
+            stt=GroqWhisperSTT(secrets),
         )
+
+    def create_speaker_tracker(self, session_id: str) -> SessionSpeakerTracker:
+        return SessionSpeakerTracker(session_id)
 
     def health_report(self) -> dict[str, object]:
         bk = self.identities.resolve_alias("BK")
@@ -79,6 +108,9 @@ class AmoraCore:
             "active_sessions": self.database.active_session_count(self.clock.now()),
             "primary_person": bk.id if bk else None,
             "model_providers_registered": self.models.provider_count,
+            "social_participant_count": len(self.social.scene.participants),
+            "social_active_addressee": self.social.scene.active_addressee,
+            "groq_stt_configured": self.secrets.get("GROQ_API_KEY") is not None,
         }
 
     def create_backup(self, name: str | None = None) -> Path:
