@@ -10,6 +10,7 @@ from amora.identity import DeviceIdentity, DeviceTrust, EntityRegistry, SessionS
 from amora.language import ACIRCompiler, LanguageSocialPipeline, PerspectiveResolver
 from amora.models import ModelRouter
 from amora.observability import configure_logging
+from amora.pairing import PairingManager
 from amora.secrets import SecretStore
 from amora.settings import RuntimePaths
 from amora.social import AddresseeEngine, SocialSceneTracker
@@ -26,6 +27,7 @@ class AmoraCore:
     identities: EntityRegistry
     sessions: SessionService
     secrets: SecretStore
+    pairing: PairingManager
     database: AmoraDatabase
     models: ModelRouter
     social: SocialSceneTracker
@@ -75,6 +77,7 @@ class AmoraCore:
             identities=identities,
             sessions=sessions,
             secrets=secrets,
+            pairing=PairingManager(paths.cache / "pairing.json", active_clock),
             database=database,
             models=ModelRouter(),
             social=social,
