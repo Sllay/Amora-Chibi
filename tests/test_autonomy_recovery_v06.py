@@ -91,7 +91,7 @@ async def test_backup_restore_preserves_autonomy_state(tmp_path, monkeypatch) ->
 
 
 @pytest.mark.asyncio
-async def test_idle_scheduler_runs_cycle_only_when_idle(tmp_path, monkeypatch) -> None:
+async def test_idle_scheduler_runs_repeated_cycles_only_when_idle(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     clock = _clock()
     core = AmoraCore.bootstrap(clock=clock)
@@ -102,8 +102,11 @@ async def test_idle_scheduler_runs_cycle_only_when_idle(tmp_path, monkeypatch) -
         assert core.autonomy.store.decision_count() == 0
 
         clock.advance(timedelta(seconds=1))
-        executed = await core.scheduler.run_due(is_idle=True)
-        assert executed == ["autonomy.idle"]
+        assert await core.scheduler.run_due(is_idle=True) == ["autonomy.idle"]
         assert core.autonomy.store.decision_count() == 1
+
+        clock.advance(timedelta(seconds=60))
+        assert await core.scheduler.run_due(is_idle=True) == ["autonomy.idle"]
+        assert core.autonomy.store.decision_count() == 2
     finally:
         core.close()
