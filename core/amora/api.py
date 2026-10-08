@@ -18,6 +18,10 @@ class SessionCreateRequest(BaseModel):
     privacy_context: PrivacyContext = PrivacyContext.PRIVATE
 
 
+class PairingRedeemRequest(BaseModel):
+    code: str = Field(pattern=r"^\d{6}$")
+
+
 class AddresseeInferRequest(BaseModel):
     text: str
     speaker_id: str = "PERSON_BK"
@@ -64,6 +68,12 @@ def create_api(core: AmoraCore) -> FastAPI:
             "version": report["version"],
             "database_integrity": report["database_integrity"],
         }
+
+    @app.post("/v1/pairing/redeem")
+    def redeem_pairing(request: PairingRedeemRequest) -> dict[str, str]:
+        if not core.pairing.redeem(request.code):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired pairing code")
+        return {"token": expected_token(), "token_type": "Bearer"}
 
     @app.get("/v1/state", dependencies=[Depends(require_auth)])
     def state_view() -> dict[str, object]:
