@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "amora-chibi"
-version = "0.1.0.dev1"
+version = "0.1.0.dev2"
 description = "Core da Amora — IA-companheira persistente mobile-first"
 requires-python = ">=3.11"
 dependencies = [
-  "pydantic>=2.9,<3",
+  # TEMPORÁRIO (Termux/Python 3.14): 2.14.0b2 usa pydantic-core 2.49.0,
+  # versão que possui wheel Android/arm64 compatível com Termux 3.14.6.
+  # Reavaliar quando pydantic-core 2.50+ tiver wheel Android confiável.
+  "pydantic==2.14.0b2",
   "fastapi>=0.115,<1",
   "uvicorn>=0.32,<1",
 ]
