@@ -14,10 +14,11 @@ from .models import (
     ToolExecutionStatus,
 )
 from .plugins import PluginRegistry
+from .schema import validate_schema
 
 
 class ActionBus:
-    """Permission/privacy/risk/cost/idempotency gate and isolated tool invocation boundary."""
+    """Permission/privacy/risk/cost/idempotency/schema gate and isolated tool boundary."""
 
     def __init__(self, registry: PluginRegistry, clock: Clock) -> None:
         self.registry = registry
@@ -76,6 +77,14 @@ class ActionBus:
                 error_code="COST_LIMIT_EXCEEDED", error_message="tool cost exceeds execution context",
             )
 
+        input_errors = validate_schema(call.arguments, spec.input_schema)
+        if input_errors:
+            return self._result(
+                call, started, ToolExecutionStatus.DENIED, attempt,
+                error_code="INPUT_SCHEMA_INVALID",
+                error_message="tool arguments do not satisfy the declared input schema",
+            )
+
         timeout = min(manifest.timeout_seconds, spec.timeout_seconds)
         try:
             output = await asyncio.wait_for(
@@ -93,6 +102,22 @@ class ActionBus:
                 error_code=f"PLUGIN_EXCEPTION_{type(exc).__name__.upper()}",
                 error_message="plugin execution failed in isolation",
                 retryable=True,
+            )
+
+        if not isinstance(output, dict):
+            return self._result(
+                call, started, ToolExecutionStatus.FAILED, attempt,
+                error_code="OUTPUT_NOT_OBJECT",
+                error_message="plugin output must be a JSON object",
+                retryable=False,
+            )
+        output_errors = validate_schema(output, spec.output_schema)
+        if output_errors:
+            return self._result(
+                call, started, ToolExecutionStatus.FAILED, attempt,
+                error_code="OUTPUT_SCHEMA_INVALID",
+                error_message="plugin output does not satisfy the declared output schema",
+                retryable=False,
             )
         return self._result(
             call,
