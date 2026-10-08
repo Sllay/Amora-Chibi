@@ -207,4 +207,62 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         CREATE INDEX IF NOT EXISTS idx_relationship_revision_active ON relationship_revisions(source_id, target_id, valid_until);
         """,
     ),
+    (
+        5,
+        """
+        CREATE TABLE IF NOT EXISTS emotion_events (
+            id TEXT PRIMARY KEY,
+            emotion TEXT NOT NULL CHECK(emotion IN ('joy','gratitude','relief','anger','irritation','fear','disappointment')),
+            intensity REAL NOT NULL CHECK(intensity >= 0 AND intensity <= 1),
+            cause_event_id TEXT,
+            cause_description TEXT NOT NULL,
+            target_id TEXT,
+            agent_id TEXT,
+            blame REAL NOT NULL CHECK(blame >= 0 AND blame <= 1),
+            intentionality REAL NOT NULL CHECK(intentionality >= 0 AND intentionality <= 1),
+            spillover REAL NOT NULL CHECK(spillover >= 0 AND spillover <= 1),
+            appraisal_json TEXT NOT NULL,
+            privacy_scope TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            dedupe_key TEXT UNIQUE
+        );
+        CREATE INDEX IF NOT EXISTS idx_emotion_target_time ON emotion_events(target_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_emotion_type_time ON emotion_events(emotion, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_emotion_cause ON emotion_events(cause_event_id);
+
+        CREATE TABLE IF NOT EXISTS mood_state (
+            singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+            valence REAL NOT NULL CHECK(valence >= -1 AND valence <= 1),
+            arousal REAL NOT NULL CHECK(arousal >= 0 AND arousal <= 1),
+            dominance REAL NOT NULL CHECK(dominance >= -1 AND dominance <= 1),
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS entity_affect (
+            entity_id TEXT PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+            anger REAL NOT NULL DEFAULT 0 CHECK(anger >= 0 AND anger <= 1),
+            affection REAL NOT NULL DEFAULT 0 CHECK(affection >= 0 AND affection <= 1),
+            trust REAL NOT NULL DEFAULT 0.5 CHECK(trust >= 0 AND trust <= 1),
+            irritation REAL NOT NULL DEFAULT 0 CHECK(irritation >= 0 AND irritation <= 1),
+            fear REAL NOT NULL DEFAULT 0 CHECK(fear >= 0 AND fear <= 1),
+            gratitude REAL NOT NULL DEFAULT 0 CHECK(gratitude >= 0 AND gratitude <= 1),
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS social_bids (
+            id TEXT PRIMARY KEY,
+            bid_type TEXT NOT NULL CHECK(bid_type IN ('express_gratitude','seek_contact','seek_repair','set_boundary','withdraw')),
+            target_id TEXT,
+            strength REAL NOT NULL CHECK(strength >= 0 AND strength <= 1),
+            reason TEXT NOT NULL,
+            source_emotion_event_id TEXT NOT NULL REFERENCES emotion_events(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending','consumed','cancelled','expired')),
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_social_bids_pending ON social_bids(status, expires_at, strength DESC);
+        CREATE INDEX IF NOT EXISTS idx_social_bids_target ON social_bids(target_id, created_at DESC);
+        """,
+    ),
 )
