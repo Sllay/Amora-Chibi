@@ -21,11 +21,7 @@ A fundação atual inclui:
 - logging estruturado;
 - testes de restart/recovery.
 
-Documentos canônicos na raiz:
-
-- `ARCHITECTURE.md`
-- `GDD.md`
-- `SKILL.md`
+Os documentos canônicos do projeto são `ARCHITECTURE.md`, `GDD.md` e `SKILL.md`, atualmente mantidos como arquivos anexados do Projeto ChatGPT. `AGENTS.md` contém os guardrails essenciais para agentes que trabalham neste repositório, e `docs/V0.1_CORE.md` documenta a fundação implementada aqui.
 
 ## Estrutura
 
