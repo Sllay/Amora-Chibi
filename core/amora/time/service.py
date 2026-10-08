@@ -104,7 +104,11 @@ class Scheduler:
                 await result
             executed.append(job.job_id)
             if job.interval is None:
-                self._jobs.pop(job.job_id, None)
+                # The callback may intentionally replace this one-shot job with
+                # another job using the same ID. Only remove the ID if it still
+                # points at the job that just ran.
+                if self._jobs.get(job.job_id) is job:
+                    self._jobs.pop(job.job_id, None)
             else:
                 job.due = now + job.interval
                 job.order = next(self._counter)
