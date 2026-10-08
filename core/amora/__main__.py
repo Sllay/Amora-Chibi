@@ -50,6 +50,18 @@ def serve(port: int) -> int:
     return 0
 
 
+def issue_pairing_code() -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        issued = core.pairing.issue()
+        print(f"Código de pareamento: {issued.code}")
+        print(f"Expira em: {issued.expires_at.isoformat()}")
+        print("Uso único; máximo de 5 tentativas.")
+        return 0
+    finally:
+        core.close()
+
+
 def resolve_reference(
     expression: str,
     *,
@@ -150,6 +162,7 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("doctor", help="Valida fundações locais do Core")
+    sub.add_parser("pair", help="Gera código local de pareamento de uso único")
 
     backup_parser = sub.add_parser("backup", help="Cria backup consistente do SQLite")
     backup_parser.add_argument("--name", default=None)
@@ -183,6 +196,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "doctor":
         return doctor()
+    if args.command == "pair":
+        return issue_pairing_code()
     if args.command == "backup":
         return backup(args.name)
     if args.command == "serve":
