@@ -97,6 +97,7 @@ class ExecutionContext(BaseModel):
     granted_permissions: set[str] = Field(default_factory=set)
     privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
     remote_processing_allowed: bool = False
+    allow_non_idempotent: bool = False
     max_risk: RiskLevel = RiskLevel.LOW
     max_total_cost: float = Field(default=0.25, ge=0.0, le=1.0)
     session_id: str | None = None
