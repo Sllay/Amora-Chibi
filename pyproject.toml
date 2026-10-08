@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 amora = "amora.__main__:main"
+amora-autonomy = "amora.autonomy.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "core"}
