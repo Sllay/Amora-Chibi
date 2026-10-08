@@ -331,7 +331,10 @@ def emotion_state() -> int:
     try:
         payload = {
             "mood": core.emotion.current_mood().model_dump(mode="json"),
-            "affect": [item.model_dump(mode="json") for item in core.emotion.store.list_affect()],
+            "affect": [
+                core.emotion.affect_for(item.entity_id).model_dump(mode="json")
+                for item in core.emotion.store.list_affect()
+            ],
             "pending_bids": [item.model_dump(mode="json") for item in core.emotion.pending_bids()],
         }
         print(json.dumps(payload, indent=2, ensure_ascii=False))
