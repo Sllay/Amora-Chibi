@@ -33,8 +33,7 @@ def _clamp(value: float, low: float, high: float) -> float:
 class AutonomyEngine:
     """V0.6 decision layer: drives -> desires -> utility -> BDI intention.
 
-    This layer deliberately stops before planning/execution. V0.7 owns tools,
-    plans and action execution.
+    Planning and execution are intentionally deferred to V0.7.
     """
 
     MIN_ACTION_UTILITY = 0.18
@@ -90,13 +89,11 @@ class AutonomyEngine:
         states: list[DriveState] = []
         for current in self.store.list_drives():
             elapsed_hours = max(0.0, (now - current.updated_at).total_seconds() / 3600.0)
-            need = _clamp(current.need + current.growth_per_hour * elapsed_hours, 0.0, 1.0)
-            updated = DriveState(
-                drive=current.drive,
-                need=need,
-                baseline=current.baseline,
-                growth_per_hour=current.growth_per_hour,
-                updated_at=now,
+            updated = current.model_copy(
+                update={
+                    "need": _clamp(current.need + current.growth_per_hour * elapsed_hours, 0.0, 1.0),
+                    "updated_at": now,
+                }
             )
             self.store.put_drive(updated)
             states.append(updated)
@@ -111,14 +108,11 @@ class AutonomyEngine:
         source_event_id=None,
         dedupe_key: str | None = None,
     ) -> tuple[DriveState, bool]:
-        if dedupe_key:
-            existing = self.store.get_adjustment_by_dedupe(dedupe_key)
-            if existing is not None:
-                current = {item.drive: item for item in self.current_drives()}[drive]
-                return current, True
-        states = {item.drive: item for item in self.current_drives()}
-        current = states[drive]
-        adjustment = DriveAdjustment(
+        if dedupe_key and self.store.get_adjustment_by_dedupe(dedupe_key) is not None:
+            return {item.drive: item for item in self.current_drives()}[drive], True
+
+        current = {item.drive: item for item in self.current_drives()}[drive]
+        item = DriveAdjustment(
             drive=drive,
             delta=_clamp(delta, -1.0, 1.0),
             reason=reason,
@@ -126,26 +120,19 @@ class AutonomyEngine:
             created_at=self.clock.now(),
             dedupe_key=dedupe_key,
         )
-        if not self.store.put_adjustment(adjustment):
-            current = {item.drive: item for item in self.current_drives()}[drive]
-            return current, True
+        if not self.store.put_adjustment(item):
+            return {state.drive: state for state in self.current_drives()}[drive], True
         updated = current.model_copy(
-            update={
-                "need": _clamp(current.need + adjustment.delta, 0.0, 1.0),
-                "updated_at": self.clock.now(),
-            }
+            update={"need": _clamp(current.need + item.delta, 0.0, 1.0), "updated_at": self.clock.now()}
         )
         self.store.put_drive(updated)
         return updated, False
 
     def state(self) -> dict[str, object]:
+        current = self.store.current_intention()
         return {
             "drives": [item.model_dump(mode="json") for item in self.current_drives()],
-            "current_intention": (
-                self.store.current_intention().model_dump(mode="json")
-                if self.store.current_intention()
-                else None
-            ),
+            "current_intention": current.model_dump(mode="json") if current else None,
             "decision_count": self.store.decision_count(),
         }
 
@@ -168,13 +155,11 @@ class AutonomyEngine:
         silence_utility = self._silence_utility(drives, active_context)
         current = self.store.current_intention()
         previous_id = current.id if current else None
+        best = candidates[0] if candidates else None
         now = self.clock.now()
         reasons: list[str] = []
         selected: Intention | None = None
-        outcome: DecisionOutcome
         selected_utility: float | None = None
-
-        best = candidates[0] if candidates else None
 
         if current is not None and not active_context.can_interrupt:
             selected = current
@@ -205,7 +190,7 @@ class AutonomyEngine:
                 outcome = DecisionOutcome.SELECTED
                 selected_utility = best.utility
                 reasons.append("URGENT_SWITCH" if urgent_switch else "UTILITY_SWITCH")
-        elif current is not None and best is None:
+        elif current is not None:
             selected = current
             outcome = DecisionOutcome.KEPT_CURRENT
             selected_utility = current.selected_utility
@@ -282,9 +267,8 @@ class AutonomyEngine:
 
     def _belief_snapshot(self, context: DecisionContext) -> BeliefSnapshot:
         mood = self.emotion.current_mood()
-        claims = self.world.current_state()
         return BeliefSnapshot(
-            world_claim_ids=[claim.id for claim in claims],
+            world_claim_ids=[claim.id for claim in self.world.current_state()],
             mood_valence=mood.valence,
             mood_arousal=mood.arousal,
             mood_dominance=mood.dominance,
@@ -294,11 +278,9 @@ class AutonomyEngine:
 
     def _collect_candidates(self, drives: list[DriveState], context: DecisionContext) -> list[DesireCandidate]:
         drive_map = {item.drive: item for item in drives}
-        items: list[DesireCandidate] = []
-        for bid in self.emotion.pending_bids(limit=100):
-            items.append(self._candidate_from_bid(bid, drive_map, context))
-        items.extend(self._drive_candidates(drive_map, context))
-        return items
+        candidates = [self._candidate_from_bid(bid, drive_map, context) for bid in self.emotion.pending_bids(limit=100)]
+        candidates.extend(self._drive_candidates(drive_map, context))
+        return candidates
 
     def _candidate_from_bid(
         self,
@@ -306,13 +288,7 @@ class AutonomyEngine:
         drives: dict[DriveType, DriveState],
         context: DecisionContext,
     ) -> DesireCandidate:
-        if bid.bid_type in {SocialBidType.SEEK_CONTACT, SocialBidType.SEEK_REPAIR}:
-            primary = DriveType.SOCIAL
-        else:
-            primary = DriveType.EXPRESSION
-        opportunity = self._target_opportunity(bid.target_id, context)
-        interruption = self._interruption_penalty(context, bid.target_id)
-        relationship = self._relationship_factor(bid.target_id)
+        primary = DriveType.SOCIAL if bid.bid_type in {SocialBidType.SEEK_CONTACT, SocialBidType.SEEK_REPAIR} else DriveType.EXPRESSION
         reward = {
             SocialBidType.EXPRESS_GRATITUDE: 0.78,
             SocialBidType.SEEK_CONTACT: 0.72,
@@ -328,16 +304,15 @@ class AutonomyEngine:
             SocialBidType.WITHDRAW: 0.05,
         }[bid.bid_type]
         factors = UtilityFactors(
-            drive_need=drives[primary].need,
-            opportunity=opportunity,
+            drive_need=max(drives[primary].need, bid.strength),
+            opportunity=self._target_opportunity(bid.target_id, context),
             personality=1.0,
             emotion=_clamp(0.35 + 0.65 * bid.strength, 0.0, 1.0),
-            relationship=relationship,
+            relationship=self._relationship_factor(bid.target_id),
             expected_reward=reward,
             cost=cost,
-            interruption_penalty=interruption,
+            interruption_penalty=self._interruption_penalty(context, bid.target_id),
         )
-        utility = self._utility(factors)
         return DesireCandidate(
             kind=DesireKind.SOCIAL_BID,
             source_kind="social_bid",
@@ -345,11 +320,15 @@ class AutonomyEngine:
             target_id=bid.target_id,
             primary_drive=primary,
             factors=factors,
-            utility=utility,
+            utility=self._utility(factors),
             urgency=bid.strength,
             created_at=self.clock.now(),
             expires_at=bid.expires_at,
-            metadata={"bid_type": bid.bid_type.value, "bid_reason": bid.reason},
+            metadata={
+                "bid_type": bid.bid_type.value,
+                "bid_reason": bid.reason,
+                "bid_pressure_applied": bid.strength > drives[primary].need,
+            },
         )
 
     def _drive_candidates(
@@ -371,13 +350,12 @@ class AutonomyEngine:
             if state.need < 0.45:
                 continue
             kind, target, reward, cost = mapping[drive]
-            opportunity = self._target_opportunity(target, context) if target else context.opportunity
             interruption = self._interruption_penalty(context, target)
-            if not context.is_idle and kind not in {DesireKind.REST}:
+            if not context.is_idle and kind != DesireKind.REST:
                 interruption = _clamp(interruption + 0.18, 0.0, 1.0)
             factors = UtilityFactors(
                 drive_need=state.need,
-                opportunity=opportunity,
+                opportunity=self._target_opportunity(target, context) if target else context.opportunity,
                 personality=0.90,
                 emotion=1.0,
                 relationship=self._relationship_factor(target),
@@ -385,8 +363,6 @@ class AutonomyEngine:
                 cost=cost,
                 interruption_penalty=interruption,
             )
-            utility = self._utility(factors)
-            urgency = _clamp((state.need - 0.55) / 0.45, 0.0, 1.0)
             candidates.append(
                 DesireCandidate(
                     kind=kind,
@@ -395,10 +371,9 @@ class AutonomyEngine:
                     target_id=target,
                     primary_drive=drive,
                     factors=factors,
-                    utility=utility,
-                    urgency=urgency,
+                    utility=self._utility(factors),
+                    urgency=_clamp((state.need - 0.55) / 0.45, 0.0, 1.0),
                     created_at=self.clock.now(),
-                    expires_at=None,
                     metadata={"generated_from_homeostasis": True},
                 )
             )
@@ -417,17 +392,18 @@ class AutonomyEngine:
         return _clamp(product - factors.cost - factors.interruption_penalty, -1.0, 1.0)
 
     def _silence_utility(self, drives: list[DriveState], context: DecisionContext) -> float:
-        drive_map = {item.drive: item.need for item in drives}
-        social_pressure = max(drive_map.get(DriveType.SOCIAL, 0.0), drive_map.get(DriveType.EXPRESSION, 0.0))
-        value = (
+        values = {item.drive: item.need for item in drives}
+        social_pressure = max(values.get(DriveType.SOCIAL, 0.0), values.get(DriveType.EXPRESSION, 0.0))
+        return _clamp(
             0.16
-            + 0.42 * drive_map.get(DriveType.REST, 0.0)
+            + 0.42 * values.get(DriveType.REST, 0.0)
             + 0.45 * context.interruption_penalty
             + (0.32 if not context.can_interrupt else 0.0)
             + (0.12 if context.active_conversation else 0.0)
-            - 0.10 * social_pressure
+            - 0.10 * social_pressure,
+            0.0,
+            1.0,
         )
-        return _clamp(value, 0.0, 1.0)
 
     def _target_opportunity(self, target_id: str | None, context: DecisionContext) -> float:
         if target_id is None:
@@ -464,7 +440,6 @@ class AutonomyEngine:
 
     def _intention_from_candidate(self, candidate: DesireCandidate) -> Intention:
         now = self.clock.now()
-        expires_at = candidate.expires_at or (now + self.DEFAULT_INTENTION_TTL)
         return Intention(
             kind=candidate.kind,
             target_id=candidate.target_id,
@@ -475,7 +450,7 @@ class AutonomyEngine:
             commitment_strength=_clamp(0.55 + 0.35 * candidate.urgency, 0.0, 1.0),
             created_at=now,
             updated_at=now,
-            expires_at=expires_at,
+            expires_at=candidate.expires_at or (now + self.DEFAULT_INTENTION_TTL),
             status=IntentionStatus.ACTIVE,
             metadata={
                 "candidate_id": str(candidate.id),
