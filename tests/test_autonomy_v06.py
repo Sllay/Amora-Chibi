@@ -112,6 +112,47 @@ async def test_hysteresis_keeps_current_intention_instead_of_thrashing(tmp_path,
 
 
 @pytest.mark.asyncio
+async def test_urgent_social_bid_can_break_hysteresis(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=_clock())
+    try:
+        core.autonomy.adjust_drive(DriveType.CURIOSITY, 0.55, reason="idle curiosity")
+        first = await core.autonomy.cycle(DecisionContext(is_idle=True), dedupe_key="curiosity-first")
+        assert first.intention is not None
+        first_id = first.intention.id
+
+        emotion = await core.emotion.process(
+            AppraisalInput(
+                description="BK cruzou um limite importante de propósito",
+                outcome_valence=-1.0,
+                target_id="PERSON_BK",
+                agent_id="PERSON_BK",
+                goal_relevance=1.0,
+                novelty=0.9,
+                expectedness=0.1,
+                agency=1.0,
+                control=0.6,
+                intentionality=1.0,
+                norm_violation=1.0,
+                relationship_relevance=1.0,
+            )
+        )
+        assert emotion.social_bids and emotion.social_bids[0].strength >= 0.88
+
+        switched = await core.autonomy.cycle(
+            DecisionContext(is_idle=True, available_entities={"PERSON_BK"}),
+            dedupe_key="urgent-switch",
+        )
+        assert switched.decision.outcome == DecisionOutcome.SELECTED
+        assert switched.intention is not None
+        assert switched.intention.id != first_id
+        assert switched.intention.kind == DesireKind.SOCIAL_BID
+        assert "URGENT_SWITCH" in switched.decision.reason_codes
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
 async def test_context_can_defer_current_intention_without_erasing_it(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=_clock())
@@ -124,6 +165,30 @@ async def test_context_can_defer_current_intention_without_erasing_it(tmp_path, 
         assert deferred.intention is not None
         assert deferred.intention.id == first.intention.id
         assert core.autonomy.store.current_intention().id == first.intention.id
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_busy_target_and_interruption_pressure_can_make_silence_win(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=_clock())
+    try:
+        core.autonomy.adjust_drive(DriveType.SOCIAL, 0.40, reason="wants contact")
+        result = await core.autonomy.cycle(
+            DecisionContext(
+                is_idle=False,
+                can_interrupt=True,
+                active_conversation=True,
+                active_addressee="ENTITY_CHATGPT",
+                busy_entities={"PERSON_BK"},
+                interruption_penalty=0.45,
+            ),
+            dedupe_key="busy-target",
+        )
+        assert result.decision.outcome == DecisionOutcome.SILENCE
+        assert result.intention is None
+        assert "SILENCE_SELECTED" in result.decision.reason_codes
     finally:
         core.close()
 
