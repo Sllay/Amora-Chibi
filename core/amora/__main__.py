@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import getpass
 import json
+import mimetypes
+from pathlib import Path
 
 from amora import __version__
 from amora.api import create_api
 from amora.app import AmoraCore
+from amora.audio import AudioSegment, SttError
 from amora.language import PerspectiveFrame, PerspectiveStack
 
 
@@ -79,6 +84,66 @@ def infer_addressee(text: str, *, speaker: str) -> int:
         core.close()
 
 
+def secret_set(name: str) -> int:
+    value = getpass.getpass(f"Valor para {name.upper()}: ")
+    if not value:
+        print("Erro: valor vazio.")
+        return 2
+    core = AmoraCore.bootstrap()
+    try:
+        normalized = core.secrets.normalize_name(name)
+        core.secrets.set(normalized, value)
+        print(f"{normalized} configurado no SecretStore local.")
+        return 0
+    finally:
+        core.close()
+
+
+def secret_list() -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        for name in core.secrets.names():
+            print(name)
+        return 0
+    finally:
+        core.close()
+
+
+def secret_delete(name: str) -> int:
+    core = AmoraCore.bootstrap()
+    try:
+        normalized = core.secrets.normalize_name(name)
+        deleted = core.secrets.delete(normalized)
+        print(f"{normalized}: {'removido' if deleted else 'não encontrado'}")
+        return 0
+    finally:
+        core.close()
+
+
+def transcribe(path: str, *, language: str | None) -> int:
+    audio_path = Path(path).expanduser().resolve()
+    mime_type = mimetypes.guess_type(audio_path.name)[0] or "application/octet-stream"
+    core = AmoraCore.bootstrap()
+    try:
+        try:
+            result = asyncio.run(
+                core.stt.transcribe(
+                    AudioSegment(
+                        path=audio_path,
+                        mime_type=mime_type,
+                        language=language,
+                    )
+                )
+            )
+        except (SttError, FileNotFoundError) as exc:
+            print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
+            return 2
+        print(json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        core.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="amora")
     parser.add_argument("--version", action="version", version=__version__)
@@ -103,6 +168,18 @@ def main() -> int:
     addressee_parser.add_argument("text")
     addressee_parser.add_argument("--speaker", default="PERSON_BK")
 
+    secret_parser = sub.add_parser("secret", help="Gerencia apenas nomes/valores no SecretStore local")
+    secret_sub = secret_parser.add_subparsers(dest="secret_command", required=True)
+    secret_set_parser = secret_sub.add_parser("set", help="Lê um segredo sem ecoar no terminal")
+    secret_set_parser.add_argument("name")
+    secret_sub.add_parser("list", help="Lista somente nomes de secrets, nunca valores")
+    secret_delete_parser = secret_sub.add_parser("delete", help="Remove um secret local")
+    secret_delete_parser.add_argument("name")
+
+    transcribe_parser = sub.add_parser("transcribe", help="Transcreve arquivo de áudio via STT configurado")
+    transcribe_parser.add_argument("path")
+    transcribe_parser.add_argument("--language", default="pt")
+
     args = parser.parse_args()
     if args.command == "doctor":
         return doctor()
@@ -120,6 +197,15 @@ def main() -> int:
         )
     if args.command == "addressee":
         return infer_addressee(args.text, speaker=args.speaker)
+    if args.command == "secret":
+        if args.secret_command == "set":
+            return secret_set(args.name)
+        if args.secret_command == "list":
+            return secret_list()
+        if args.secret_command == "delete":
+            return secret_delete(args.name)
+    if args.command == "transcribe":
+        return transcribe(args.path, language=args.language)
     return 2
 
 
