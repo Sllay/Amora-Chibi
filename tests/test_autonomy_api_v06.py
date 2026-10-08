@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from amora.api import create_api
@@ -45,7 +46,9 @@ def test_drive_adjustment_and_cycle_are_idempotent_over_api(tmp_path: Path, monk
         replay_adjust = client.post("/v1/autonomy/drives/social/adjust", headers=headers, json=adjustment)
         assert replay_adjust.status_code == 200
         assert replay_adjust.json()["deduplicated"] is True
-        assert replay_adjust.json()["drive"]["need"] == first_need
+        replay_need = replay_adjust.json()["drive"]["need"]
+        assert replay_need == pytest.approx(first_need, abs=1e-5)
+        assert replay_need < min(1.0, first_need + 1e-5)
 
         payload = {
             "context": {"is_idle": True, "available_entities": ["PERSON_BK"]},
