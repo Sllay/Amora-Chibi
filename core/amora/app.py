@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from amora import __version__
+from amora.actions import ActionEngine, ActionStore
 from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
 from amora.autonomy import AutonomyEngine, AutonomyStore
 from amora.emotion import EmotionEngine, EmotionStore
@@ -48,6 +49,7 @@ class AmoraCore:
     perspective_consolidator: PerspectiveConsolidator
     emotion: EmotionEngine
     autonomy: AutonomyEngine
+    actions: ActionEngine
     models: ModelRouter
     social: SocialSceneTracker
     addressee: AddresseeEngine
@@ -116,6 +118,13 @@ class AmoraCore:
             world,
             events,
         )
+        actions = ActionEngine(
+            ActionStore(paths.database, active_clock),
+            active_clock,
+            autonomy,
+            emotion,
+            events,
+        )
         return cls(
             paths=paths,
             clock=active_clock,
@@ -134,6 +143,7 @@ class AmoraCore:
             perspective_consolidator=perspective_consolidator,
             emotion=emotion,
             autonomy=autonomy,
+            actions=actions,
             models=ModelRouter(),
             social=social,
             addressee=addressee,
@@ -179,6 +189,11 @@ class AmoraCore:
             "autonomy_decision_count": self.autonomy.store.decision_count(),
             "active_intention_kind": current_intention.kind.value if current_intention else None,
             "drives": drives,
+            "action_plan_count": self.actions.store.plan_count(),
+            "action_run_count": self.actions.store.run_count(),
+            "tool_execution_count": self.actions.store.execution_count(),
+            "plugin_count": self.actions.registry.plugin_count,
+            "skill_count": self.actions.skills.count,
             "entity_count": len(self.identities.entities),
             "relationship_count": len(self.identities.relationships),
             "active_sessions": self.database.active_session_count(self.clock.now()),
@@ -197,6 +212,7 @@ class AmoraCore:
         return self.database.backup_to(self.paths.backups / filename)
 
     def close(self) -> None:
+        self.actions.close()
         self.autonomy.close()
         self.emotion.close()
         self.world_store.close()
