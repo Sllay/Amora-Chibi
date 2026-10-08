@@ -76,6 +76,11 @@ class Scheduler:
     def schedule_idle(self, job_id: str, delay_seconds: float, callback: JobCallback) -> None:
         self._schedule(job_id, delay_seconds, callback, interval=None, idle_only=True)
 
+    def schedule_idle_interval(self, job_id: str, interval_seconds: float, callback: JobCallback) -> None:
+        if interval_seconds <= 0:
+            raise ValueError("interval_seconds must be positive")
+        self._schedule(job_id, interval_seconds, callback, interval=interval_seconds, idle_only=True)
+
     def cancel(self, job_id: str) -> bool:
         job = self._jobs.pop(job_id, None)
         if job is None:
