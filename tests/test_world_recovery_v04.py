@@ -66,7 +66,7 @@ def test_world_model_survives_backup_restore_with_history(tmp_path: Path, monkey
     restored_db = AmoraDatabase(restored_path)
     try:
         assert restored_db.integrity_check() == "ok"
-        assert restored_db.schema_version() == 5
+        assert restored_db.schema_version() == 6
     finally:
         restored_db.close()
 
