@@ -89,7 +89,12 @@ class AmoraCore:
         world = WorldModelService(world_store, active_clock)
         self_model = SelfModelService(world_store, active_clock)
         self_model.ensure_core_identity()
-        relationships = RelationshipEvolutionService(world_store, active_clock, identities)
+        relationships = RelationshipEvolutionService(
+            world_store,
+            active_clock,
+            identities,
+            persist_registry=database.save_registry,
+        )
         relationships.seed_registry_relationships()
         perspective_consolidator = PerspectiveConsolidator(world)
         return cls(
