@@ -7,7 +7,7 @@ from amora import __version__
 from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
 from amora.events import AsyncEventBus
 from amora.identity import DeviceIdentity, DeviceTrust, EntityRegistry, SessionService, build_initial_registry
-from amora.language import ACIRCompiler, PerspectiveResolver
+from amora.language import ACIRCompiler, LanguageSocialPipeline, PerspectiveResolver
 from amora.models import ModelRouter
 from amora.observability import configure_logging
 from amora.secrets import SecretStore
@@ -32,6 +32,7 @@ class AmoraCore:
     addressee: AddresseeEngine
     perspective: PerspectiveResolver
     acir: ACIRCompiler
+    language_social: LanguageSocialPipeline
     vad: EnergyVad
     stt: GroqWhisperSTT
 
@@ -62,12 +63,14 @@ class AmoraCore:
                     last_seen=active_clock.now(),
                 )
             )
+        events = AsyncEventBus(event_store=database)
         social = SocialSceneTracker()
+        addressee = AddresseeEngine(identities)
         perspective = PerspectiveResolver(identities)
         return cls(
             paths=paths,
             clock=active_clock,
-            events=AsyncEventBus(event_store=database),
+            events=events,
             scheduler=Scheduler(active_clock),
             identities=identities,
             sessions=sessions,
@@ -75,9 +78,15 @@ class AmoraCore:
             database=database,
             models=ModelRouter(),
             social=social,
-            addressee=AddresseeEngine(identities),
+            addressee=addressee,
             perspective=perspective,
             acir=ACIRCompiler(perspective),
+            language_social=LanguageSocialPipeline(
+                clock=active_clock,
+                events=events,
+                social=social,
+                addressee=addressee,
+            ),
             vad=EnergyVad(),
             stt=GroqWhisperSTT(secrets),
         )
