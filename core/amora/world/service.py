@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 from amora.events import PrivacyScope
-from amora.identity import EntityRegistry
+from amora.identity import EntityRegistry, Relationship
 from amora.time import Clock
 
 from .models import (
@@ -214,10 +215,18 @@ class SelfModelService:
 class RelationshipEvolutionService:
     """Temporal relationship identity/provenance history; affect belongs to V0.5."""
 
-    def __init__(self, store: WorldStore, clock: Clock, identities: EntityRegistry) -> None:
+    def __init__(
+        self,
+        store: WorldStore,
+        clock: Clock,
+        identities: EntityRegistry,
+        *,
+        persist_registry: Callable[[EntityRegistry], None] | None = None,
+    ) -> None:
         self.store = store
         self.clock = clock
         self.identities = identities
+        self.persist_registry = persist_registry
 
     def seed_registry_relationships(self) -> None:
         now = self.clock.now()
@@ -268,6 +277,16 @@ class RelationshipEvolutionService:
             metadata=metadata or {},
         )
         self.store.put_relationship(relation)
+        self.identities.upsert_relationship(
+            Relationship(
+                source=source_id,
+                relation_type=relation_type,
+                target=target_id,
+                confidence=confidence,
+            )
+        )
+        if self.persist_registry is not None:
+            self.persist_registry(self.identities)
         return relation
 
     def history(self, source_id: str, *, target_id: str | None = None) -> list[RelationshipState]:
