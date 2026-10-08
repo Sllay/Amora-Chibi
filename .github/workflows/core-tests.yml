@@ -39,6 +39,12 @@ jobs:
         run: |
           amora-autonomy state
           amora-autonomy cycle --dedupe-key ci-autonomy-cycle
+      - name: Actions smoke test
+        env:
+          AMORA_HOME: ${{ runner.temp }}/amora-runtime
+        run: |
+          amora-actions state
+          python -m amora.actions state
       - name: Backup smoke test
         env:
           AMORA_HOME: ${{ runner.temp }}/amora-runtime
