@@ -27,10 +27,7 @@ def test_promoting_report_to_belief_preserves_claim_evidence(tmp_path: Path, mon
         promoted = core.world.promote_to_belief(str(report.id), confidence=0.96).claim
         assert promoted.canonical is True
         assert promoted.supersedes_claim_id is None
-        assert any(
-            item.kind == EvidenceKind.CLAIM and item.ref_id == str(report.id)
-            for item in promoted.evidence
-        )
+        assert any(item.kind == EvidenceKind.CLAIM and item.ref_id == str(report.id) for item in promoted.evidence)
         assert core.world.current_state(subject_id="PERSON_BK")[0].id == promoted.id
     finally:
         core.close()
@@ -40,13 +37,7 @@ def test_self_model_preference_survives_restart(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     first = AmoraCore.bootstrap()
     try:
-        first.self_model.set(
-            SelfLayer.PREFERENCES,
-            "favorite_visual_style",
-            "chibi",
-            source="test",
-            confidence=0.82,
-        )
+        first.self_model.set(SelfLayer.PREFERENCES, "favorite_visual_style", "chibi", source="test", confidence=0.82)
     finally:
         first.close()
 
@@ -65,28 +56,8 @@ def test_world_model_survives_backup_restore_with_history(tmp_path: Path, monkey
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap()
     try:
-        core.world.record(
-            WorldClaimDraft(
-                kind=EpistemicKind.BELIEF,
-                statement="BK prefere azul",
-                subject_id="PERSON_BK",
-                predicate="favorite_color",
-                object_value="blue",
-                source="test:first",
-                confidence=0.97,
-            )
-        )
-        core.world.record(
-            WorldClaimDraft(
-                kind=EpistemicKind.BELIEF,
-                statement="BK agora prefere roxo",
-                subject_id="PERSON_BK",
-                predicate="favorite_color",
-                object_value="purple",
-                source="test:second",
-                confidence=0.98,
-            )
-        )
+        core.world.record(WorldClaimDraft(kind=EpistemicKind.BELIEF, statement="BK prefere azul", subject_id="PERSON_BK", predicate="favorite_color", object_value="blue", source="test:first", confidence=0.97))
+        core.world.record(WorldClaimDraft(kind=EpistemicKind.BELIEF, statement="BK agora prefere roxo", subject_id="PERSON_BK", predicate="favorite_color", object_value="purple", source="test:second", confidence=0.98))
         backup = core.create_backup("v04-world.db")
     finally:
         core.close()
@@ -95,7 +66,7 @@ def test_world_model_survives_backup_restore_with_history(tmp_path: Path, monkey
     restored_db = AmoraDatabase(restored_path)
     try:
         assert restored_db.integrity_check() == "ok"
-        assert restored_db.schema_version() == 4
+        assert restored_db.schema_version() == 5
     finally:
         restored_db.close()
 
@@ -121,23 +92,13 @@ def test_relationship_revision_history_survives_restart(tmp_path: Path, monkeypa
     try:
         initial = first.world_store.current_relationship("PERSON_BK", "father_of", "ENTITY_AMORA")
         assert initial is not None
-        first.relationships.record(
-            "PERSON_BK",
-            "father_of",
-            "ENTITY_AMORA",
-            confidence=0.95,
-            source_of_truth="test:revalidated",
-        )
+        first.relationships.record("PERSON_BK", "father_of", "ENTITY_AMORA", confidence=0.95, source_of_truth="test:revalidated")
     finally:
         first.close()
 
     second = AmoraCore.bootstrap()
     try:
-        history = [
-            item
-            for item in second.relationships.history("PERSON_BK", target_id="ENTITY_AMORA")
-            if item.relation_type == "father_of"
-        ]
+        history = [item for item in second.relationships.history("PERSON_BK", target_id="ENTITY_AMORA") if item.relation_type == "father_of"]
         assert len(history) == 2
         assert history[0].source_of_truth == "test:revalidated"
         assert history[1].valid_until == history[0].valid_from
