@@ -5,6 +5,7 @@ from pathlib import Path
 
 from amora import __version__
 from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
+from amora.emotion import EmotionEngine, EmotionStore
 from amora.events import AsyncEventBus
 from amora.identity import DeviceIdentity, DeviceTrust, EntityRegistry, SessionService, build_initial_registry
 from amora.language import ACIRCompiler, LanguageSocialPipeline, PerspectiveResolver
@@ -44,6 +45,7 @@ class AmoraCore:
     self_model: SelfModelService
     relationships: RelationshipEvolutionService
     perspective_consolidator: PerspectiveConsolidator
+    emotion: EmotionEngine
     models: ModelRouter
     social: SocialSceneTracker
     addressee: AddresseeEngine
@@ -97,6 +99,12 @@ class AmoraCore:
         )
         relationships.seed_registry_relationships()
         perspective_consolidator = PerspectiveConsolidator(world)
+        emotion = EmotionEngine(
+            EmotionStore(paths.database, active_clock),
+            active_clock,
+            identities,
+            events,
+        )
         return cls(
             paths=paths,
             clock=active_clock,
@@ -113,6 +121,7 @@ class AmoraCore:
             self_model=self_model,
             relationships=relationships,
             perspective_consolidator=perspective_consolidator,
+            emotion=emotion,
             models=ModelRouter(),
             social=social,
             addressee=addressee,
@@ -135,6 +144,7 @@ class AmoraCore:
         bk = self.identities.resolve_alias("BK")
         integrity = self.database.integrity_check()
         core_identity = self.self_model.get(SelfLayer.CORE_IDENTITY, "entity_id")
+        mood = self.emotion.current_mood()
         return {
             "status": "ok" if integrity == "ok" else "degraded",
             "version": __version__,
@@ -147,6 +157,11 @@ class AmoraCore:
             "canonical_world_state_count": len(self.world.current_state()),
             "self_entry_count": len(self.world_store.list_self_entries()),
             "self_core_identity": core_identity.value if core_identity else None,
+            "emotion_event_count": self.emotion.store.event_count(),
+            "mood_valence": round(mood.valence, 6),
+            "mood_arousal": round(mood.arousal, 6),
+            "mood_dominance": round(mood.dominance, 6),
+            "pending_social_bids": len(self.emotion.pending_bids()),
             "entity_count": len(self.identities.entities),
             "relationship_count": len(self.identities.relationships),
             "active_sessions": self.database.active_session_count(self.clock.now()),
@@ -165,6 +180,7 @@ class AmoraCore:
         return self.database.backup_to(self.paths.backups / filename)
 
     def close(self) -> None:
+        self.emotion.close()
         self.world_store.close()
         self.memory.close()
         self.database.close()
