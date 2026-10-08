@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -134,9 +133,7 @@ class ActionStore:
                 return False
         return True
 
-    def get_run_by_dedupe(self, dedupe_key: str) -> PlanExecutionResult | None:
-        with self._lock:
-            row = self._conn.execute("SELECT result_json FROM action_runs WHERE dedupe_key = ?", (dedupe_key,)).fetchone()
+    def _hydrate_run(self, row: sqlite3.Row | None) -> PlanExecutionResult | None:
         if row is None:
             return None
         result = PlanExecutionResult.model_validate(json.loads(row["result_json"]))
@@ -144,6 +141,19 @@ class ActionStore:
         for execution in result.executions:
             execution.deduplicated = True
         return result
+
+    def get_run_by_dedupe(self, dedupe_key: str) -> PlanExecutionResult | None:
+        with self._lock:
+            row = self._conn.execute("SELECT result_json FROM action_runs WHERE dedupe_key = ?", (dedupe_key,)).fetchone()
+        return self._hydrate_run(row)
+
+    def latest_run_for_plan(self, plan_id: UUID | str) -> PlanExecutionResult | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT result_json FROM action_runs WHERE plan_id = ? ORDER BY created_at DESC LIMIT 1",
+                (str(plan_id),),
+            ).fetchone()
+        return self._hydrate_run(row)
 
     def run_count(self) -> int:
         with self._lock:
