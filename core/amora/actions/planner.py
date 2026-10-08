@@ -59,6 +59,8 @@ class Planner:
                 metadata={
                     "skill_version": skill.version,
                     "provider_used": False,
+                    "source_kind": intention.source_kind,
+                    "source_ref_id": intention.source_ref_id,
                 },
             )
 
