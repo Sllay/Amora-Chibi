@@ -66,7 +66,7 @@ def test_backup_restore_preserves_speech_queue(tmp_path: Path, monkeypatch) -> N
     restored_db = AmoraDatabase(restored_path)
     try:
         assert restored_db.integrity_check() == "ok"
-        assert restored_db.schema_version() == 8
+        assert restored_db.schema_version() == 9
     finally:
         restored_db.close()
 
