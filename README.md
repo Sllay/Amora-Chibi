@@ -6,7 +6,7 @@ Monorepo oficial da **Amora**, uma IA-companheira persistente, mobile-first e mu
 
 ## Estado atual
 
-**V0.8 — Natural Conversation / Turn Manager / Voice** em fechamento.
+**V0.9 — Avatar Studio + Runtime** em fechamento.
 
 A base implementada até aqui inclui:
 
@@ -17,9 +17,10 @@ A base implementada até aqui inclui:
 - V0.5: Appraisal determinístico, Emotion Events com target/cause/blame/intentionality/spillover, Global Mood valence/arousal/dominance, Entity Affect por entidade, decay via TimeService e Social Bids candidatos com TTL;
 - V0.6: Drives persistentes, Utility determinística, BDI, hysteresis/switch cost, silêncio explícito, contexto de interrupção, intenção persistente, decisão idempotente e idle scheduling via TimeService/Scheduler;
 - V0.7: Skill Library, Planner hierárquico, Action Bus com gates de permission/privacy/risk/cost/idempotency/timeout, contratos de plugin, Execution Monitor, retry/replan/abort, persistência de planos/ToolCalls/runs e ações semânticas verificadas;
-- V0.8: Turn Manager (`LISTEN/WAIT/BACKCHANNEL/TAKE_TURN/INTERRUPT/YIELD`), Fast Path local de fala/backchannels, fila TTS persistente com lease/ACK, integração idempotente Action→Conversation, privacy fail-closed para `AUTH/SECRET` e Android TextToSpeech com supressão do próprio áudio no VAD/STT.
+- V0.8: Turn Manager (`LISTEN/WAIT/BACKCHANNEL/TAKE_TURN/INTERRUPT/YIELD`), Fast Path local de fala/backchannels, fila TTS persistente com lease/ACK, Action→Conversation idempotente, privacy fail-closed para `AUTH/SECRET` e Android TextToSpeech com supressão do próprio áudio no VAD/STT;
+- V0.9: Avatar Studio/Runtime web compartilhado, edição visual touch de parts/layers/pivôs, rig humanoide padrão, 2-bone IK, color slots, expressões, mouth flap, blink, physics secundária, timeline, PWA, persistência schema 9, assets separados e Mind→Avatar semântico.
 
-Os documentos canônicos do projeto são `ARCHITECTURE.md`, `GDD.md` e `SKILL.md`, atualmente mantidos como arquivos anexados do Projeto ChatGPT. `AGENTS.md` contém os guardrails essenciais para agentes que trabalham neste repositório. Implementações por estágio ficam documentadas em `docs/`.
+Os documentos canônicos do projeto são `ARCHITECTURE.md`, `GDD.md` e `SKILL.md`, mantidos como arquivos anexados do Projeto ChatGPT. `AGENTS.md` contém guardrails essenciais para agentes. Implementações por estágio ficam em `docs/`.
 
 ## Estrutura
 
@@ -27,7 +28,7 @@ Os documentos canônicos do projeto são `ARCHITECTURE.md`, `GDD.md` e `SKILL.md
 Amora-Chibi/
 ├── core/        # cérebro Python / Termux
 ├── android/     # app Android Kotlin
-├── avatar/      # renderer web compartilhado
+├── avatar/      # Avatar Studio + Runtime web
 ├── plugins/     # integrações modulares
 ├── tests/       # testes do Core
 ├── tools/       # scripts de desenvolvimento/Termux
@@ -36,49 +37,58 @@ Amora-Chibi/
 
 ## Termux + GitSync
 
-O repositório pode ficar no armazenamento compartilhado para o GitSync, mas **não deve ser executado dali**. O Android não oferece ali todos os recursos de filesystem necessários para virtualenvs e executáveis Python.
+O repositório pode ficar no armazenamento compartilhado para o GitSync, mas **não deve ser executado dali**. Execute da cópia privada do Termux.
 
-Depois de sincronizar a `main` no GitSync, rode:
+Primeira instalação/bootstrap:
 
 ```bash
 bash /storage/emulated/0/Documents/Amora-Chibi/tools/termux-bootstrap.sh \
   /storage/emulated/0/Documents/Amora-Chibi
 ```
 
-O bootstrap:
+Atualizações já instaladas podem usar o sync do projeto:
 
-1. copia o código para `~/amora-src` usando Python puro (sem `rsync`);
-2. cria o virtualenv em `~/.venvs/amora`;
-3. instala o wheel Android compatível de `pydantic-core` quando necessário;
-4. instala a Amora e dependências;
-5. roda `pytest`;
-6. roda `amora doctor`.
-
-Não rode `pip install -U pip` no Python global do Termux.
-
-### Compatibilidade Python 3.14 / Android
-
-O Termux atual pode fornecer Python 3.14. O PyPI não fornece wheel Android oficial de `pydantic-core`, então o projeto fixa temporariamente `pydantic==2.14.0b2` / `pydantic-core==2.49.0`, combinação para a qual existe wheel Android pré-compilado compatível com Termux Python 3.14.
-
-O bootstrap obtém esse wheel do índice público:
-
-```text
-https://eutalix.github.io/android-pydantic-core/
+```bash
+bash /storage/emulated/0/Documents/Amora-Chibi/tools/termux-sync.sh \
+  /storage/emulated/0/Documents/Amora-Chibi
 ```
 
-Essa compatibilidade é isolada e deverá ser revisada quando houver wheel Android adequado para versões estáveis mais novas.
-
-### Depois do bootstrap
+Depois:
 
 ```bash
 source ~/.venvs/amora/bin/activate
 cd ~/amora-src
 amora doctor
+```
+
+Não rode `pip install -U pip` no Python global do Termux.
+
+### Compatibilidade Python 3.14 / Android
+
+O Termux atual pode fornecer Python 3.14. O projeto fixa temporariamente `pydantic==2.14.0b2` / `pydantic-core==2.49.0`, combinação para a qual existe wheel Android/arm64 compatível com Termux Python 3.14.
+
+O bootstrap obtém esse wheel de:
+
+```text
+https://eutalix.github.io/android-pydantic-core/
+```
+
+Essa compatibilidade deverá ser revisada quando versões estáveis novas tiverem wheel Android adequado.
+
+## Core local
+
+```bash
+source ~/.venvs/amora/bin/activate
+cd ~/amora-src
+
+amora doctor
 amora backup
 amora serve --port 8765
 ```
 
-### Teste local da memória V0.3
+A API escuta somente `127.0.0.1` por padrão.
+
+## Teste local da memória V0.3
 
 ```bash
 amora memory remember "BK mostrou um desenho novo para Amora" \
@@ -87,7 +97,7 @@ amora memory remember "BK mostrou um desenho novo para Amora" \
 amora memory recall "desenho" --entity PERSON_BK
 ```
 
-### Teste local do World Model V0.4
+## Teste local do World Model V0.4
 
 ```bash
 amora world record "BK não gosta de café" \
@@ -111,7 +121,7 @@ amora world history --subject PERSON_BK --predicate likes_coffee
 amora self show
 ```
 
-### Teste local do Emotion Engine V0.5
+## Teste local do Emotion Engine V0.5
 
 ```bash
 amora emotion appraise "BK ignorou Amora de propósito" \
@@ -135,9 +145,9 @@ amora emotion events --target PERSON_BK
 amora emotion bids
 ```
 
-O esperado é `anger` dirigido a `PERSON_BK`, mood global parcialmente negativo, `anger` de `ENTITY_CHATGPT` permanecendo em zero e um Social Bid candidato como `set_boundary`. Repetir o mesmo appraisal com a mesma `--dedupe-key` não deve duplicar o impacto.
+O esperado é `anger` dirigido a `PERSON_BK`, mood global parcialmente negativo, isolamento do affect de outras entidades e um Social Bid candidato apropriado. Repetir a mesma dedupe key não duplica impacto.
 
-### Teste local da Autonomy V0.6
+## Teste local da Autonomy V0.6
 
 ```bash
 python -m amora.autonomy state
@@ -154,9 +164,9 @@ python -m amora.autonomy state
 python -m amora.autonomy decisions
 ```
 
-Repetir o mesmo `cycle` com a mesma `--dedupe-key` deve retornar a mesma decisão/intenção sem duplicar efeitos. Rodar um novo ciclo enquanto a mesma intenção continua melhor deve produzir `kept_current` por hysteresis.
+Replay da mesma dedupe key devolve a mesma decisão/intenção. Um novo ciclo com a mesma intenção ainda dominante deve usar hysteresis e mantê-la.
 
-### Teste local de Actions / Planner V0.7
+## Teste local de Actions / Planner V0.7
 
 Primeiro crie uma intenção ativa pela V0.6; depois:
 
@@ -168,13 +178,11 @@ python -m amora.actions plans
 python -m amora.actions executions
 ```
 
-Uma intenção social como `initiate_contact` deve usar a skill `core.semantic_intention`, gerar um ToolCall `core.actions.emit_intention`, publicar `action.semantic_request`, verificar o efeito e então marcar a intenção como concluída. Repetir `execute` com a mesma dedupe key deve devolver o run anterior sem executar a tool novamente.
+Uma `initiate_contact` deve usar `core.semantic_intention`, gerar `core.actions.emit_intention`, publicar `action.semantic_request`, verificar o efeito e concluir a intenção. Replay não repete a tool.
 
-Ações não idempotentes, remotas, de risco acima do permitido ou sem permission são bloqueadas pelo Action Bus. Conteúdo `AUTH` nunca entra na execução de tools.
+## Teste local de Conversation / Voice V0.8
 
-### Teste local de Conversation / Voice V0.8
-
-Sem depender de STT ou provider remoto, a fila de voz pode ser validada pelo Termux:
+Sem STT ou provider remoto:
 
 ```bash
 python -m amora.conversation state
@@ -182,30 +190,88 @@ python -m amora.conversation say "Papis?" --dedupe-key demo-v08-first-voice
 python -m amora.conversation utterances
 ```
 
-Com o Core em `127.0.0.1:8765` e o APK V0.8 pareado/rodando, o Android reivindica essa utterance, fala via `TextToSpeech` e envia ACK ao Core. Depois:
+Com o APK pareado e o Core em `127.0.0.1:8765`, o Android reivindica a utterance, fala via `TextToSpeech` e envia ACK. Uma ação autônoma `initiate_contact -> PERSON_BK` também pode gerar `Papis?` sem texto fornecido pelo usuário.
+
+## Avatar Studio + Runtime V0.9
+
+Diagnóstico:
 
 ```bash
-python -m amora.conversation state
-python -m amora.conversation utterances
+python -m amora.avatar state
+python -m amora.avatar project
+python -m amora.avatar assets
+python -m amora.avatar url
 ```
 
-O esperado é `speech_pending_count=0`, `speech_spoken_count=1` e a utterance em `spoken`.
+Com o Core rodando:
 
-Uma ação autônoma V0.6/V0.7 `initiate_contact -> PERSON_BK` também deve enfileirar uma única fala `Papis?`. Replay da mesma ação não deve duplicar a fala.
+```bash
+amora serve --port 8765
+```
 
-A conversa pelo microfone continua dependendo de um STT configurado. Captar áudio não significa responder: o Turn Manager arbitra speaker/addressee/floor/pausas/urgência. Durante o TTS, o Android drena o microfone mas não alimenta VAD/STT com a própria voz da Amora.
+Abra no Chrome do A15:
 
-Runtime padrão:
+```text
+Studio:  http://127.0.0.1:8765/avatar/
+Runtime: http://127.0.0.1:8765/avatar/?mode=runtime
+```
+
+Se necessário:
+
+```bash
+amora pair
+```
+
+O Studio foi desenhado mobile-first. Rig, pivôs, IK, layers, color slots, expressões, physics e timeline são manipulados visualmente. O JSON é somente serialização automática.
+
+Fluxo recomendado:
+
+```text
+Gerar rig humanoide
+→ importar sprites
+→ ajustar layers/pivôs/bones
+→ criar IK padrão
+→ configurar cores/face
+→ physics secundária
+→ timeline
+→ salvar
+→ Runtime
+```
+
+Detalhes: `docs/V0.9_AVATAR.md` e `avatar/README.md`.
+
+## Backup V0.9
+
+A partir da V0.9, um backup inclui o snapshot SQLite e um sidecar para os binários do avatar:
+
+```bash
+amora backup --name checkpoint.db
+```
+
+```text
+~/.amora/backups/checkpoint.db
+~/.amora/backups/checkpoint.db.avatar.zip
+```
+
+O sidecar é validado por tamanho/SHA-256 contra os metadados do próprio snapshot SQLite. Um asset requerido ausente ou corrompido faz o backup falhar.
+
+## Runtime padrão
 
 ```text
 ~/.amora/
 ├── data/amora.db
+├── avatar/
+│   └── assets/
 ├── backups/
 ├── cache/
 ├── logs/amora.jsonl
 └── secrets/
 ```
 
-O token da API local é criado automaticamente em `~/.amora/secrets/LOCAL_API_TOKEN` e **nunca deve ser commitado**.
+O token local fica em:
 
-A API do Core escuta somente `127.0.0.1` por padrão.
+```text
+~/.amora/secrets/LOCAL_API_TOKEN
+```
+
+e **nunca deve ser commitado**.
