@@ -61,13 +61,57 @@ amora-avatar url --port 8765
 
 Use o modo LAN somente em Wi-Fi/hotspot confiável. O pareamento de 6 dígitos continua obrigatório para as APIs autenticadas do Studio.
 
+## Rig v2: sockets + bones/IK
+
+A V0.9 aceita dois fluxos ao mesmo tempo:
+
+```text
+peça rígida (ex.: braço inteiro)
+Torso socket → Arm socket → Hand socket
+
+membro segmentado (ex.: coxa/perna/pé)
+Bones + IK tradicional
+```
+
+Sockets são pontos normalizados dentro da textura. Uma conexão prende o socket da peça filha ao socket da peça parent e herda rotação. Isso é ideal para braço inteiro, mão, cabeça, acessórios e outras partes rígidas.
+
+Bones e IK não foram removidos. Eles continuam disponíveis para membros divididos em duas ou mais partes, como perna e futuros braços upper-arm/forearm.
+
+Cada peça também possui:
+
+- `Flip H` e `Flip V` sem destruir escala/pivô;
+- `locked` para impedir edição acidental;
+- `pickable/click-through` para layers da frente não roubarem seleção;
+- múltiplos sockets nomeados.
+
+### Regra de seleção
+
+O Studio separa escolha de manipulação:
+
+```text
+Selecionar → hit-test normal, layer mais alta primeiro
+Mover      → usa a peça já selecionada
+Pivô       → usa a peça já selecionada
+Girar      → usa a peça já selecionada
+Socket     → usa o socket já selecionado
+```
+
+Isso evita que cabelo/face/layers superiores roubem o gesto quando o usuário está editando uma peça escolhida pela lista.
+
+### Compatibilidade com projetos já mapeados
+
+Rig v2 é uma extensão aditiva do projeto. Projetos `schema_version: 1` continuam válidos. Ao carregar um projeto antigo, nomes, IDs, layers, transforms, pivôs, tags, color slots, expressões, bones e animações são preservados; os campos novos recebem apenas defaults (`anchors=[]`, `attachments=[]`, flips desligados, layer livre e selecionável).
+
+O schema só sobe para 2 quando uma edição Rig v2 é salva. Não existe reset automático do projeto nem renomeação automática de peças já mapeadas.
+
 ## Fluxo visual
 
 ```text
-Gerar rig humanoide
-→ importar sprites
-→ ajustar layers/pivôs/bones
-→ criar IK padrão
+importar sprites
+→ nomear/organizar layers
+→ ajustar pivôs
+→ peça rígida: criar sockets e conectar
+→ membro segmentado: mapear bones e IK
 → configurar slots de cor
 → configurar face/tags
 → adicionar physics onde necessário
@@ -81,7 +125,10 @@ Gerar rig humanoide
 - um dedo sobre uma peça/handle: seleciona ou move conforme a ferramenta;
 - arrastar fundo: pan;
 - dois dedos: pan + pinch zoom;
-- `Pivot`: posiciona o pivô diretamente na arte;
+- `Mover`: move somente a peça selecionada;
+- `Pivot`: posiciona o pivô somente da peça selecionada;
+- `Girar`: gira visualmente em torno do pivô;
+- `Socket`: posiciona o socket escolhido diretamente na arte;
 - `Bones`: move articulações;
 - `IK`: arrasta targets de mãos/pés;
 - bottom sheet concentra propriedades em telas pequenas.
@@ -137,6 +184,6 @@ O engine não exige dependências npm:
 npm --prefix avatar test
 ```
 
-A CI também executa `node --check` nos módulos do Studio.
+A CI também executa `node --check` em `engine.js`, `app.js`, `rig-v2.js` e `sw.js`.
 
 Mais detalhes: `docs/V0.9_AVATAR.md`.
