@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from amora.events import AmoraEvent, AsyncEventBus
@@ -30,12 +31,7 @@ class ToolPlugin(Protocol):
 
 
 class PluginRegistry:
-    """In-process V0.7 registry.
-
-    Plugins are registered explicitly; discovery/loading from arbitrary filesystem paths is
-    intentionally out of scope. A broken plugin is isolated by ActionBus and cannot replace
-    canonical Core state.
-    """
+    """In-process registry with explicit plugin registration."""
 
     def __init__(self) -> None:
         self._plugins: dict[str, ToolPlugin] = {}
@@ -74,14 +70,16 @@ class PluginRegistry:
 
 
 class CoreActionPlugin:
-    """Safe local semantic actions consumed by later presentation/action layers.
+    """Safe local semantic actions consumed by presentation/action layers."""
 
-    V0.7 can execute the decision pipeline without pretending that V0.8 voice or
-    platform-specific integrations already exist.
-    """
-
-    def __init__(self, events: AsyncEventBus) -> None:
+    def __init__(
+        self,
+        events: AsyncEventBus,
+        *,
+        semantic_sink: Callable[[AmoraEvent], Awaitable[object]] | None = None,
+    ) -> None:
         self.events = events
+        self.semantic_sink = semantic_sink
         self._manifest = PluginManifest(
             plugin_id="core.actions",
             name="Amora Core Actions",
@@ -93,14 +91,8 @@ class CoreActionPlugin:
                     name="emit_intention",
                     description="Emit a verified semantic action request for downstream action/voice layers.",
                     permissions={"core:action:semantic"},
-                    input_schema={
-                        "type": "object",
-                        "required": ["intention_kind", "intention_id"],
-                    },
-                    output_schema={
-                        "type": "object",
-                        "required": ["published", "event_id", "action_kind"],
-                    },
+                    input_schema={"type": "object", "required": ["intention_kind", "intention_id"]},
+                    output_schema={"type": "object", "required": ["published", "event_id", "action_kind"]},
                     cost=0.0,
                     risk=RiskLevel.LOW,
                     timeout_seconds=3.0,
@@ -132,11 +124,7 @@ class CoreActionPlugin:
 
     async def execute(self, tool_name: str, arguments: dict[str, object], call: ToolCall) -> dict[str, object]:
         if tool_name == "wait":
-            return {
-                "wait_registered": True,
-                "semantic_only": True,
-                "intention_id": str(call.intention_id),
-            }
+            return {"wait_registered": True, "semantic_only": True, "intention_id": str(call.intention_id)}
         if tool_name != "emit_intention":
             raise KeyError(tool_name)
 
@@ -160,6 +148,8 @@ class CoreActionPlugin:
             dedupe_key=f"action.semantic:{call.id}",
         )
         publish = await self.events.publish(event)
+        if self.semantic_sink is not None:
+            await self.semantic_sink(event)
         return {
             "published": True,
             "event_id": publish.event_id,
