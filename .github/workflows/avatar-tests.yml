@@ -18,5 +18,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Parse Studio modules
+        run: |
+          node --check avatar/engine.js
+          node --check avatar/app.js
+          node --check avatar/sw.js
       - name: Test Avatar Engine
         run: npm --prefix avatar test
