@@ -148,16 +148,21 @@ class AvatarStore:
     def asset_backup_path(database_backup: Path) -> Path:
         return Path(f"{database_backup}.avatar.zip")
 
-    def backup_assets(self, database_backup: Path) -> Path:
-        """Create a validated companion archive for binary avatar assets.
+    @staticmethod
+    def _snapshot_asset_infos(database_backup: Path) -> list[AvatarAssetInfo]:
+        connection = sqlite3.connect(database_backup)
+        connection.row_factory = sqlite3.Row
+        try:
+            rows = connection.execute("SELECT * FROM avatar_assets ORDER BY updated_at DESC").fetchall()
+        finally:
+            connection.close()
+        return [AvatarAssetInfo.model_validate(dict(row)) for row in rows]
 
-        The SQLite backup remains the canonical metadata/project snapshot while this
-        sidecar contains only files referenced by avatar_assets. Creating it even
-        when empty keeps backup semantics predictable from V0.9 onward.
-        """
+    def backup_assets(self, database_backup: Path) -> Path:
+        """Create a validated companion archive bound to the SQLite snapshot."""
         destination = self.asset_backup_path(database_backup)
         tmp = destination.with_suffix(destination.suffix + ".tmp")
-        infos = self.list_assets()
+        infos = self._snapshot_asset_infos(database_backup)
         manifest: list[dict[str, object]] = []
         try:
             with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -187,11 +192,7 @@ class AvatarStore:
         return destination
 
     def restore_assets(self, database_backup: Path) -> int:
-        """Restore the companion archive into this store's asset directory.
-
-        The caller should instantiate this store against the already-restored SQLite
-        database so archive content can be validated against its metadata.
-        """
+        """Restore the companion archive against this store's restored DB metadata."""
         source = self.asset_backup_path(database_backup)
         if not source.is_file():
             if self.asset_count() == 0:
