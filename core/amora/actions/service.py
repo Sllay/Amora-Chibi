@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from amora.autonomy import AutonomyEngine, IntentionStatus
@@ -30,7 +31,7 @@ TERMINAL_PLAN_STATUSES = {PlanStatus.COMPLETED, PlanStatus.FAILED, PlanStatus.AB
 
 
 class ActionEngine:
-    """V0.7 boundary: intention -> plan -> guarded tools -> verified effect."""
+    """Intention -> plan -> guarded tools -> verified effect."""
 
     DEFAULT_PERMISSIONS = {"core:action:semantic"}
 
@@ -45,6 +46,7 @@ class ActionEngine:
         registry: PluginRegistry | None = None,
         skills: SkillLibrary | None = None,
         planner: Planner | None = None,
+        semantic_sink: Callable[[AmoraEvent], Awaitable[object]] | None = None,
     ) -> None:
         self.store = store
         self.clock = clock
@@ -53,7 +55,7 @@ class ActionEngine:
         self.events = events
         self.registry = registry or PluginRegistry()
         if self.registry.plugin("core.actions") is None:
-            self.registry.register(CoreActionPlugin(events))
+            self.registry.register(CoreActionPlugin(events, semantic_sink=semantic_sink))
         self.skills = skills or SkillLibrary.builtins()
         self.planner = planner or Planner(clock, self.skills)
         self.bus = ActionBus(self.registry, clock)
