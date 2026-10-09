@@ -240,7 +240,15 @@ class AmoraCore:
         filename = name or f"amora-{stamp}.db"
         if Path(filename).name != filename or not filename.endswith(".db"):
             raise ValueError("backup name must be a simple .db filename")
-        return self.database.backup_to(self.paths.backups / filename)
+        destination = self.paths.backups / filename
+        self.database.backup_to(destination)
+        try:
+            self.avatar.store.backup_assets(destination)
+        except Exception:
+            destination.unlink(missing_ok=True)
+            AvatarStore.asset_backup_path(destination).unlink(missing_ok=True)
+            raise
+        return destination
 
     def close(self) -> None:
         self.actions.close()
