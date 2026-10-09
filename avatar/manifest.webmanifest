@@ -1,0 +1,11 @@
+{
+  "name": "Amora Avatar Studio",
+  "short_name": "Amora Studio",
+  "start_url": "/avatar/",
+  "scope": "/avatar/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f0b18",
+  "theme_color": "#171228",
+  "description": "Editor visual mobile-first e runtime do avatar da Amora"
+}
