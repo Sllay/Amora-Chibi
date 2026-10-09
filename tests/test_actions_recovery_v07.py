@@ -60,7 +60,7 @@ def test_backup_restore_preserves_action_state(tmp_path: Path, monkeypatch) -> N
     restored_db = AmoraDatabase(restored_path)
     try:
         assert restored_db.integrity_check() == "ok"
-        assert restored_db.schema_version() == 7
+        assert restored_db.schema_version() == 8
     finally:
         restored_db.close()
 
