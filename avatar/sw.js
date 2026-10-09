@@ -1,4 +1,4 @@
-const CACHE = 'amora-avatar-v09-1';
+const CACHE = 'amora-avatar-v09-2';
 const SHELL = [
   '/avatar/',
   '/avatar/index.html',
@@ -14,7 +14,8 @@ self.addEventListener('install', event => {
 
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE && key.startsWith('amora-avatar-')).map(key => caches.delete(key))))
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(key => key !== CACHE && key.startsWith('amora-avatar-')).map(key => caches.delete(key))))
       .then(() => self.clients.claim())
   );
 });
@@ -24,10 +25,12 @@ self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET' || url.pathname.startsWith('/v1/')) return;
   if (!url.pathname.startsWith('/avatar/')) return;
   event.respondWith(
-    caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
-      const copy = response.clone();
-      caches.open(CACHE).then(cache => cache.put(event.request, copy));
-      return response;
-    }))
+    fetch(event.request)
+      .then(response => {
+        const copy = response.clone();
+        caches.open(CACHE).then(cache => cache.put(event.request, copy));
+        return response;
+      })
+      .catch(() => caches.match(event.request).then(cached => cached || caches.match('/avatar/')))
   );
 });
