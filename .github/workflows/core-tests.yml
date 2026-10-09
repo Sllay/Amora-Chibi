@@ -52,9 +52,17 @@ jobs:
           amora-conversation state
           python -m amora.conversation state
           python -m amora.conversation say "Papis?" --dedupe-key ci-v08-speech
+      - name: Avatar smoke test
+        env:
+          AMORA_HOME: ${{ runner.temp }}/amora-runtime
+        run: |
+          amora-avatar state
+          python -m amora.avatar project
+          python -m amora.avatar url
       - name: Backup smoke test
         env:
           AMORA_HOME: ${{ runner.temp }}/amora-runtime
         run: |
           python -m amora backup --name ci.db
           test -f "$AMORA_HOME/backups/ci.db"
+          test -f "$AMORA_HOME/backups/ci.db.avatar.zip"

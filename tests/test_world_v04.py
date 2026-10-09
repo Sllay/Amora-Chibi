@@ -255,6 +255,6 @@ def test_world_state_survives_restart(tmp_path: Path, monkeypatch) -> None:
         assert len(state) == 1
         assert state[0].predicate == "preferred_drawing_period"
         assert state[0].object_value == "night"
-        assert second.health_report()["schema_version"] == 8
+        assert second.health_report()["schema_version"] == 9
     finally:
         second.close()

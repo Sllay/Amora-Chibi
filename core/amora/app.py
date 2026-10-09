@@ -7,6 +7,7 @@ from amora import __version__
 from amora.actions import ActionEngine, ActionStore
 from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
 from amora.autonomy import AutonomyEngine, AutonomyStore
+from amora.avatar import AvatarEngine, AvatarStore
 from amora.conversation import ConversationEngine, ConversationStore
 from amora.emotion import EmotionEngine, EmotionStore
 from amora.events import AsyncEventBus
@@ -52,6 +53,7 @@ class AmoraCore:
     autonomy: AutonomyEngine
     conversation: ConversationEngine
     actions: ActionEngine
+    avatar: AvatarEngine
     models: ModelRouter
     social: SocialSceneTracker
     addressee: AddresseeEngine
@@ -127,7 +129,15 @@ class AmoraCore:
             emotion,
             events,
         )
+        avatar = AvatarEngine(
+            AvatarStore(paths.database, paths.avatar_assets, active_clock),
+            active_clock,
+            emotion,
+            conversation,
+            social,
+        )
         events.subscribe_bootstrap("action.semantic_request", conversation.handle_semantic_event)
+        events.subscribe_bootstrap("action.semantic_request", avatar.handle_semantic_event)
         actions = ActionEngine(
             ActionStore(paths.database, active_clock),
             active_clock,
@@ -156,6 +166,7 @@ class AmoraCore:
             autonomy=autonomy,
             conversation=conversation,
             actions=actions,
+            avatar=avatar,
             models=ModelRouter(),
             social=social,
             addressee=addressee,
@@ -182,6 +193,7 @@ class AmoraCore:
         current_intention = self.autonomy.store.current_intention()
         drives = {item.drive.value: round(item.need, 6) for item in self.autonomy.current_drives()}
         conversation = self.conversation.state()
+        avatar = self.avatar.health()
         return {
             "status": "ok" if integrity == "ok" else "degraded",
             "version": __version__,
@@ -212,6 +224,7 @@ class AmoraCore:
             "speech_spoken_count": conversation["speech_spoken_count"],
             "conversation_floor": conversation["conversation_floor"],
             "dialogue_provider": conversation["dialogue_provider"],
+            **avatar,
             "entity_count": len(self.identities.entities),
             "relationship_count": len(self.identities.relationships),
             "active_sessions": self.database.active_session_count(self.clock.now()),
@@ -227,10 +240,19 @@ class AmoraCore:
         filename = name or f"amora-{stamp}.db"
         if Path(filename).name != filename or not filename.endswith(".db"):
             raise ValueError("backup name must be a simple .db filename")
-        return self.database.backup_to(self.paths.backups / filename)
+        destination = self.paths.backups / filename
+        self.database.backup_to(destination)
+        try:
+            self.avatar.store.backup_assets(destination)
+        except Exception:
+            destination.unlink(missing_ok=True)
+            AvatarStore.asset_backup_path(destination).unlink(missing_ok=True)
+            raise
+        return destination
 
     def close(self) -> None:
         self.actions.close()
+        self.avatar.close()
         self.conversation.close()
         self.autonomy.close()
         self.emotion.close()
