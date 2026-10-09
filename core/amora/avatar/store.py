@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import threading
+import zipfile
 from pathlib import Path
 
 from amora.time import Clock
@@ -142,3 +143,77 @@ class AvatarStore:
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*) FROM avatar_assets").fetchone()
         return int(row[0]) if row else 0
+
+    @staticmethod
+    def asset_backup_path(database_backup: Path) -> Path:
+        return Path(f"{database_backup}.avatar.zip")
+
+    def backup_assets(self, database_backup: Path) -> Path:
+        """Create a validated companion archive for binary avatar assets.
+
+        The SQLite backup remains the canonical metadata/project snapshot while this
+        sidecar contains only files referenced by avatar_assets. Creating it even
+        when empty keeps backup semantics predictable from V0.9 onward.
+        """
+        destination = self.asset_backup_path(database_backup)
+        tmp = destination.with_suffix(destination.suffix + ".tmp")
+        infos = self.list_assets()
+        manifest: list[dict[str, object]] = []
+        try:
+            with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for info in infos:
+                    path = self.asset_dir / info.file_name
+                    if not path.is_file():
+                        raise FileNotFoundError(f"avatar asset missing during backup: {info.id}")
+                    body = path.read_bytes()
+                    digest = hashlib.sha256(body).hexdigest()
+                    if digest != info.sha256 or len(body) != info.size_bytes:
+                        raise ValueError(f"avatar asset integrity mismatch during backup: {info.id}")
+                    archive.writestr(f"assets/{info.file_name}", body)
+                    manifest.append({
+                        "id": info.id,
+                        "file_name": info.file_name,
+                        "size_bytes": info.size_bytes,
+                        "sha256": info.sha256,
+                    })
+                archive.writestr(
+                    "manifest.json",
+                    json.dumps({"version": 1, "assets": manifest}, ensure_ascii=False, separators=(",", ":")),
+                )
+            tmp.replace(destination)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+        return destination
+
+    def restore_assets(self, database_backup: Path) -> int:
+        """Restore the companion archive into this store's asset directory.
+
+        The caller should instantiate this store against the already-restored SQLite
+        database so archive content can be validated against its metadata.
+        """
+        source = self.asset_backup_path(database_backup)
+        if not source.is_file():
+            if self.asset_count() == 0:
+                return 0
+            raise FileNotFoundError(source)
+        infos = {item.id: item for item in self.list_assets()}
+        restored = 0
+        with zipfile.ZipFile(source, "r") as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            entries = manifest.get("assets", [])
+            if not isinstance(entries, list):
+                raise ValueError("invalid avatar asset backup manifest")
+            entry_ids = {str(item.get("id")) for item in entries if isinstance(item, dict)}
+            if entry_ids != set(infos):
+                raise ValueError("avatar asset backup manifest does not match database metadata")
+            for asset_id, info in infos.items():
+                body = archive.read(f"assets/{info.file_name}")
+                if len(body) != info.size_bytes or hashlib.sha256(body).hexdigest() != info.sha256:
+                    raise ValueError(f"avatar asset backup integrity mismatch: {asset_id}")
+                destination = self.asset_dir / info.file_name
+                tmp = destination.with_suffix(destination.suffix + ".restore.tmp")
+                tmp.write_bytes(body)
+                tmp.replace(destination)
+                restored += 1
+        return restored
