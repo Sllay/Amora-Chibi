@@ -1,9 +1,10 @@
-const CACHE = 'amora-avatar-v09-2';
+const CACHE = 'amora-avatar-v09-3';
 const SHELL = [
   '/avatar/',
   '/avatar/index.html',
   '/avatar/styles.css',
   '/avatar/app.js',
+  '/avatar/rig-v2.js',
   '/avatar/engine.js',
   '/avatar/manifest.webmanifest',
 ];

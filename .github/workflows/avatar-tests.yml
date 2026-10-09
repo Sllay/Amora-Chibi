@@ -22,6 +22,7 @@ jobs:
         run: |
           node --check avatar/engine.js
           node --check avatar/app.js
+          node --check avatar/rig-v2.js
           node --check avatar/sw.js
       - name: Test Avatar Engine
         run: npm --prefix avatar test

@@ -40,6 +40,15 @@ class AvatarAssetRef(BaseModel):
     content_type: str = "image/png"
 
 
+class AnchorPoint(BaseModel):
+    """Normalized visual socket stored on one sprite."""
+
+    id: str
+    name: str
+    x: float = Field(default=0.5, ge=0.0, le=1.0)
+    y: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
 class AvatarPart(BaseModel):
     id: str
     name: str
@@ -48,8 +57,33 @@ class AvatarPart(BaseModel):
     bone_id: str | None = None
     tint_slot: str | None = None
     visible: bool = True
+    locked: bool = False
+    pickable: bool = True
+    flip_x: bool = False
+    flip_y: bool = False
+    anchors: list[AnchorPoint] = Field(default_factory=list)
     transform: Transform2D = Field(default_factory=Transform2D)
     tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_anchor_ids(self) -> "AvatarPart":
+        ids = [item.id for item in self.anchors]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"duplicate anchor id on part {self.id}")
+        return self
+
+
+class PartAttachment(BaseModel):
+    """Rigid socket-to-socket connection between two sprite parts."""
+
+    id: str
+    name: str
+    parent_part_id: str
+    parent_anchor_id: str
+    child_part_id: str
+    child_anchor_id: str
+    inherit_rotation: bool = True
+    enabled: bool = True
 
 
 class BoneDefinition(BaseModel):
@@ -117,12 +151,15 @@ class AnimationClip(BaseModel):
 
 class AvatarProject(BaseModel):
     id: str = "default"
-    schema_version: int = 1
+    # V2 is additive: V1 projects validate unchanged, gaining only defaults for
+    # new fields when they are next saved by the Studio.
+    schema_version: int = 2
     name: str = "Amora"
     canvas: CanvasConfig = Field(default_factory=CanvasConfig)
     color_slots: list[ColorSlot] = Field(default_factory=list)
     assets: list[AvatarAssetRef] = Field(default_factory=list)
     parts: list[AvatarPart] = Field(default_factory=list)
+    attachments: list[PartAttachment] = Field(default_factory=list)
     bones: list[BoneDefinition] = Field(default_factory=list)
     ik_chains: list[IKChain] = Field(default_factory=list)
     physics: list[PhysicsSlot] = Field(default_factory=list)
@@ -131,11 +168,12 @@ class AvatarProject(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_unique_ids(self) -> "AvatarProject":
+    def validate_project(self) -> "AvatarProject":
         groups = {
             "color slot": [item.id for item in self.color_slots],
             "asset": [item.id for item in self.assets],
             "part": [item.id for item in self.parts],
+            "attachment": [item.id for item in self.attachments],
             "bone": [item.id for item in self.bones],
             "IK chain": [item.id for item in self.ik_chains],
             "physics slot": [item.id for item in self.physics],
@@ -145,6 +183,33 @@ class AvatarProject(BaseModel):
         for label, values in groups.items():
             if len(values) != len(set(values)):
                 raise ValueError(f"duplicate {label} id")
+
+        parts = {item.id: item for item in self.parts}
+        parent_of: dict[str, str] = {}
+        for attachment in self.attachments:
+            if attachment.parent_part_id == attachment.child_part_id:
+                raise ValueError("attachment cannot connect a part to itself")
+            parent = parts.get(attachment.parent_part_id)
+            child = parts.get(attachment.child_part_id)
+            if parent is None or child is None:
+                raise ValueError(f"attachment {attachment.id} references missing part")
+            if not any(item.id == attachment.parent_anchor_id for item in parent.anchors):
+                raise ValueError(f"attachment {attachment.id} references missing parent anchor")
+            if not any(item.id == attachment.child_anchor_id for item in child.anchors):
+                raise ValueError(f"attachment {attachment.id} references missing child anchor")
+            if attachment.enabled:
+                if attachment.child_part_id in parent_of:
+                    raise ValueError(f"part {attachment.child_part_id} has more than one active attachment")
+                parent_of[attachment.child_part_id] = attachment.parent_part_id
+
+        for child in parent_of:
+            seen: set[str] = set()
+            current = child
+            while current in parent_of:
+                if current in seen:
+                    raise ValueError("attachment cycle detected")
+                seen.add(current)
+                current = parent_of[current]
         return self
 
 
