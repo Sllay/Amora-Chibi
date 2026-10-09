@@ -37,7 +37,7 @@ class MainActivity : Activity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "Amora Chibi — V0.2 Audio Bridge"
+            text = "Amora Chibi — V0.8 Voice Bridge"
             textSize = 22F
         })
         statusView = TextView(this).also {
@@ -61,11 +61,11 @@ class MainActivity : Activity() {
             setOnClickListener { testCore() }
         })
         root.addView(Button(this).apply {
-            text = "Começar a ouvir"
+            text = "Começar a ouvir e falar"
             setOnClickListener { startListening() }
         })
         root.addView(Button(this).apply {
-            text = "Parar de ouvir"
+            text = "Parar voz e microfone"
             setOnClickListener { stopListening() }
         })
 
@@ -107,13 +107,13 @@ class MainActivity : Activity() {
             return
         }
         startForegroundService(Intent(this, AudioCaptureService::class.java))
-        setStatus("Microfone ativo; VAD local filtrando fala.")
+        setStatus("Microfone + voz ativos; VAD local e TTS conectados ao Core.")
     }
 
     private fun stopListening() {
         val intent = Intent(this, AudioCaptureService::class.java).setAction(AudioCaptureService.ACTION_STOP)
         startService(intent)
-        setStatus("Microfone parado.")
+        setStatus("Voz e microfone parados.")
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
