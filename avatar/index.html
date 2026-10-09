@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <meta name="theme-color" content="#171228">
+  <title>Amora Avatar Studio</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <div><strong>Amora Avatar</strong><small id="modeLabel">Studio</small></div>
+      </div>
+      <div class="top-actions studio-only">
+        <button id="undoBtn" class="icon-btn" title="Desfazer">↶</button>
+        <button id="redoBtn" class="icon-btn" title="Refazer">↷</button>
+        <button id="saveBtn" class="primary">Salvar</button>
+      </div>
+      <div id="connectionPill" class="pill">offline</div>
+    </header>
+
+    <main class="workspace">
+      <aside class="toolrail studio-only" aria-label="Ferramentas">
+        <button class="tool active" data-tool="select">☝<span>Selecionar</span></button>
+        <button class="tool" data-tool="move">✥<span>Mover</span></button>
+        <button class="tool" data-tool="pivot">◎<span>Pivô</span></button>
+        <button class="tool" data-tool="bone">⌁<span>Bones</span></button>
+        <button class="tool" data-tool="ik">◇<span>IK</span></button>
+        <button class="tool" data-panel="colors">◉<span>Cores</span></button>
+        <button class="tool" data-panel="layers">▤<span>Layers</span></button>
+        <button class="tool" data-panel="animate">▶<span>Animar</span></button>
+      </aside>
+
+      <section id="viewport" class="viewport">
+        <canvas id="stage" aria-label="Viewport do avatar"></canvas>
+        <div class="viewport-hud studio-only">
+          <button id="fitBtn">Enquadrar</button>
+          <button id="gridBtn">Grade</button>
+          <span id="zoomLabel">100%</span>
+        </div>
+        <div id="runtimeBadge" class="runtime-badge runtime-only">LIVE</div>
+      </section>
+
+      <aside id="desktopInspector" class="inspector studio-only"></aside>
+    </main>
+
+    <nav class="bottom-nav studio-only">
+      <button data-panel="parts" class="active">Peças</button>
+      <button data-panel="rig">Rig</button>
+      <button data-panel="colors">Cores</button>
+      <button data-panel="expressions">Face</button>
+      <button data-panel="animate">Timeline</button>
+      <button data-panel="project">Projeto</button>
+    </nav>
+
+    <section id="sheet" class="sheet studio-only" aria-live="polite">
+      <div class="sheet-handle"></div>
+      <header><strong id="sheetTitle">Peças</strong><button id="sheetClose" class="icon-btn">⌄</button></header>
+      <div id="sheetBody" class="sheet-body"></div>
+    </section>
+
+    <input id="assetInput" type="file" accept="image/png,image/webp,image/jpeg" multiple hidden>
+
+    <div id="toast" class="toast"></div>
+
+    <div id="pairModal" class="modal hidden">
+      <div class="modal-card">
+        <h2>Parear Avatar Studio</h2>
+        <p>Em outro Termux rode <code>amora pair</code> e digite o código de 6 dígitos.</p>
+        <input id="pairCode" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="000000" autocomplete="one-time-code">
+        <button id="pairBtn" class="primary wide">Parear</button>
+        <small>O token longo fica somente neste navegador local.</small>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
