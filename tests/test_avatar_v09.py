@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from amora.api import create_api
 from amora.app import AmoraCore
-from amora.avatar import AvatarProject, AvatarStore
+from amora.avatar import AvatarStore
 from amora.conversation import UtteranceKind
 from amora.events import AmoraEvent, PrivacyScope
 from amora.storage import AmoraDatabase
@@ -120,15 +120,19 @@ def test_avatar_api_project_asset_and_static_studio(tmp_path: Path, monkeypatch)
         core.close()
 
 
-def test_backup_restore_preserves_avatar_project(tmp_path: Path, monkeypatch) -> None:
+def test_backup_restore_preserves_avatar_project_and_binary_assets(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     clock = _clock()
     core = AmoraCore.bootstrap(clock=clock)
+    asset_body = b"\x89PNG\r\n\x1a\nbackup-avatar-fixture"
     try:
         project = core.avatar.project()
         project.metadata["acceptance"] = "v09"
         core.avatar.save_project(project)
+        core.avatar.store.put_asset("dress", "image/png", asset_body)
         backup = core.create_backup("v09-avatar.db")
+        asset_backup = AvatarStore.asset_backup_path(backup)
+        assert asset_backup.is_file()
     finally:
         core.close()
 
@@ -140,9 +144,15 @@ def test_backup_restore_preserves_avatar_project(tmp_path: Path, monkeypatch) ->
     finally:
         restored_db.close()
 
-    store = AvatarStore(restored_path, tmp_path / "restored-assets", clock)
+    restored_assets = tmp_path / "restored-assets"
+    store = AvatarStore(restored_path, restored_assets, clock)
     try:
         restored = store.get_project()
         assert restored.metadata["acceptance"] == "v09"
+        assert store.read_asset("dress") is None
+        assert store.restore_assets(backup) == 1
+        asset = store.read_asset("dress")
+        assert asset is not None
+        assert asset[1] == asset_body
     finally:
         store.close()
