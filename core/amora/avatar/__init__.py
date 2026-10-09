@@ -1,4 +1,5 @@
 from .models import (
+    AnchorPoint,
     AnimationClip,
     AnimationKeyframe,
     AnimationTrack,
@@ -12,6 +13,7 @@ from .models import (
     ColorSlot,
     ExpressionPreset,
     IKChain,
+    PartAttachment,
     PhysicsSlot,
     Transform2D,
     Vec2,
@@ -21,6 +23,7 @@ from .service import AvatarEngine
 from .store import AvatarStore
 
 __all__ = [
+    "AnchorPoint",
     "AnimationClip",
     "AnimationKeyframe",
     "AnimationTrack",
@@ -36,6 +39,7 @@ __all__ = [
     "ColorSlot",
     "ExpressionPreset",
     "IKChain",
+    "PartAttachment",
     "PhysicsSlot",
     "Transform2D",
     "Vec2",
