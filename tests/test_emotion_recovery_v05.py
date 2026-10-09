@@ -114,7 +114,7 @@ async def test_backup_restore_contains_emotion_mood_affect_and_bids(tmp_path: Pa
     restored_db = AmoraDatabase(restored_path)
     try:
         assert restored_db.integrity_check() == "ok"
-        assert restored_db.schema_version() == 7
+        assert restored_db.schema_version() == 8
     finally:
         restored_db.close()
 
