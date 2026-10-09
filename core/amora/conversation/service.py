@@ -55,6 +55,9 @@ class ConversationEngine:
         }
 
     def decide_turn(self, signal: TurnSignal) -> TurnDecision:
+        if signal.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+            redacted = signal.model_copy(update={"partial_text": None, "dedupe_key": None})
+            return self.turn_manager.decide(redacted)
         if signal.dedupe_key:
             existing = self.store.get_turn_by_dedupe(signal.dedupe_key)
             if existing is not None:
@@ -125,7 +128,7 @@ class ConversationEngine:
             conversation_floor=None,
             vad_active=False,
             pause_ms=450,
-            partial_text=text[:240],
+            partial_text=None if privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET} else text[:240],
             direct_call=direct,
             speech_requested=False,
             active_conversation=True,
@@ -231,11 +234,7 @@ class ConversationEngine:
                 actor="ENTITY_AMORA",
                 target=target_id,
                 importance=0.6,
-                payload={
-                    "utterance_id": str(item.id),
-                    "kind": item.kind.value,
-                    "device_id": item.device_id,
-                },
+                payload={"utterance_id": str(item.id), "kind": item.kind.value, "device_id": item.device_id},
                 privacy_scope=privacy_scope,
                 causation_id=source_event_id,
                 dedupe_key=f"conversation.queued:{item.id}",
