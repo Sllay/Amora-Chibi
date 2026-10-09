@@ -1,0 +1,22 @@
+name: Avatar tests
+
+on:
+  push:
+    paths:
+      - 'avatar/**'
+      - '.github/workflows/avatar-tests.yml'
+  pull_request:
+    paths:
+      - 'avatar/**'
+      - '.github/workflows/avatar-tests.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test Avatar Engine
+        run: npm --prefix avatar test
