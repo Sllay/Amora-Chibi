@@ -53,7 +53,11 @@ def test_raw_wav_endpoint_requires_auth_and_emits_social_observation(tmp_path: P
         assert body["transcript"]["text"] == "Amora, vem cá"
         assert body["observation"]["speaker_id"] == "SESSION_ANDROID_SPEAKER_1"
         assert body["observation"]["addressee"]["entity_id"] == "ENTITY_AMORA"
-        assert core.database.event_count() == before + 1
+        assert body["turn"]["state"] == "TAKE_TURN"
+        assert body["reply_queued"] is not None
+        assert body["reply_queued"]["target_id"] == "SESSION_ANDROID_SPEAKER_1"
+        assert core.database.event_count() == before + 2
+        assert core.conversation.store.pending_count() == 1
         assert list((core.paths.cache / "incoming").glob("*.wav")) == []
     finally:
         core.close()

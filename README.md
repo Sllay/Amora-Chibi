@@ -6,7 +6,7 @@ Monorepo oficial da **Amora**, uma IA-companheira persistente, mobile-first e mu
 
 ## Estado atual
 
-**V0.7 — Actions / Planner / Skills** em fechamento.
+**V0.8 — Natural Conversation / Turn Manager / Voice** em fechamento.
 
 A base implementada até aqui inclui:
 
@@ -16,7 +16,8 @@ A base implementada até aqui inclui:
 - V0.4: World Model com observation/report/belief/inference/hypothesis, belief revision temporal, Canonical World State, Self Model protegido, relationship revisions e consolidação de perspectiva sobre ACIR resolvido;
 - V0.5: Appraisal determinístico, Emotion Events com target/cause/blame/intentionality/spillover, Global Mood valence/arousal/dominance, Entity Affect por entidade, decay via TimeService e Social Bids candidatos com TTL;
 - V0.6: Drives persistentes, Utility determinística, BDI, hysteresis/switch cost, silêncio explícito, contexto de interrupção, intenção persistente, decisão idempotente e idle scheduling via TimeService/Scheduler;
-- V0.7: Skill Library, Planner hierárquico, Action Bus com gates de permission/privacy/risk/cost/idempotency/timeout, contratos de plugin, Execution Monitor, retry/replan/abort, persistência de planos/ToolCalls/runs e ações semânticas verificadas. Voz/Turn Manager continuam na V0.8.
+- V0.7: Skill Library, Planner hierárquico, Action Bus com gates de permission/privacy/risk/cost/idempotency/timeout, contratos de plugin, Execution Monitor, retry/replan/abort, persistência de planos/ToolCalls/runs e ações semânticas verificadas;
+- V0.8: Turn Manager (`LISTEN/WAIT/BACKCHANNEL/TAKE_TURN/INTERRUPT/YIELD`), Fast Path local de fala/backchannels, fila TTS persistente com lease/ACK, integração idempotente Action→Conversation, privacy fail-closed para `AUTH/SECRET` e Android TextToSpeech com supressão do próprio áudio no VAD/STT.
 
 Os documentos canônicos do projeto são `ARCHITECTURE.md`, `GDD.md` e `SKILL.md`, atualmente mantidos como arquivos anexados do Projeto ChatGPT. `AGENTS.md` contém os guardrails essenciais para agentes que trabalham neste repositório. Implementações por estágio ficam documentadas em `docs/`.
 
@@ -170,6 +171,29 @@ python -m amora.actions executions
 Uma intenção social como `initiate_contact` deve usar a skill `core.semantic_intention`, gerar um ToolCall `core.actions.emit_intention`, publicar `action.semantic_request`, verificar o efeito e então marcar a intenção como concluída. Repetir `execute` com a mesma dedupe key deve devolver o run anterior sem executar a tool novamente.
 
 Ações não idempotentes, remotas, de risco acima do permitido ou sem permission são bloqueadas pelo Action Bus. Conteúdo `AUTH` nunca entra na execução de tools.
+
+### Teste local de Conversation / Voice V0.8
+
+Sem depender de STT ou provider remoto, a fila de voz pode ser validada pelo Termux:
+
+```bash
+python -m amora.conversation state
+python -m amora.conversation say "Papis?" --dedupe-key demo-v08-first-voice
+python -m amora.conversation utterances
+```
+
+Com o Core em `127.0.0.1:8765` e o APK V0.8 pareado/rodando, o Android reivindica essa utterance, fala via `TextToSpeech` e envia ACK ao Core. Depois:
+
+```bash
+python -m amora.conversation state
+python -m amora.conversation utterances
+```
+
+O esperado é `speech_pending_count=0`, `speech_spoken_count=1` e a utterance em `spoken`.
+
+Uma ação autônoma V0.6/V0.7 `initiate_contact -> PERSON_BK` também deve enfileirar uma única fala `Papis?`. Replay da mesma ação não deve duplicar a fala.
+
+A conversa pelo microfone continua dependendo de um STT configurado. Captar áudio não significa responder: o Turn Manager arbitra speaker/addressee/floor/pausas/urgência. Durante o TTS, o Android drena o microfone mas não alimenta VAD/STT com a própria voz da Amora.
 
 Runtime padrão:
 

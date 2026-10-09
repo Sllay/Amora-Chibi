@@ -33,6 +33,15 @@ class AsyncEventBus:
         self._event_store = event_store
         self._lock = asyncio.Lock()
 
+    def subscribe_bootstrap(self, event_type: str, handler: EventHandler) -> None:
+        """Register a handler before async runtime starts.
+
+        Bootstrap wiring is single-threaded. Runtime changes must continue using
+        subscribe()/unsubscribe() so mutation is protected by the async lock.
+        """
+        if handler not in self._handlers[event_type]:
+            self._handlers[event_type].append(handler)
+
     async def subscribe(self, event_type: str, handler: EventHandler) -> None:
         async with self._lock:
             if handler not in self._handlers[event_type]:

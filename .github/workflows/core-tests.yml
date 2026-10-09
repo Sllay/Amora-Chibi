@@ -45,6 +45,13 @@ jobs:
         run: |
           amora-actions state
           python -m amora.actions state
+      - name: Conversation smoke test
+        env:
+          AMORA_HOME: ${{ runner.temp }}/amora-runtime
+        run: |
+          amora-conversation state
+          python -m amora.conversation state
+          python -m amora.conversation say "Papis?" --dedupe-key ci-v08-speech
       - name: Backup smoke test
         env:
           AMORA_HOME: ${{ runner.temp }}/amora-runtime

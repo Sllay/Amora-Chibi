@@ -12,6 +12,7 @@ from amora.actions.routes import register_action_routes
 from amora.app import AmoraCore
 from amora.audio import AudioSegment, SpeakerResult, SttCredentialsError, SttError, SttRateLimitedError
 from amora.autonomy.routes import register_autonomy_routes
+from amora.conversation.routes import register_conversation_routes
 from amora.emotion.routes import register_emotion_routes
 from amora.events import AmoraEvent, PrivacyScope
 from amora.identity import PrivacyContext
@@ -75,6 +76,7 @@ def create_api(core: AmoraCore) -> FastAPI:
     register_emotion_routes(app, core, require_auth)
     register_autonomy_routes(app, core, require_auth)
     register_action_routes(app, core, require_auth)
+    register_conversation_routes(app, core, require_auth)
 
     @app.get("/health")
     def health() -> dict[str, object]:
@@ -160,6 +162,7 @@ def create_api(core: AmoraCore) -> FastAPI:
         speaker_confidence: float = Query(default=0.35, ge=0.0, le=1.0),
         session_id: str | None = Query(default=None, max_length=128),
         privacy_scope: PrivacyScope = Query(default=PrivacyScope.PERSONAL),
+        remote_processing_allowed: bool = Query(default=False),
     ) -> dict[str, object]:
         content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if content_type not in {"audio/wav", "audio/x-wav", "audio/wave"}:
@@ -192,9 +195,22 @@ def create_api(core: AmoraCore) -> FastAPI:
                 privacy_scope=privacy_scope,
                 dedupe_key=f"stt:{transcript.request_id}" if transcript.request_id else None,
             )
+            try:
+                turn, reply = await core.conversation.observe_completed_utterance(
+                    transcript.text,
+                    speaker_id=speaker.speaker_id,
+                    addressee_id=observation.addressee.entity_id,
+                    source_event_id=observation.event_id,
+                    privacy_scope=privacy_scope,
+                    remote_processing_allowed=remote_processing_allowed,
+                )
+            finally:
+                core.social.end_turn(speaker.speaker_id)
             return {
                 "transcript": transcript.model_dump(mode="json"),
                 "observation": observation.model_dump(mode="json"),
+                "turn": turn.model_dump(mode="json"),
+                "reply_queued": reply.model_dump(mode="json") if reply else None,
             }
         except SttCredentialsError as exc:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc

@@ -7,6 +7,7 @@ from amora import __version__
 from amora.actions import ActionEngine, ActionStore
 from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
 from amora.autonomy import AutonomyEngine, AutonomyStore
+from amora.conversation import ConversationEngine, ConversationStore
 from amora.emotion import EmotionEngine, EmotionStore
 from amora.events import AsyncEventBus
 from amora.identity import DeviceIdentity, DeviceTrust, EntityRegistry, SessionService, build_initial_registry
@@ -49,6 +50,7 @@ class AmoraCore:
     perspective_consolidator: PerspectiveConsolidator
     emotion: EmotionEngine
     autonomy: AutonomyEngine
+    conversation: ConversationEngine
     actions: ActionEngine
     models: ModelRouter
     social: SocialSceneTracker
@@ -118,12 +120,21 @@ class AmoraCore:
             world,
             events,
         )
+        conversation = ConversationEngine(
+            ConversationStore(paths.database, active_clock),
+            active_clock,
+            social,
+            emotion,
+            events,
+        )
+        events.subscribe_bootstrap("action.semantic_request", conversation.handle_semantic_event)
         actions = ActionEngine(
             ActionStore(paths.database, active_clock),
             active_clock,
             autonomy,
             emotion,
             events,
+            semantic_sink=conversation.handle_semantic_event,
         )
         return cls(
             paths=paths,
@@ -143,6 +154,7 @@ class AmoraCore:
             perspective_consolidator=perspective_consolidator,
             emotion=emotion,
             autonomy=autonomy,
+            conversation=conversation,
             actions=actions,
             models=ModelRouter(),
             social=social,
@@ -169,6 +181,7 @@ class AmoraCore:
         mood = self.emotion.current_mood()
         current_intention = self.autonomy.store.current_intention()
         drives = {item.drive.value: round(item.need, 6) for item in self.autonomy.current_drives()}
+        conversation = self.conversation.state()
         return {
             "status": "ok" if integrity == "ok" else "degraded",
             "version": __version__,
@@ -194,6 +207,11 @@ class AmoraCore:
             "tool_execution_count": self.actions.store.execution_count(),
             "plugin_count": self.actions.registry.plugin_count,
             "skill_count": self.actions.skills.count,
+            "turn_decision_count": conversation["turn_decision_count"],
+            "speech_pending_count": conversation["speech_pending_count"],
+            "speech_spoken_count": conversation["speech_spoken_count"],
+            "conversation_floor": conversation["conversation_floor"],
+            "dialogue_provider": conversation["dialogue_provider"],
             "entity_count": len(self.identities.entities),
             "relationship_count": len(self.identities.relationships),
             "active_sessions": self.database.active_session_count(self.clock.now()),
@@ -213,6 +231,7 @@ class AmoraCore:
 
     def close(self) -> None:
         self.actions.close()
+        self.conversation.close()
         self.autonomy.close()
         self.emotion.close()
         self.world_store.close()
