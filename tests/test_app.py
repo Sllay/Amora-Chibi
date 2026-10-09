@@ -12,7 +12,7 @@ def test_bootstrap_survives_restart_with_same_identity(tmp_path: Path, monkeypat
         assert second.identities.resolve_alias("Slay").id == "PERSON_BK"
         assert second.secrets.get("LOCAL_API_TOKEN") == token
         report = second.health_report()
-        assert report["schema_version"] == 8
+        assert report["schema_version"] == 9
         assert report["memory_count"] == 0
         assert report["world_claim_count"] == 0
         assert report["self_core_identity"] == "ENTITY_AMORA"
@@ -31,4 +31,8 @@ def test_bootstrap_survives_restart_with_same_identity(tmp_path: Path, monkeypat
         assert report["speech_pending_count"] == 0
         assert report["speech_spoken_count"] == 0
         assert report["dialogue_provider"] == "none"
+        assert report["avatar_project_count"] == 0
+        assert report["avatar_asset_count"] == 0
+        assert report["avatar_expression"] == "neutral"
+        assert report["avatar_speaking"] is False
     finally: second.close()
