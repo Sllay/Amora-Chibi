@@ -37,6 +37,30 @@ amora pair
 
 Digite o código de 6 dígitos no modal do Studio.
 
+## Abrir em outro celular na mesma rede
+
+`127.0.0.1` é loopback e só funciona no próprio A15. Para montar o avatar em outro celular que contém os sprites, use o servidor LAN dedicado do Avatar:
+
+```bash
+amora-avatar serve --lan --port 8765
+```
+
+O comando escuta em `0.0.0.0`, tenta descobrir o IP LAN do A15 e imprime a URL para abrir no outro aparelho, por exemplo:
+
+```text
+http://192.168.1.42:8765/avatar/
+```
+
+Os dois aparelhos precisam estar na mesma Wi-Fi/hotspot. O modo LAN é intencionalmente restrito: pela rede ele libera somente o shell `/avatar/`, APIs `/v1/avatar/*`, resgate do código de pareamento e `/health`; as demais rotas do Core retornam 404.
+
+Para apenas descobrir URLs sem iniciar outro servidor:
+
+```bash
+amora-avatar url --port 8765
+```
+
+Use o modo LAN somente em Wi-Fi/hotspot confiável. O pareamento de 6 dígitos continua obrigatório para as APIs autenticadas do Studio.
+
 ## Fluxo visual
 
 ```text
