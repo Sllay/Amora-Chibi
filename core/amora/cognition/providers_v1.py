@@ -29,13 +29,9 @@ _REFLECTION_INSTRUCTION = (
 )
 
 _DIALOGUE_CONTRACT = (
-    " Amora é o próprio nome da pessoa que fala por esta saída. Trate 'Amora' no início ou isolado como vocativo/chamada "
-    "dirigida a ela, nunca como pedido de permissão para chamá-la por esse nome. Se a entrada for apenas uma chamada curta "
-    "pelo nome, responda como alguém que foi chamado, de modo breve e natural. Não use fórmulas de atendimento como "
-    "'como posso ajudar hoje?', 'em que posso ajudar?', 'estou à disposição' ou equivalentes, salvo se o conteúdo do turno "
-    "realmente exigir oferecer ajuda. Não repita automaticamente uma formulação recente da própria Amora só porque ela "
-    "aparece em recent_messages. Quando o estado canônico trouxer uma relação familiar ou afetiva com a pessoa, deixe isso "
-    "aparecer de forma espontânea quando couber, sem inventar vínculo nem forçar vocativos em toda resposta."
+    " Amora é o próprio nome dela; quando esse nome aparece como chamada, trate-o como vocativo. "
+    "Continue a conversa como Amora, não como serviço de atendimento. Relações e formas de tratamento só podem vir "
+    "do estado canônico fornecido e devem aparecer naturalmente, sem serem forçadas em toda resposta."
 )
 
 
@@ -43,12 +39,53 @@ def _system_prompt(base: str) -> str:
     return (
         base
         + _DIALOGUE_CONTRACT
-        + " Quando reason_codes contiver AUTONOMOUS_INITIATION, a linha de user_text não é uma fala recebida: "
+        + " Quando reason_codes contiver AUTONOMOUS_INITIATION, user_text não é uma fala recebida: "
         "é uma intenção interna da Amora para iniciar contato. Nesse modo, formule uma abertura espontânea coerente "
         "com intenção, memória, relação, humor e afeto, sem fingir que a outra pessoa acabou de dizer algo."
         + " Quando reason_codes contiver COGNITIVE_REFLECTION, não produza fala social casual; trate a solicitação "
         "como reflexão interna estruturada conforme a instrução específica do turno."
     )
+
+
+def _canonical_state_payload(context: CognitiveContext) -> dict[str, object]:
+    payload = dict(BaseGroqCognitiveProvider._context_payload(context))
+    # Literal conversation history is rendered with provider-native roles below.
+    # Keeping it out of the state blob prevents the model from treating old Amora
+    # wording as generic state/examples to imitate.
+    payload.pop("recent_messages", None)
+    return payload
+
+
+def _canonical_state_text(context: CognitiveContext) -> str:
+    return (
+        "ESTADO CANÔNICO SELECIONADO:\n"
+        + json.dumps(_canonical_state_payload(context), ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def _dialogue_turns(context: CognitiveContext) -> list[tuple[str, str]]:
+    """Project persisted history into real conversational roles.
+
+    Multiple speech segments emitted by Amora in the same cognitive turn are
+    recombined into one assistant turn. The current turn is excluded defensively
+    even if a caller supplies an older/pre-fix snapshot containing it.
+    """
+    grouped: list[tuple[str, str, str]] = []
+    current_turn = str(context.turn_id)
+    for item in context.recent_messages:
+        turn_id = str(item.get("turn_id") or "")
+        if turn_id == current_turn:
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        role = "assistant" if item.get("speaker_id") == "ENTITY_AMORA" else "user"
+        if grouped and grouped[-1][0] == role and grouped[-1][1] == turn_id:
+            previous_role, previous_turn, previous_text = grouped[-1]
+            grouped[-1] = (previous_role, previous_turn, f"{previous_text} {text}".strip())
+        else:
+            grouped.append((role, turn_id, text))
+    return [(role, text) for role, _, text in grouped]
 
 
 def _context_text(context: CognitiveContext, *, instruction: str) -> str:
@@ -66,6 +103,17 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
     @staticmethod
     def _system_prompt() -> str:
         return _system_prompt(BaseGroqCognitiveProvider._system_prompt())
+
+    def _messages(self, context: CognitiveContext) -> list[dict[str, str]]:
+        messages: list[dict[str, str]] = [
+            {
+                "role": "system",
+                "content": self._system_prompt() + "\n\n" + _canonical_state_text(context),
+            }
+        ]
+        messages.extend({"role": role, "content": text} for role, text in _dialogue_turns(context))
+        messages.append({"role": "user", "content": context.user_text})
+        return messages
 
     async def propose(self, context: CognitiveContext) -> dict[str, object]:
         """Return bounded structured proposals; never canonical state mutations."""
@@ -177,14 +225,38 @@ class GeminiCognitiveProvider:
         }
         if json_output:
             generation["responseMimeType"] = "application/json"
-        instruction = (
-            _REFLECTION_INSTRUCTION + " Produza apenas propostas estruturadas sujeitas aos gates locais."
-            if json_output
-            else "Gere apenas a resposta falável da Amora."
-        )
+            return {
+                "systemInstruction": {"parts": [{"text": self._system_prompt() + " " + _REFLECTION_INSTRUCTION}]},
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": _context_text(
+                                    context,
+                                    instruction="Produza apenas propostas estruturadas sujeitas aos gates locais.",
+                                )
+                            }
+                        ],
+                    }
+                ],
+                "generationConfig": generation,
+            }
+
+        contents: list[dict[str, object]] = []
+        for role, text in _dialogue_turns(context):
+            contents.append(
+                {
+                    "role": "model" if role == "assistant" else "user",
+                    "parts": [{"text": text}],
+                }
+            )
+        contents.append({"role": "user", "parts": [{"text": context.user_text}]})
         return {
-            "systemInstruction": {"parts": [{"text": self._system_prompt()}]},
-            "contents": [{"role": "user", "parts": [{"text": _context_text(context, instruction=instruction)}]}],
+            "systemInstruction": {
+                "parts": [{"text": self._system_prompt() + "\n\n" + _canonical_state_text(context)}]
+            },
+            "contents": contents,
             "generationConfig": generation,
         }
 
