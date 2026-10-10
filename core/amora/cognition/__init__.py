@@ -14,14 +14,18 @@ from .models import (
 )
 from .providers import CognitiveProvider, ProviderDelta, ProviderError
 from .providers_v1 import GroqCognitiveProvider
+from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
 from .hardened import CognitiveEngine
 from .speech import SpeechNormalizer, SpeechRender, SpeechSegmenter
 from .store import CognitiveStore
 
 __all__ = [
+    "ActionSuggestion",
+    "BeliefHypothesisProposal",
     "CognitiveContext",
     "CognitiveEngine",
     "CognitiveJournalEntry",
+    "CognitiveProposalBundle",
     "CognitiveProvider",
     "CognitiveRequest",
     "CognitiveResponsePlan",
@@ -31,6 +35,7 @@ __all__ = [
     "ConversationMessage",
     "GroqCognitiveProvider",
     "JournalStage",
+    "MemoryProposal",
     "MessageSource",
     "MessageStatus",
     "ProviderDelta",
