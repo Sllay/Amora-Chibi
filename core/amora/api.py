@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hmac
+import logging
+import sys
 from dataclasses import asdict
 from uuid import uuid4
 
@@ -20,6 +22,7 @@ from amora.events import AmoraEvent, PrivacyScope
 from amora.identity import PrivacyContext
 from amora.language import PerspectiveFrame, PerspectiveStack
 from amora.memory.routes import register_memory_routes
+from amora.server_console import ServerConsole
 from amora.world.routes import register_world_routes
 
 
@@ -57,7 +60,13 @@ class ObserveTextRequest(BaseModel):
 
 
 def create_api(core: AmoraCore) -> FastAPI:
+    # High-frequency request polling and successful provider requests remain in
+    # structured diagnostics, not in the human terminal surface.
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
     app = FastAPI(title="Amora Core API", version=__version__)
+    app.state.server_console = None
 
     def expected_token() -> str:
         value = core.secrets.get("LOCAL_API_TOKEN")
@@ -72,6 +81,50 @@ def create_api(core: AmoraCore) -> FastAPI:
         supplied = authorization[len(prefix):]
         if not hmac.compare_digest(supplied, expected_token()):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
+
+    def server_console(request: Request | None = None) -> ServerConsole | None:
+        existing = getattr(app.state, "server_console", None)
+        if existing is not None:
+            return existing
+        if not bool(getattr(sys.stderr, "isatty", lambda: False)()):
+            return None
+        host = request.url.hostname if request is not None else "127.0.0.1"
+        port = request.url.port if request is not None and request.url.port is not None else 8765
+        console = ServerConsole(
+            host=host or "127.0.0.1",
+            port=port,
+            log_path=str(core.paths.logs / "amora.jsonl"),
+        )
+        app.state.server_console = console
+        console.start(core)
+        return console
+
+    @app.middleware("http")
+    async def server_console_middleware(request: Request, call_next):
+        console = server_console(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            if console is not None:
+                console.record_error("api", f"{request.method} {request.url.path}: {type(exc).__name__}: {exc}")
+            raise
+        if console is not None:
+            if response.status_code >= 500 and not request.url.path.startswith("/v1/voice/"):
+                console.record_error("api", f"{request.method} {request.url.path} → HTTP {response.status_code}")
+            console.heartbeat(core)
+        return response
+
+    # FastAPI 0.143 removed the legacy app.add_event_handler surface used by
+    # older releases. The dashboard only owns terminal/logging presentation and
+    # does not hold canonical state, so process teardown is sufficient. On older
+    # FastAPI versions, close it cleanly when the compatibility hook exists.
+    add_event_handler = getattr(app, "add_event_handler", None)
+    if callable(add_event_handler):
+        def close_server_console() -> None:
+            console = getattr(app.state, "server_console", None)
+            if console is not None:
+                console.close()
+        add_event_handler("shutdown", close_server_console)
 
     register_memory_routes(app, core, require_auth)
     register_world_routes(app, core, require_auth)
@@ -168,6 +221,7 @@ def create_api(core: AmoraCore) -> FastAPI:
         privacy_scope: PrivacyScope = Query(default=PrivacyScope.PERSONAL),
         remote_processing_allowed: bool = Query(default=False),
     ) -> dict[str, object]:
+        console = server_console(request)
         content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if content_type not in {"audio/wav", "audio/x-wav", "audio/wave"}:
             raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="expected audio/wav")
@@ -184,14 +238,20 @@ def create_api(core: AmoraCore) -> FastAPI:
         audio_path.write_bytes(body)
 
         try:
+            if console is not None:
+                console.set_activity("TRANSCRIBINDO", "Groq STT", ttl_seconds=45.0)
             transcript = await core.stt.transcribe(
                 AudioSegment(path=audio_path, mime_type="audio/wav", language=language)
             )
+            if console is not None:
+                console.clear_module_override("groq.stt")
             rejected = (
                 not transcript.text.strip()
                 or transcript.provider_metadata.get("speech_rejected") == "true"
             )
             if rejected:
+                if console is not None:
+                    console.set_activity("IDLE", "fala rejeitada pelo VAD/STT", ttl_seconds=1.5)
                 return {
                     "accepted": False,
                     "transcript": transcript.model_dump(mode="json"),
@@ -212,6 +272,8 @@ def create_api(core: AmoraCore) -> FastAPI:
                 privacy_scope=privacy_scope,
                 dedupe_key=f"stt:{transcript.request_id}" if transcript.request_id else None,
             )
+            if console is not None:
+                console.set_activity("PENSANDO", "Core local → plano semântico → linguagem", ttl_seconds=60.0)
             try:
                 turn, reply = await core.conversation.observe_completed_utterance(
                     transcript.text,
@@ -225,6 +287,11 @@ def create_api(core: AmoraCore) -> FastAPI:
                 )
             finally:
                 core.social.end_turn(speaker.speaker_id)
+            if console is not None:
+                if reply is not None:
+                    console.set_activity("RESPONDENDO", "fala enfileirada", ttl_seconds=4.0)
+                else:
+                    console.set_activity("IDLE", "sem resposta vocal", ttl_seconds=1.5)
             return {
                 "accepted": True,
                 "transcript": transcript.model_dump(mode="json"),
@@ -233,11 +300,19 @@ def create_api(core: AmoraCore) -> FastAPI:
                 "reply_queued": reply.model_dump(mode="json") if reply else None,
             }
         except SttCredentialsError as exc:
+            if console is not None:
+                console.set_module("groq.stt", "Groq STT", "OFF", "credencial indisponível")
+                console.record_error("Groq STT", str(exc))
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
         except SttRateLimitedError as exc:
+            if console is not None:
+                console.set_module("groq.stt", "Groq STT", "WAIT", "rate limit")
             headers = {"Retry-After": exc.retry_after} if exc.retry_after else None
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc), headers=headers) from exc
         except SttError as exc:
+            if console is not None:
+                console.set_module("groq.stt", "Groq STT", "DEGRADED", type(exc).__name__)
+                console.record_error("Groq STT", str(exc))
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         finally:
             try:

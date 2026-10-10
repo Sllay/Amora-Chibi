@@ -27,7 +27,7 @@ class ActionBus:
             return self._result(call, started, ToolExecutionStatus.DENIED, attempt, error_code="TOOL_NOT_REGISTERED", error_message="tool is not registered")
         plugin, spec = resolved
         manifest = plugin.manifest
-        if manifest.health == PluginHealth.UNAVAILABLE:
+        if self.registry.health(call.plugin_id) == PluginHealth.UNAVAILABLE:
             return self._result(call, started, ToolExecutionStatus.FAILED, attempt, error_code="PLUGIN_UNAVAILABLE", error_message="plugin is unavailable", retryable=True)
         if call.privacy_scope == PrivacyScope.AUTH:
             return self._result(call, started, ToolExecutionStatus.DENIED, attempt, error_code="AUTH_CONTEXT_DENIED", error_message="AUTH content cannot enter tool execution")
@@ -50,13 +50,18 @@ class ActionBus:
         try:
             output = await asyncio.wait_for(plugin.execute(call.tool_name, dict(call.arguments), call), timeout=timeout)
         except asyncio.TimeoutError:
+            self.registry.set_health(call.plugin_id, PluginHealth.DEGRADED)
             return self._result(call, started, ToolExecutionStatus.TIMED_OUT, attempt, error_code="TOOL_TIMEOUT", error_message="tool execution timed out", retryable=True)
         except Exception as exc:
+            self.registry.set_health(call.plugin_id, PluginHealth.DEGRADED)
             return self._result(call, started, ToolExecutionStatus.FAILED, attempt, error_code=f"PLUGIN_EXCEPTION_{type(exc).__name__.upper()}", error_message="plugin execution failed in isolation", retryable=True)
         if not isinstance(output, dict):
+            self.registry.set_health(call.plugin_id, PluginHealth.DEGRADED)
             return self._result(call, started, ToolExecutionStatus.FAILED, attempt, error_code="OUTPUT_NOT_OBJECT", error_message="plugin output must be a JSON object")
         if validate_schema(output, spec.output_schema):
+            self.registry.set_health(call.plugin_id, PluginHealth.DEGRADED)
             return self._result(call, started, ToolExecutionStatus.FAILED, attempt, error_code="OUTPUT_SCHEMA_INVALID", error_message="plugin output does not satisfy the declared output schema")
+        self.registry.set_health(call.plugin_id, PluginHealth.HEALTHY)
         return self._result(call, started, ToolExecutionStatus.SUCCEEDED, attempt, output=output)
 
     def _result(self, call: ToolCall, started, status: ToolExecutionStatus, attempt: int, *, output: dict[str, object] | None = None, error_code: str | None = None, error_message: str | None = None, retryable: bool = False) -> ToolExecutionResult:

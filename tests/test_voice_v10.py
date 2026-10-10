@@ -10,7 +10,7 @@ from amora.api import create_api
 from amora.app import AmoraCore
 from amora.conversation import UtteranceKind, UtteranceStatus
 from amora.events import PrivacyScope
-from amora.voice.tts import GeminiStreamingTTS, RemoteVoiceNotAllowed, VoiceEngine, VoiceRenderRequest
+from amora.voice.tts import GeminiStreamingTTS, RemoteVoiceNotAllowed, VoiceEngine, VoiceRenderRequest, VoiceUnavailable
 
 
 class FakeVoiceProvider:
@@ -18,6 +18,18 @@ class FakeVoiceProvider:
     model = "fake-voice-model"
     voice_id = "fake-voice"
     available = True
+    configured = True
+
+    def ensure_available(self) -> None:
+        return None
+
+    def state(self) -> dict[str, object]:
+        return {
+            "configured": True,
+            "available": True,
+            "cooldown_seconds": 0,
+            "last_error": None,
+        }
 
     async def stream(self, request: VoiceRenderRequest):
         assert request.text
@@ -102,7 +114,6 @@ def test_voice_engine_enforces_utterance_policy_before_remote_provider(tmp_path:
 async def test_voice_engine_streams_pcm_and_records_usage(tmp_path: Path, monkeypatch) -> None:
     core = _core(tmp_path, monkeypatch)
     try:
-        import asyncio
         utterance = await core.conversation.enqueue_text(
             "Oi, papis.",
             target_id="PERSON_BK",
@@ -134,6 +145,50 @@ def test_voice_api_reports_unconfigured_provider_without_exposing_key(tmp_path: 
         assert response.status_code == 200
         body = response.json()
         assert body["expressive_tts_configured"] is False
+        assert body["expressive_tts_available"] is False
         assert "api_key" not in str(body).lower()
+    finally:
+        core.close()
+
+
+def test_gemini_retry_duration_parses_hours_minutes_and_seconds() -> None:
+    assert GeminiStreamingTTS._duration_seconds("2h27m5.5s") == pytest.approx(8825.5)
+    assert GeminiStreamingTTS._duration_seconds("90s") == pytest.approx(90.0)
+    assert GeminiStreamingTTS._duration_seconds("n/a") is None
+
+
+def test_voice_api_returns_503_before_stream_headers_when_tts_is_rate_limited(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+
+    core = _core(tmp_path, monkeypatch)
+    try:
+        core.secrets.set("GEMINI_API_KEY", "test-only-key")
+        utterance = asyncio.run(core.conversation.enqueue_text(
+            "Teste de fallback local.",
+            target_id="PERSON_BK",
+            kind=UtteranceKind.DIALOGUE,
+            priority=70,
+            privacy_scope=PrivacyScope.PERSONAL,
+            source_event_id=None,
+            dedupe_key="voice-rate-limit",
+            metadata={"remote_tts_allowed": True},
+        ))
+        assert utterance is not None
+
+        async def rate_limited(self, request):
+            if False:
+                yield b""
+            raise VoiceUnavailable("Gemini TTS quota exhausted", retry_after_seconds=123.2)
+
+        monkeypatch.setattr(GeminiStreamingTTS, "stream", rate_limited)
+        token = core.secrets.get("LOCAL_API_TOKEN")
+        client = TestClient(create_api(core))
+        response = client.get(
+            f"/v1/voice/utterances/{utterance.id}/audio",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 503
+        assert response.headers["retry-after"] == "124"
+        assert response.json()["detail"] == "Gemini TTS quota exhausted"
     finally:
         core.close()
