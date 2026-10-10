@@ -31,10 +31,17 @@ class ToolPlugin(Protocol):
 
 
 class PluginRegistry:
-    """In-process registry with explicit plugin registration."""
+    """In-process registry with explicit registration and runtime health.
+
+    Manifest health is the startup/default state. Runtime health is mutable and
+    deliberately lives in the registry so a transient integration failure never
+    has to mutate a plugin manifest. Future connectors (Minecraft, OBS, browser,
+    etc.) can stay UNAVAILABLE while disconnected and become HEALTHY on connect.
+    """
 
     def __init__(self) -> None:
         self._plugins: dict[str, ToolPlugin] = {}
+        self._health: dict[str, PluginHealth] = {}
 
     def register(self, plugin: ToolPlugin) -> None:
         manifest = plugin.manifest
@@ -44,6 +51,7 @@ class PluginRegistry:
         if len(tool_names) != len(set(tool_names)):
             raise ValueError(f"duplicate tool in plugin manifest: {manifest.plugin_id}")
         self._plugins[manifest.plugin_id] = plugin
+        self._health[manifest.plugin_id] = manifest.health
 
     def plugin(self, plugin_id: str) -> ToolPlugin | None:
         return self._plugins.get(plugin_id)
@@ -59,6 +67,20 @@ class PluginRegistry:
 
     def manifests(self) -> list[PluginManifest]:
         return sorted((plugin.manifest for plugin in self._plugins.values()), key=lambda item: item.plugin_id)
+
+    def health(self, plugin_id: str) -> PluginHealth:
+        plugin = self._plugins.get(plugin_id)
+        if plugin is None:
+            return PluginHealth.UNAVAILABLE
+        return self._health.get(plugin_id, plugin.manifest.health)
+
+    def set_health(self, plugin_id: str, health: PluginHealth) -> None:
+        if plugin_id not in self._plugins:
+            raise KeyError(plugin_id)
+        self._health[plugin_id] = health
+
+    def health_snapshot(self) -> dict[str, str]:
+        return {plugin_id: self.health(plugin_id).value for plugin_id in sorted(self._plugins)}
 
     @property
     def plugin_count(self) -> int:
