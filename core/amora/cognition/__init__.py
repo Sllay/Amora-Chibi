@@ -1,4 +1,5 @@
-from .context import ContextCompiler, ProviderPrivacyGate
+from .context import ProviderPrivacyGate
+from .context_v1 import ContextCompiler
 from .models import (
     CognitiveContext,
     CognitiveJournalEntry,
@@ -11,7 +12,8 @@ from .models import (
     MessageStatus,
     SpeechSegment,
 )
-from .providers import CognitiveProvider, GroqCognitiveProvider, ProviderDelta, ProviderError
+from .providers import CognitiveProvider, ProviderDelta, ProviderError
+from .providers_v1 import GroqCognitiveProvider
 from .hardened import CognitiveEngine
 from .speech import SpeechNormalizer, SpeechRender, SpeechSegmenter
 from .store import CognitiveStore
