@@ -52,6 +52,26 @@ def test_addressee_explicit_amora_and_third_party_vocative() -> None:
     assert "EXPLICIT_LEADING_VOCATIVE" in joao.reason_codes
 
 
+def test_addressee_recovers_a15_split_amora_only_as_leading_vocative() -> None:
+    registry = extended_registry()
+    engine = AddresseeEngine(registry)
+
+    split = engine.infer("A mora, você está me ouvindo?", speaker_id="PERSON_BK")
+    assert split.entity_id == "ENTITY_AMORA"
+    assert split.confidence >= 0.95
+    assert "STT_AMORA_SPLIT_VOCATIVE" in split.reason_codes
+
+    split_without_comma = engine.infer("A mora você tá me ouvindo?", speaker_id="PERSON_BK")
+    assert split_without_comma.entity_id == "ENTITY_AMORA"
+    assert "STT_AMORA_SPLIT_VOCATIVE" in split_without_comma.reason_codes
+
+    natural_phrase = engine.infer("A mora fica no interior.", speaker_id="PERSON_BK")
+    assert natural_phrase.kind == AddresseeKind.UNKNOWN
+
+    agora = engine.infer("Agora você está me ouvindo?", speaker_id="PERSON_BK")
+    assert agora.kind == AddresseeKind.UNKNOWN
+
+
 def test_addressee_is_conservative_without_signal_and_uses_floor_continuity() -> None:
     registry = extended_registry()
     engine = AddresseeEngine(registry)
