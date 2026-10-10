@@ -32,10 +32,18 @@ class CoreClient(context: Context) {
         val bytesReceived: Long,
     )
 
-    private val tokenStore = SecureTokenStore(context.applicationContext)
+    private val appContext = context.applicationContext
+    private val tokenStore = SecureTokenStore(appContext)
+    private val privacyPreferences = appContext.getSharedPreferences(PRIVACY_PREFERENCES, Context.MODE_PRIVATE)
     private val baseUrl = "http://127.0.0.1:8765"
 
     fun isPaired(): Boolean = tokenStore.hasToken()
+
+    fun isRemoteCognitionAllowed(): Boolean = privacyPreferences.getBoolean(KEY_REMOTE_COGNITION, false)
+
+    fun setRemoteCognitionAllowed(allowed: Boolean) {
+        privacyPreferences.edit().putBoolean(KEY_REMOTE_COGNITION, allowed).apply()
+    }
 
     fun pair(code: String) {
         require(code.matches(Regex("\\d{6}"))) { "Código deve ter 6 dígitos" }
@@ -54,7 +62,8 @@ class CoreClient(context: Context) {
 
     fun transcribe(wav: ByteArray): TranscriptionResult {
         val speaker = URLEncoder.encode("SESSION_ANDROID_SPEAKER_1", "UTF-8")
-        val path = "/v1/audio/transcribe?language=pt&speaker_id=$speaker&speaker_confidence=0.35&remote_processing_allowed=true"
+        val remoteCognition = isRemoteCognitionAllowed()
+        val path = "/v1/audio/transcribe?language=pt&speaker_id=$speaker&speaker_confidence=0.35&remote_processing_allowed=$remoteCognition"
         val connection = open(path, "POST", authenticated = true)
         connection.setRequestProperty("Content-Type", "audio/wav")
         connection.doOutput = true
@@ -137,12 +146,14 @@ class CoreClient(context: Context) {
         readResponse(connection)
     }
 
-    fun cancelUtterance(utteranceId: String, reason: String = "barge_in") {
+    fun cancelUtterance(utteranceId: String, reason: String = "barge_in", spokenChars: Int? = null) {
         val safeId = URLEncoder.encode(utteranceId, "UTF-8")
         val connection = open("/v1/conversation/utterances/$safeId/cancel", "POST", authenticated = true)
         connection.setRequestProperty("Content-Type", "application/json")
         connection.doOutput = true
-        val payload = JSONObject().put("reason", reason.take(96)).toString().toByteArray(Charsets.UTF_8)
+        val root = JSONObject().put("reason", reason.take(96))
+        if (spokenChars != null) root.put("spoken_chars", spokenChars.coerceAtLeast(0))
+        val payload = root.toString().toByteArray(Charsets.UTF_8)
         connection.outputStream.use { it.write(payload) }
         readResponse(connection)
     }
@@ -168,5 +179,10 @@ class CoreClient(context: Context) {
         connection.disconnect()
         if (code !in 200..299) throw IllegalStateException("Core respondeu HTTP $code: $body")
         return body
+    }
+
+    companion object {
+        private const val PRIVACY_PREFERENCES = "amora_privacy"
+        private const val KEY_REMOTE_COGNITION = "remote_cognition_allowed"
     }
 }
