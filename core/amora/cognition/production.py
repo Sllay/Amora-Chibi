@@ -7,11 +7,10 @@ from uuid import UUID
 from amora.events import PrivacyScope
 from amora.models import ScopedModelRouter, TaskClass
 
-from .models import CognitiveContext, CognitiveJournalEntry, CognitiveRequest, CognitiveResponsePlan, JournalStage
+from .models import CognitiveContext, CognitiveJournalEntry, CognitiveRequest, JournalStage
 from .proposals import CognitiveProposalBundle
 from .replay import CognitiveReplayResult
 from .resilient import CognitiveEngine as ResilientCognitiveEngine
-from .service import SegmentSink
 
 
 class CognitiveEngine(ResilientCognitiveEngine):
@@ -28,15 +27,10 @@ class CognitiveEngine(ResilientCognitiveEngine):
         state["cognitive_replay_enabled"] = True
         return state
 
-    async def respond(
-        self,
-        request: CognitiveRequest,
-        *,
-        on_segment: SegmentSink | None = None,
-        fallback_text: str | None = None,
-    ) -> CognitiveResponsePlan:
-        self._persist_replay_snapshot(request)
-        return await super().respond(request, on_segment=on_segment, fallback_text=fallback_text)
+    def _prepare_context(self, request: CognitiveRequest) -> CognitiveContext:
+        context = super()._prepare_context(request)
+        self._persist_replay_snapshot(request, context)
+        return context
 
     async def reflect(self, request: CognitiveRequest) -> CognitiveProposalBundle:
         """Run the canonical reflection gates with provider failover.
@@ -205,10 +199,9 @@ class CognitiveEngine(ResilientCognitiveEngine):
                 )
         return results
 
-    def _persist_replay_snapshot(self, request: CognitiveRequest) -> None:
+    def _persist_replay_snapshot(self, request: CognitiveRequest, context: CognitiveContext) -> None:
         if request.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
             return
-        context = self.compiler.compile(request)
         self.store.put_journal(
             CognitiveJournalEntry(
                 turn_id=request.turn_id,
