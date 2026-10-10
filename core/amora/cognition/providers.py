@@ -101,24 +101,32 @@ class GroqCognitiveProvider:
             "reason_codes": context.reason_codes,
         }
 
+    def _messages(self, context: CognitiveContext) -> list[dict[str, str]]:
+        """Render one provider request from the frozen cognitive context.
+
+        V1 adapters may override this projection without duplicating transport,
+        streaming, quota, or error-handling logic.
+        """
+        return [
+            {"role": "system", "content": self._system_prompt()},
+            {
+                "role": "user",
+                "content": (
+                    "ESTADO CANÔNICO SELECIONADO:\n"
+                    + json.dumps(self._context_payload(context), ensure_ascii=False, separators=(",", ":"))
+                    + "\n\nFALA ATUAL DE " + context.speaker_id + ":\n" + context.user_text
+                    + "\n\nGere apenas a resposta falável da Amora."
+                ),
+            },
+        ]
+
     async def stream(self, context: CognitiveContext) -> AsyncIterator[ProviderDelta]:
         api_key = self.secrets.get("GROQ_API_KEY")
         if not api_key:
             raise ProviderError("GROQ_API_KEY is not configured")
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": self._system_prompt()},
-                {
-                    "role": "user",
-                    "content": (
-                        "ESTADO CANÔNICO SELECIONADO:\n"
-                        + json.dumps(self._context_payload(context), ensure_ascii=False, separators=(",", ":"))
-                        + "\n\nFALA ATUAL DE " + context.speaker_id + ":\n" + context.user_text
-                        + "\n\nGere apenas a resposta falável da Amora."
-                    ),
-                },
-            ],
+            "messages": self._messages(context),
             "stream": True,
             "temperature": 0.78,
             "top_p": 0.92,
