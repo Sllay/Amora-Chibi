@@ -114,12 +114,17 @@ def create_api(core: AmoraCore) -> FastAPI:
             console.heartbeat(core)
         return response
 
-    def close_server_console() -> None:
-        console = getattr(app.state, "server_console", None)
-        if console is not None:
-            console.close()
-
-    app.add_event_handler("shutdown", close_server_console)
+    # FastAPI 0.143 removed the legacy app.add_event_handler surface used by
+    # older releases. The dashboard only owns terminal/logging presentation and
+    # does not hold canonical state, so process teardown is sufficient. On older
+    # FastAPI versions, close it cleanly when the compatibility hook exists.
+    add_event_handler = getattr(app, "add_event_handler", None)
+    if callable(add_event_handler):
+        def close_server_console() -> None:
+            console = getattr(app.state, "server_console", None)
+            if console is not None:
+                console.close()
+        add_event_handler("shutdown", close_server_console)
 
     register_memory_routes(app, core, require_auth)
     register_world_routes(app, core, require_auth)
