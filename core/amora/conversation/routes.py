@@ -17,6 +17,7 @@ class TurnSignalRequest(BaseModel):
 
 class CancelSpeechRequest(BaseModel):
     reason: str = Field(default="barge_in", min_length=1, max_length=96)
+    spoken_chars: int | None = Field(default=None, ge=0, le=12000)
 
 
 def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Callable[..., None]) -> None:
@@ -46,10 +47,18 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
 
     @app.post("/v1/conversation/utterances/{utterance_id}/cancel", dependencies=[Depends(require_auth)])
     async def cancel_utterance(utterance_id: str, request: CancelSpeechRequest) -> dict[str, object]:
-        item, cancelled = await core.conversation.cancel_utterance(utterance_id, reason=request.reason)
+        item, cancelled = await core.conversation.cancel_utterance(
+            utterance_id,
+            reason=request.reason,
+            spoken_chars=request.spoken_chars,
+        )
         if item is None:
             raise HTTPException(status_code=404, detail="utterance not found")
-        return {"utterance": item.model_dump(mode="json"), "cancelled_utterances": cancelled}
+        return {
+            "utterance": item.model_dump(mode="json"),
+            "cancelled_utterances": cancelled,
+            "spoken_progress_known": request.spoken_chars is not None,
+        }
 
     @app.get("/v1/conversation/turns", dependencies=[Depends(require_auth)])
     def list_turns(limit: int = Query(default=20, ge=1, le=200)) -> list[dict[str, object]]:
