@@ -24,6 +24,9 @@ class AudioCaptureService : Service() {
     private val voiceBusy = AtomicBoolean(false)
     private val resetSegmenter = AtomicBoolean(false)
     private val networkExecutor = Executors.newSingleThreadExecutor()
+    // Control traffic must never wait behind a long STT/cognition request. In
+    // particular, barge-in cancellation has to reach the Core immediately.
+    private val controlExecutor = Executors.newSingleThreadExecutor()
     private val voiceExecutor = Executors.newSingleThreadScheduledExecutor()
     private val bargeIn = BargeInDetector()
     private var captureThread: Thread? = null
@@ -49,7 +52,12 @@ class AudioCaptureService : Service() {
                 manager.notify(NOTIFICATION_ID, notification(text))
             },
             onFinished = { utteranceId, outcome ->
-                networkExecutor.execute {
+                val executor = when (outcome) {
+                    VoiceOutput.Outcome.INTERRUPTED,
+                    VoiceOutput.Outcome.PARTIAL -> controlExecutor
+                    else -> networkExecutor
+                }
+                executor.execute {
                     try {
                         when (outcome) {
                             VoiceOutput.Outcome.SPOKEN -> coreClient.acknowledgeUtterance(utteranceId, true)
@@ -95,6 +103,7 @@ class AudioCaptureService : Service() {
         voiceOutput?.close()
         voiceOutput = null
         networkExecutor.shutdownNow()
+        controlExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -162,9 +171,9 @@ class AudioCaptureService : Service() {
 
                 val floats = FloatArray(count) { index -> shorts[index] / 32768F }
                 if (speaking.get()) {
-                    // Never send playback-time audio to STT. We only inspect local,
-                    // echo-cancelled energy to decide whether a human is trying to
-                    // take the floor. Identity is resolved later by normal STT/social.
+                    // Playback-time microphone audio never reaches STT. The
+                    // echo-cancelled signal is inspected locally only to detect
+                    // a human taking the floor.
                     if (bargeIn.accept(floats)) {
                         Log.i(TAG, "Barge-in detectado; Amora cede o turno")
                         voiceOutput?.stopCurrent()
