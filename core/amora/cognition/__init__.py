@@ -13,9 +13,9 @@ from .models import (
     SpeechSegment,
 )
 from .providers import CognitiveProvider, ProviderDelta, ProviderError
-from .providers_v1 import GroqCognitiveProvider
+from .providers_v1 import GeminiCognitiveProvider, GroqCognitiveProvider
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
-from .hardened import CognitiveEngine
+from .resilient import CognitiveEngine
 from .speech import SpeechNormalizer, SpeechRender, SpeechSegmenter
 from .store import CognitiveStore
 
@@ -33,6 +33,7 @@ __all__ = [
     "ContextCompiler",
     "ContextMemory",
     "ConversationMessage",
+    "GeminiCognitiveProvider",
     "GroqCognitiveProvider",
     "JournalStage",
     "MemoryProposal",
