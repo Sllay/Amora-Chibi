@@ -15,7 +15,8 @@ from .models import (
 from .providers import CognitiveProvider, ProviderDelta, ProviderError
 from .providers_v1 import GeminiCognitiveProvider, GroqCognitiveProvider
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
-from .resilient import CognitiveEngine
+from .production import CognitiveEngine
+from .replay import CognitiveReplayResult
 from .speech import SpeechNormalizer, SpeechRender, SpeechSegmenter
 from .store_v1 import CognitiveStore
 
@@ -27,6 +28,7 @@ __all__ = [
     "CognitiveJournalEntry",
     "CognitiveProposalBundle",
     "CognitiveProvider",
+    "CognitiveReplayResult",
     "CognitiveRequest",
     "CognitiveResponsePlan",
     "CognitiveStore",
