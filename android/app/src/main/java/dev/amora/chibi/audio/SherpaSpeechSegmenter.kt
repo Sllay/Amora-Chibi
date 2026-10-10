@@ -11,9 +11,15 @@ class SherpaSpeechSegmenter(context: Context) : SpeechSegmenter {
         config = VadModelConfig(
             sileroVadModelConfig = SileroVadModelConfig(
                 model = "silero_vad.onnx",
-                threshold = 0.5F,
-                minSilenceDuration = 0.30F,
-                minSpeechDuration = 0.18F,
+                // A15 VOICE_COMMUNICATION processing can soften the first vowel
+                // of a phrase. A slightly lower onset threshold avoids clipping
+                // vocatives such as "Amora" while still relying on Silero VAD.
+                threshold = 0.38F,
+                // Natural pt-BR speech contains brief intra-sentence pauses. The
+                // previous 300 ms boundary fragmented ordinary conversation too
+                // aggressively on the physical A15.
+                minSilenceDuration = 0.55F,
+                minSpeechDuration = 0.12F,
                 windowSize = 512,
                 maxSpeechDuration = 12.0F,
             ),
