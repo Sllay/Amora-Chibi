@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 from uuid import UUID
 
 from amora.cognition import CognitiveRequest, SpeechSegment
@@ -11,6 +12,7 @@ from .service import ConversationEngine as BaseConversationEngine
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+_DIRECT_CONTINUITY_SECONDS = 25
 
 
 class ConversationEngine(BaseConversationEngine):
@@ -33,6 +35,10 @@ class ConversationEngine(BaseConversationEngine):
         session_id: str | None = None,
         stt_confidence: float | None = None,
     ) -> tuple[TurnDecision, SpeechUtterance | None]:
+        addressee_id, continuity_inferred = self._resolve_conversational_addressee(
+            speaker_id=speaker_id,
+            addressee_id=addressee_id,
+        )
         decision, item = await super().observe_completed_utterance(
             text,
             speaker_id=speaker_id,
@@ -74,10 +80,47 @@ class ConversationEngine(BaseConversationEngine):
                 "stt_confidence": stt_confidence,
                 "turn_state": decision.state.value,
                 "turn_reason_codes": decision.reason_codes,
+                "addressee_inferred_by_continuity": continuity_inferred,
             },
         )
         await self.cognition.reflect(reflection_request)
         return decision, item
+
+    def _resolve_conversational_addressee(
+        self,
+        *,
+        speaker_id: str,
+        addressee_id: str | None,
+    ) -> tuple[str | None, bool]:
+        """Keep a brief direct-conversation window without answering ambient speech forever.
+
+        Mobile VAD/STT can occasionally clip or mistranscribe a leading vocative
+        such as "Amora". After one explicit direct turn, an immediately following
+        utterance from the same speaker may therefore inherit ENTITY_AMORA for a
+        short bounded window. Explicit speech to another entity closes the window.
+        """
+        now = self.clock.now()
+        deadlines = getattr(self, "_direct_addressee_deadlines", None)
+        if deadlines is None:
+            deadlines = {}
+            self._direct_addressee_deadlines = deadlines
+
+        if addressee_id == "ENTITY_AMORA":
+            deadlines[speaker_id] = now + timedelta(seconds=_DIRECT_CONTINUITY_SECONDS)
+            return addressee_id, False
+
+        if addressee_id is not None:
+            deadlines.pop(speaker_id, None)
+            return addressee_id, False
+
+        deadline = deadlines.get(speaker_id)
+        if deadline is None or now > deadline:
+            deadlines.pop(speaker_id, None)
+            return None, False
+
+        # Refresh only while the same speaker keeps the conversation flowing.
+        deadlines[speaker_id] = now + timedelta(seconds=_DIRECT_CONTINUITY_SECONDS)
+        return "ENTITY_AMORA", True
 
     async def handle_semantic_event(self, event: AmoraEvent) -> SpeechUtterance | None:
         if event.event_type != "action.semantic_request":

@@ -3,7 +3,9 @@ package dev.amora.chibi.audio
 import kotlin.math.sqrt
 
 class EnergySpeechSegmenter(
-    private val threshold: Float = 0.025F,
+    // Keep the fallback conservative enough for room noise, but do not require
+    // unusually loud speech on the A15 VOICE_COMMUNICATION input path.
+    private val threshold: Float = 0.018F,
     private val sampleRate: Int = 16_000,
 ) : SpeechSegmenter {
     private val active = ArrayList<Float>()
