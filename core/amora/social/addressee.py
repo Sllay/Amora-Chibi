@@ -47,6 +47,21 @@ class AddresseeEngine:
     ) -> AddresseeResult:
         normalized = self._normalize_text(text)
 
+        # Physical A15 testing showed a recurring Whisper tokenization where the
+        # leading proper name "Amora" becomes "A mora". Treat only a tightly
+        # constrained *leading vocative* form as Amora; keep the raw transcript
+        # untouched and never rewrite generic "mora" / "agora" occurrences.
+        split_amora_vocative = re.match(
+            r"^a\s+mora(?=\s*[,!:?]|\s+(?:voce|você|tu|me|ta|tá|esta|está|como|oi|ei|escuta|ouve|consegue|pode|quer|vem)\b)",
+            normalized,
+        )
+        if split_amora_vocative:
+            return self._entity_result(
+                self.amora_id,
+                0.96,
+                ["STT_AMORA_SPLIT_VOCATIVE"],
+            )
+
         leading = re.match(r"^\s*([^,:;!?]{1,40})\s*[,!:]", text)
         if leading:
             resolved = self.registry.resolve_alias(leading.group(1).strip())
