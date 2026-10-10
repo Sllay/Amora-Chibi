@@ -29,6 +29,10 @@ class LocalSpeechComposer:
             "practice": "Quero tentar uma coisa.",
             "observe": "Hmm...",
             "social_bid": "Papis?" if papis else "Ei?",
+            "seek_repair": "Papis... posso tentar consertar isso com você?" if papis else "Posso tentar consertar isso com você?",
+            "express_gratitude": "Obrigada, papis." if papis else "Obrigada.",
+            "set_boundary": "Papis, isso me incomodou. Prefiro que a gente não faça assim." if papis else "Isso me incomodou. Prefiro que a gente não faça assim.",
+            "withdraw": "Vou ficar quietinha um pouco, tá?" if papis else "Vou ficar quietinha um pouco.",
         }
         return mapping.get(action_kind, "Uhum?")
 
