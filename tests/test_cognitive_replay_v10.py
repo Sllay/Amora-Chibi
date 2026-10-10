@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from amora.app import AmoraCore
-from amora.cognition import CognitiveRequest, ProviderDelta
+from amora.cognition import CognitiveContext, CognitiveRequest, ProviderDelta
 from amora.events import PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.time import SimulatedClock
@@ -15,6 +15,7 @@ from amora.time import SimulatedClock
 class ReplayProvider:
     def __init__(self, name: str, text: str, *, priority: int) -> None:
         self.text = text
+        self.last_context: dict[str, object] | None = None
         self.descriptor = ProviderDescriptor(
             name=name,
             model=f"{name}-model",
@@ -31,6 +32,7 @@ class ReplayProvider:
 
     async def stream(self, context):
         assert context.self_model
+        self.last_context = context.model_dump(mode="json")
         yield ProviderDelta(text=self.text, input_tokens=10, output_tokens=5, status_code=200)
         yield ProviderDelta(done=True, finish_reason="stop", input_tokens=10, output_tokens=5, status_code=200)
 
@@ -71,6 +73,15 @@ async def test_replay_uses_same_snapshot_without_mutating_canonical_state(tmp_pa
         )
         plan = await core.cognition.respond(request)
         assert plan.provider == "provider-a"
+        assert a.last_context is not None
+
+        snapshot_entry = next(
+            item
+            for item in core.cognition.store.journal_for_turn(request.turn_id)
+            if "REPLAY_SNAPSHOT" in item.reason_codes
+        )
+        snapshot = CognitiveContext.model_validate(snapshot_entry.payload["context"]).model_dump(mode="json")
+        assert snapshot == a.last_context
 
         before = _state_counts(core)
         results = await core.cognition.replay(request.turn_id, provider_names=["provider-a", "provider-b"])
