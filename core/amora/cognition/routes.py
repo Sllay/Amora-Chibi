@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from .models import CognitiveRequest
+
+
+class ReplayRequest(BaseModel):
+    provider_names: list[str] = Field(default_factory=list, max_length=8)
 
 
 def register_cognition_routes(app: FastAPI, core, require_auth) -> None:
@@ -13,6 +18,10 @@ def register_cognition_routes(app: FastAPI, core, require_auth) -> None:
     @app.get("/v1/cognition/state", dependencies=auth)
     def cognition_state() -> dict[str, object]:
         return core.cognition.state()
+
+    @app.get("/v1/cognition/usage", dependencies=auth)
+    def cognition_usage() -> list[dict[str, object]]:
+        return core.cognition.store.usage_ledger()
 
     @app.get("/v1/cognition/history", dependencies=auth)
     def cognition_history(
@@ -39,6 +48,24 @@ def register_cognition_routes(app: FastAPI, core, require_auth) -> None:
         plan = await core.cognition.respond(request)
         await core.cognition.emit_event(plan)
         return plan.model_dump(mode="json")
+
+    @app.post("/v1/cognition/replay/{turn_id}", dependencies=auth)
+    async def cognition_replay(turn_id: UUID, request: ReplayRequest) -> dict[str, object]:
+        try:
+            results = await core.cognition.replay(
+                turn_id,
+                provider_names=request.provider_names or None,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        return {
+            "turn_id": str(turn_id),
+            "sandbox": True,
+            "state_mutation_allowed": False,
+            "results": [item.model_dump(mode="json") for item in results],
+        }
 
     @app.post("/v1/cognition/interrupt/{turn_id}", dependencies=auth)
     def cognition_interrupt(turn_id: UUID, reason: str = Query(default="barge_in", max_length=64)) -> dict[str, object]:
