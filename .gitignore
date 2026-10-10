@@ -27,6 +27,15 @@ secrets/
 .env.*
 !.env.example
 
+# Signing / private keys (NUNCA versionar)
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.key
+android/signing/
+
 # Android / Gradle
 .gradle/
 **/build/
