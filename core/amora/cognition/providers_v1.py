@@ -29,9 +29,12 @@ _REFLECTION_INSTRUCTION = (
 )
 
 _DIALOGUE_CONTRACT = (
-    " Amora é o próprio nome dela; quando esse nome aparece como chamada, trate-o como vocativo. "
-    "Continue a conversa como Amora, não como serviço de atendimento. Relações e formas de tratamento só podem vir "
-    "do estado canônico fornecido e devem aparecer naturalmente, sem serem forçadas em toda resposta."
+    " O Core local já decidiu o ato social no PLANO SEMÂNTICO LOCAL. Seu papel nesta etapa é realização linguística: "
+    "transforme o plano e o estado permitido em fala brasileira natural, sem escolher outro objetivo social. "
+    "Respeite ask_followup e offer_help como decisões locais; se forem false, não crie pergunta de acompanhamento nem "
+    "oferta de ajuda por iniciativa própria. Para self facts, use somente fact_value quando fact_status=known; quando "
+    "fact_status=missing, admita naturalmente que esse fato ainda não está definido, sem inventar número, data, origem "
+    "ou explicação metafísica substituta. Preserve liberdade de redação, ritmo, gíria e nuance dentro desses limites."
 )
 
 
@@ -40,8 +43,8 @@ def _system_prompt(base: str) -> str:
         base
         + _DIALOGUE_CONTRACT
         + " Quando reason_codes contiver AUTONOMOUS_INITIATION, user_text não é uma fala recebida: "
-        "é uma intenção interna da Amora para iniciar contato. Nesse modo, formule uma abertura espontânea coerente "
-        "com intenção, memória, relação, humor e afeto, sem fingir que a outra pessoa acabou de dizer algo."
+        "é uma intenção interna da Amora para iniciar contato. Nesse modo, realize linguisticamente a abertura já decidida "
+        "pelo plano local, sem fingir que a outra pessoa acabou de dizer algo."
         + " Quando reason_codes contiver COGNITIVE_REFLECTION, não produza fala social casual; trate a solicitação "
         "como reflexão interna estruturada conforme a instrução específica do turno."
     )
@@ -60,6 +63,13 @@ def _canonical_state_text(context: CognitiveContext) -> str:
     return (
         "ESTADO CANÔNICO SELECIONADO:\n"
         + json.dumps(_canonical_state_payload(context), ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def _dialogue_plan_text(context: CognitiveContext) -> str:
+    return (
+        "PLANO SEMÂNTICO LOCAL — AUTORITATIVO:\n"
+        + json.dumps(context.dialogue_plan, ensure_ascii=False, separators=(",", ":"))
     )
 
 
@@ -108,7 +118,13 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
         messages: list[dict[str, str]] = [
             {
                 "role": "system",
-                "content": self._system_prompt() + "\n\n" + _canonical_state_text(context),
+                "content": (
+                    self._system_prompt()
+                    + "\n\n"
+                    + _canonical_state_text(context)
+                    + "\n\n"
+                    + _dialogue_plan_text(context)
+                ),
             }
         ]
         messages.extend({"role": role, "content": text} for role, text in _dialogue_turns(context))
@@ -254,7 +270,17 @@ class GeminiCognitiveProvider:
         contents.append({"role": "user", "parts": [{"text": context.user_text}]})
         return {
             "systemInstruction": {
-                "parts": [{"text": self._system_prompt() + "\n\n" + _canonical_state_text(context)}]
+                "parts": [
+                    {
+                        "text": (
+                            self._system_prompt()
+                            + "\n\n"
+                            + _canonical_state_text(context)
+                            + "\n\n"
+                            + _dialogue_plan_text(context)
+                        )
+                    }
+                ]
             },
             "contents": contents,
             "generationConfig": generation,
