@@ -48,6 +48,10 @@ class SkillLibrary:
             "seek_novelty",
             "express",
             "practice",
+            "seek_repair",
+            "express_gratitude",
+            "set_boundary",
+            "withdraw",
         }
         library.register(
             SkillDefinition(
@@ -80,9 +84,9 @@ class SkillLibrary:
             SkillDefinition(
                 name="core.rest",
                 version="1",
-                intention_kinds={"rest"},
+                intention_kinds={"rest", "wait"},
                 planner_mode=PlannerMode.RULE,
-                description="Resolve a rest intention locally without blocking the event loop.",
+                description="Resolve a rest/wait intention locally without blocking the event loop.",
                 steps=[
                     ToolTemplate(
                         plugin_id="core.actions",
