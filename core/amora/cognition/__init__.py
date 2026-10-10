@@ -1,3 +1,4 @@
+from .context import ContextCompiler, ProviderPrivacyGate
 from .models import (
     CognitiveContext,
     CognitiveJournalEntry,
@@ -10,20 +11,29 @@ from .models import (
     MessageStatus,
     SpeechSegment,
 )
+from .providers import CognitiveProvider, GroqCognitiveProvider, ProviderDelta, ProviderError
+from .service import CognitiveEngine
 from .speech import SpeechNormalizer, SpeechRender, SpeechSegmenter
 from .store import CognitiveStore
 
 __all__ = [
     "CognitiveContext",
+    "CognitiveEngine",
     "CognitiveJournalEntry",
+    "CognitiveProvider",
     "CognitiveRequest",
     "CognitiveResponsePlan",
     "CognitiveStore",
+    "ContextCompiler",
     "ContextMemory",
     "ConversationMessage",
+    "GroqCognitiveProvider",
     "JournalStage",
     "MessageSource",
     "MessageStatus",
+    "ProviderDelta",
+    "ProviderError",
+    "ProviderPrivacyGate",
     "SpeechNormalizer",
     "SpeechRender",
     "SpeechSegment",

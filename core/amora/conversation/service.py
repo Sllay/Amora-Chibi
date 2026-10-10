@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from amora.emotion import EmotionEngine
@@ -20,6 +21,9 @@ from .models import (
 from .store import ConversationStore
 from .turn_manager import TurnManager
 
+if TYPE_CHECKING:
+    from amora.cognition import CognitiveEngine, CognitiveRequest, SpeechSegment
+
 
 class ConversationEngine:
     def __init__(
@@ -31,6 +35,7 @@ class ConversationEngine:
         events: AsyncEventBus,
         *,
         dialogue: DialogueProvider | None = None,
+        cognition: "CognitiveEngine | None" = None,
     ) -> None:
         self.store = store
         self.clock = clock
@@ -40,6 +45,7 @@ class ConversationEngine:
         self.turn_manager = TurnManager(clock)
         self.composer = LocalSpeechComposer()
         self.dialogue = dialogue or NoDialogueProvider()
+        self.cognition = cognition
 
     def close(self) -> None:
         self.store.close()
@@ -50,6 +56,7 @@ class ConversationEngine:
             "speech_pending_count": self.store.pending_count(),
             "speech_spoken_count": self.store.spoken_count(),
             "dialogue_provider": self.dialogue.name,
+            "cognition_enabled": self.cognition is not None,
             "conversation_floor": self.social.scene.conversation_floor,
             "active_addressee": self.social.scene.active_addressee,
         }
@@ -119,6 +126,8 @@ class ConversationEngine:
         source_event_id: UUID | str | None,
         privacy_scope: PrivacyScope,
         remote_processing_allowed: bool = False,
+        session_id: str | None = None,
+        stt_confidence: float | None = None,
     ) -> tuple[TurnDecision, SpeechUtterance | None]:
         direct = addressee_id == "ENTITY_AMORA"
         event_id = UUID(str(source_event_id)) if source_event_id else None
@@ -139,10 +148,63 @@ class ConversationEngine:
             dedupe_key=f"turn:utterance:{event_id}" if event_id else None,
         )
         decision = self.decide_turn(signal)
+
+        cognitive_request = None
+        if self.cognition is not None:
+            from amora.cognition import CognitiveRequest
+
+            cognitive_request = CognitiveRequest(
+                text=text,
+                speaker_id=speaker_id,
+                target_id=addressee_id,
+                source_event_id=event_id,
+                session_id=session_id,
+                privacy_scope=privacy_scope,
+                remote_processing_allowed=remote_processing_allowed,
+                metadata={
+                    "stt_confidence": stt_confidence,
+                    "turn_state": decision.state.value,
+                    "turn_reason_codes": decision.reason_codes,
+                },
+            )
+            self.cognition.observe_input(cognitive_request)
+            self.cognition.record_turn_decision(cognitive_request, decision.state.value, decision.reason_codes, decision.score)
+
         if decision.state != TurnState.TAKE_TURN or not direct:
             return decision, None
         if privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
             return decision, None
+
+        if self.cognition is not None and cognitive_request is not None:
+            first_utterance: SpeechUtterance | None = None
+            mood = self.emotion.current_mood()
+
+            async def queue_segment(segment: "SpeechSegment") -> None:
+                nonlocal first_utterance
+                item = await self.enqueue_text(
+                    segment.speech_text,
+                    target_id=speaker_id,
+                    kind=UtteranceKind.DIALOGUE,
+                    priority=70,
+                    privacy_scope=privacy_scope,
+                    source_event_id=event_id,
+                    dedupe_key=f"speech:cognitive:{segment.turn_id}:{segment.ordinal}",
+                    metadata={
+                        "turn_state": decision.state.value,
+                        "cognitive_turn_id": str(segment.turn_id),
+                        "cognitive_segment_id": str(segment.id),
+                        "cognitive_ordinal": segment.ordinal,
+                        "nonverbal_cues": segment.metadata.get("nonverbal_cues", []),
+                    },
+                    style=self.composer.style_for_mood(mood),
+                )
+                if first_utterance is None and item is not None:
+                    first_utterance = item
+
+            fallback = self.composer.fallback_dialogue(text, speaker_id=speaker_id)
+            plan = await self.cognition.respond(cognitive_request, on_segment=queue_segment, fallback_text=fallback)
+            await self.cognition.emit_event(plan)
+            return decision, first_utterance
 
         reply: str
         if remote_processing_allowed and self.dialogue.name != "none":
@@ -243,12 +305,23 @@ class ConversationEngine:
         return item
 
     def claim_next(self, device_id: str = "DEVICE_A15") -> SpeechUtterance | None:
-        return self.store.claim_next(device_id)
+        item = self.store.claim_next(device_id)
+        if item is not None and self.cognition is not None:
+            segment_id = item.metadata.get("cognitive_segment_id")
+            turn_id = item.metadata.get("cognitive_turn_id")
+            if segment_id and turn_id:
+                self.cognition.mark_segment_speaking(str(segment_id), turn_id=str(turn_id))
+        return item
 
     async def acknowledge(self, utterance_id: UUID | str, ack: SpeechAck) -> SpeechUtterance | None:
         item = self.store.acknowledge(utterance_id, spoken=ack.spoken)
         if item is None:
             return None
+        if self.cognition is not None:
+            segment_id = item.metadata.get("cognitive_segment_id")
+            turn_id = item.metadata.get("cognitive_turn_id")
+            if segment_id and turn_id:
+                self.cognition.acknowledge_segment(str(segment_id), spoken=ack.spoken, turn_id=str(turn_id))
         if ack.spoken:
             await self.events.publish(
                 AmoraEvent(

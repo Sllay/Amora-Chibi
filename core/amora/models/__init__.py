@@ -1,3 +1,3 @@
-from .router import ModelRouter, ProviderDescriptor, TaskClass
+from .router import ModelRouter, ProviderClass, ProviderDescriptor, TaskClass
 
-__all__ = ["ModelRouter", "ProviderDescriptor", "TaskClass"]
+__all__ = ["ModelRouter", "ProviderClass", "ProviderDescriptor", "TaskClass"]
