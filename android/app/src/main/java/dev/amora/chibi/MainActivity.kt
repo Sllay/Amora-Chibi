@@ -9,6 +9,7 @@ import android.text.InputFilter
 import android.text.InputType
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -19,6 +20,7 @@ import dev.amora.chibi.core.CoreClient
 class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var codeInput: EditText
+    private lateinit var remoteCognitionCheck: CheckBox
     private lateinit var client: CoreClient
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -37,7 +39,7 @@ class MainActivity : Activity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "Amora Chibi — V0.8 Voice Bridge"
+            text = "Amora Chibi — V1.0 Cognitive Voice"
             textSize = 22F
         })
         statusView = TextView(this).also {
@@ -60,6 +62,29 @@ class MainActivity : Activity() {
             text = "Testar Core"
             setOnClickListener { testCore() }
         })
+
+        remoteCognitionCheck = CheckBox(this).apply {
+            text = "Permitir cognição remota para minhas falas"
+            isChecked = client.isRemoteCognitionAllowed()
+            setPadding(0, padding / 2, 0, 0)
+            setOnCheckedChangeListener { _, checked ->
+                client.setRemoteCognitionAllowed(checked)
+                setStatus(
+                    if (checked) {
+                        "Cognição remota permitida. Groq/Gemini podem receber o contexto permitido pelo Core."
+                    } else {
+                        "Cognição remota desligada. O Core usa resposta cognitiva local/fallback."
+                    }
+                )
+            }
+        }
+        root.addView(remoteCognitionCheck)
+        root.addView(TextView(this).apply {
+            text = "Essa opção controla somente a etapa cognitiva depois da transcrição. O provider de STT/áudio é uma autorização separada do Core."
+            textSize = 13F
+            setPadding(0, 0, 0, padding / 2)
+        })
+
         root.addView(Button(this).apply {
             text = "Começar a ouvir e falar"
             setOnClickListener { startListening() }
@@ -107,7 +132,8 @@ class MainActivity : Activity() {
             return
         }
         startForegroundService(Intent(this, AudioCaptureService::class.java))
-        setStatus("Microfone + voz ativos; VAD local e TTS conectados ao Core.")
+        val mode = if (client.isRemoteCognitionAllowed()) "cognição remota permitida" else "cognição remota bloqueada"
+        setStatus("Microfone + voz ativos; VAD local e TTS conectados ao Core ($mode).")
     }
 
     private fun stopListening() {
@@ -126,7 +152,9 @@ class MainActivity : Activity() {
     }
 
     private fun refreshStatus() {
-        setStatus(if (client.isPaired()) "Pareada anteriormente ✅" else "Ainda não pareada com o Core.")
+        val pairing = if (client.isPaired()) "Pareada anteriormente ✅" else "Ainda não pareada com o Core."
+        val cognition = if (client.isRemoteCognitionAllowed()) "Cognição remota: permitida." else "Cognição remota: bloqueada por padrão."
+        setStatus("$pairing\n$cognition")
     }
 
     private fun setStatus(value: String) {
