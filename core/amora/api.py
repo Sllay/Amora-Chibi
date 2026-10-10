@@ -7,95 +7,72 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
 
-from amora import __version__
-from amora.actions.routes import register_action_routes
 from amora.app import AmoraCore
 from amora.audio import AudioSegment, SpeakerResult, SttCredentialsError, SttError, SttRateLimitedError
-from amora.autonomy.routes import register_autonomy_routes
-from amora.avatar.routes import register_avatar_routes
-from amora.cognition.routes import register_cognition_routes
-from amora.conversation.routes import register_conversation_routes
-from amora.emotion.routes import register_emotion_routes
 from amora.events import AmoraEvent, PrivacyScope
-from amora.identity import PrivacyContext
 from amora.language import PerspectiveFrame, PerspectiveStack
-from amora.memory.routes import register_memory_routes
-from amora.world.routes import register_world_routes
 
 
-MAX_LOCAL_AUDIO_BYTES = 12 * 1024 * 1024
-
-
-class SessionCreateRequest(BaseModel):
-    device_id: str = "DEVICE_A15"
-    privacy_context: PrivacyContext = PrivacyContext.PRIVATE
+MAX_LOCAL_AUDIO_BYTES = 25 * 1024 * 1024
 
 
 class PairingRedeemRequest(BaseModel):
     code: str = Field(pattern=r"^\d{6}$")
 
 
-class AddresseeInferRequest(BaseModel):
-    text: str
-    speaker_id: str = "PERSON_BK"
-
-
-class ReferenceResolveRequest(BaseModel):
-    expression: str
-    speaker_id: str = "PERSON_BK"
-    addressee_id: str | None = "ENTITY_AMORA"
-    focus_entity_id: str | None = None
-    candidates: list[str] = Field(default_factory=list)
+class SessionCreateRequest(BaseModel):
+    device_id: str = Field(min_length=1, max_length=128)
+    privacy_context: PrivacyScope = PrivacyScope.PERSONAL
 
 
 class ObserveTextRequest(BaseModel):
-    text: str
-    speaker_id: str = "PERSON_BK"
-    session_id: str | None = None
+    text: str = Field(min_length=1, max_length=10_000)
+    speaker_id: str = Field(min_length=1, max_length=128)
+    session_id: str | None = Field(default=None, max_length=128)
     privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
-    dedupe_key: str | None = None
+    dedupe_key: str | None = Field(default=None, max_length=256)
+
+
+class AddresseeInferRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=10_000)
+    speaker_id: str = Field(min_length=1, max_length=128)
+
+
+class ReferenceResolveRequest(BaseModel):
+    expression: str = Field(min_length=1, max_length=512)
+    speaker_id: str = Field(min_length=1, max_length=128)
+    addressee_id: str | None = Field(default=None, max_length=128)
+    focus_entity_id: str | None = Field(default=None, max_length=128)
+    candidates: list[str] = Field(default_factory=list)
 
 
 def create_api(core: AmoraCore) -> FastAPI:
-    app = FastAPI(title="Amora Core API", version=__version__)
+    app = FastAPI(title="Amora Core", version="1.0")
 
     def expected_token() -> str:
-        value = core.secrets.get("LOCAL_API_TOKEN")
-        if not value:
-            raise RuntimeError("LOCAL_API_TOKEN is missing")
-        return value
+        token = core.secrets.get("PAIRING_TOKEN")
+        if not token:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="pairing token unavailable")
+        return token
 
     def require_auth(authorization: str | None = Header(default=None)) -> None:
         prefix = "Bearer "
         if authorization is None or not authorization.startswith(prefix):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="authentication required")
-        supplied = authorization[len(prefix):]
-        if not hmac.compare_digest(supplied, expected_token()):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
-
-    register_memory_routes(app, core, require_auth)
-    register_world_routes(app, core, require_auth)
-    register_emotion_routes(app, core, require_auth)
-    register_autonomy_routes(app, core, require_auth)
-    register_action_routes(app, core, require_auth)
-    register_conversation_routes(app, core, require_auth)
-    register_cognition_routes(app, core, require_auth)
-    register_avatar_routes(app, core, require_auth)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token")
+        if not hmac.compare_digest(authorization[len(prefix):], expected_token()):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid bearer token")
 
     @app.get("/health")
     def health() -> dict[str, object]:
-        report = core.health_report()
-        return {
-            "status": report["status"],
-            "version": report["version"],
-            "database_integrity": report["database_integrity"],
-        }
+        return core.health_report()
 
     @app.post("/v1/pairing/redeem")
-    def redeem_pairing(request: PairingRedeemRequest) -> dict[str, str]:
-        if not core.pairing.redeem(request.code):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired pairing code")
-        return {"token": expected_token(), "token_type": "Bearer"}
+    def redeem_pairing(request: PairingRedeemRequest) -> dict[str, object]:
+        try:
+            token = core.pairing.redeem(request.code)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return {"token": token}
 
     @app.get("/v1/state", dependencies=[Depends(require_auth)])
     def state_view() -> dict[str, object]:
@@ -187,6 +164,19 @@ def create_api(core: AmoraCore) -> FastAPI:
             transcript = await core.stt.transcribe(
                 AudioSegment(path=audio_path, mime_type="audio/wav", language=language)
             )
+            rejected = (
+                not transcript.text.strip()
+                or transcript.provider_metadata.get("speech_rejected") == "true"
+            )
+            if rejected:
+                return {
+                    "accepted": False,
+                    "transcript": transcript.model_dump(mode="json"),
+                    "observation": None,
+                    "turn": None,
+                    "reply_queued": None,
+                }
+
             speaker = SpeakerResult(
                 speaker_id=speaker_id,
                 confidence=speaker_confidence,
@@ -213,6 +203,7 @@ def create_api(core: AmoraCore) -> FastAPI:
             finally:
                 core.social.end_turn(speaker.speaker_id)
             return {
+                "accepted": True,
                 "transcript": transcript.model_dump(mode="json"),
                 "observation": observation.model_dump(mode="json"),
                 "turn": turn.model_dump(mode="json"),
