@@ -152,6 +152,7 @@ class AmoraCore:
         gemini_cognition = GeminiCognitiveProvider(secrets)
         if gemini_cognition.descriptor.available and cognition.router.descriptor("gemini") is None:
             cognition.register_provider(gemini_cognition)
+        events.subscribe_bootstrap("cognition.action_suggested", autonomy.handle_cognitive_suggestion)
         conversation = ConversationEngine(
             ConversationStore(paths.database, active_clock),
             active_clock,
@@ -223,6 +224,7 @@ class AmoraCore:
         core_identity = self.self_model.get(SelfLayer.CORE_IDENTITY, "entity_id")
         mood = self.emotion.current_mood()
         current_intention = self.autonomy.store.current_intention()
+        autonomy_state = self.autonomy.state()
         drives = {item.drive.value: round(item.need, 6) for item in self.autonomy.current_drives()}
         conversation = self.conversation.state()
         cognition = self.cognition.state()
@@ -244,6 +246,7 @@ class AmoraCore:
             "mood_arousal": round(mood.arousal, 6),
             "mood_dominance": round(mood.dominance, 6),
             "pending_social_bids": len(self.emotion.pending_bids()),
+            "pending_cognitive_suggestions": autonomy_state["pending_cognitive_suggestions"],
             "autonomy_decision_count": self.autonomy.store.decision_count(),
             "active_intention_kind": current_intention.kind.value if current_intention else None,
             "drives": drives,
