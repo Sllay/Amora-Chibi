@@ -14,6 +14,7 @@ import android.os.IBinder
 import android.util.Log
 import dev.amora.chibi.core.CoreClient
 import dev.amora.chibi.voice.VoiceOutput
+import java.util.ArrayDeque
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -51,7 +52,7 @@ class AudioCaptureService : Service() {
                 val text = if (active) "Amora está falando" else "Amora está ouvindo localmente"
                 manager.notify(NOTIFICATION_ID, notification(text))
             },
-            onFinished = { utteranceId, outcome ->
+            onFinished = { utteranceId, outcome, spokenChars ->
                 val executor = when (outcome) {
                     VoiceOutput.Outcome.INTERRUPTED,
                     VoiceOutput.Outcome.PARTIAL -> controlExecutor
@@ -62,8 +63,8 @@ class AudioCaptureService : Service() {
                         when (outcome) {
                             VoiceOutput.Outcome.SPOKEN -> coreClient.acknowledgeUtterance(utteranceId, true)
                             VoiceOutput.Outcome.FAILED -> coreClient.acknowledgeUtterance(utteranceId, false)
-                            VoiceOutput.Outcome.INTERRUPTED -> coreClient.cancelUtterance(utteranceId, "barge_in")
-                            VoiceOutput.Outcome.PARTIAL -> coreClient.cancelUtterance(utteranceId, "tts_partial_failure")
+                            VoiceOutput.Outcome.INTERRUPTED -> coreClient.cancelUtterance(utteranceId, "barge_in", spokenChars)
+                            VoiceOutput.Outcome.PARTIAL -> coreClient.cancelUtterance(utteranceId, "tts_partial_failure", spokenChars)
                         }
                     } catch (error: Throwable) {
                         Log.w(TAG, "Falha ao finalizar fala $utteranceId outcome=$outcome", error)
@@ -156,6 +157,22 @@ class AudioCaptureService : Service() {
         var localSegmenter = SpeechSegmenterFactory.create(this)
         segmenter = localSegmenter
         val shorts = ShortArray(bufferBytes / 2)
+        val bargeInPreRoll = ArrayDeque<FloatArray>()
+        var preRollSamples = 0
+        val maxPreRollSamples = sampleRate * BARGE_IN_PREROLL_MS / 1000
+
+        fun clearPreRoll() {
+            bargeInPreRoll.clear()
+            preRollSamples = 0
+        }
+
+        fun appendPreRoll(chunk: FloatArray) {
+            bargeInPreRoll.addLast(chunk.copyOf())
+            preRollSamples += chunk.size
+            while (preRollSamples > maxPreRollSamples && bargeInPreRoll.size > 1) {
+                preRollSamples -= bargeInPreRoll.removeFirst().size
+            }
+        }
 
         try {
             localRecorder.startRecording()
@@ -167,21 +184,39 @@ class AudioCaptureService : Service() {
                     runCatching { localSegmenter.close() }
                     localSegmenter = SpeechSegmenterFactory.create(this)
                     segmenter = localSegmenter
+                    if (!speaking.get()) clearPreRoll()
                 }
 
                 val floats = FloatArray(count) { index -> shorts[index] / 32768F }
                 if (speaking.get()) {
-                    // Playback-time microphone audio never reaches STT. The
-                    // echo-cancelled signal is inspected locally only to detect
-                    // a human taking the floor.
+                    // Keep only a short echo-cancelled tail. At the instant barge-in
+                    // latches, the last ~320 ms contain the sustained human speech
+                    // that proved the floor takeover. Feeding that tail after TTS
+                    // stops prevents swallowing the beginning of "Mas Amora...".
+                    appendPreRoll(floats)
                     if (bargeIn.accept(floats)) {
                         Log.i(TAG, "Barge-in detectado; Amora cede o turno")
                         voiceOutput?.stopCurrent()
-                        resetSegmenter.set(true)
+                        runCatching { localSegmenter.close() }
+                        localSegmenter = SpeechSegmenterFactory.create(this)
+                        segmenter = localSegmenter
+                        resetSegmenter.set(false)
+
+                        if (!speaking.get()) {
+                            val recovered = FloatArray(preRollSamples)
+                            var offset = 0
+                            for (chunk in bargeInPreRoll) {
+                                chunk.copyInto(recovered, destinationOffset = offset)
+                                offset += chunk.size
+                            }
+                            clearPreRoll()
+                            for (segment in localSegmenter.accept(recovered)) submitSegment(segment)
+                        }
                     }
                     continue
                 }
 
+                clearPreRoll()
                 for (segment in localSegmenter.accept(floats)) submitSegment(segment)
             }
             if (!speaking.get()) {
@@ -231,6 +266,7 @@ class AudioCaptureService : Service() {
         const val ACTION_STOP = "dev.amora.chibi.action.STOP_LISTENING"
         private const val CHANNEL_ID = "amora_microphone"
         private const val NOTIFICATION_ID = 2001
+        private const val BARGE_IN_PREROLL_MS = 320
         private const val TAG = "AmoraAudio"
     }
 }
