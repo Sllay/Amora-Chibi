@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from amora.app import AmoraCore
 
@@ -15,6 +15,10 @@ class TurnSignalRequest(BaseModel):
     allow_backchannel: bool = False
 
 
+class CancelSpeechRequest(BaseModel):
+    reason: str = Field(default="barge_in", min_length=1, max_length=96)
+
+
 def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Callable[..., None]) -> None:
     @app.get("/v1/conversation/state", dependencies=[Depends(require_auth)])
     def conversation_state() -> dict[str, object]:
@@ -23,14 +27,8 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
     @app.post("/v1/conversation/turn", dependencies=[Depends(require_auth)])
     async def decide_turn(request: TurnSignalRequest) -> dict[str, object]:
         if request.allow_backchannel:
-            decision, utterance = await core.conversation.enqueue_backchannel(
-                request.signal,
-                dedupe_key=request.signal.dedupe_key,
-            )
-            return {
-                "decision": decision.model_dump(mode="json"),
-                "utterance": utterance.model_dump(mode="json") if utterance else None,
-            }
+            decision, utterance = await core.conversation.enqueue_backchannel(request.signal, dedupe_key=request.signal.dedupe_key)
+            return {"decision": decision.model_dump(mode="json"), "utterance": utterance.model_dump(mode="json") if utterance else None}
         decision = core.conversation.decide_turn(request.signal)
         return {"decision": decision.model_dump(mode="json"), "utterance": None}
 
@@ -45,6 +43,13 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
         if item is None:
             raise HTTPException(status_code=404, detail="utterance not found")
         return {"utterance": item.model_dump(mode="json")}
+
+    @app.post("/v1/conversation/utterances/{utterance_id}/cancel", dependencies=[Depends(require_auth)])
+    async def cancel_utterance(utterance_id: str, request: CancelSpeechRequest) -> dict[str, object]:
+        item, cancelled = await core.conversation.cancel_utterance(utterance_id, reason=request.reason)
+        if item is None:
+            raise HTTPException(status_code=404, detail="utterance not found")
+        return {"utterance": item.model_dump(mode="json"), "cancelled_utterances": cancelled}
 
     @app.get("/v1/conversation/turns", dependencies=[Depends(require_auth)])
     def list_turns(limit: int = Query(default=20, ge=1, le=200)) -> list[dict[str, object]]:

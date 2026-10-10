@@ -10,14 +10,7 @@ from amora.time import Clock
 
 from .composer import LocalSpeechComposer
 from .dialogue import DialogueProvider, NoDialogueProvider
-from .models import (
-    SpeechAck,
-    SpeechUtterance,
-    TurnDecision,
-    TurnSignal,
-    TurnState,
-    UtteranceKind,
-)
+from .models import SpeechAck, SpeechUtterance, TurnDecision, TurnSignal, TurnState, UtteranceKind
 from .store import ConversationStore
 from .turn_manager import TurnManager
 
@@ -178,6 +171,7 @@ class ConversationEngine:
         if self.cognition is not None and cognitive_request is not None:
             first_utterance: SpeechUtterance | None = None
             mood = self.emotion.current_mood()
+            remote_tts_allowed = remote_processing_allowed and privacy_scope in {PrivacyScope.PUBLIC, PrivacyScope.PERSONAL}
 
             async def queue_segment(segment: "SpeechSegment") -> None:
                 nonlocal first_utterance
@@ -195,6 +189,7 @@ class ConversationEngine:
                         "cognitive_segment_id": str(segment.id),
                         "cognitive_ordinal": segment.ordinal,
                         "nonverbal_cues": segment.metadata.get("nonverbal_cues", []),
+                        "remote_tts_allowed": remote_tts_allowed,
                     },
                     style=self.composer.style_for_mood(mood),
                 )
@@ -338,3 +333,34 @@ class ConversationEngine:
                 )
             )
         return item
+
+    async def cancel_utterance(self, utterance_id: UUID | str, *, reason: str = "barge_in") -> tuple[SpeechUtterance | None, int]:
+        current = self.store.get_utterance(utterance_id)
+        if current is None:
+            return None, 0
+        turn_raw = current.metadata.get("cognitive_turn_id")
+        cancelled = 0
+        if turn_raw:
+            cancelled = self.store.cancel_cognitive_turn(str(turn_raw), reason=reason)
+            if self.cognition is not None:
+                self.cognition.interrupt_turn(str(turn_raw), reason=reason)
+            item = self.store.get_utterance(utterance_id)
+        else:
+            item = self.store.cancel(utterance_id, reason=reason)
+            cancelled = 1 if item is not None else 0
+        if item is not None:
+            await self.events.publish(
+                AmoraEvent(
+                    event_type="conversation.utterance_cancelled",
+                    timestamp=self.clock.now(),
+                    source="conversation_engine",
+                    actor="ENTITY_AMORA",
+                    target=item.target_id,
+                    importance=0.45,
+                    payload={"utterance_id": str(item.id), "reason": reason, "cancelled_utterances": cancelled},
+                    privacy_scope=item.privacy_scope,
+                    causation_id=item.source_event_id,
+                    dedupe_key=f"conversation.cancelled:{item.id}:{reason}",
+                )
+            )
+        return item, cancelled

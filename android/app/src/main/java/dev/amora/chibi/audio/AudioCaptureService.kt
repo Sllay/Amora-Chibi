@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import android.os.IBinder
 import android.util.Log
 import dev.amora.chibi.core.CoreClient
@@ -24,6 +25,7 @@ class AudioCaptureService : Service() {
     private val resetSegmenter = AtomicBoolean(false)
     private val networkExecutor = Executors.newSingleThreadExecutor()
     private val voiceExecutor = Executors.newSingleThreadScheduledExecutor()
+    private val bargeIn = BargeInDetector()
     private var captureThread: Thread? = null
     private var recorder: AudioRecord? = null
     private var segmenter: SpeechSegmenter? = null
@@ -41,23 +43,29 @@ class AudioCaptureService : Service() {
             onSpeakingChanged = { active ->
                 speaking.set(active)
                 resetSegmenter.set(true)
+                if (active) bargeIn.speechStarted() else bargeIn.reset()
                 val manager = getSystemService(NotificationManager::class.java)
                 val text = if (active) "Amora está falando" else "Amora está ouvindo localmente"
                 manager.notify(NOTIFICATION_ID, notification(text))
             },
-            onFinished = { utteranceId, spoken ->
+            onFinished = { utteranceId, outcome ->
                 networkExecutor.execute {
                     try {
-                        coreClient.acknowledgeUtterance(utteranceId, spoken)
+                        when (outcome) {
+                            VoiceOutput.Outcome.SPOKEN -> coreClient.acknowledgeUtterance(utteranceId, true)
+                            VoiceOutput.Outcome.FAILED -> coreClient.acknowledgeUtterance(utteranceId, false)
+                            VoiceOutput.Outcome.INTERRUPTED -> coreClient.cancelUtterance(utteranceId, "barge_in")
+                            VoiceOutput.Outcome.PARTIAL -> coreClient.cancelUtterance(utteranceId, "tts_partial_failure")
+                        }
                     } catch (error: Throwable) {
-                        Log.w(TAG, "Falha ao confirmar fala $utteranceId", error)
+                        Log.w(TAG, "Falha ao finalizar fala $utteranceId outcome=$outcome", error)
                     } finally {
                         voiceBusy.set(false)
                     }
                 }
             },
         )
-        voiceExecutor.scheduleWithFixedDelay(::pollVoice, 400, 700, TimeUnit.MILLISECONDS)
+        voiceExecutor.scheduleWithFixedDelay(::pollVoice, 350, 450, TimeUnit.MILLISECONDS)
     }
 
     override fun onStartCommand(intent: android.content.Intent?, flags: Int, startId: Int): Int {
@@ -75,6 +83,7 @@ class AudioCaptureService : Service() {
     override fun onDestroy() {
         running.set(false)
         speaking.set(false)
+        runCatching { voiceOutput?.stopCurrent() }
         runCatching { recorder?.stop() }
         recorder?.release()
         recorder = null
@@ -91,16 +100,11 @@ class AudioCaptureService : Service() {
 
     private fun pollVoice() {
         if (!running.get() || !coreClient.isPaired() || voiceBusy.get()) return
-        val item = try {
-            coreClient.nextUtterance()
-        } catch (_: Throwable) {
-            return
-        } ?: return
-
+        val item = try { coreClient.nextUtterance() } catch (_: Throwable) { return } ?: return
         if (!voiceBusy.compareAndSet(false, true)) return
         val accepted = runCatching { voiceOutput?.speak(item) == true }
             .getOrElse { error ->
-                Log.w(TAG, "Falha ao iniciar TTS ${item.id}", error)
+                Log.w(TAG, "Falha ao iniciar voz ${item.id}", error)
                 false
             }
         if (!accepted) {
@@ -118,20 +122,28 @@ class AudioCaptureService : Service() {
         }
 
         val sampleRate = 16_000
-        val minBytes = AudioRecord.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-        )
+        val minBytes = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val bufferBytes = maxOf(minBytes, 4096)
         val localRecorder = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
             bufferBytes,
         )
         recorder = localRecorder
+        val echoCanceler = if (AcousticEchoCanceler.isAvailable()) {
+            runCatching { AcousticEchoCanceler.create(localRecorder.audioSessionId) }
+                .getOrNull()
+                ?.also { effect ->
+                    effect.enabled = true
+                    Log.i(TAG, "AcousticEchoCanceler ativo=${effect.enabled}")
+                }
+        } else {
+            Log.w(TAG, "AcousticEchoCanceler indisponível; barge-in ficará conservador")
+            null
+        }
+
         var localSegmenter = SpeechSegmenterFactory.create(this)
         segmenter = localSegmenter
         val shorts = ShortArray(bufferBytes / 2)
@@ -148,24 +160,29 @@ class AudioCaptureService : Service() {
                     segmenter = localSegmenter
                 }
 
-                // Always drain AudioRecord while TTS is active, but never feed Amora's
-                // own voice into VAD/STT. The segmenter is reset at both speech edges.
-                if (speaking.get()) continue
-
                 val floats = FloatArray(count) { index -> shorts[index] / 32768F }
-                for (segment in localSegmenter.accept(floats)) {
-                    submitSegment(segment)
+                if (speaking.get()) {
+                    // Never send playback-time audio to STT. We only inspect local,
+                    // echo-cancelled energy to decide whether a human is trying to
+                    // take the floor. Identity is resolved later by normal STT/social.
+                    if (bargeIn.accept(floats)) {
+                        Log.i(TAG, "Barge-in detectado; Amora cede o turno")
+                        voiceOutput?.stopCurrent()
+                        resetSegmenter.set(true)
+                    }
+                    continue
                 }
+
+                for (segment in localSegmenter.accept(floats)) submitSegment(segment)
             }
             if (!speaking.get()) {
-                for (segment in localSegmenter.flush()) {
-                    submitSegment(segment)
-                }
+                for (segment in localSegmenter.flush()) submitSegment(segment)
             }
         } catch (error: Throwable) {
             Log.e(TAG, "Falha no loop de captura", error)
         } finally {
             runCatching { localRecorder.stop() }
+            runCatching { echoCanceler?.release() }
             localRecorder.release()
             recorder = null
             localSegmenter.close()
@@ -181,16 +198,15 @@ class AudioCaptureService : Service() {
                 .onSuccess { result ->
                     val target = result.addresseeId ?: "addressee incerto"
                     Log.i(TAG, "STT: ${result.text} [$target] replyQueued=${result.replyQueued}")
-                    val manager = getSystemService(NotificationManager::class.java)
-                    manager.notify(NOTIFICATION_ID, notification(result.text.ifBlank { "Fala detectada" }))
+                    getSystemService(NotificationManager::class.java)
+                        .notify(NOTIFICATION_ID, notification(result.text.ifBlank { "Fala detectada" }))
                 }
                 .onFailure { error -> Log.w(TAG, "Falha ao enviar segmento ao Core", error) }
         }
     }
 
     private fun createChannel() {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Amora — microfone e voz", NotificationManager.IMPORTANCE_LOW),
         )
     }
