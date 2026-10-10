@@ -133,6 +133,7 @@ class CognitiveContext(BaseModel):
     memories: list[ContextMemory] = Field(default_factory=list)
     world_claims: list[dict[str, Any]] = Field(default_factory=list)
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
+    dialogue_plan: dict[str, Any] = Field(default_factory=dict)
     privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
     remote_processing_allowed: bool = False
     token_budget: int = Field(default=3200, ge=256, le=32000)

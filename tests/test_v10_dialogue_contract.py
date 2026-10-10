@@ -22,7 +22,7 @@ def _context() -> CognitiveContext:
         speaker_id="SESSION_ANDROID_SPEAKER_1",
         target_id="ENTITY_AMORA",
         user_text="E tu, como tá depois de tudo que a gente fez hoje?",
-        self_model={"core_identity": {"name": "Amora"}},
+        self_model={"core_identity": {"canonical_name": "Amora"}},
         relationships=[
             {
                 "source": "ENTITY_AMORA",
@@ -67,6 +67,20 @@ def _context() -> CognitiveContext:
                 "status": "received",
             },
         ],
+        dialogue_plan={
+            "act": "answer_question",
+            "objective": "answer directly and stay in the relationship/topic",
+            "depth": "medium",
+            "response_moves": ["answer_question", "relate_to_context_if_relevant"],
+            "ask_followup": False,
+            "offer_help": False,
+            "style_register": "intimate_colloquial",
+            "tone_tags": ["warm"],
+            "fact_status": "not_requested",
+            "epistemic_policy": "canonical_state_only",
+            "language_role": "surface_realization",
+            "reason_codes": ["LOCAL_DIALOGUE_ORCHESTRATOR"],
+        },
         remote_processing_allowed=True,
     )
 
@@ -76,13 +90,12 @@ def test_v10_dialogue_contract_is_provider_independent_and_compact() -> None:
     gemini = GeminiCognitiveProvider._system_prompt()
 
     assert groq == gemini
-    assert "Amora é o próprio nome" in groq
-    assert "vocativo" in groq
-    assert "não como serviço de atendimento" in groq
-    # Natural dialogue should come primarily from role-structured history, not
-    # an ever-growing blacklist of canned assistant phrases.
+    assert "Core local já decidiu o ato social" in groq
+    assert "realização linguística" in groq
+    assert "ask_followup" in groq
+    assert "offer_help" in groq
     assert "como posso ajudar hoje?" not in groq
-    assert len(groq) < 3_000
+    assert len(groq) < 3_500
 
 
 def test_v10_dialogue_contract_keeps_model_as_language_capacity() -> None:
@@ -91,6 +104,7 @@ def test_v10_dialogue_contract_keeps_model_as_language_capacity() -> None:
     assert "Você não é a identidade dela" in prompt
     assert "não é a fonte canônica da verdade" in prompt
     assert "Não invente memórias, relações, fatos ou sentimentos" in prompt
+    assert "surface" not in prompt.lower() or "realização linguística" in prompt
 
 
 def test_v10_history_is_projected_as_real_turns_and_segments_are_recombined() -> None:
@@ -112,6 +126,8 @@ def test_v10_groq_receives_current_human_turn_once_with_native_roles(tmp_path) -
     assert sum(context.user_text in item["content"] for item in messages) == 1
     assert "recent_messages" not in messages[0]["content"]
     assert "ESTADO CANÔNICO SELECIONADO" in messages[0]["content"]
+    assert "PLANO SEMÂNTICO LOCAL — AUTORITATIVO" in messages[0]["content"]
+    assert '"offer_help":false' in messages[0]["content"]
 
 
 def test_v10_gemini_uses_same_dialogue_projection(tmp_path) -> None:
@@ -124,4 +140,7 @@ def test_v10_gemini_uses_same_dialogue_projection(tmp_path) -> None:
     assert contents[-1]["parts"][0]["text"] == context.user_text
     serialized = str(payload)
     assert serialized.count(context.user_text) == 1
-    assert "recent_messages" not in payload["systemInstruction"]["parts"][0]["text"]
+    instruction = payload["systemInstruction"]["parts"][0]["text"]
+    assert "recent_messages" not in instruction
+    assert "PLANO SEMÂNTICO LOCAL — AUTORITATIVO" in instruction
+    assert '"ask_followup":false' in instruction
