@@ -1,6 +1,6 @@
 # PROJECT_STATE — Amora-Chibi
 
-Última atualização: 2026-10-09/10 — branch `feat/v1.0-cognitive-integration`.
+Última atualização: 2026-10-10 — branch `feat/v1.0-cognitive-integration`.
 
 Este arquivo existe para permitir continuidade segura entre chats/agentes sem depender do histórico da conversa.
 
@@ -200,6 +200,9 @@ tests/test_cognitive_replay_v10.py
 tests/test_delivery_truth_v10.py
 tests/test_reflection_failover_v10.py
 tests/test_cognition_backup_v10.py
+tests/test_cognitive_action_bdi_v10.py
+tests/test_provider_bootstrap_v10.py
+tests/test_v10_release_hygiene.py
 android/app/src/test/java/dev/amora/chibi/audio/BargeInDetectorTest.kt
 ```
 
@@ -213,21 +216,40 @@ CI obrigatório antes de merge:
 - Android debug APK build;
 - regressões V0.1–V0.9.
 
+## Auditoria automatizada de release
+
+Auditoria concluída em 2026-10-10 sobre o código V1 no HEAD `b0235115045f40ebfa7190b8812750e02fdf8e79` (antes deste commit apenas documental):
+
+- branch comparada com `main`: 67 commits à frente, 0 atrás;
+- PR #16 aberto, não-draft e mergeável;
+- Core CI verde em Python 3.11, 3.12, 3.13 e 3.14;
+- doctor/autonomy/actions/conversation/avatar/backup smoke tests verdes;
+- Android unit tests verdes;
+- Android debug APK build verde;
+- release hygiene verde: sem `TODO`, `FIXME`, `NotImplementedError`/`NotImplementedException` nas superfícies críticas V1;
+- release hygiene confirma que as camadas V1 (`production`/`resilient`/`hardened`, Context Compiler V1, providers V1, store V1, autonomia integrada e conversation integrada) estão conectadas e não órfãs;
+- README e contrato `docs/V1.0_COGNITIVE_INTEGRATION.md` presentes e alinhados com o escopo V1;
+- imagem/foto/câmera/screenshots continuam explicitamente fora da V1 e pertencem à V1.1.
+
+Nenhum bug conhecido foi identificado pela auditoria automatizada. Isso não substitui a certificação física no Galaxy A15.
+
 ## Estado de release
 
-A V1 está em **release-candidate**, não deve ser marcada como `v1.0.0` estável apenas por existir código.
+A V1 está em **release-candidate**. O código automatizável está fechado e certificado; não deve ser marcado como `v1.0.0` estável antes da certificação física no A15.
 
-Antes do merge final:
+Gates antes do merge/release:
 
 ```text
-[ ] todos os workflows do HEAD verdes
-[ ] revisar diff contra main
-[ ] procurar TODO/FIXME/stubs na superfície V1
-[ ] confirmar README/documentação V1
-[ ] abrir PR V1 → main
+[x] todos os workflows relevantes do HEAD de código verdes
+[x] revisar diff contra main
+[x] procurar TODO/FIXME/stubs na superfície V1
+[x] confirmar README/documentação V1
+[ ] executar certificação física A15
+[ ] corrigir qualquer falha física encontrada e repetir CI
+[ ] promover PR #16 para merge/release estável
 ```
 
-Antes da tag estável `v1.0.0`, executar também a certificação física descrita em `docs/V1.0_COGNITIVE_INTEGRATION.md` no A15.
+A certificação física está descrita em `docs/V1.0_COGNITIVE_INTEGRATION.md` e cobre acústica real, echo cancellation, barge-in, pre-roll, TTS local/remoto, troca/falha de provider, restart e backup/restore.
 
 ## Não fazer
 
