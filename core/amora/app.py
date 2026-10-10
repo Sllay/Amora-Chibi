@@ -8,7 +8,7 @@ from amora.actions import ActionEngine, ActionStore
 from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
 from amora.autonomy import AutonomyEngine, AutonomyStore
 from amora.avatar import AvatarEngine, AvatarStore
-from amora.cognition import CognitiveEngine, CognitiveStore, ContextCompiler, GroqCognitiveProvider
+from amora.cognition import CognitiveEngine, CognitiveStore, ContextCompiler, GeminiCognitiveProvider, GroqCognitiveProvider
 from amora.conversation import ConversationEngine, ConversationStore
 from amora.emotion import EmotionEngine, EmotionStore
 from amora.events import AsyncEventBus
@@ -146,6 +146,12 @@ class AmoraCore:
         groq_cognition = GroqCognitiveProvider(secrets)
         if groq_cognition.descriptor.available:
             cognition.register_provider(groq_cognition)
+        # Gemini is a real substitute, not a child of Groq. If Groq registration
+        # already auto-discovered it, avoid duplicate registration; otherwise a
+        # Gemini-only installation remains fully usable for remote cognition.
+        gemini_cognition = GeminiCognitiveProvider(secrets)
+        if gemini_cognition.descriptor.available and cognition.router.descriptor("gemini") is None:
+            cognition.register_provider(gemini_cognition)
         conversation = ConversationEngine(
             ConversationStore(paths.database, active_clock),
             active_clock,
@@ -263,6 +269,7 @@ class AmoraCore:
             "social_active_addressee": self.social.scene.active_addressee,
             "groq_stt_configured": self.secrets.get("GROQ_API_KEY") is not None,
             "groq_cognition_configured": self.secrets.get("GROQ_API_KEY") is not None,
+            "gemini_cognition_configured": self.secrets.get("GEMINI_API_KEY") is not None,
         }
 
     def create_backup(self, name: str | None = None) -> Path:
