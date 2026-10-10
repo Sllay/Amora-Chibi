@@ -47,7 +47,7 @@ class ProviderDescriptor:
 
 
 class ModelRouter:
-    """Provider/model selector with privacy and quota gates.
+    """Provider/model selector with privacy, quota and ranked failover gates.
 
     The router chooses compute. It never owns Amora's identity or canonical state.
     Existing V0.x callers can still call ``select(task)`` without extra arguments.
@@ -72,22 +72,35 @@ class ModelRouter:
             quota_remaining=current.quota_remaining if quota_remaining is None else quota_remaining,
         )
 
-    def select(
+    def set_quota(self, name: str, quota_remaining: float | None) -> None:
+        current = self._providers.get(name)
+        if current is None:
+            raise KeyError(name)
+        self._providers[name] = replace(current, quota_remaining=quota_remaining)
+
+    def ranked_candidates(
         self,
         task: TaskClass,
         *,
         privacy_scope: PrivacyScope = PrivacyScope.PERSONAL,
         remote_processing_allowed: bool = True,
         require_streaming: bool = False,
+        require_structured_output: bool = False,
         estimated_input_tokens: int | None = None,
-    ) -> ProviderDescriptor | None:
+        excluded_names: set[str] | None = None,
+    ) -> tuple[ProviderDescriptor, ...]:
+        excluded = excluded_names or set()
         candidates: list[ProviderDescriptor] = []
         for provider in self._providers.values():
+            if provider.name in excluded:
+                continue
             if not provider.available or task not in provider.capabilities:
                 continue
             if provider.quota_remaining is not None and provider.quota_remaining <= 0:
                 continue
             if require_streaming and not provider.supports_streaming:
+                continue
+            if require_structured_output and not provider.supports_structured_output:
                 continue
             if provider.remote:
                 if not remote_processing_allowed:
@@ -99,23 +112,43 @@ class ModelRouter:
             if estimated_input_tokens and provider.context_window_tokens and estimated_input_tokens > provider.context_window_tokens:
                 continue
             candidates.append(provider)
-        if not candidates:
-            return None
+        return tuple(sorted(candidates, key=self._score, reverse=True))
 
-        def score(provider: ProviderDescriptor) -> float:
-            privacy_bonus = 0.04 if provider.provider_class == ProviderClass.LOCAL else 0.0
-            streaming_bonus = 0.04 if provider.supports_streaming else 0.0
-            priority_bonus = max(-0.10, min(0.10, provider.priority * 0.01))
-            return (
-                provider.quality * 0.52
-                + provider.latency_score * 0.24
-                + (1.0 - provider.cost_score) * 0.20
-                + privacy_bonus
-                + streaming_bonus
-                + priority_bonus
-            )
+    def select(
+        self,
+        task: TaskClass,
+        *,
+        privacy_scope: PrivacyScope = PrivacyScope.PERSONAL,
+        remote_processing_allowed: bool = True,
+        require_streaming: bool = False,
+        estimated_input_tokens: int | None = None,
+    ) -> ProviderDescriptor | None:
+        candidates = self.ranked_candidates(
+            task,
+            privacy_scope=privacy_scope,
+            remote_processing_allowed=remote_processing_allowed,
+            require_streaming=require_streaming,
+            estimated_input_tokens=estimated_input_tokens,
+        )
+        return candidates[0] if candidates else None
 
-        return max(candidates, key=score)
+    @staticmethod
+    def _score(provider: ProviderDescriptor) -> float:
+        privacy_bonus = 0.04 if provider.provider_class == ProviderClass.LOCAL else 0.0
+        streaming_bonus = 0.04 if provider.supports_streaming else 0.0
+        priority_bonus = max(-0.10, min(0.10, provider.priority * 0.01))
+        quota_bonus = 0.0
+        if provider.quota_remaining is not None:
+            quota_bonus = 0.02 if provider.quota_remaining > 0 else -1.0
+        return (
+            provider.quality * 0.52
+            + provider.latency_score * 0.24
+            + (1.0 - provider.cost_score) * 0.20
+            + privacy_bonus
+            + streaming_bonus
+            + priority_bonus
+            + quota_bonus
+        )
 
     def descriptor(self, name: str) -> ProviderDescriptor | None:
         return self._providers.get(name)
