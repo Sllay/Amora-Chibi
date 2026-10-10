@@ -31,21 +31,38 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+class CompactConsoleFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        return f"[{timestamp}] {record.levelname:<7} {record.name}: {record.getMessage()}"
+
+
 def configure_logging(log_dir: Path, *, level: int = logging.INFO) -> None:
+    """Keep complete structured diagnostics on disk and console noise minimal.
+
+    `amora serve` replaces the warning console handler with the live server
+    dashboard. Non-server commands still get concise warnings/errors instead of
+    one JSON object per INFO/access event.
+    """
+
     log_dir.mkdir(parents=True, exist_ok=True)
     root = logging.getLogger()
     if getattr(root, "_amora_configured", False):
         return
     root.setLevel(level)
-    formatter = JsonFormatter()
-
-    stderr = logging.StreamHandler()
-    stderr.setFormatter(formatter)
-    root.addHandler(stderr)
 
     file_handler = RotatingFileHandler(
         log_dir / "amora.jsonl", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
     )
-    file_handler.setFormatter(formatter)
+    file_handler.setLevel(level)
+    file_handler.setFormatter(JsonFormatter())
+    file_handler._amora_file = True  # type: ignore[attr-defined]
     root.addHandler(file_handler)
+
+    stderr = logging.StreamHandler()
+    stderr.setLevel(logging.WARNING)
+    stderr.setFormatter(CompactConsoleFormatter())
+    stderr._amora_console = True  # type: ignore[attr-defined]
+    root.addHandler(stderr)
+
     setattr(root, "_amora_configured", True)
