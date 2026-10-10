@@ -39,6 +39,21 @@ def _clock() -> SimulatedClock:
     return SimulatedClock(datetime(2026, 10, 10, 5, 0, tzinfo=timezone.utc))
 
 
+def _state_counts(core: AmoraCore) -> dict[str, object]:
+    report = core.health_report()
+    return {
+        "messages": core.cognition.store.message_count(),
+        "journal": core.cognition.store.journal_count(),
+        "memories": core.memory.store.count(),
+        "world": core.world_store.claim_count(),
+        "usage": tuple(
+            (row["provider"], row["request_count"], row["success_count"], row["input_tokens"], row["output_tokens"])
+            for row in core.cognition.store.usage_ledger()
+        ),
+        "identity": report["self_core_identity"],
+    }
+
+
 @pytest.mark.asyncio
 async def test_replay_uses_same_snapshot_without_mutating_canonical_state(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
@@ -57,23 +72,9 @@ async def test_replay_uses_same_snapshot_without_mutating_canonical_state(tmp_pa
         plan = await core.cognition.respond(request)
         assert plan.provider == "provider-a"
 
-        before = {
-            "messages": core.cognition.store.message_count(),
-            "journal": core.cognition.store.journal_count(),
-            "memories": core.memory.store.count(),
-            "world": core.world_store.count(),
-            "usage": len(core.cognition.store.usage_ledger()),
-            "identity": core.self_model.core_identity_id,
-        }
+        before = _state_counts(core)
         results = await core.cognition.replay(request.turn_id, provider_names=["provider-a", "provider-b"])
-        after = {
-            "messages": core.cognition.store.message_count(),
-            "journal": core.cognition.store.journal_count(),
-            "memories": core.memory.store.count(),
-            "world": core.world_store.count(),
-            "usage": len(core.cognition.store.usage_ledger()),
-            "identity": core.self_model.core_identity_id,
-        }
+        after = _state_counts(core)
 
         assert before == after
         assert [item.provider for item in results] == ["provider-a", "provider-b"]
