@@ -28,6 +28,11 @@ class DesireKind(StrEnum):
     EXPRESS = "express"
     PRACTICE = "practice"
     REST = "rest"
+    SEEK_REPAIR = "seek_repair"
+    EXPRESS_GRATITUDE = "express_gratitude"
+    SET_BOUNDARY = "set_boundary"
+    WITHDRAW = "withdraw"
+    WAIT = "wait"
 
 
 class IntentionStatus(StrEnum):
