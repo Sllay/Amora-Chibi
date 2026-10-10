@@ -31,6 +31,45 @@ class CognitiveEngine(ResilientCognitiveEngine):
         self._persist_replay_snapshot(request)
         return await super().respond(request, on_segment=on_segment, fallback_text=fallback_text)
 
+    def interrupt_turn(
+        self,
+        turn_id: UUID | str,
+        *,
+        reason: str = "barge_in",
+        active_segment_id: UUID | str | None = None,
+        spoken_chars: int | None = None,
+    ) -> int:
+        count = super().interrupt_turn(turn_id, reason=reason)
+        if active_segment_id is not None:
+            spoken_text = self.store.record_interrupted_progress(active_segment_id, spoken_chars=spoken_chars)
+            segments = self.store.list_segments(turn_id)
+            privacy_scope = segments[-1].metadata.get("privacy_scope") if segments else PrivacyScope.PERSONAL.value
+            try:
+                scope = PrivacyScope(str(privacy_scope))
+            except ValueError:
+                scope = PrivacyScope.PERSONAL
+            self.store.put_journal(
+                CognitiveJournalEntry(
+                    turn_id=UUID(str(turn_id)),
+                    stage=JournalStage.TTS_FINISHED,
+                    timestamp=self.clock.now(),
+                    source="voice:delivery",
+                    summary="tts segment interrupted",
+                    reason_codes=[
+                        "INTERRUPTED",
+                        "SPOKEN_PREFIX_KNOWN" if spoken_chars is not None else "SPOKEN_PREFIX_UNKNOWN",
+                    ],
+                    payload={
+                        "segment_id": str(active_segment_id),
+                        "spoken_chars": spoken_chars,
+                        "spoken_text": spoken_text,
+                    },
+                    privacy_scope=scope,
+                    dedupe_key=f"journal:interrupted-progress:{active_segment_id}",
+                )
+            )
+        return count
+
     async def replay(
         self,
         turn_id: UUID | str,
