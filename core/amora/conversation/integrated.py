@@ -167,6 +167,54 @@ class ConversationEngine(BaseConversationEngine):
         await self.cognition.emit_event(plan)
         return first_utterance
 
+    async def cancel_utterance(
+        self,
+        utterance_id: UUID | str,
+        *,
+        reason: str = "barge_in",
+        spoken_chars: int | None = None,
+    ) -> tuple[SpeechUtterance | None, int]:
+        current = self.store.get_utterance(utterance_id)
+        if current is None:
+            return None, 0
+        turn_raw = current.metadata.get("cognitive_turn_id")
+        cancelled = 0
+        if turn_raw:
+            cancelled = self.store.cancel_cognitive_turn(str(turn_raw), reason=reason)
+            if self.cognition is not None:
+                self.cognition.interrupt_turn(
+                    str(turn_raw),
+                    reason=reason,
+                    active_segment_id=current.metadata.get("cognitive_segment_id"),
+                    spoken_chars=spoken_chars,
+                )
+            item = self.store.get_utterance(utterance_id)
+        else:
+            item = self.store.cancel(utterance_id, reason=reason)
+            cancelled = 1 if item is not None else 0
+        if item is not None:
+            await self.events.publish(
+                AmoraEvent(
+                    event_type="conversation.utterance_cancelled",
+                    timestamp=self.clock.now(),
+                    source="conversation_engine",
+                    actor="ENTITY_AMORA",
+                    target=item.target_id,
+                    importance=0.45,
+                    payload={
+                        "utterance_id": str(item.id),
+                        "reason": reason,
+                        "cancelled_utterances": cancelled,
+                        "spoken_progress_known": spoken_chars is not None,
+                        "spoken_chars": spoken_chars,
+                    },
+                    privacy_scope=item.privacy_scope,
+                    causation_id=item.source_event_id,
+                    dedupe_key=f"conversation.cancelled:{item.id}:{reason}",
+                )
+            )
+        return item, cancelled
+
     @staticmethod
     def _remote_autonomy_allowed(event: AmoraEvent) -> bool:
         explicit = event.payload.get("remote_processing_allowed")
