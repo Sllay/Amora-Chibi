@@ -71,6 +71,9 @@ async def test_provider_failure_before_speech_fails_over(tmp_path: Path, monkeyp
         assert plan.provider == "secondary"
         assert "PROVIDER_FAILOVER_USED" in plan.reason_codes
         assert core.cognition.state()["cognitive_provider_failures"]["primary"] == 1
+        ledger = {row["provider"]: row for row in core.cognition.store.usage_ledger()}
+        assert ledger["primary"]["request_count"] == 1
+        assert ledger["secondary"]["success_count"] == 1
     finally:
         core.close()
 
@@ -128,7 +131,7 @@ async def test_rate_limit_marks_quota_zero_until_cooldown_expires(tmp_path: Path
         core.cognition.register_provider(primary)
         core.cognition.register_provider(fallback)
         await core.cognition.respond(_request())
-        assert core.model_router.descriptor("primary").quota_remaining == 0.0
+        assert core.cognition.router.descriptor("primary").quota_remaining == 0.0
         await core.cognition.respond(_request())
         assert primary.calls == 1
         clock.advance(timedelta(seconds=61))
