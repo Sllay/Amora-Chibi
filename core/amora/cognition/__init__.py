@@ -17,7 +17,7 @@ from .providers_v1 import GeminiCognitiveProvider, GroqCognitiveProvider
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
 from .resilient import CognitiveEngine
 from .speech import SpeechNormalizer, SpeechRender, SpeechSegmenter
-from .store import CognitiveStore
+from .store_v1 import CognitiveStore
 
 __all__ = [
     "ActionSuggestion",
