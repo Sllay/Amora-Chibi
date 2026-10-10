@@ -140,6 +140,11 @@ class ContextCompiler:
 
         recent: list[dict[str, Any]] = []
         for message in self.store.list_messages(limit=12):
+            # respond() persists the input before compiling context so observability
+            # survives provider failure. Do not echo that same current turn back as
+            # history: the provider receives context.user_text separately exactly once.
+            if str(message.turn_id) == str(request.turn_id):
+                continue
             if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
                 continue
             if remote and not message.remote_processing_allowed:
@@ -157,6 +162,7 @@ class ContextCompiler:
                     "status": message.status.value,
                 }
             )
+        reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
         relationships: list[dict[str, Any]] = []
         for relation in self.identities.relationships:
