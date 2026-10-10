@@ -11,6 +11,8 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import dev.amora.chibi.core.CoreClient
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -27,6 +29,7 @@ class VoiceOutput(
     private val current = AtomicReference<CoreClient.SpeechUtterance?>(null)
     private val localProgressKnown = AtomicBoolean(false)
     private val lastSpokenEnd = AtomicInteger(0)
+    private val localInit = CountDownLatch(1)
     private val tts = TextToSpeech(context.applicationContext, this)
     private val coreClient = CoreClient(context.applicationContext)
     @Volatile private var activeTrack: AudioTrack? = null
@@ -56,6 +59,7 @@ class VoiceOutput(
 
     override fun onInit(status: Int) {
         ready.set(status == TextToSpeech.SUCCESS)
+        localInit.countDown()
         if (!ready.get()) Log.w(TAG, "Android TextToSpeech não inicializou: $status")
     }
 
@@ -77,11 +81,23 @@ class VoiceOutput(
                 RemoteResult.UNAVAILABLE, null -> Unit
             }
         }
-        if (!ready.get()) {
+        if (!awaitLocalReady()) {
+            Log.w(TAG, "TTS local indisponível após aguardar inicialização; fala será tentada novamente")
             current.compareAndSet(item, null)
             return false
         }
         return startLocal(item)
+    }
+
+    private fun awaitLocalReady(): Boolean {
+        if (ready.get()) return true
+        try {
+            localInit.await(LOCAL_TTS_INIT_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return false
+        }
+        return ready.get()
     }
 
     fun stopCurrent(): CoreClient.SpeechUtterance? {
@@ -222,6 +238,7 @@ class VoiceOutput(
     override fun close() {
         stopRequested.set(true)
         current.getAndSet(null)
+        localInit.countDown()
         runCatching { activeTrack?.stop() }
         runCatching { activeTrack?.release() }
         activeTrack = null
@@ -235,5 +252,8 @@ class VoiceOutput(
     }
 
     private enum class RemoteResult { COMPLETED, UNAVAILABLE, INTERRUPTED, PARTIAL_FAILURE }
-    companion object { private const val TAG = "AmoraVoice" }
+    companion object {
+        private const val LOCAL_TTS_INIT_WAIT_MS = 2_500L
+        private const val TAG = "AmoraVoice"
+    }
 }
