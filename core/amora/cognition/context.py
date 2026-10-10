@@ -11,6 +11,7 @@ from amora.social import SocialSceneTracker
 from amora.time import Clock
 from amora.world import SelfModelService, WorldModelService
 
+from .dialogue import DialogueOrchestrator
 from .models import CognitiveContext, CognitiveRequest, ContextMemory
 from .store import CognitiveStore
 
@@ -60,6 +61,7 @@ class ContextCompiler:
         social: SocialSceneTracker,
         store: CognitiveStore,
         privacy_gate: ProviderPrivacyGate | None = None,
+        dialogue: DialogueOrchestrator | None = None,
     ) -> None:
         self.clock = clock
         self.identities = identities
@@ -71,6 +73,7 @@ class ContextCompiler:
         self.social = social
         self.store = store
         self.privacy_gate = privacy_gate or ProviderPrivacyGate()
+        self.dialogue = dialogue or DialogueOrchestrator()
 
     def compile(self, request: CognitiveRequest, *, token_budget: int = 3200) -> CognitiveContext:
         remote = self.privacy_gate.remote_allowed(request)
@@ -209,6 +212,12 @@ class ContextCompiler:
             token_budget=token_budget,
             reason_codes=reasons,
         )
+        dialogue_plan = self.dialogue.plan(context)
+        context.dialogue_plan = dialogue_plan.model_dump(mode="json")
+        context.reason_codes.extend(
+            code for code in dialogue_plan.reason_codes if code not in context.reason_codes
+        )
+        context.reason_codes.append(f"DIALOGUE_ACT_{dialogue_plan.act.value.upper()}")
         return self._fit_budget(context)
 
     @staticmethod
