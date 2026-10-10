@@ -10,7 +10,7 @@ from amora.events import PrivacyScope
 from amora.models import ProviderDescriptor, TaskClass
 
 from .hardened import CognitiveEngine as HardenedCognitiveEngine
-from .models import CognitiveRequest, CognitiveResponsePlan, JournalStage
+from .models import CognitiveContext, CognitiveRequest, CognitiveResponsePlan, JournalStage
 from .providers import ProviderError
 from .providers_v1 import GeminiCognitiveProvider
 from .speech import SpeechSegmenter
@@ -47,6 +47,16 @@ class CognitiveEngine(HardenedCognitiveEngine):
         }
         state["cognitive_provider_failures"] = dict(self._provider_failures)
         return state
+
+    def _prepare_context(self, request: CognitiveRequest) -> CognitiveContext:
+        """Persist the observed input and compile the one context used by this turn.
+
+        Subclasses may observe/persist that exact object (for replay/certification),
+        but must return it unchanged so provider execution never sees a separately
+        recompiled snapshot.
+        """
+        self._record_input(request)
+        return self.compiler.compile(request)
 
     async def respond(
         self,
@@ -89,8 +99,7 @@ class CognitiveEngine(HardenedCognitiveEngine):
         fallback_text: str | None,
     ) -> CognitiveResponsePlan:
         started = perf_counter()
-        self._record_input(request)
-        context = self.compiler.compile(request)
+        context = self._prepare_context(request)
         estimated_tokens = max(1, len(context.model_dump_json()) // 4)
         self._journal(
             request,
