@@ -30,6 +30,8 @@ class VoiceOutput(
     private val tts = TextToSpeech(context.applicationContext, this)
     private val coreClient = CoreClient(context.applicationContext)
     @Volatile private var activeTrack: AudioTrack? = null
+    @Volatile private var selectedLocalVoiceName: String? = null
+    @Volatile private var selectedLocalVoiceLanguage: String? = null
 
     init {
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -117,6 +119,16 @@ class VoiceOutput(
 
     private fun selectBestLocalVoice(locale: Locale) {
         val voices = runCatching { tts.voices }.getOrNull().orEmpty()
+        val cachedName = selectedLocalVoiceName
+        val cachedLanguage = selectedLocalVoiceLanguage
+        if (cachedName != null && cachedLanguage == locale.language) {
+            val cached = voices.firstOrNull { it.name == cachedName }
+            if (cached != null) {
+                runCatching { tts.voice = cached }
+                return
+            }
+        }
+
         val languageMatches = voices.filter { it.locale.language == locale.language }
         val candidates = if (languageMatches.isNotEmpty()) languageMatches else voices.toList()
         val chosen = candidates.sortedWith(
@@ -124,9 +136,15 @@ class VoiceOutput(
                 .thenByDescending { !it.isNetworkConnectionRequired }
                 .thenByDescending { it.quality }
                 .thenBy { it.latency }
+                .thenBy { it.name }
         ).firstOrNull()
         if (chosen != null) {
             runCatching { tts.voice = chosen }
+                .onSuccess {
+                    selectedLocalVoiceName = chosen.name
+                    selectedLocalVoiceLanguage = locale.language
+                    Log.i(TAG, "Voz local fixada: ${chosen.name} locale=${chosen.locale}")
+                }
                 .onFailure { Log.w(TAG, "Não foi possível selecionar voz local ${chosen.name}", it) }
         }
     }
@@ -208,6 +226,8 @@ class VoiceOutput(
         runCatching { activeTrack?.release() }
         activeTrack = null
         localProgressKnown.set(false)
+        selectedLocalVoiceName = null
+        selectedLocalVoiceLanguage = null
         ready.set(false)
         runCatching { tts.stop() }
         runCatching { tts.shutdown() }
