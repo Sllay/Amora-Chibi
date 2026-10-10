@@ -12,7 +12,7 @@ from .models import (
     SpeechSegment,
 )
 from .providers import CognitiveProvider, GroqCognitiveProvider, ProviderDelta, ProviderError
-from .service import CognitiveEngine
+from .hardened import CognitiveEngine
 from .speech import SpeechNormalizer, SpeechRender, SpeechSegmenter
 from .store import CognitiveStore
 
