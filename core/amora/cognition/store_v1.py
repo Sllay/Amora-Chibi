@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 from typing import Any
+from uuid import UUID
 
+from .models import MessageStatus
 from .store import CognitiveStore as BaseCognitiveStore
 
 
 class CognitiveStore(BaseCognitiveStore):
-    """V1 observability helpers over the persistent model_usage ledger."""
+    """V1 observability and delivery helpers over persistent cognition state."""
 
     def latest_usage(self, provider: str, *, task_class: str | None = None) -> dict[str, Any] | None:
         query = "SELECT * FROM model_usage WHERE provider = ?"
@@ -47,3 +50,49 @@ class CognitiveStore(BaseCognitiveStore):
                 }
             )
         return result
+
+    def record_interrupted_progress(
+        self,
+        segment_id: UUID | str,
+        *,
+        spoken_chars: int | None,
+    ) -> str | None:
+        """Record the known spoken prefix, or explicitly mark it unknown.
+
+        Android local TTS can report character ranges. Streaming PCM providers do
+        not currently provide reliable text/audio alignment, so ``None`` means
+        "interrupted, exact spoken prefix unknown" rather than guessing.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT speech_text, metadata_json FROM speech_segments WHERE id = ?",
+                (str(segment_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        metadata = json.loads(row["metadata_json"])
+        text = str(row["speech_text"] or "")
+        message_id = metadata.get("message_id")
+        spoken_text: str | None = None
+        if spoken_chars is None:
+            metadata["spoken_progress_known"] = False
+            metadata["spoken_chars"] = None
+        else:
+            count = max(0, min(len(text), int(spoken_chars)))
+            spoken_text = text[:count]
+            metadata["spoken_progress_known"] = True
+            metadata["spoken_chars"] = count
+
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE speech_segments SET metadata_json = ? WHERE id = ?",
+                (json.dumps(metadata, ensure_ascii=False, separators=(",", ":")), str(segment_id)),
+            )
+        if message_id:
+            self.update_message_delivery(
+                str(message_id),
+                status=MessageStatus.INTERRUPTED,
+                spoken_text=spoken_text,
+                interrupted=True,
+            )
+        return spoken_text
