@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+from uuid import UUID
 
 from amora.cognition import CognitiveRequest, SpeechSegment
 from amora.events import AmoraEvent, PrivacyScope
 
-from .models import SpeechUtterance, TurnSignal, TurnState, UtteranceKind
+from .models import SpeechUtterance, TurnDecision, TurnSignal, TurnState, UtteranceKind
 from .service import ConversationEngine as BaseConversationEngine
 
 
@@ -19,6 +20,64 @@ class ConversationEngine(BaseConversationEngine):
     wording can now be generated from canonical Amora state. Remote cognition is
     an independent opt-in and is never inferred from the disclosure scope.
     """
+
+    async def observe_completed_utterance(
+        self,
+        text: str,
+        *,
+        speaker_id: str,
+        addressee_id: str | None,
+        source_event_id: UUID | str | None,
+        privacy_scope: PrivacyScope,
+        remote_processing_allowed: bool = False,
+        session_id: str | None = None,
+        stt_confidence: float | None = None,
+    ) -> tuple[TurnDecision, SpeechUtterance | None]:
+        decision, item = await super().observe_completed_utterance(
+            text,
+            speaker_id=speaker_id,
+            addressee_id=addressee_id,
+            source_event_id=source_event_id,
+            privacy_scope=privacy_scope,
+            remote_processing_allowed=remote_processing_allowed,
+            session_id=session_id,
+            stt_confidence=stt_confidence,
+        )
+        if (
+            self.cognition is None
+            or item is None
+            or not remote_processing_allowed
+            or privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}
+        ):
+            return decision, item
+
+        turn_raw = item.metadata.get("cognitive_turn_id")
+        if not turn_raw:
+            return decision, item
+        try:
+            turn_id = UUID(str(turn_raw))
+        except ValueError:
+            return decision, item
+
+        event_id = UUID(str(source_event_id)) if source_event_id else None
+        reflection_request = CognitiveRequest(
+            text=text,
+            speaker_id=speaker_id,
+            target_id=addressee_id,
+            source_event_id=event_id,
+            session_id=session_id,
+            privacy_scope=privacy_scope,
+            remote_processing_allowed=True,
+            turn_id=turn_id,
+            metadata={
+                "cognitive_mode": "reflection",
+                "stt_confidence": stt_confidence,
+                "turn_state": decision.state.value,
+                "turn_reason_codes": decision.reason_codes,
+            },
+        )
+        await self.cognition.reflect(reflection_request)
+        return decision, item
 
     async def handle_semantic_event(self, event: AmoraEvent) -> SpeechUtterance | None:
         if event.event_type != "action.semantic_request":
