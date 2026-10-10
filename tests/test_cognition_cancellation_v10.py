@@ -39,6 +39,28 @@ class BlockingStreamingProvider:
             self.closed.set()
 
 
+class FiniteStreamingProvider:
+    def __init__(self) -> None:
+        self.descriptor = ProviderDescriptor(
+            name="finite-stream",
+            model="finite-model",
+            capabilities=frozenset({TaskClass.SOCIAL_DIALOGUE}),
+            quality=1.0,
+            latency_score=1.0,
+            cost_score=0.0,
+            provider_class=ProviderClass.REMOTE_EPHEMERAL,
+            allowed_privacy_scopes=frozenset({PrivacyScope.PERSONAL}),
+            supports_streaming=True,
+            context_window_tokens=100_000,
+            priority=40,
+        )
+
+    async def stream(self, context):
+        yield ProviderDelta(text="Claro, papis. E eu termino esta frase também.")
+        yield ProviderDelta(input_tokens=20, output_tokens=12, latency_ms=5.0, status_code=200)
+        yield ProviderDelta(done=True, finish_reason="stop")
+
+
 def _clock() -> SimulatedClock:
     return SimulatedClock(datetime(2026, 10, 10, 2, 10, tzinfo=timezone.utc))
 
@@ -86,9 +108,7 @@ async def test_turn_finishes_only_after_delivery_settles(tmp_path: Path, monkeyp
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=_clock())
     try:
-        from tests.test_cognition_v10 import FakeStreamingProvider
-
-        core.cognition.register_provider(FakeStreamingProvider())
+        core.cognition.register_provider(FiniteStreamingProvider())
         request = CognitiveRequest(
             text="Oi Amora",
             speaker_id="PERSON_BK",
