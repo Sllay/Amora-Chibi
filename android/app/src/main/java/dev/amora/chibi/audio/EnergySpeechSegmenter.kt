@@ -3,9 +3,9 @@ package dev.amora.chibi.audio
 import kotlin.math.sqrt
 
 class EnergySpeechSegmenter(
-    // Keep the fallback conservative enough for room noise, but do not require
-    // unusually loud speech on the A15 VOICE_COMMUNICATION input path.
-    private val threshold: Float = 0.018F,
+    // This path is only a fallback when Sherpa is unavailable. It should prefer
+    // missing a very quiet utterance over turning steady room noise into speech.
+    private val threshold: Float = 0.030F,
     private val sampleRate: Int = 16_000,
 ) : SpeechSegmenter {
     private val active = ArrayList<Float>()
@@ -33,7 +33,7 @@ class EnergySpeechSegmenter(
             active.clear()
             speaking = false
             silentFrames = 0
-            return if (segment.size >= sampleRate / 5) listOf(segment) else emptyList()
+            return if (segment.size >= sampleRate * 3 / 10) listOf(segment) else emptyList()
         }
         return emptyList()
     }
@@ -44,7 +44,7 @@ class EnergySpeechSegmenter(
         active.clear()
         speaking = false
         silentFrames = 0
-        return if (segment.size >= sampleRate / 5) listOf(segment) else emptyList()
+        return if (segment.size >= sampleRate * 3 / 10) listOf(segment) else emptyList()
     }
 
     override fun close() = Unit

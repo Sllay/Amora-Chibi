@@ -13,6 +13,7 @@ class CoreClient(context: Context) {
         val text: String,
         val addresseeId: String?,
         val replyQueued: Boolean,
+        val accepted: Boolean,
     )
 
     data class SpeechUtterance(
@@ -69,10 +70,14 @@ class CoreClient(context: Context) {
         connection.doOutput = true
         connection.outputStream.use { it.write(wav) }
         val root = JSONObject(readResponse(connection))
-        val text = root.getJSONObject("transcript").optString("text")
-        val addressee = root.getJSONObject("observation").optJSONObject("addressee")
-            ?.optString("entity_id")?.takeIf { it.isNotBlank() }
-        return TranscriptionResult(text, addressee, !root.isNull("reply_queued"))
+        val accepted = root.optBoolean("accepted", true)
+        val transcript = root.optJSONObject("transcript")
+        val text = transcript?.optString("text").orEmpty()
+        val addressee = root.optJSONObject("observation")
+            ?.optJSONObject("addressee")
+            ?.optString("entity_id")
+            ?.takeIf { it.isNotBlank() }
+        return TranscriptionResult(text, addressee, !root.isNull("reply_queued"), accepted)
     }
 
     fun nextUtterance(deviceId: String = "DEVICE_A15"): SpeechUtterance? {

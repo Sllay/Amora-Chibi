@@ -41,7 +41,7 @@ def test_known_voice_is_context_not_authentication() -> None:
 
 
 @pytest.mark.asyncio
-async def test_groq_stt_uses_official_endpoint_and_returns_quota_metadata(tmp_path) -> None:
+async def test_groq_stt_uses_verbose_quality_metadata_and_context_prompt(tmp_path) -> None:
     audio = tmp_path / "sample.wav"
     audio.write_bytes(b"RIFFfake")
     secrets = SecretStore(tmp_path / "secrets")
@@ -52,9 +52,22 @@ async def test_groq_stt_uses_official_endpoint_and_returns_quota_metadata(tmp_pa
         assert request.headers["authorization"] == "Bearer super-secret"
         body = await request.aread()
         assert b"whisper-large-v3-turbo" in body
+        assert b"verbose_json" in body
+        assert b"Amora" in body
         return httpx.Response(
             200,
-            json={"text": "oi amora", "x_groq": {"id": "req_1"}},
+            json={
+                "text": "oi amora",
+                "segments": [
+                    {
+                        "start": 0.0,
+                        "end": 1.2,
+                        "avg_logprob": -0.12,
+                        "no_speech_prob": 0.02,
+                    }
+                ],
+                "x_groq": {"id": "req_1"},
+            },
             headers={"x-ratelimit-remaining-requests": "1999"},
         )
 
@@ -64,6 +77,41 @@ async def test_groq_stt_uses_official_endpoint_and_returns_quota_metadata(tmp_pa
     assert transcript.provider == "groq"
     assert transcript.request_id == "req_1"
     assert transcript.provider_metadata["x-ratelimit-remaining-requests"] == "1999"
+    assert transcript.provider_metadata["speech_rejected"] == "false"
+    assert transcript.confidence is not None and transcript.confidence > 0.8
+
+
+@pytest.mark.asyncio
+async def test_groq_stt_rejects_noise_hallucination_before_conversation(tmp_path) -> None:
+    audio = tmp_path / "fan.wav"
+    audio.write_bytes(b"RIFFfake")
+    secrets = SecretStore(tmp_path / "secrets")
+    secrets.set("GROQ_API_KEY", "super-secret")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "text": "Obrigado.",
+                "segments": [
+                    {
+                        "start": 0.0,
+                        "end": 0.9,
+                        "avg_logprob": -1.05,
+                        "no_speech_prob": 0.83,
+                    }
+                ],
+                "x_groq": {"id": "req_noise"},
+            },
+        )
+
+    transcript = await GroqWhisperSTT(
+        secrets,
+        transport=httpx.MockTransport(handler),
+    ).transcribe(AudioSegment(path=audio, language="pt"))
+    assert transcript.text == ""
+    assert transcript.provider_metadata["speech_rejected"] == "true"
+    assert transcript.provider_metadata["rejection_reason"] == "HIGH_NO_SPEECH_PROBABILITY"
 
 
 @pytest.mark.asyncio

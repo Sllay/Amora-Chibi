@@ -10,6 +10,8 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.IBinder
 import android.util.Log
 import dev.amora.chibi.core.CoreClient
@@ -153,6 +155,28 @@ class AudioCaptureService : Service() {
             Log.w(TAG, "AcousticEchoCanceler indisponível; barge-in ficará conservador")
             null
         }
+        val noiseSuppressor = if (NoiseSuppressor.isAvailable()) {
+            runCatching { NoiseSuppressor.create(localRecorder.audioSessionId) }
+                .getOrNull()
+                ?.also { effect ->
+                    effect.enabled = true
+                    Log.i(TAG, "NoiseSuppressor ativo=${effect.enabled}")
+                }
+        } else {
+            Log.w(TAG, "NoiseSuppressor indisponível")
+            null
+        }
+        // Some devices boost a constant fan/room floor when nobody is speaking.
+        // Disable explicit AGC when the effect is exposed; speech recognition and
+        // the VAD work better with the natural level after noise suppression.
+        val automaticGain = if (AutomaticGainControl.isAvailable()) {
+            runCatching { AutomaticGainControl.create(localRecorder.audioSessionId) }
+                .getOrNull()
+                ?.also { effect ->
+                    effect.enabled = false
+                    Log.i(TAG, "AutomaticGainControl ativo=${effect.enabled}")
+                }
+        } else null
 
         var localSegmenter = SpeechSegmenterFactory.create(this)
         segmenter = localSegmenter
@@ -227,6 +251,8 @@ class AudioCaptureService : Service() {
         } finally {
             runCatching { localRecorder.stop() }
             runCatching { echoCanceler?.release() }
+            runCatching { noiseSuppressor?.release() }
+            runCatching { automaticGain?.release() }
             localRecorder.release()
             recorder = null
             localSegmenter.close()
@@ -240,6 +266,10 @@ class AudioCaptureService : Service() {
         networkExecutor.execute {
             runCatching { coreClient.transcribe(wav) }
                 .onSuccess { result ->
+                    if (!result.accepted) {
+                        Log.d(TAG, "STT rejeitou segmento sem evidência suficiente de fala")
+                        return@onSuccess
+                    }
                     val target = result.addresseeId ?: "addressee incerto"
                     Log.i(TAG, "STT: ${result.text} [$target] replyQueued=${result.replyQueued}")
                     getSystemService(NotificationManager::class.java)

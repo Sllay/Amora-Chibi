@@ -187,6 +187,19 @@ def create_api(core: AmoraCore) -> FastAPI:
             transcript = await core.stt.transcribe(
                 AudioSegment(path=audio_path, mime_type="audio/wav", language=language)
             )
+            rejected = (
+                not transcript.text.strip()
+                or transcript.provider_metadata.get("speech_rejected") == "true"
+            )
+            if rejected:
+                return {
+                    "accepted": False,
+                    "transcript": transcript.model_dump(mode="json"),
+                    "observation": None,
+                    "turn": None,
+                    "reply_queued": None,
+                }
+
             speaker = SpeakerResult(
                 speaker_id=speaker_id,
                 confidence=speaker_confidence,
@@ -213,6 +226,7 @@ def create_api(core: AmoraCore) -> FastAPI:
             finally:
                 core.social.end_turn(speaker.speaker_id)
             return {
+                "accepted": True,
                 "transcript": transcript.model_dump(mode="json"),
                 "observation": observation.model_dump(mode="json"),
                 "turn": turn.model_dump(mode="json"),
