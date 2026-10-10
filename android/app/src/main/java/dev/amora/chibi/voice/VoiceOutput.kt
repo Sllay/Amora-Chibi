@@ -12,18 +12,21 @@ import android.util.Log
 import dev.amora.chibi.core.CoreClient
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 class VoiceOutput(
     context: Context,
     private val onSpeakingChanged: (Boolean) -> Unit,
-    private val onFinished: (String, Outcome) -> Unit,
+    private val onFinished: (String, Outcome, Int?) -> Unit,
 ) : TextToSpeech.OnInitListener, AutoCloseable {
     enum class Outcome { SPOKEN, FAILED, INTERRUPTED, PARTIAL }
 
     private val ready = AtomicBoolean(false)
     private val stopRequested = AtomicBoolean(false)
     private val current = AtomicReference<CoreClient.SpeechUtterance?>(null)
+    private val localProgressKnown = AtomicBoolean(false)
+    private val lastSpokenEnd = AtomicInteger(0)
     private val tts = TextToSpeech(context.applicationContext, this)
     private val coreClient = CoreClient(context.applicationContext)
     @Volatile private var activeTrack: AudioTrack? = null
@@ -41,6 +44,11 @@ class VoiceOutput(
             override fun onStop(utteranceId: String, interrupted: Boolean) {
                 finishLocal(utteranceId, if (interrupted) Outcome.INTERRUPTED else Outcome.FAILED)
             }
+            override fun onRangeStart(utteranceId: String, start: Int, end: Int, frame: Int) {
+                val item = current.get() ?: return
+                if (item.id != utteranceId || !localProgressKnown.get()) return
+                lastSpokenEnd.accumulateAndGet(end.coerceIn(0, item.text.length), ::maxOf)
+            }
         })
     }
 
@@ -54,6 +62,8 @@ class VoiceOutput(
     fun speak(item: CoreClient.SpeechUtterance): Boolean {
         if (!current.compareAndSet(null, item)) return false
         stopRequested.set(false)
+        localProgressKnown.set(false)
+        lastSpokenEnd.set(0)
         if (item.remoteTtsAllowed) {
             val remote = runCatching { playRemote(item) }
                 .onFailure { Log.w(TAG, "TTS expressivo remoto falhou ${item.id}", it) }
@@ -84,6 +94,8 @@ class VoiceOutput(
     }
 
     private fun startLocal(item: CoreClient.SpeechUtterance): Boolean {
+        localProgressKnown.set(true)
+        lastSpokenEnd.set(0)
         val locale = Locale.forLanguageTag(item.locale)
         val languageResult = tts.setLanguage(locale)
         if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
@@ -99,6 +111,7 @@ class VoiceOutput(
             return true
         }
         current.compareAndSet(item, null)
+        localProgressKnown.set(false)
         return false
     }
 
@@ -119,6 +132,7 @@ class VoiceOutput(
     }
 
     private fun playRemote(item: CoreClient.SpeechUtterance): RemoteResult {
+        localProgressKnown.set(false)
         var track: AudioTrack? = null
         var anyAudio = false
         try {
@@ -177,8 +191,14 @@ class VoiceOutput(
 
     private fun finish(item: CoreClient.SpeechUtterance, outcome: Outcome) {
         if (!current.compareAndSet(item, null)) return
+        val spokenChars = when (outcome) {
+            Outcome.SPOKEN -> item.text.length
+            Outcome.INTERRUPTED -> if (localProgressKnown.get()) lastSpokenEnd.get().coerceIn(0, item.text.length) else null
+            Outcome.FAILED, Outcome.PARTIAL -> null
+        }
+        localProgressKnown.set(false)
         onSpeakingChanged(false)
-        onFinished(item.id, outcome)
+        onFinished(item.id, outcome, spokenChars)
     }
 
     override fun close() {
@@ -187,6 +207,7 @@ class VoiceOutput(
         runCatching { activeTrack?.stop() }
         runCatching { activeTrack?.release() }
         activeTrack = null
+        localProgressKnown.set(false)
         ready.set(false)
         runCatching { tts.stop() }
         runCatching { tts.shutdown() }
