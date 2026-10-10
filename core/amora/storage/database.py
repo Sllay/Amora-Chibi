@@ -15,6 +15,7 @@ from .migrations_v06 import MIGRATION_V06
 from .migrations_v07 import MIGRATION_V07
 from .migrations_v08 import MIGRATION_V08
 from .migrations_v09 import MIGRATION_V09
+from .migrations_v10 import MIGRATION_V10
 
 
 class AmoraDatabase:
@@ -38,7 +39,7 @@ class AmoraDatabase:
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             applied = {row[0] for row in self._conn.execute("SELECT version FROM schema_migrations")}
             count = 0
-            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07, MIGRATION_V08, MIGRATION_V09):
+            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07, MIGRATION_V08, MIGRATION_V09, MIGRATION_V10):
                 if version in applied:
                     continue
                 script = f"BEGIN IMMEDIATE;\n{sql}\nINSERT INTO schema_migrations(version) VALUES ({int(version)});\nCOMMIT;"

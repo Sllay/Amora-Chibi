@@ -10,7 +10,7 @@ from .models import (
     UtteranceKind,
     UtteranceStatus,
 )
-from .service import ConversationEngine
+from .integrated import ConversationEngine
 from .store import ConversationStore
 from .turn_manager import TurnManager
 

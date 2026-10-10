@@ -6,7 +6,7 @@ Monorepo oficial da **Amora**, uma IA-companheira persistente, mobile-first e mu
 
 ## Estado atual
 
-**V0.9 — Avatar Studio + Runtime** em fechamento.
+**V1.0 — Cognitive Integration / Soul** em release-candidate na branch `feat/v1.0-cognitive-integration`.
 
 A base implementada até aqui inclui:
 
@@ -18,9 +18,12 @@ A base implementada até aqui inclui:
 - V0.6: Drives persistentes, Utility determinística, BDI, hysteresis/switch cost, silêncio explícito, contexto de interrupção, intenção persistente, decisão idempotente e idle scheduling via TimeService/Scheduler;
 - V0.7: Skill Library, Planner hierárquico, Action Bus com gates de permission/privacy/risk/cost/idempotency/timeout, contratos de plugin, Execution Monitor, retry/replan/abort, persistência de planos/ToolCalls/runs e ações semânticas verificadas;
 - V0.8: Turn Manager (`LISTEN/WAIT/BACKCHANNEL/TAKE_TURN/INTERRUPT/YIELD`), Fast Path local de fala/backchannels, fila TTS persistente com lease/ACK, Action→Conversation idempotente, privacy fail-closed para `AUTH/SECRET` e Android TextToSpeech com supressão do próprio áudio no VAD/STT;
-- V0.9: Avatar Studio/Runtime web compartilhado, edição visual touch de parts/layers/pivôs, rig humanoide padrão, 2-bone IK, color slots, expressões, mouth flap, blink, physics secundária, timeline, PWA, persistência schema 9, assets separados e Mind→Avatar semântico.
+- V0.9: Avatar Studio/Runtime web compartilhado, edição visual touch de parts/layers/pivôs, rig humanoide padrão, 2-bone IK, color slots, expressões, mouth flap, blink, physics secundária, timeline, PWA, persistência schema 9, assets separados e Mind→Avatar semântico;
+- V1.0: Context Compiler, Conversation History + Cognitive Journal persistentes, schema 10, cognição streaming, voz expressiva streaming, barge-in causal, fala autônoma cognitiva, reflexão estruturada com gates locais, quota/backoff/failover Groq→Gemini→local, Cognitive Replay sem mutação de estado e consentimento Android explícito para cognição remota.
 
-Os documentos canônicos do projeto são `ARCHITECTURE.md`, `GDD.md` e `SKILL.md`, mantidos como arquivos anexados do Projeto ChatGPT. `AGENTS.md` contém guardrails essenciais para agentes. Implementações por estágio ficam em `docs/`.
+**Imagem, foto, câmera, screenshot e percepção visual avançada ficam para V1.1.**
+
+Os documentos canônicos do projeto são `ARCHITECTURE.md`, `GDD.md` e `SKILL.md`, mantidos como arquivos anexados do Projeto ChatGPT. `AGENTS.md` contém guardrails essenciais para agentes. `PROJECT_STATE.md` registra o handoff operacional atual e `docs/V1.0_COGNITIVE_INTEGRATION.md` descreve o contrato técnico da V1.
 
 ## Estrutura
 
@@ -190,7 +193,36 @@ python -m amora.conversation say "Papis?" --dedupe-key demo-v08-first-voice
 python -m amora.conversation utterances
 ```
 
-Com o APK pareado e o Core em `127.0.0.1:8765`, o Android reivindica a utterance, fala via `TextToSpeech` e envia ACK. Uma ação autônoma `initiate_contact -> PERSON_BK` também pode gerar `Papis?` sem texto fornecido pelo usuário.
+Com o APK pareado e o Core em `127.0.0.1:8765`, o Android reivindica a utterance, fala via `TextToSpeech` e envia ACK.
+
+## Cognitive Integration / Voice V1.0
+
+Com o Core rodando, os principais diagnósticos estão disponíveis em:
+
+```text
+GET /v1/cognition/state
+GET /v1/cognition/usage
+GET /v1/cognition/history
+GET /v1/cognition/journal
+GET /v1/cognition/segments/{turn_id}
+POST /v1/cognition/replay/{turn_id}
+```
+
+O app Android deixa a cognição remota desligada por padrão. O checkbox **“Permitir cognição remota para minhas falas”** controla se o contexto permitido pelo Core pode seguir para os providers cognitivos depois do STT.
+
+Para fala autônoma remota, a autorização é separada e fail-closed:
+
+```bash
+export AMORA_REMOTE_COGNITION_ALLOWED=true
+```
+
+Gemini cognitivo pode ser configurado como fallback com `GEMINI_API_KEY`; o modelo pode ser sobrescrito por:
+
+```bash
+export AMORA_GEMINI_COGNITION_MODEL=<modelo>
+```
+
+Detalhes de arquitetura, gates, replay, barge-in e checklist físico A15: `docs/V1.0_COGNITIVE_INTEGRATION.md`.
 
 ## Avatar Studio + Runtime V0.9
 
@@ -240,9 +272,9 @@ Gerar rig humanoide
 
 Detalhes: `docs/V0.9_AVATAR.md` e `avatar/README.md`.
 
-## Backup V0.9
+## Backup V1.0
 
-A partir da V0.9, um backup inclui o snapshot SQLite e um sidecar para os binários do avatar:
+O backup continua incluindo o snapshot SQLite e o sidecar para os binários do avatar. No schema 10, o mesmo snapshot SQLite inclui Conversation History, Cognitive Journal, speech segments e model usage da V1.
 
 ```bash
 amora backup --name checkpoint.db

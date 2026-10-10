@@ -8,6 +8,7 @@ from amora.actions import ActionEngine, ActionStore
 from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
 from amora.autonomy import AutonomyEngine, AutonomyStore
 from amora.avatar import AvatarEngine, AvatarStore
+from amora.cognition import CognitiveEngine, CognitiveStore, ContextCompiler, GeminiCognitiveProvider, GroqCognitiveProvider
 from amora.conversation import ConversationEngine, ConversationStore
 from amora.emotion import EmotionEngine, EmotionStore
 from amora.events import AsyncEventBus
@@ -51,6 +52,7 @@ class AmoraCore:
     perspective_consolidator: PerspectiveConsolidator
     emotion: EmotionEngine
     autonomy: AutonomyEngine
+    cognition: CognitiveEngine
     conversation: ConversationEngine
     actions: ActionEngine
     avatar: AvatarEngine
@@ -122,12 +124,42 @@ class AmoraCore:
             world,
             events,
         )
+        models = ModelRouter()
+        cognitive_store = CognitiveStore(paths.database, active_clock)
+        cognition = CognitiveEngine(
+            cognitive_store,
+            ContextCompiler(
+                clock=active_clock,
+                identities=identities,
+                memory=memory,
+                world=world,
+                self_model=self_model,
+                emotion=emotion,
+                autonomy=autonomy,
+                social=social,
+                store=cognitive_store,
+            ),
+            models,
+            active_clock,
+            events,
+        )
+        groq_cognition = GroqCognitiveProvider(secrets)
+        if groq_cognition.descriptor.available:
+            cognition.register_provider(groq_cognition)
+        # Gemini is a real substitute, not a child of Groq. If Groq registration
+        # already auto-discovered it, avoid duplicate registration; otherwise a
+        # Gemini-only installation remains fully usable for remote cognition.
+        gemini_cognition = GeminiCognitiveProvider(secrets)
+        if gemini_cognition.descriptor.available and cognition.router.descriptor("gemini") is None:
+            cognition.register_provider(gemini_cognition)
+        events.subscribe_bootstrap("cognition.action_suggested", autonomy.handle_cognitive_suggestion)
         conversation = ConversationEngine(
             ConversationStore(paths.database, active_clock),
             active_clock,
             social,
             emotion,
             events,
+            cognition=cognition,
         )
         avatar = AvatarEngine(
             AvatarStore(paths.database, paths.avatar_assets, active_clock),
@@ -164,10 +196,11 @@ class AmoraCore:
             perspective_consolidator=perspective_consolidator,
             emotion=emotion,
             autonomy=autonomy,
+            cognition=cognition,
             conversation=conversation,
             actions=actions,
             avatar=avatar,
-            models=ModelRouter(),
+            models=models,
             social=social,
             addressee=addressee,
             perspective=perspective,
@@ -191,8 +224,10 @@ class AmoraCore:
         core_identity = self.self_model.get(SelfLayer.CORE_IDENTITY, "entity_id")
         mood = self.emotion.current_mood()
         current_intention = self.autonomy.store.current_intention()
+        autonomy_state = self.autonomy.state()
         drives = {item.drive.value: round(item.need, 6) for item in self.autonomy.current_drives()}
         conversation = self.conversation.state()
+        cognition = self.cognition.state()
         avatar = self.avatar.health()
         return {
             "status": "ok" if integrity == "ok" else "degraded",
@@ -211,6 +246,7 @@ class AmoraCore:
             "mood_arousal": round(mood.arousal, 6),
             "mood_dominance": round(mood.dominance, 6),
             "pending_social_bids": len(self.emotion.pending_bids()),
+            "pending_cognitive_suggestions": autonomy_state["pending_cognitive_suggestions"],
             "autonomy_decision_count": self.autonomy.store.decision_count(),
             "active_intention_kind": current_intention.kind.value if current_intention else None,
             "drives": drives,
@@ -224,6 +260,8 @@ class AmoraCore:
             "speech_spoken_count": conversation["speech_spoken_count"],
             "conversation_floor": conversation["conversation_floor"],
             "dialogue_provider": conversation["dialogue_provider"],
+            "cognition_enabled": conversation["cognition_enabled"],
+            **cognition,
             **avatar,
             "entity_count": len(self.identities.entities),
             "relationship_count": len(self.identities.relationships),
@@ -233,6 +271,8 @@ class AmoraCore:
             "social_participant_count": len(self.social.scene.participants),
             "social_active_addressee": self.social.scene.active_addressee,
             "groq_stt_configured": self.secrets.get("GROQ_API_KEY") is not None,
+            "groq_cognition_configured": self.secrets.get("GROQ_API_KEY") is not None,
+            "gemini_cognition_configured": self.secrets.get("GEMINI_API_KEY") is not None,
         }
 
     def create_backup(self, name: str | None = None) -> Path:
@@ -254,6 +294,7 @@ class AmoraCore:
         self.actions.close()
         self.avatar.close()
         self.conversation.close()
+        self.cognition.close()
         self.autonomy.close()
         self.emotion.close()
         self.world_store.close()

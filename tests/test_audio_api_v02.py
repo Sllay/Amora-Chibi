@@ -56,8 +56,11 @@ def test_raw_wav_endpoint_requires_auth_and_emits_social_observation(tmp_path: P
         assert body["turn"]["state"] == "TAKE_TURN"
         assert body["reply_queued"] is not None
         assert body["reply_queued"]["target_id"] == "SESSION_ANDROID_SPEAKER_1"
-        assert core.database.event_count() == before + 2
+        # social observation + speech queued + cognitive response plan
+        assert core.database.event_count() == before + 3
         assert core.conversation.store.pending_count() == 1
+        assert core.cognition.store.message_count() >= 2
+        assert core.cognition.store.journal_count() >= 4
         assert list((core.paths.cache / "incoming").glob("*.wav")) == []
     finally:
         core.close()

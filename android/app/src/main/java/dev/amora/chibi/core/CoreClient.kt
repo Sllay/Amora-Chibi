@@ -3,6 +3,7 @@ package dev.amora.chibi.core
 import android.content.Context
 import dev.amora.chibi.security.SecureTokenStore
 import org.json.JSONObject
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -21,24 +22,37 @@ class CoreClient(context: Context) {
         val rate: Float,
         val pitch: Float,
         val volume: Float,
+        val remoteTtsAllowed: Boolean,
+        val cognitiveTurnId: String?,
     )
 
-    private val tokenStore = SecureTokenStore(context.applicationContext)
+    data class VoiceStreamResult(
+        val usedRemote: Boolean,
+        val completed: Boolean,
+        val bytesReceived: Long,
+    )
+
+    private val appContext = context.applicationContext
+    private val tokenStore = SecureTokenStore(appContext)
+    private val privacyPreferences = appContext.getSharedPreferences(PRIVACY_PREFERENCES, Context.MODE_PRIVATE)
     private val baseUrl = "http://127.0.0.1:8765"
 
     fun isPaired(): Boolean = tokenStore.hasToken()
+
+    fun isRemoteCognitionAllowed(): Boolean = privacyPreferences.getBoolean(KEY_REMOTE_COGNITION, false)
+
+    fun setRemoteCognitionAllowed(allowed: Boolean) {
+        privacyPreferences.edit().putBoolean(KEY_REMOTE_COGNITION, allowed).apply()
+    }
 
     fun pair(code: String) {
         require(code.matches(Regex("\\d{6}"))) { "Código deve ter 6 dígitos" }
         val connection = open("/v1/pairing/redeem", "POST")
         connection.setRequestProperty("Content-Type", "application/json")
         connection.doOutput = true
-        connection.outputStream.use {
-            it.write(JSONObject().put("code", code).toString().toByteArray(Charsets.UTF_8))
-        }
+        connection.outputStream.use { it.write(JSONObject().put("code", code).toString().toByteArray(Charsets.UTF_8)) }
         val body = readResponse(connection)
-        val token = JSONObject(body).getString("token")
-        tokenStore.save(token)
+        tokenStore.save(JSONObject(body).getString("token"))
     }
 
     fun health(): String {
@@ -48,7 +62,8 @@ class CoreClient(context: Context) {
 
     fun transcribe(wav: ByteArray): TranscriptionResult {
         val speaker = URLEncoder.encode("SESSION_ANDROID_SPEAKER_1", "UTF-8")
-        val path = "/v1/audio/transcribe?language=pt&speaker_id=$speaker&speaker_confidence=0.35"
+        val remoteCognition = isRemoteCognitionAllowed()
+        val path = "/v1/audio/transcribe?language=pt&speaker_id=$speaker&speaker_confidence=0.35&remote_processing_allowed=$remoteCognition"
         val connection = open(path, "POST", authenticated = true)
         connection.setRequestProperty("Content-Type", "audio/wav")
         connection.doOutput = true
@@ -56,10 +71,8 @@ class CoreClient(context: Context) {
         val root = JSONObject(readResponse(connection))
         val text = root.getJSONObject("transcript").optString("text")
         val addressee = root.getJSONObject("observation").optJSONObject("addressee")
-            ?.optString("entity_id")
-            ?.takeIf { it.isNotBlank() }
-        val replyQueued = !root.isNull("reply_queued")
-        return TranscriptionResult(text, addressee, replyQueued)
+            ?.optString("entity_id")?.takeIf { it.isNotBlank() }
+        return TranscriptionResult(text, addressee, !root.isNull("reply_queued"))
     }
 
     fun nextUtterance(deviceId: String = "DEVICE_A15"): SpeechUtterance? {
@@ -69,6 +82,7 @@ class CoreClient(context: Context) {
         if (root.isNull("utterance")) return null
         val item = root.getJSONObject("utterance")
         val style = item.optJSONObject("style") ?: JSONObject()
+        val metadata = item.optJSONObject("metadata") ?: JSONObject()
         return SpeechUtterance(
             id = item.getString("id"),
             text = item.getString("text"),
@@ -76,19 +90,70 @@ class CoreClient(context: Context) {
             rate = style.optDouble("rate", 1.0).toFloat(),
             pitch = style.optDouble("pitch", 1.0).toFloat(),
             volume = style.optDouble("volume", 1.0).toFloat(),
+            remoteTtsAllowed = metadata.optBoolean("remote_tts_allowed", false),
+            cognitiveTurnId = metadata.optString("cognitive_turn_id").takeIf { it.isNotBlank() },
         )
+    }
+
+    fun streamVoiceAudio(
+        utteranceId: String,
+        onChunk: (ByteArray) -> Boolean,
+    ): VoiceStreamResult {
+        val safeId = URLEncoder.encode(utteranceId, "UTF-8")
+        val connection = open("/v1/voice/utterances/$safeId/audio", "GET", authenticated = true)
+        connection.readTimeout = 60_000
+        var received = 0L
+        try {
+            val code = connection.responseCode
+            if (code == 409 || code == 503 || code == 404) {
+                connection.errorStream?.close()
+                return VoiceStreamResult(usedRemote = false, completed = false, bytesReceived = 0)
+            }
+            if (code !in 200..299) {
+                val body = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                throw IllegalStateException("Core TTS respondeu HTTP $code: $body")
+            }
+            val buffer = ByteArray(16 * 1024)
+            try {
+                connection.inputStream.use { input ->
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        if (count == 0) continue
+                        received += count
+                        if (!onChunk(buffer.copyOf(count))) {
+                            return VoiceStreamResult(usedRemote = true, completed = false, bytesReceived = received)
+                        }
+                    }
+                }
+            } catch (error: IOException) {
+                if (received > 0) return VoiceStreamResult(usedRemote = true, completed = false, bytesReceived = received)
+                throw error
+            }
+            return VoiceStreamResult(usedRemote = true, completed = true, bytesReceived = received)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     fun acknowledgeUtterance(utteranceId: String, spoken: Boolean) {
         val safeId = URLEncoder.encode(utteranceId, "UTF-8")
-        val connection = open(
-            "/v1/conversation/utterances/$safeId/ack",
-            "POST",
-            authenticated = true,
-        )
+        val connection = open("/v1/conversation/utterances/$safeId/ack", "POST", authenticated = true)
         connection.setRequestProperty("Content-Type", "application/json")
         connection.doOutput = true
         val payload = JSONObject().put("spoken", spoken).toString().toByteArray(Charsets.UTF_8)
+        connection.outputStream.use { it.write(payload) }
+        readResponse(connection)
+    }
+
+    fun cancelUtterance(utteranceId: String, reason: String = "barge_in", spokenChars: Int? = null) {
+        val safeId = URLEncoder.encode(utteranceId, "UTF-8")
+        val connection = open("/v1/conversation/utterances/$safeId/cancel", "POST", authenticated = true)
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.doOutput = true
+        val root = JSONObject().put("reason", reason.take(96))
+        if (spokenChars != null) root.put("spoken_chars", spokenChars.coerceAtLeast(0))
+        val payload = root.toString().toByteArray(Charsets.UTF_8)
         connection.outputStream.use { it.write(payload) }
         readResponse(connection)
     }
@@ -112,9 +177,12 @@ class CoreClient(context: Context) {
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream
         val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
         connection.disconnect()
-        if (code !in 200..299) {
-            throw IllegalStateException("Core respondeu HTTP $code: $body")
-        }
+        if (code !in 200..299) throw IllegalStateException("Core respondeu HTTP $code: $body")
         return body
+    }
+
+    companion object {
+        private const val PRIVACY_PREFERENCES = "amora_privacy"
+        private const val KEY_REMOTE_COGNITION = "remote_cognition_allowed"
     }
 }

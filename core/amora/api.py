@@ -13,6 +13,7 @@ from amora.app import AmoraCore
 from amora.audio import AudioSegment, SpeakerResult, SttCredentialsError, SttError, SttRateLimitedError
 from amora.autonomy.routes import register_autonomy_routes
 from amora.avatar.routes import register_avatar_routes
+from amora.cognition.routes import register_cognition_routes
 from amora.conversation.routes import register_conversation_routes
 from amora.emotion.routes import register_emotion_routes
 from amora.events import AmoraEvent, PrivacyScope
@@ -78,6 +79,7 @@ def create_api(core: AmoraCore) -> FastAPI:
     register_autonomy_routes(app, core, require_auth)
     register_action_routes(app, core, require_auth)
     register_conversation_routes(app, core, require_auth)
+    register_cognition_routes(app, core, require_auth)
     register_avatar_routes(app, core, require_auth)
 
     @app.get("/health")
@@ -205,6 +207,8 @@ def create_api(core: AmoraCore) -> FastAPI:
                     source_event_id=observation.event_id,
                     privacy_scope=privacy_scope,
                     remote_processing_allowed=remote_processing_allowed,
+                    session_id=session_id,
+                    stt_confidence=transcript.confidence,
                 )
             finally:
                 core.social.end_turn(speaker.speaker_id)

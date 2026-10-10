@@ -13,7 +13,7 @@ from .models import (
     IntentionStatus,
     UtilityFactors,
 )
-from .service import AutonomyEngine
+from .integrated import AutonomyEngine
 from .store import AutonomyStore
 
 __all__ = [
