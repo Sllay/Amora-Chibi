@@ -5,8 +5,10 @@ from typing import Any
 from uuid import UUID
 
 from amora.events import PrivacyScope
+from amora.models import ScopedModelRouter, TaskClass
 
 from .models import CognitiveContext, CognitiveJournalEntry, CognitiveRequest, CognitiveResponsePlan, JournalStage
+from .proposals import CognitiveProposalBundle
 from .replay import CognitiveReplayResult
 from .resilient import CognitiveEngine as ResilientCognitiveEngine
 from .service import SegmentSink
@@ -14,6 +16,11 @@ from .service import SegmentSink
 
 class CognitiveEngine(ResilientCognitiveEngine):
     """Final V1 cognition surface: resilient runtime plus safe replay/certification."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        if not isinstance(self.router, ScopedModelRouter):
+            self.router = ScopedModelRouter(self.router)
 
     def state(self) -> dict[str, object]:
         state = super().state()
@@ -30,6 +37,46 @@ class CognitiveEngine(ResilientCognitiveEngine):
     ) -> CognitiveResponsePlan:
         self._persist_replay_snapshot(request)
         return await super().respond(request, on_segment=on_segment, fallback_text=fallback_text)
+
+    async def reflect(self, request: CognitiveRequest) -> CognitiveProposalBundle:
+        """Run the canonical reflection gates with provider failover.
+
+        Each attempt pins only the current asyncio context. Other turns continue
+        using the normal router concurrently. Provider output is still processed
+        by the single hardened reflection/gating path inherited from V1.
+        """
+        reflection_request = request.model_copy(
+            update={"metadata": {**request.metadata, "cognitive_mode": "reflection"}}
+        )
+        context = self.compiler.compile(reflection_request)
+        candidates = self.router.ranked_candidates(
+            TaskClass.REASONING,
+            privacy_scope=request.privacy_scope,
+            remote_processing_allowed=context.remote_processing_allowed,
+            require_structured_output=True,
+            estimated_input_tokens=max(1, len(context.model_dump_json()) // 4),
+            excluded_names=self._cooldown_names(),
+        )
+        if not candidates:
+            return CognitiveProposalBundle(reason_codes=["NO_STRUCTURED_REFLECTION_PROVIDER"])
+
+        last = CognitiveProposalBundle(reason_codes=["NO_STRUCTURED_REFLECTION_PROVIDER"])
+        for index, descriptor in enumerate(candidates):
+            with self.router.pin(descriptor.name):
+                bundle = await super().reflect(request)
+            last = bundle
+            failed = "REFLECTION_PROVIDER_FAILURE" in bundle.reason_codes
+            unavailable = "NO_STRUCTURED_REFLECTION_PROVIDER" in bundle.reason_codes
+            if not failed and not unavailable:
+                if index:
+                    bundle.reason_codes.append("REFLECTION_PROVIDER_FAILOVER_USED")
+                self._provider_succeeded(descriptor, None, None)
+                return bundle
+            if failed:
+                latest = self.store.latest_usage(descriptor.name, task_class=TaskClass.REASONING.value)
+                status_code = int(latest["status_code"]) if latest and latest.get("status_code") is not None else None
+                self._backoff(descriptor, status_code=status_code)
+        return last
 
     def interrupt_turn(
         self,
