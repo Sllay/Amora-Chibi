@@ -38,8 +38,8 @@ data class VoiceIdentity(
             tokensFileName = "tokens.txt",
             dataDirectoryName = "espeak-ng-data",
             downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_BR-faber-medium.tar.bz2",
-            // The sherpa-converted Faber model published by its maintainer.
-            expectedModelSha256 = "39fb6b580d6d40a3230b7a9d0851d282074537b9694892b5b3cd90ff87c6cbb3",
+            // Current sherpa tts-models Faber ONNX pinned during the V1 certification build.
+            expectedModelSha256 = "956b4f1733903891c4ba0973d0603b2a3d8c09c8432fb3bb5203a90a7431daca",
             baseSpeed = 1.0f,
             minSpeed = 0.88f,
             maxSpeed = 1.12f,
