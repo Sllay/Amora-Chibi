@@ -26,6 +26,34 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - name: Restore stable Amora dev signing key
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        env:
+          AMORA_DEBUG_KEYSTORE_B64: ${{ secrets.AMORA_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$AMORA_DEBUG_KEYSTORE_B64" ]; then
+            echo "::error::Repository secret AMORA_DEBUG_KEYSTORE_B64 is required for trusted Amora APK builds."
+            exit 1
+          fi
+          mkdir -p "$HOME/.android"
+          printf '%s' "$AMORA_DEBUG_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey >/dev/null
+      - name: Create ephemeral signing key for fork PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -v \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -dname "CN=Amora Untrusted PR Debug,O=AMORA IA,C=BR" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 30
       - name: Configure preinstalled Android SDK
         shell: bash
         run: |

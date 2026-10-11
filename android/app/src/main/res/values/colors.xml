@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="amora_black">#05030A</color>
+    <color name="amora_black_alt">#0B0712</color>
+    <color name="amora_surface">#15101F</color>
+    <color name="amora_surface_2">#21152F</color>
+    <color name="amora_purple_deep">#3A135B</color>
+    <color name="amora_purple">#7C3AED</color>
+    <color name="amora_pink">#E84AAE</color>
+    <color name="amora_neon">#D76BFF</color>
+    <color name="amora_white">#FFFFFF</color>
+    <color name="amora_text_muted">#B9AFC8</color>
+    <color name="amora_success">#79FFD0</color>
+    <color name="amora_error">#FF7A9E</color>
+</resources>

@@ -10,8 +10,12 @@ android {
         applicationId = "dev.amora.chibi"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.0.0-dev0"
+        versionCode = 6
+        versionName = "1.0.0-dev3"
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {

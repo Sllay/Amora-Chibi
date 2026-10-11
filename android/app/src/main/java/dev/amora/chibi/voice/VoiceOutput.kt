@@ -11,6 +11,8 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import dev.amora.chibi.core.CoreClient
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -27,6 +29,7 @@ class VoiceOutput(
     private val current = AtomicReference<CoreClient.SpeechUtterance?>(null)
     private val localProgressKnown = AtomicBoolean(false)
     private val lastSpokenEnd = AtomicInteger(0)
+    private val localInit = CountDownLatch(1)
     private val tts = TextToSpeech(context.applicationContext, this)
     private val coreClient = CoreClient(context.applicationContext)
     @Volatile private var activeTrack: AudioTrack? = null
@@ -56,6 +59,7 @@ class VoiceOutput(
 
     override fun onInit(status: Int) {
         ready.set(status == TextToSpeech.SUCCESS)
+        localInit.countDown()
         if (!ready.get()) Log.w(TAG, "Android TextToSpeech não inicializou: $status")
     }
 
@@ -77,11 +81,23 @@ class VoiceOutput(
                 RemoteResult.UNAVAILABLE, null -> Unit
             }
         }
-        if (!ready.get()) {
+        if (!awaitLocalReady()) {
+            Log.w(TAG, "TTS local indisponível após aguardar inicialização; fala será tentada novamente")
             current.compareAndSet(item, null)
             return false
         }
         return startLocal(item)
+    }
+
+    private fun awaitLocalReady(): Boolean {
+        if (ready.get()) return true
+        try {
+            localInit.await(LOCAL_TTS_INIT_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return false
+        }
+        return ready.get()
     }
 
     fun stopCurrent(): CoreClient.SpeechUtterance? {
@@ -153,9 +169,13 @@ class VoiceOutput(
         localProgressKnown.set(false)
         var track: AudioTrack? = null
         var anyAudio = false
+        var framesWritten = 0L
+        val decoder = Pcm16LeDecoder(REMOTE_PCM_GAIN)
         try {
             val result = coreClient.streamVoiceAudio(item.id) { chunk ->
                 if (stopRequested.get()) return@streamVoiceAudio false
+                val samples = decoder.decode(chunk)
+                if (samples.isEmpty()) return@streamVoiceAudio true
                 if (track == null) {
                     track = createTrack(item.volume).also {
                         activeTrack = it
@@ -163,14 +183,21 @@ class VoiceOutput(
                         onSpeakingChanged(true)
                     }
                 }
-                anyAudio = true
-                val written = track?.write(chunk, 0, chunk.size, AudioTrack.WRITE_BLOCKING) ?: -1
-                written >= 0 && !stopRequested.get()
+                val localTrack = track ?: return@streamVoiceAudio false
+                val written = writeAllSamples(localTrack, samples)
+                if (written > 0) {
+                    anyAudio = true
+                    framesWritten += written.toLong()
+                }
+                written == samples.size && !stopRequested.get()
+            }
+            if (decoder.hasPendingByte()) {
+                Log.w(TAG, "Gemini TTS terminou com byte PCM16 incompleto; descartando 1 byte residual")
             }
             if (!result.usedRemote) return RemoteResult.UNAVAILABLE
             if (stopRequested.get()) return RemoteResult.INTERRUPTED
             if (!result.completed) return if (anyAudio) RemoteResult.PARTIAL_FAILURE else RemoteResult.UNAVAILABLE
-            waitForPlayback(track, result.bytesReceived)
+            waitForPlayback(track, framesWritten)
             return if (stopRequested.get()) RemoteResult.INTERRUPTED else RemoteResult.COMPLETED
         } finally {
             val localTrack = track
@@ -182,18 +209,43 @@ class VoiceOutput(
         }
     }
 
+    private fun writeAllSamples(track: AudioTrack, samples: ShortArray): Int {
+        var offset = 0
+        while (offset < samples.size && !stopRequested.get()) {
+            val written = track.write(samples, offset, samples.size - offset, AudioTrack.WRITE_BLOCKING)
+            if (written <= 0) {
+                Log.w(TAG, "AudioTrack recusou PCM remoto: written=$written offset=$offset total=${samples.size}")
+                break
+            }
+            offset += written
+        }
+        return offset
+    }
+
     private fun createTrack(volume: Float): AudioTrack {
         val sampleRate = 24_000
         val minBuffer = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
-        val format = AudioFormat.Builder().setSampleRate(sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build()
-        return AudioTrack(attributes, format, maxOf(minBuffer, sampleRate), AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE)
-            .also { it.setVolume(volume.coerceIn(0F, 1F)) }
+        val attributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        val format = AudioFormat.Builder()
+            .setSampleRate(sampleRate)
+            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .build()
+        return AudioTrack(
+            attributes,
+            format,
+            maxOf(minBuffer, sampleRate * 2),
+            AudioTrack.MODE_STREAM,
+            AudioManager.AUDIO_SESSION_ID_GENERATE,
+        ).also { it.setVolume(volume.coerceIn(0F, 1F)) }
     }
 
-    private fun waitForPlayback(track: AudioTrack?, bytesReceived: Long) {
-        if (track == null || bytesReceived <= 0) return
-        val targetFrames = (bytesReceived / 2L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    private fun waitForPlayback(track: AudioTrack?, framesWritten: Long) {
+        if (track == null || framesWritten <= 0) return
+        val targetFrames = framesWritten.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         val deadline = System.nanoTime() + 8_000_000_000L
         while (!stopRequested.get() && System.nanoTime() < deadline) {
             if (track.playbackHeadPosition >= targetFrames) return
@@ -222,6 +274,7 @@ class VoiceOutput(
     override fun close() {
         stopRequested.set(true)
         current.getAndSet(null)
+        localInit.countDown()
         runCatching { activeTrack?.stop() }
         runCatching { activeTrack?.release() }
         activeTrack = null
@@ -234,6 +287,52 @@ class VoiceOutput(
         onSpeakingChanged(false)
     }
 
+    private class Pcm16LeDecoder(private val gain: Float) {
+        private var pendingLowByte: Int? = null
+
+        fun decode(chunk: ByteArray): ShortArray {
+            if (chunk.isEmpty()) return ShortArray(0)
+            val totalBytes = chunk.size + if (pendingLowByte != null) 1 else 0
+            val sampleCount = totalBytes / 2
+            if (sampleCount == 0) {
+                pendingLowByte = chunk[0].toInt() and 0xFF
+                return ShortArray(0)
+            }
+
+            val output = ShortArray(sampleCount)
+            var chunkIndex = 0
+            var sampleIndex = 0
+
+            pendingLowByte?.let { low ->
+                val high = chunk[chunkIndex++].toInt() and 0xFF
+                output[sampleIndex++] = amplify((high shl 8) or low)
+                pendingLowByte = null
+            }
+
+            while (sampleIndex < sampleCount) {
+                val low = chunk[chunkIndex++].toInt() and 0xFF
+                val high = chunk[chunkIndex++].toInt() and 0xFF
+                output[sampleIndex++] = amplify((high shl 8) or low)
+            }
+
+            if (chunkIndex < chunk.size) {
+                pendingLowByte = chunk[chunkIndex].toInt() and 0xFF
+            }
+            return output
+        }
+
+        fun hasPendingByte(): Boolean = pendingLowByte != null
+
+        private fun amplify(raw: Int): Short {
+            val signed = if ((raw and 0x8000) != 0) raw - 0x10000 else raw
+            return (signed * gain).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
+    }
+
     private enum class RemoteResult { COMPLETED, UNAVAILABLE, INTERRUPTED, PARTIAL_FAILURE }
-    companion object { private const val TAG = "AmoraVoice" }
+    companion object {
+        private const val LOCAL_TTS_INIT_WAIT_MS = 2_500L
+        private const val REMOTE_PCM_GAIN = 1.45F
+        private const val TAG = "AmoraVoice"
+    }
 }

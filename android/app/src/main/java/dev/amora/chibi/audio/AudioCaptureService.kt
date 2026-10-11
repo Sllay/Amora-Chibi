@@ -14,6 +14,7 @@ import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.os.IBinder
 import android.util.Log
+import dev.amora.chibi.R
 import dev.amora.chibi.core.CoreClient
 import dev.amora.chibi.voice.VoiceOutput
 import java.util.ArrayDeque
@@ -286,9 +287,9 @@ class AudioCaptureService : Service() {
     }
 
     private fun notification(text: String): Notification = Notification.Builder(this, CHANNEL_ID)
-        .setContentTitle("Amora Chibi")
+        .setContentTitle("Amora")
         .setContentText(text.take(120))
-        .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+        .setSmallIcon(R.drawable.ic_amora_notification)
         .setOngoing(true)
         .build()
 
