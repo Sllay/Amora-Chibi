@@ -1,66 +1,44 @@
 package dev.amora.chibi.voice
 
 import android.content.Context
-import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioManager
-import android.media.AudioTrack
-import android.os.Bundle
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import dev.amora.chibi.core.CoreClient
-import java.util.Locale
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
+/**
+ * Authoritative V1 voice output.
+ *
+ * The provisional neural identity is bundled with the APK. Android TextToSpeech
+ * is intentionally not used as an automatic fallback here: a hidden fallback
+ * changes Amora's identity and masks physical integration failures.
+ */
 class VoiceOutput(
     context: Context,
     private val onSpeakingChanged: (Boolean) -> Unit,
     private val onFinished: (String, Outcome, Int?) -> Unit,
-) : TextToSpeech.OnInitListener, AutoCloseable {
+    private val onVoiceStatusChanged: (VoiceDiagnostics.Snapshot) -> Unit = {},
+) : AutoCloseable {
     enum class Outcome { SPOKEN, FAILED, INTERRUPTED, PARTIAL }
 
-    private val ready = AtomicBoolean(false)
+    private val identity = VoiceIdentity.AMORA_V1_PROVISIONAL
+    private val diagnostics = VoiceDiagnostics(context.applicationContext)
     private val stopRequested = AtomicBoolean(false)
     private val current = AtomicReference<CoreClient.SpeechUtterance?>(null)
-    private val localProgressKnown = AtomicBoolean(false)
-    private val lastSpokenEnd = AtomicInteger(0)
-    private val localInit = CountDownLatch(1)
-    private val tts = TextToSpeech(context.applicationContext, this)
-    private val coreClient = CoreClient(context.applicationContext)
-    @Volatile private var activeTrack: AudioTrack? = null
-    @Volatile private var selectedLocalVoiceName: String? = null
-    @Volatile private var selectedLocalVoiceLanguage: String? = null
+    private val localVoice = LocalVoiceEngine(
+        context = context.applicationContext,
+        identity = identity,
+        diagnostics = diagnostics,
+        onStatusChanged = onVoiceStatusChanged,
+    )
 
     init {
-        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String) { onSpeakingChanged(true) }
-            override fun onDone(utteranceId: String) { finishLocal(utteranceId, Outcome.SPOKEN) }
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String) { finishLocal(utteranceId, Outcome.FAILED) }
-            override fun onError(utteranceId: String, errorCode: Int) {
-                Log.w(TAG, "TTS local falhou id=$utteranceId code=$errorCode")
-                finishLocal(utteranceId, Outcome.FAILED)
-            }
-            override fun onStop(utteranceId: String, interrupted: Boolean) {
-                finishLocal(utteranceId, if (interrupted) Outcome.INTERRUPTED else Outcome.FAILED)
-            }
-            override fun onRangeStart(utteranceId: String, start: Int, end: Int, frame: Int) {
-                val item = current.get() ?: return
-                if (item.id != utteranceId || !localProgressKnown.get()) return
-                lastSpokenEnd.accumulateAndGet(end.coerceIn(0, item.text.length), ::maxOf)
-            }
-        })
-    }
-
-    override fun onInit(status: Int) {
-        ready.set(status == TextToSpeech.SUCCESS)
-        localInit.countDown()
-        if (!ready.get()) Log.w(TAG, "Android TextToSpeech não inicializou: $status")
+        if (localVoice.assetsAvailable()) {
+            diagnostics.record(VoiceDiagnostics.STAGE_ASSETS_READY, "voz provisória empacotada no APK")
+        } else {
+            diagnostics.record(VoiceDiagnostics.STAGE_FAILED, "assets da voz provisória não estão no APK")
+        }
+        onVoiceStatusChanged(diagnostics.snapshot())
     }
 
     fun currentUtterance(): CoreClient.SpeechUtterance? = current.get()
@@ -68,271 +46,49 @@ class VoiceOutput(
     fun speak(item: CoreClient.SpeechUtterance): Boolean {
         if (!current.compareAndSet(null, item)) return false
         stopRequested.set(false)
-        localProgressKnown.set(false)
-        lastSpokenEnd.set(0)
-        if (item.remoteTtsAllowed) {
-            val remote = runCatching { playRemote(item) }
-                .onFailure { Log.w(TAG, "TTS expressivo remoto falhou ${item.id}", it) }
-                .getOrNull()
-            when (remote) {
-                RemoteResult.COMPLETED -> { finish(item, Outcome.SPOKEN); return true }
-                RemoteResult.INTERRUPTED -> { finish(item, Outcome.INTERRUPTED); return true }
-                RemoteResult.PARTIAL_FAILURE -> { finish(item, Outcome.PARTIAL); return true }
-                RemoteResult.UNAVAILABLE, null -> Unit
+
+        val result = localVoice.play(
+            text = item.text,
+            requestedRate = item.rate,
+            volume = item.volume,
+            stopRequested = stopRequested,
+            onStarted = { onSpeakingChanged(true) },
+        )
+        when (result) {
+            LocalVoiceEngine.PlayResult.COMPLETED -> finish(item, Outcome.SPOKEN)
+            LocalVoiceEngine.PlayResult.INTERRUPTED -> finish(item, Outcome.INTERRUPTED)
+            LocalVoiceEngine.PlayResult.UNAVAILABLE,
+            LocalVoiceEngine.PlayResult.FAILED -> {
+                Log.e(TAG, "Voz neural local indisponível: ${localVoice.lastFailure()}")
+                finish(item, Outcome.FAILED)
             }
         }
-        if (!awaitLocalReady()) {
-            Log.w(TAG, "TTS local indisponível após aguardar inicialização; fala será tentada novamente")
-            current.compareAndSet(item, null)
-            return false
-        }
-        return startLocal(item)
-    }
-
-    private fun awaitLocalReady(): Boolean {
-        if (ready.get()) return true
-        try {
-            localInit.await(LOCAL_TTS_INIT_WAIT_MS, TimeUnit.MILLISECONDS)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            return false
-        }
-        return ready.get()
+        return true
     }
 
     fun stopCurrent(): CoreClient.SpeechUtterance? {
         val item = current.get() ?: return null
         stopRequested.set(true)
-        runCatching { activeTrack?.pause() }
-        runCatching { activeTrack?.flush() }
-        runCatching { activeTrack?.stop() }
-        runCatching { tts.stop() }
+        localVoice.stop()
         finish(item, Outcome.INTERRUPTED)
         return item
     }
 
-    private fun startLocal(item: CoreClient.SpeechUtterance): Boolean {
-        localProgressKnown.set(true)
-        lastSpokenEnd.set(0)
-        val locale = Locale.forLanguageTag(item.locale)
-        val languageResult = tts.setLanguage(locale)
-        if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
-            Log.w(TAG, "Voz/locale não suportado: ${item.locale}")
-        }
-        selectBestLocalVoice(locale)
-        tts.setSpeechRate(item.rate.coerceIn(0.72F, 1.35F))
-        tts.setPitch(item.pitch.coerceIn(0.80F, 1.28F))
-        val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, item.volume.coerceIn(0F, 1F)) }
-        val result = tts.speak(item.text, TextToSpeech.QUEUE_FLUSH, params, item.id)
-        if (result == TextToSpeech.SUCCESS) {
-            onSpeakingChanged(true)
-            return true
-        }
-        current.compareAndSet(item, null)
-        localProgressKnown.set(false)
-        return false
-    }
-
-    private fun selectBestLocalVoice(locale: Locale) {
-        val voices = runCatching { tts.voices }.getOrNull().orEmpty()
-        val cachedName = selectedLocalVoiceName
-        val cachedLanguage = selectedLocalVoiceLanguage
-        if (cachedName != null && cachedLanguage == locale.language) {
-            val cached = voices.firstOrNull { it.name == cachedName }
-            if (cached != null) {
-                runCatching { tts.voice = cached }
-                return
-            }
-        }
-
-        val languageMatches = voices.filter { it.locale.language == locale.language }
-        val candidates = if (languageMatches.isNotEmpty()) languageMatches else voices.toList()
-        val chosen = candidates.sortedWith(
-            compareByDescending<android.speech.tts.Voice> { it.locale.country.equals(locale.country, ignoreCase = true) }
-                .thenByDescending { !it.isNetworkConnectionRequired }
-                .thenByDescending { it.quality }
-                .thenBy { it.latency }
-                .thenBy { it.name }
-        ).firstOrNull()
-        if (chosen != null) {
-            runCatching { tts.voice = chosen }
-                .onSuccess {
-                    selectedLocalVoiceName = chosen.name
-                    selectedLocalVoiceLanguage = locale.language
-                    Log.i(TAG, "Voz local fixada: ${chosen.name} locale=${chosen.locale}")
-                }
-                .onFailure { Log.w(TAG, "Não foi possível selecionar voz local ${chosen.name}", it) }
-        }
-    }
-
-    private fun playRemote(item: CoreClient.SpeechUtterance): RemoteResult {
-        localProgressKnown.set(false)
-        var track: AudioTrack? = null
-        var anyAudio = false
-        var framesWritten = 0L
-        val decoder = Pcm16LeDecoder(REMOTE_PCM_GAIN)
-        try {
-            val result = coreClient.streamVoiceAudio(item.id) { chunk ->
-                if (stopRequested.get()) return@streamVoiceAudio false
-                val samples = decoder.decode(chunk)
-                if (samples.isEmpty()) return@streamVoiceAudio true
-                if (track == null) {
-                    track = createTrack(item.volume).also {
-                        activeTrack = it
-                        it.play()
-                        onSpeakingChanged(true)
-                    }
-                }
-                val localTrack = track ?: return@streamVoiceAudio false
-                val written = writeAllSamples(localTrack, samples)
-                if (written > 0) {
-                    anyAudio = true
-                    framesWritten += written.toLong()
-                }
-                written == samples.size && !stopRequested.get()
-            }
-            if (decoder.hasPendingByte()) {
-                Log.w(TAG, "Gemini TTS terminou com byte PCM16 incompleto; descartando 1 byte residual")
-            }
-            if (!result.usedRemote) return RemoteResult.UNAVAILABLE
-            if (stopRequested.get()) return RemoteResult.INTERRUPTED
-            if (!result.completed) return if (anyAudio) RemoteResult.PARTIAL_FAILURE else RemoteResult.UNAVAILABLE
-            waitForPlayback(track, framesWritten)
-            return if (stopRequested.get()) RemoteResult.INTERRUPTED else RemoteResult.COMPLETED
-        } finally {
-            val localTrack = track
-            activeTrack = null
-            if (localTrack != null) {
-                runCatching { localTrack.stop() }
-                runCatching { localTrack.release() }
-            }
-        }
-    }
-
-    private fun writeAllSamples(track: AudioTrack, samples: ShortArray): Int {
-        var offset = 0
-        while (offset < samples.size && !stopRequested.get()) {
-            val written = track.write(samples, offset, samples.size - offset, AudioTrack.WRITE_BLOCKING)
-            if (written <= 0) {
-                Log.w(TAG, "AudioTrack recusou PCM remoto: written=$written offset=$offset total=${samples.size}")
-                break
-            }
-            offset += written
-        }
-        return offset
-    }
-
-    private fun createTrack(volume: Float): AudioTrack {
-        val sampleRate = 24_000
-        val minBuffer = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val attributes = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-            .build()
-        val format = AudioFormat.Builder()
-            .setSampleRate(sampleRate)
-            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .build()
-        return AudioTrack(
-            attributes,
-            format,
-            maxOf(minBuffer, sampleRate * 2),
-            AudioTrack.MODE_STREAM,
-            AudioManager.AUDIO_SESSION_ID_GENERATE,
-        ).also { it.setVolume(volume.coerceIn(0F, 1F)) }
-    }
-
-    private fun waitForPlayback(track: AudioTrack?, framesWritten: Long) {
-        if (track == null || framesWritten <= 0) return
-        val targetFrames = framesWritten.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-        val deadline = System.nanoTime() + 8_000_000_000L
-        while (!stopRequested.get() && System.nanoTime() < deadline) {
-            if (track.playbackHeadPosition >= targetFrames) return
-            try { Thread.sleep(8) } catch (_: InterruptedException) { Thread.currentThread().interrupt(); return }
-        }
-    }
-
-    private fun finishLocal(utteranceId: String, outcome: Outcome) {
-        val item = current.get() ?: return
-        if (item.id != utteranceId) return
-        finish(item, outcome)
-    }
-
     private fun finish(item: CoreClient.SpeechUtterance, outcome: Outcome) {
         if (!current.compareAndSet(item, null)) return
-        val spokenChars = when (outcome) {
-            Outcome.SPOKEN -> item.text.length
-            Outcome.INTERRUPTED -> if (localProgressKnown.get()) lastSpokenEnd.get().coerceIn(0, item.text.length) else null
-            Outcome.FAILED, Outcome.PARTIAL -> null
-        }
-        localProgressKnown.set(false)
         onSpeakingChanged(false)
+        val spokenChars = if (outcome == Outcome.SPOKEN) item.text.length else null
         onFinished(item.id, outcome, spokenChars)
     }
 
     override fun close() {
         stopRequested.set(true)
         current.getAndSet(null)
-        localInit.countDown()
-        runCatching { activeTrack?.stop() }
-        runCatching { activeTrack?.release() }
-        activeTrack = null
-        localProgressKnown.set(false)
-        selectedLocalVoiceName = null
-        selectedLocalVoiceLanguage = null
-        ready.set(false)
-        runCatching { tts.stop() }
-        runCatching { tts.shutdown() }
+        localVoice.close()
         onSpeakingChanged(false)
     }
 
-    private class Pcm16LeDecoder(private val gain: Float) {
-        private var pendingLowByte: Int? = null
-
-        fun decode(chunk: ByteArray): ShortArray {
-            if (chunk.isEmpty()) return ShortArray(0)
-            val totalBytes = chunk.size + if (pendingLowByte != null) 1 else 0
-            val sampleCount = totalBytes / 2
-            if (sampleCount == 0) {
-                pendingLowByte = chunk[0].toInt() and 0xFF
-                return ShortArray(0)
-            }
-
-            val output = ShortArray(sampleCount)
-            var chunkIndex = 0
-            var sampleIndex = 0
-
-            pendingLowByte?.let { low ->
-                val high = chunk[chunkIndex++].toInt() and 0xFF
-                output[sampleIndex++] = amplify((high shl 8) or low)
-                pendingLowByte = null
-            }
-
-            while (sampleIndex < sampleCount) {
-                val low = chunk[chunkIndex++].toInt() and 0xFF
-                val high = chunk[chunkIndex++].toInt() and 0xFF
-                output[sampleIndex++] = amplify((high shl 8) or low)
-            }
-
-            if (chunkIndex < chunk.size) {
-                pendingLowByte = chunk[chunkIndex].toInt() and 0xFF
-            }
-            return output
-        }
-
-        fun hasPendingByte(): Boolean = pendingLowByte != null
-
-        private fun amplify(raw: Int): Short {
-            val signed = if ((raw and 0x8000) != 0) raw - 0x10000 else raw
-            return (signed * gain).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
-        }
-    }
-
-    private enum class RemoteResult { COMPLETED, UNAVAILABLE, INTERRUPTED, PARTIAL_FAILURE }
     companion object {
-        private const val LOCAL_TTS_INIT_WAIT_MS = 2_500L
-        private const val REMOTE_PCM_GAIN = 1.45F
         private const val TAG = "AmoraVoice"
     }
 }

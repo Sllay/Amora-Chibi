@@ -20,22 +20,32 @@ import android.widget.ScrollView
 import android.widget.TextView
 import dev.amora.chibi.audio.AudioCaptureService
 import dev.amora.chibi.core.CoreClient
+import dev.amora.chibi.voice.VoiceDiagnostics
 
 class MainActivity : Activity() {
     private lateinit var statusView: TextView
+    private lateinit var voiceDiagnosticView: TextView
     private lateinit var codeInput: EditText
     private lateinit var pairingContainer: LinearLayout
     private lateinit var pairingToggleButton: Button
     private lateinit var remoteCognitionCheck: CheckBox
     private lateinit var client: CoreClient
+    private lateinit var voiceDiagnostics: VoiceDiagnostics
     private var pairingExpanded = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         client = CoreClient(this)
+        voiceDiagnostics = VoiceDiagnostics(this)
         setContentView(buildUi())
         refreshPairingUi()
         refreshStatus()
+        refreshVoiceDiagnostics()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::voiceDiagnosticView.isInitialized) refreshVoiceDiagnostics()
     }
 
     private fun buildUi(): ScrollView {
@@ -140,8 +150,20 @@ class MainActivity : Activity() {
     }
 
     private fun buildVoiceCard(): LinearLayout = card().apply {
-        addView(sectionLabel("CONVERSA"))
-        addView(bodyText("VAD local, interrupção por voz e entrega cognitiva conectados ao Core."))
+        addView(sectionLabel("CONVERSA / VOZ LOCAL"))
+        addView(bodyText("VAD local, interrupção por voz e sherpa-onnx offline. Nesta build a voz Faber provisória vem empacotada no APK; não existe fallback automático para a voz do Google."))
+
+        voiceDiagnosticView = TextView(this@MainActivity).also {
+            it.textSize = 13F
+            it.setTextColor(getColor(R.color.amora_white))
+            it.setPadding(0, dp(12), 0, dp(4))
+            it.setLineSpacing(0F, 1.12F)
+            addView(it)
+        }
+
+        addView(actionButton("Atualizar diagnóstico da voz", primary = false).apply {
+            setOnClickListener { refreshVoiceDiagnostics() }
+        }, sectionParams(topDp = 8))
         addView(actionButton("Começar a ouvir e falar", primary = true).apply {
             setOnClickListener { startListening() }
         }, sectionParams(topDp = 12))
@@ -190,9 +212,7 @@ class MainActivity : Activity() {
                         setStatus("Pareada com o Core • credencial segura salva neste app. ✦")
                     }
                 }
-                .onFailure { error ->
-                    runOnUiThread { setStatus("Falha no pareamento: ${error.message}") }
-                }
+                .onFailure { error -> runOnUiThread { setStatus("Falha no pareamento: ${error.message}") } }
         }.start()
     }
 
@@ -203,6 +223,10 @@ class MainActivity : Activity() {
                 .onSuccess { health -> runOnUiThread { setStatus("Core online • $health ✦") } }
                 .onFailure { error -> runOnUiThread { setStatus("Core indisponível: ${error.message}") } }
         }.start()
+    }
+
+    private fun refreshVoiceDiagnostics() {
+        voiceDiagnosticView.text = voiceDiagnostics.describe()
     }
 
     private fun startListening() {
@@ -221,12 +245,14 @@ class MainActivity : Activity() {
         startForegroundService(Intent(this, AudioCaptureService::class.java))
         val mode = if (client.isRemoteCognitionAllowed()) "remota permitida" else "local/fallback"
         setStatus("Ouvindo • VAD local • cognição $mode ✦")
+        refreshVoiceDiagnostics()
     }
 
     private fun stopListening() {
         val intent = Intent(this, AudioCaptureService::class.java).setAction(AudioCaptureService.ACTION_STOP)
         startService(intent)
         setStatus("Voz e microfone parados.")
+        refreshVoiceDiagnostics()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
