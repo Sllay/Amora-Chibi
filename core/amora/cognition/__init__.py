@@ -1,5 +1,6 @@
 from .context import ProviderPrivacyGate
 from .context_v1 import ContextCompiler
+from .mesh_providers import CloudflareCognitiveProvider, OpenRouterCognitiveProvider
 from .models import (
     CognitiveContext,
     CognitiveJournalEntry,
@@ -23,6 +24,7 @@ from .store_v1 import CognitiveStore
 __all__ = [
     "ActionSuggestion",
     "BeliefHypothesisProposal",
+    "CloudflareCognitiveProvider",
     "CognitiveContext",
     "CognitiveEngine",
     "CognitiveJournalEntry",
@@ -41,6 +43,7 @@ __all__ = [
     "MemoryProposal",
     "MessageSource",
     "MessageStatus",
+    "OpenRouterCognitiveProvider",
     "ProviderDelta",
     "ProviderError",
     "ProviderPrivacyGate",
