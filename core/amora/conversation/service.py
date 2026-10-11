@@ -121,7 +121,9 @@ class ConversationEngine:
         remote_processing_allowed: bool = False,
         session_id: str | None = None,
         stt_confidence: float | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> tuple[TurnDecision, SpeechUtterance | None]:
+        turn_metadata = dict(metadata or {})
         direct = addressee_id == "ENTITY_AMORA"
         event_id = UUID(str(source_event_id)) if source_event_id else None
         signal = TurnSignal(
@@ -155,6 +157,7 @@ class ConversationEngine:
                 privacy_scope=privacy_scope,
                 remote_processing_allowed=remote_processing_allowed,
                 metadata={
+                    **turn_metadata,
                     "stt_confidence": stt_confidence,
                     "turn_state": decision.state.value,
                     "turn_reason_codes": decision.reason_codes,
@@ -184,6 +187,7 @@ class ConversationEngine:
                     source_event_id=event_id,
                     dedupe_key=f"speech:cognitive:{segment.turn_id}:{segment.ordinal}",
                     metadata={
+                        **_execution_metadata(turn_metadata),
                         "turn_state": decision.state.value,
                         "cognitive_turn_id": str(segment.turn_id),
                         "cognitive_segment_id": str(segment.id),
@@ -218,7 +222,11 @@ class ConversationEngine:
             privacy_scope=privacy_scope,
             source_event_id=event_id,
             dedupe_key=f"speech:utterance:{event_id}" if event_id else None,
-            metadata={"turn_state": decision.state.value, "remote_provider_used": remote_processing_allowed and self.dialogue.name != "none"},
+            metadata={
+                **_execution_metadata(turn_metadata),
+                "turn_state": decision.state.value,
+                "remote_provider_used": remote_processing_allowed and self.dialogue.name != "none",
+            },
             style=self.composer.style_for_mood(mood),
         )
         return decision, utterance
@@ -364,3 +372,8 @@ class ConversationEngine:
                 )
             )
         return item, cancelled
+
+
+def _execution_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    keys = ("test_mode", "memory_consolidation", "relationship_learning", "emotion_persistence")
+    return {key: metadata[key] for key in keys if key in metadata}
