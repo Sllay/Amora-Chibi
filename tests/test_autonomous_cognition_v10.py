@@ -41,8 +41,6 @@ class AutonomousProvider:
             moves.append({"kind": "ask_followup", "text": "Quer me mostrar o que tá fazendo?"})
             closing = "question"
         payload = {"moves": moves, "closing": closing}
-        # The fixture itself proves it is supplying a frame that satisfies the
-        # exact same local validator used by production before returning it.
         RealizationValidator.parse_and_validate(context, payload)
         return {
             **payload,
@@ -79,8 +77,9 @@ async def test_autonomous_semantic_action_uses_canonical_cognition_when_opted_in
         item = await core.conversation.handle_semantic_event(_event(core))
         assert item is not None
         assert provider.seen_autonomous_context is True
-        realization = core.cognition.state()["last_realization"]
-        assert realization is not None
+        state = core.cognition.state()
+        realization = state["last_realization"]
+        assert realization is not None, state["last_realization_rejection"]
         assert realization["provider"] == "autonomy-provider"
         assert item.text == "Papis, pensei em você."
         assert item.metadata["autonomous"] is True
