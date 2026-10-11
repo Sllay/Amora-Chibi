@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from amora.app import AmoraCore
+from amora.cognition.realization import RealizationValidator
 from amora.events import AmoraEvent, PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.time import SimulatedClock
@@ -39,9 +40,12 @@ class AutonomousProvider:
         if bool(context.dialogue_plan.get("ask_followup")) and "ask_followup" in allowed:
             moves.append({"kind": "ask_followup", "text": "Quer me mostrar o que tá fazendo?"})
             closing = "question"
+        payload = {"moves": moves, "closing": closing}
+        # The fixture itself proves it is supplying a frame that satisfies the
+        # exact same local validator used by production before returning it.
+        RealizationValidator.parse_and_validate(context, payload)
         return {
-            "moves": moves,
-            "closing": closing,
+            **payload,
             "_usage": {"input_tokens": 35, "output_tokens": 15, "latency_ms": 7.0, "status_code": 200},
         }
 
@@ -75,6 +79,9 @@ async def test_autonomous_semantic_action_uses_canonical_cognition_when_opted_in
         item = await core.conversation.handle_semantic_event(_event(core))
         assert item is not None
         assert provider.seen_autonomous_context is True
+        realization = core.cognition.state()["last_realization"]
+        assert realization is not None
+        assert realization["provider"] == "autonomy-provider"
         assert item.text == "Papis, pensei em você."
         assert item.metadata["autonomous"] is True
         assert item.metadata["cognitive_turn_id"]
