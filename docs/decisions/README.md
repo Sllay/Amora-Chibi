@@ -56,13 +56,15 @@ Superseded by: ADR-NNNN / none
 ...
 ```
 
-## Índice inicial
+## Índice
 
 - `ADR-0001-document-authority-and-versioning.md` — canon no GitHub + ADR + roadmap; documentos antigos não são especificação atual.
 - `ADR-0002-local-voice-as-normal-path.md` — voz normal local pt-BR; Gemini TTS removido do caminho normal.
 - `ADR-0003-local-dialogue-semantic-authority.md` — Core decide semântica social; provider realiza linguagem.
 - `ADR-0004-zero-cost-provider-mesh.md` — objetivo R$ 0, Groq/Cloudflare, OpenRouter especialista/último recurso.
 - `ADR-0005-roadmap-split-v09-v11-v12.md` — escopo antigo V0.9/V0.95 dividido entre V1.1 e V1.2.
+- `ADR-0006-structured-dialogue-realization.md` — `DialoguePlan` vira `RealizationFrame` estruturado e validado; prompt/blacklist não são enforcement suficiente.
+- `ADR-0007-emotion-loop-and-test-isolation.md` — conversa/ações alimentam Emotion Engine em loop fechado; testes podem executar sem contaminar memória/relação/mood persistente.
 
 ## Regra de uso
 
