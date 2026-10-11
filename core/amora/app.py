@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,7 +9,15 @@ from amora.actions import ActionEngine, ActionStore
 from amora.audio import EnergyVad, GroqWhisperSTT, SessionSpeakerTracker
 from amora.autonomy import AutonomyEngine, AutonomyStore
 from amora.avatar import AvatarEngine, AvatarStore
-from amora.cognition import CognitiveEngine, CognitiveStore, ContextCompiler, GeminiCognitiveProvider, GroqCognitiveProvider
+from amora.cognition import (
+    CloudflareCognitiveProvider,
+    CognitiveEngine,
+    CognitiveStore,
+    ContextCompiler,
+    GeminiCognitiveProvider,
+    GroqCognitiveProvider,
+    OpenRouterCognitiveProvider,
+)
 from amora.conversation import ConversationEngine, ConversationStore
 from amora.emotion import EmotionEngine, EmotionStore
 from amora.events import AsyncEventBus
@@ -31,6 +40,9 @@ from amora.world import (
     WorldModelService,
     WorldStore,
 )
+
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 @dataclass(slots=True)
@@ -143,15 +155,28 @@ class AmoraCore:
             active_clock,
             events,
         )
+
         groq_cognition = GroqCognitiveProvider(secrets)
         if groq_cognition.descriptor.available:
             cognition.register_provider(groq_cognition)
-        # Gemini is a real substitute, not a child of Groq. If Groq registration
-        # already auto-discovered it, avoid duplicate registration; otherwise a
-        # Gemini-only installation remains fully usable for remote cognition.
+
+        cloudflare_cognition = CloudflareCognitiveProvider(secrets)
+        cloudflare_zero_cost_confirmed = _env_true("AMORA_CLOUDFLARE_ZERO_COST_CONFIRMED")
+        if cloudflare_cognition.descriptor.available and cloudflare_zero_cost_confirmed:
+            cognition.register_provider(cloudflare_cognition)
+
+        # Gemini remains an independent fallback. Groq registration may already
+        # auto-discover it for backwards compatibility, so avoid duplication.
         gemini_cognition = GeminiCognitiveProvider(secrets)
         if gemini_cognition.descriptor.available and cognition.router.descriptor("gemini") is None:
             cognition.register_provider(gemini_cognition)
+
+        # OpenRouter is intentionally registered only when the selected route is
+        # explicitly free (`openrouter/free` or a :free model).
+        openrouter_cognition = OpenRouterCognitiveProvider(secrets)
+        if openrouter_cognition.descriptor.available:
+            cognition.register_provider(openrouter_cognition)
+
         events.subscribe_bootstrap("cognition.action_suggested", autonomy.handle_cognitive_suggestion)
         conversation = ConversationEngine(
             ConversationStore(paths.database, active_clock),
@@ -229,6 +254,11 @@ class AmoraCore:
         conversation = self.conversation.state()
         cognition = self.cognition.state()
         avatar = self.avatar.health()
+        cloudflare_configured = (
+            self.secrets.get("CLOUDFLARE_API_TOKEN") is not None
+            and self.secrets.get("CLOUDFLARE_ACCOUNT_ID") is not None
+        )
+        openrouter_provider = self.models.descriptor("openrouter")
         return {
             "status": "ok" if integrity == "ok" else "degraded",
             "version": __version__,
@@ -268,11 +298,20 @@ class AmoraCore:
             "active_sessions": self.database.active_session_count(self.clock.now()),
             "primary_person": bk.id if bk else None,
             "model_providers_registered": self.models.provider_count,
+            "model_provider_names": [item.name for item in self.models.descriptors()],
             "social_participant_count": len(self.social.scene.participants),
             "social_active_addressee": self.social.scene.active_addressee,
             "groq_stt_configured": self.secrets.get("GROQ_API_KEY") is not None,
             "groq_cognition_configured": self.secrets.get("GROQ_API_KEY") is not None,
+            "cloudflare_cognition_configured": cloudflare_configured,
+            "cloudflare_zero_cost_confirmed": _env_true("AMORA_CLOUDFLARE_ZERO_COST_CONFIRMED"),
+            "cloudflare_cognition_registered": self.models.descriptor("cloudflare") is not None,
             "gemini_cognition_configured": self.secrets.get("GEMINI_API_KEY") is not None,
+            "openrouter_cognition_configured": self.secrets.get("OPENROUTER_API_KEY") is not None,
+            "openrouter_zero_cost_route": bool(
+                openrouter_provider and openrouter_provider.metadata.get("zero_cost_route") is True
+            ),
+            "openrouter_cognition_registered": openrouter_provider is not None,
         }
 
     def create_backup(self, name: str | None = None) -> Path:
@@ -300,3 +339,7 @@ class AmoraCore:
         self.world_store.close()
         self.memory.close()
         self.database.close()
+
+
+def _env_true(name: str) -> bool:
+    return os.getenv(name, "0").strip().casefold() in _TRUE_VALUES
