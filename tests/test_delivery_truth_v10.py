@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from amora.app import AmoraCore
-from amora.cognition import MessageStatus, ProviderDelta
+from amora.cognition import MessageStatus
 from amora.events import PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.time import SimulatedClock
@@ -23,14 +23,24 @@ class SpeechProvider:
             cost_score=0.0,
             provider_class=ProviderClass.REMOTE_EPHEMERAL,
             allowed_privacy_scopes=frozenset({PrivacyScope.PERSONAL}),
-            supports_streaming=True,
+            supports_streaming=False,
+            supports_structured_output=True,
             context_window_tokens=100_000,
             priority=80,
         )
 
-    async def stream(self, context):
-        yield ProviderDelta(text="Primeira frase falada com carinho. Segunda frase fica na fila.")
-        yield ProviderDelta(done=True, input_tokens=10, output_tokens=12, status_code=200)
+    async def realize(self, context):
+        allowed = list(context.dialogue_plan["response_moves"])
+        return {
+            "moves": [
+                {
+                    "kind": allowed[0],
+                    "text": "Primeira frase falada com carinho. Segunda frase fica na fila.",
+                }
+            ],
+            "closing": "statement",
+            "_usage": {"input_tokens": 10, "output_tokens": 12, "status_code": 200},
+        }
 
 
 def _clock() -> SimulatedClock:
@@ -40,7 +50,7 @@ def _clock() -> SimulatedClock:
 async def _queue_cognitive_reply(core: AmoraCore):
     core.cognition.register_provider(SpeechProvider())
     _, item = await core.conversation.observe_completed_utterance(
-        "Oi Amora",
+        "Amora, fala alguma coisa sobre esse assunto.",
         speaker_id="PERSON_BK",
         addressee_id="ENTITY_AMORA",
         source_event_id=None,
@@ -50,6 +60,7 @@ async def _queue_cognitive_reply(core: AmoraCore):
     assert item is not None
     claimed = core.conversation.claim_next()
     assert claimed is not None
+    assert len(claimed.text) > 11
     return claimed
 
 
