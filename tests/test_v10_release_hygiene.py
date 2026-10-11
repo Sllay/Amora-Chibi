@@ -48,14 +48,18 @@ def test_v10_layered_modules_are_wired_not_orphaned() -> None:
     cognition_init = (ROOT / "core/amora/cognition/__init__.py").read_text(encoding="utf-8")
     autonomy_init = (ROOT / "core/amora/autonomy/__init__.py").read_text(encoding="utf-8")
     app = (ROOT / "core/amora/app.py").read_text(encoding="utf-8")
+    structured = (ROOT / "core/amora/cognition/structured_runtime.py").read_text(encoding="utf-8")
     production = (ROOT / "core/amora/cognition/production.py").read_text(encoding="utf-8")
     resilient = (ROOT / "core/amora/cognition/resilient.py").read_text(encoding="utf-8")
     hardened = (ROOT / "core/amora/cognition/hardened.py").read_text(encoding="utf-8")
     context_v1 = (ROOT / "core/amora/cognition/context_v1.py").read_text(encoding="utf-8")
     providers_v1 = (ROOT / "core/amora/cognition/providers_v1.py").read_text(encoding="utf-8")
+    providers_structured = (ROOT / "core/amora/cognition/providers_structured.py").read_text(encoding="utf-8")
     store_v1 = (ROOT / "core/amora/cognition/store_v1.py").read_text(encoding="utf-8")
 
-    assert "from .production import CognitiveEngine" in cognition_init
+    assert "from .structured_runtime import CognitiveEngine" in cognition_init
+    assert "ProductionCognitiveEngine" in structured
+    assert "RealizationValidator" in structured
     assert "from .integrated import AutonomyEngine" in autonomy_init
     assert 'subscribe_bootstrap("cognition.action_suggested", autonomy.handle_cognitive_suggestion)' in app
     assert "ResilientCognitiveEngine" in production
@@ -63,4 +67,5 @@ def test_v10_layered_modules_are_wired_not_orphaned() -> None:
     assert "BaseCognitiveEngine" in hardened
     assert "BaseContextCompiler" in context_v1
     assert "BaseGroqCognitiveProvider" in providers_v1
+    assert "BaseGroqCognitiveProvider" in providers_structured
     assert "BaseCognitiveStore" in store_v1
