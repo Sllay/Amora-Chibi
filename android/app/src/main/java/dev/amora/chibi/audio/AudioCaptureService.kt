@@ -17,6 +17,7 @@ import android.util.Log
 import dev.amora.chibi.R
 import dev.amora.chibi.core.CoreClient
 import dev.amora.chibi.voice.VoiceOutput
+import dev.amora.chibi.voice.VoicePackManager
 import java.util.ArrayDeque
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -37,6 +38,7 @@ class AudioCaptureService : Service() {
     private var recorder: AudioRecord? = null
     private var segmenter: SpeechSegmenter? = null
     private var voiceOutput: VoiceOutput? = null
+    @Volatile private var voicePackStatus = "voz neural: iniciando"
     private lateinit var coreClient: CoreClient
 
     override fun onBind(intent: android.content.Intent?): IBinder? = null
@@ -51,9 +53,12 @@ class AudioCaptureService : Service() {
                 speaking.set(active)
                 resetSegmenter.set(true)
                 if (active) bargeIn.speechStarted() else bargeIn.reset()
-                val manager = getSystemService(NotificationManager::class.java)
-                val text = if (active) "Amora está falando" else "Amora está ouvindo localmente"
-                manager.notify(NOTIFICATION_ID, notification(text))
+                val text = if (active) {
+                    "Amora está falando · $voicePackStatus"
+                } else {
+                    "Amora está ouvindo · $voicePackStatus"
+                }
+                notifyVoiceState(text)
             },
             onFinished = { utteranceId, outcome, spokenChars ->
                 val executor = when (outcome) {
@@ -76,6 +81,11 @@ class AudioCaptureService : Service() {
                     }
                 }
             },
+            onVoicePackChanged = { state ->
+                voicePackStatus = describeVoicePack(state)
+                val prefix = if (speaking.get()) "Amora está falando" else "Amora está ouvindo"
+                notifyVoiceState("$prefix · $voicePackStatus")
+            },
         )
         voiceExecutor.scheduleWithFixedDelay(::pollVoice, 350, 450, TimeUnit.MILLISECONDS)
     }
@@ -85,7 +95,7 @@ class AudioCaptureService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(NOTIFICATION_ID, notification("Amora está ouvindo localmente"))
+        startForeground(NOTIFICATION_ID, notification("Amora está ouvindo · $voicePackStatus"))
         if (running.compareAndSet(false, true)) {
             captureThread = Thread(::captureLoop, "amora-audio-capture").apply { start() }
         }
@@ -273,11 +283,22 @@ class AudioCaptureService : Service() {
                     }
                     val target = result.addresseeId ?: "addressee incerto"
                     Log.i(TAG, "STT: ${result.text} [$target] replyQueued=${result.replyQueued}")
-                    getSystemService(NotificationManager::class.java)
-                        .notify(NOTIFICATION_ID, notification(result.text.ifBlank { "Fala detectada" }))
+                    notifyVoiceState(result.text.ifBlank { "Fala detectada" })
                 }
                 .onFailure { error -> Log.w(TAG, "Falha ao enviar segmento ao Core", error) }
         }
+    }
+
+    private fun describeVoicePack(state: VoicePackManager.Snapshot): String = when (state.state) {
+        VoicePackManager.State.MISSING -> "voz neural ausente"
+        VoicePackManager.State.DOWNLOADING -> "baixando voz neural ${state.progressPercent ?: 0}%"
+        VoicePackManager.State.READY -> "voz neural pronta"
+        VoicePackManager.State.FAILED -> "voz neural FALHOU: ${state.detail}"
+    }
+
+    private fun notifyVoiceState(text: String) {
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, notification(text))
     }
 
     private fun createChannel() {
@@ -289,6 +310,7 @@ class AudioCaptureService : Service() {
     private fun notification(text: String): Notification = Notification.Builder(this, CHANNEL_ID)
         .setContentTitle("Amora")
         .setContentText(text.take(120))
+        .setStyle(Notification.BigTextStyle().bigText(text.take(320)))
         .setSmallIcon(R.drawable.ic_amora_notification)
         .setOngoing(true)
         .build()
