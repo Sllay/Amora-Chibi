@@ -51,6 +51,26 @@ class CognitiveStore(BaseCognitiveStore):
             )
         return result
 
+    def merge_message_metadata(self, message_id: UUID | str, values: dict[str, object]) -> bool:
+        """Merge operational flags without rewriting persisted conversation text."""
+        if not values:
+            return True
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT metadata_json FROM conversation_messages WHERE id = ?",
+                (str(message_id),),
+            ).fetchone()
+        if row is None:
+            return False
+        metadata = json.loads(row["metadata_json"] or "{}")
+        metadata.update(values)
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE conversation_messages SET metadata_json = ? WHERE id = ?",
+                (json.dumps(metadata, ensure_ascii=False, separators=(",", ":")), str(message_id)),
+            )
+        return cur.rowcount > 0
+
     def record_interrupted_progress(
         self,
         segment_id: UUID | str,
