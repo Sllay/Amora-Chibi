@@ -79,6 +79,8 @@ class ContextCompiler:
         remote = self.privacy_gate.remote_allowed(request)
         reasons = ["CANONICAL_STATE_OUTSIDE_PROVIDER"]
         reasons.append("REMOTE_CONTEXT_ALLOWED" if remote else "REMOTE_CONTEXT_BLOCKED")
+        if bool(request.metadata.get("test_mode", False)):
+            reasons.append("TEST_MODE_ACTIVE")
 
         mood = self.emotion.current_mood()
         affect: dict[str, float] = {}
@@ -141,12 +143,25 @@ class ContextCompiler:
             if len(claims) >= 10:
                 break
 
+        persisted_messages = self.store.list_messages(limit=24)
+        test_turn_ids = {
+            str(message.turn_id)
+            for message in persisted_messages
+            if bool(message.metadata.get("test_mode", False))
+        }
+        if test_turn_ids:
+            reasons.append("TEST_TURNS_EXCLUDED_FROM_RECENT")
+
         recent: list[dict[str, Any]] = []
-        for message in self.store.list_messages(limit=12):
+        for message in persisted_messages:
             # respond() persists the input before compiling context so observability
             # survives provider failure. Do not echo that same current turn back as
             # history: the provider receives context.user_text separately exactly once.
             if str(message.turn_id) == str(request.turn_id):
+                continue
+            # A technical turn is excluded as one causal unit. This removes both
+            # the test input and Amora's generated segments from future history.
+            if str(message.turn_id) in test_turn_ids:
                 continue
             if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
                 continue
@@ -165,6 +180,7 @@ class ContextCompiler:
                     "status": message.status.value,
                 }
             )
+        recent = recent[-12:]
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
         relationships: list[dict[str, Any]] = []
