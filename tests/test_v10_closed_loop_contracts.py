@@ -98,7 +98,7 @@ async def test_test_turn_is_excluded_as_one_causal_unit_from_future_history(tmp_
             },
         )
         assert utterance is not None
-        assert decision.state.value == "take_turn"
+        assert decision.state.value == "TAKE_TURN"
 
         test_turn_id = str(utterance.metadata["cognitive_turn_id"])
         messages = core.cognition.store.list_messages(turn_id=test_turn_id)
