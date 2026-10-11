@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from amora.app import AmoraCore
+from amora.events import PrivacyScope
 
 from .models import SpeechAck, TurnSignal
 
@@ -20,6 +21,14 @@ class CancelSpeechRequest(BaseModel):
     spoken_chars: int | None = Field(default=None, ge=0, le=12000)
 
 
+class TechnicalTestTurnRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=12000)
+    speaker_id: str = "PERSON_BK"
+    addressee_id: str = "ENTITY_AMORA"
+    remote_processing_allowed: bool = False
+    privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
+
+
 def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Callable[..., None]) -> None:
     def console():
         return getattr(app.state, "server_console", None)
@@ -27,6 +36,35 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
     @app.get("/v1/conversation/state", dependencies=[Depends(require_auth)])
     def conversation_state() -> dict[str, object]:
         return core.conversation.state()
+
+    @app.post("/v1/conversation/test-turn", dependencies=[Depends(require_auth)])
+    async def technical_test_turn(request: TechnicalTestTurnRequest) -> dict[str, object]:
+        """Exercise dialogue/cognition/voice queue without persistent learning.
+
+        The turn is still journaled for diagnostics, but it is marked so future
+        dialogue history, reflection/memory consolidation, relationships and
+        persistent emotion do not learn from the technical probe.
+        """
+        decision, utterance = await core.conversation.observe_completed_utterance(
+            request.text,
+            speaker_id=request.speaker_id,
+            addressee_id=request.addressee_id,
+            source_event_id=None,
+            privacy_scope=request.privacy_scope,
+            remote_processing_allowed=request.remote_processing_allowed,
+            metadata={
+                "test_mode": True,
+                "memory_consolidation": False,
+                "relationship_learning": False,
+                "emotion_persistence": False,
+            },
+        )
+        return {
+            "test_mode": True,
+            "decision": decision.model_dump(mode="json"),
+            "utterance": utterance.model_dump(mode="json") if utterance else None,
+            "conversation_state": core.conversation.state(),
+        }
 
     @app.post("/v1/conversation/turn", dependencies=[Depends(require_auth)])
     async def decide_turn(request: TurnSignalRequest) -> dict[str, object]:
