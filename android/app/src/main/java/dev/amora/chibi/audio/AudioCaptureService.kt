@@ -16,8 +16,8 @@ import android.os.IBinder
 import android.util.Log
 import dev.amora.chibi.R
 import dev.amora.chibi.core.CoreClient
+import dev.amora.chibi.voice.VoiceDiagnostics
 import dev.amora.chibi.voice.VoiceOutput
-import dev.amora.chibi.voice.VoicePackManager
 import java.util.ArrayDeque
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -29,8 +29,6 @@ class AudioCaptureService : Service() {
     private val voiceBusy = AtomicBoolean(false)
     private val resetSegmenter = AtomicBoolean(false)
     private val networkExecutor = Executors.newSingleThreadExecutor()
-    // Control traffic must never wait behind a long STT/cognition request. In
-    // particular, barge-in cancellation has to reach the Core immediately.
     private val controlExecutor = Executors.newSingleThreadExecutor()
     private val voiceExecutor = Executors.newSingleThreadScheduledExecutor()
     private val bargeIn = BargeInDetector()
@@ -38,7 +36,7 @@ class AudioCaptureService : Service() {
     private var recorder: AudioRecord? = null
     private var segmenter: SpeechSegmenter? = null
     private var voiceOutput: VoiceOutput? = null
-    @Volatile private var voicePackStatus = "voz neural: iniciando"
+    @Volatile private var voiceStatus = "voz neural: iniciando"
     private lateinit var coreClient: CoreClient
 
     override fun onBind(intent: android.content.Intent?): IBinder? = null
@@ -53,12 +51,8 @@ class AudioCaptureService : Service() {
                 speaking.set(active)
                 resetSegmenter.set(true)
                 if (active) bargeIn.speechStarted() else bargeIn.reset()
-                val text = if (active) {
-                    "Amora está falando · $voicePackStatus"
-                } else {
-                    "Amora está ouvindo · $voicePackStatus"
-                }
-                notifyVoiceState(text)
+                val prefix = if (active) "Amora está falando" else "Amora está ouvindo"
+                notifyVoiceState("$prefix · $voiceStatus")
             },
             onFinished = { utteranceId, outcome, spokenChars ->
                 val executor = when (outcome) {
@@ -70,7 +64,7 @@ class AudioCaptureService : Service() {
                     try {
                         when (outcome) {
                             VoiceOutput.Outcome.SPOKEN -> coreClient.acknowledgeUtterance(utteranceId, true)
-                            VoiceOutput.Outcome.FAILED -> coreClient.acknowledgeUtterance(utteranceId, false)
+                            VoiceOutput.Outcome.FAILED -> coreClient.cancelUtterance(utteranceId, "local_voice_failure", null)
                             VoiceOutput.Outcome.INTERRUPTED -> coreClient.cancelUtterance(utteranceId, "barge_in", spokenChars)
                             VoiceOutput.Outcome.PARTIAL -> coreClient.cancelUtterance(utteranceId, "tts_partial_failure", spokenChars)
                         }
@@ -81,10 +75,10 @@ class AudioCaptureService : Service() {
                     }
                 }
             },
-            onVoicePackChanged = { state ->
-                voicePackStatus = describeVoicePack(state)
+            onVoiceStatusChanged = { state ->
+                voiceStatus = "${state.stage}: ${state.detail}".take(220)
                 val prefix = if (speaking.get()) "Amora está falando" else "Amora está ouvindo"
-                notifyVoiceState("$prefix · $voicePackStatus")
+                notifyVoiceState("$prefix · $voiceStatus")
             },
         )
         voiceExecutor.scheduleWithFixedDelay(::pollVoice, 350, 450, TimeUnit.MILLISECONDS)
@@ -95,7 +89,7 @@ class AudioCaptureService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(NOTIFICATION_ID, notification("Amora está ouvindo · $voicePackStatus"))
+        startForeground(NOTIFICATION_ID, notification("Amora está ouvindo · $voiceStatus"))
         if (running.compareAndSet(false, true)) {
             captureThread = Thread(::captureLoop, "amora-audio-capture").apply { start() }
         }
@@ -131,8 +125,8 @@ class AudioCaptureService : Service() {
                 false
             }
         if (!accepted) {
-            runCatching { coreClient.acknowledgeUtterance(item.id, false) }
-                .onFailure { error -> Log.w(TAG, "Falha ao devolver fala ${item.id} à fila", error) }
+            runCatching { coreClient.cancelUtterance(item.id, "voice_output_rejected", null) }
+                .onFailure { error -> Log.w(TAG, "Falha ao cancelar fala rejeitada ${item.id}", error) }
             voiceBusy.set(false)
         }
     }
@@ -177,9 +171,6 @@ class AudioCaptureService : Service() {
             Log.w(TAG, "NoiseSuppressor indisponível")
             null
         }
-        // Some devices boost a constant fan/room floor when nobody is speaking.
-        // Disable explicit AGC when the effect is exposed; speech recognition and
-        // the VAD work better with the natural level after noise suppression.
         val automaticGain = if (AutomaticGainControl.isAvailable()) {
             runCatching { AutomaticGainControl.create(localRecorder.audioSessionId) }
                 .getOrNull()
@@ -224,10 +215,6 @@ class AudioCaptureService : Service() {
 
                 val floats = FloatArray(count) { index -> shorts[index] / 32768F }
                 if (speaking.get()) {
-                    // Keep only a short echo-cancelled tail. At the instant barge-in
-                    // latches, the last ~320 ms contain the sustained human speech
-                    // that proved the floor takeover. Feeding that tail after TTS
-                    // stops prevents swallowing the beginning of "Mas Amora...".
                     appendPreRoll(floats)
                     if (bargeIn.accept(floats)) {
                         Log.i(TAG, "Barge-in detectado; Amora cede o turno")
@@ -287,13 +274,6 @@ class AudioCaptureService : Service() {
                 }
                 .onFailure { error -> Log.w(TAG, "Falha ao enviar segmento ao Core", error) }
         }
-    }
-
-    private fun describeVoicePack(state: VoicePackManager.Snapshot): String = when (state.state) {
-        VoicePackManager.State.MISSING -> "voz neural ausente"
-        VoicePackManager.State.DOWNLOADING -> "baixando voz neural ${state.progressPercent ?: 0}%"
-        VoicePackManager.State.READY -> "voz neural pronta"
-        VoicePackManager.State.FAILED -> "voz neural FALHOU: ${state.detail}"
     }
 
     private fun notifyVoiceState(text: String) {
