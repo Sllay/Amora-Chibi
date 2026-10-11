@@ -1,7 +1,7 @@
 # AMORA — Version Lineage / Roadmap Canônico
 
 **Status:** CANÔNICO  
-**Atualizado em:** 2026-10-10
+**Atualizado em:** 2026-10-11
 
 Este arquivo existe para impedir um erro recorrente: interpretar uma feature ausente da versão atual como “cancelada”.
 
@@ -95,6 +95,8 @@ Escopo histórico concluído em 2026-10-08:
 
 Destino atual: Emotion Engine V1.
 
+**Integração pendente descoberta na V1:** o engine existe, mas o fluxo normal de conversa/ação precisa alimentá-lo em loop fechado. Isso pertence ao V1 Step 2 e não reabre a V0.5.
+
 ### V0.6 — Autonomia
 
 Escopo histórico:
@@ -168,7 +170,7 @@ O que já existia como infraestrutura/experimento de avatar pode continuar no re
 
 **Status:** `IN_PROGRESS`
 
-Objetivo: fechar cognição, diálogo, voz, provider resilience, Android e certificação sem reabrir escopo visual futuro.
+Objetivo: fechar cognição, diálogo, emoção integrada, voz, provider resilience, Android e certificação sem reabrir escopo visual futuro.
 
 ### Já faz parte da fundação V1
 
@@ -187,51 +189,56 @@ Objetivo: fechar cognição, diálogo, voz, provider resilience, Android e certi
 - local Dialogue Orchestrator;
 - provider como realização linguística;
 - Android app/pareamento/foreground voice;
-- server console/health infrastructure.
+- server console/health infrastructure;
+- Emotion Engine com appraisal/mood/affect;
+- voice path local sherpa-onnx comprovado fisicamente no Galaxy A15.
 
 ### Fechamento em quatro passos
 
 #### V1 Step 1 — Local Voice
 
-**Status:** `IN_PROGRESS`
+**Status:** `IMPLEMENTED / PHYSICAL PATH PASS`
 
-Objetivo:
+Entregue:
 
-- VoiceIdentity pt-BR fixa;
-- sherpa-onnx + TTS local Piper/VITS provisório;
-- Voice Pack versionado + SHA-256;
+- VoiceIdentity pt-BR fixa/provisória;
+- sherpa-onnx + TTS local Piper/VITS Faber;
+- voice pack verificado e empacotado em build-time assets;
 - síntese offline;
 - Gemini TTS fora do caminho normal;
-- Android TTS somente bootstrap/emergência;
-- benchmark/certificação física no Galaxy A15.
+- sem fallback automático silencioso para Android/Google TTS;
+- diagnóstico local;
+- Galaxy A15 reproduziu fisicamente a voz neural Faber.
 
-Critério de saída:
+O Faber é somente voz técnica provisória. Barge-in prolongado, térmica e conversa longa permanecem no gate final V1.
 
-- conversa prolongada sem chamada TTS remota;
-- mesmo timbre entre turnos;
-- pt-BR aceitável;
-- latência/CPU/RAM/temperatura aceitáveis;
-- barge-in funcional.
+#### V1 Step 2 — Dialogue Identity + Emotion Integration
 
-#### V1 Step 2 — Dialogue Identity
-
-**Status:** `PLANNED`
+**Status:** `IN_PROGRESS`
 
 Objetivo:
 
 - atos locais de opinião/discordância/zoeira/reclamação/reação relacional/limite;
 - stance e relational attitude;
 - closing mode;
-- validator estrutural pós-geração;
-- correção da janela de addressee que não pode se auto-renovar;
-- Cognitive Replay comparando modelos para realização linguística.
+- `RealizationFrame` estruturado entre provider e fala;
+- validator estrutural/semântico pós-geração;
+- realização local para atos triviais já resolvidos;
+- conversation/action events alimentarem Emotion Engine em loop fechado;
+- estado emocional influenciar comportamento social antes da prosódia;
+- isolamento de testes (`test_mode`) para não consolidar memória/relação/mood quando desabilitado;
+- observabilidade do último appraisal, DialoguePlan e RealizationFrame;
+- correção da janela de addressee que não pode se auto-renovar.
 
 Critério de saída:
 
-- reduzir comportamento de atendimento genérico;
-- provider respeitar `ask_followup` / `offer_help`;
+- reduzir comportamento de atendimento genérico por enforcement estrutural, não blacklist;
+- provider respeitar moves autorizados, `ask_followup`, `offer_help` e facts;
 - self-facts grounded;
-- identidade social observável em testes físicos.
+- conversa significativa conseguir alterar mood/affect quando aplicável;
+- emoção mudar comportamento sem trocar identidade;
+- testes técnicos poderem atravessar o pipeline sem contaminar estado persistente;
+- testes determinísticos e Cognitive Replay cobrirem as regressões conhecidas.
 
 #### V1 Step 3 — Zero-Cost Provider Mesh
 
@@ -254,19 +261,40 @@ Critério de saída:
 
 #### V1 Step 4 — Canonical Voice + V1 Certification
 
-**Status:** `PLANNED`
+**Status:** `PLANNED / VOICE TARGET CANONIZED`
 
 Objetivo:
 
-- promover `amora-voice-v1` própria quando dataset/direitos/qualidade estiverem resolvidos;
+- seguir `docs/canon/VOICE_IDENTITY.md`;
+- selecionar material feminino pt-BR com direitos/provenance claros;
+- treinar/fine-tunar `amora-voice-v1` priorizando GPU gratuita;
+- medium/high escolhido por naturalidade + benchmark, não pelo rótulo;
+- exportar ONNX e manter inferência local no sherpa-onnx;
 - teste prolongado no A15;
 - conversa, barge-in, quota, failover, restart, backup/restore;
 - estabilidade térmica e de memória;
 - fechamento documental.
 
+Compute pago não é dependência. Caso seja avaliado futuramente, exige teto explícito de custo e decisão consciente; nunca deixar instância sem limite previsível.
+
+Treino no Galaxy A15 não é padrão: RAM do aparelho não equivale a VRAM de GPU. O A15 permanece alvo de inferência/certificação.
+
 ---
 
-## 5. V1.1 — percepção e corpo
+## 5. Política de experimentos V1
+
+Um experimento/teste novo deve existir apenas quando seu resultado:
+
+1. decide entre arquiteturas reais;
+2. prova gate físico/hardware;
+3. detecta/previne regressão crítica;
+4. valida contrato destinado à produção.
+
+Experimentos descartáveis que apenas demonstram algo já provado devem ser evitados para reduzir tempo, complexidade e consumo de recursos.
+
+---
+
+## 6. V1.1 — percepção e corpo
 
 **Status:** `PLANNED`
 
@@ -286,7 +314,7 @@ Não transformar V1.1 automaticamente em editor profissional de Live2D/rig compl
 
 ---
 
-## 6. V1.2 — estética e autoimagem
+## 7. V1.2 — estética e autoimagem
 
 **Status:** `PLANNED`
 
@@ -305,7 +333,7 @@ Essas capacidades devem ser da Amora, não simplesmente presets controlados pelo
 
 ---
 
-## 7. Futuro / backlog
+## 8. Futuro / backlog
 
 Possibilidades futuras sem compromisso de versão ainda:
 
@@ -325,14 +353,14 @@ Nada desta seção deve entrar automaticamente na V1/V1.1/V1.2.
 
 ---
 
-## 8. Regra para mudanças futuras
+## 9. Regra para mudanças futuras
 
 Quando uma decisão de versão mudar:
 
 1. não apagar silenciosamente o item antigo;
 2. atualizar este arquivo com `origin_version`, novo destino e motivo;
 3. criar/atualizar ADR se a mudança for relevante;
-4. atualizar GDD/Architecture se a visão atual mudar;
+4. atualizar GDD/Architecture/canon se a visão atual mudar;
 5. manter histórico Git.
 
 Exemplo:

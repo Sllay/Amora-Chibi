@@ -26,13 +26,25 @@ class ReplayProvider:
             provider_class=ProviderClass.REMOTE_EPHEMERAL,
             allowed_privacy_scopes=frozenset({PrivacyScope.PERSONAL}),
             supports_streaming=True,
+            supports_structured_output=True,
             context_window_tokens=100_000,
             priority=priority,
         )
 
-    async def stream(self, context):
+    async def realize(self, context):
         assert context.self_model
         self.last_context = context.model_dump(mode="json")
+        allowed = list(context.dialogue_plan["response_moves"])
+        return {
+            "moves": [{"kind": allowed[0], "text": self.text}],
+            "closing": "statement",
+            "_usage": {"input_tokens": 10, "output_tokens": 5, "status_code": 200},
+        }
+
+    async def stream(self, context):
+        # Replay is an immutable diagnostic sandbox inherited from the lower V1
+        # layer. Production speech still uses realize()+local validation above.
+        assert context.self_model
         yield ProviderDelta(text=self.text, input_tokens=10, output_tokens=5, status_code=200)
         yield ProviderDelta(done=True, finish_reason="stop", input_tokens=10, output_tokens=5, status_code=200)
 
@@ -66,8 +78,9 @@ async def test_replay_uses_same_snapshot_without_mutating_canonical_state(tmp_pa
         core.cognition.register_provider(a)
         core.cognition.register_provider(b)
         request = CognitiveRequest(
-            text="Oi, Amora",
+            text="Amora, o que você acha desse assunto?",
             speaker_id="PERSON_BK",
+            target_id="ENTITY_AMORA",
             privacy_scope=PrivacyScope.PERSONAL,
             remote_processing_allowed=True,
         )

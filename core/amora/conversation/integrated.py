@@ -5,6 +5,7 @@ from datetime import timedelta
 from uuid import UUID
 
 from amora.cognition import CognitiveRequest, SpeechSegment
+from amora.emotion import InteractionAppraiser
 from amora.events import AmoraEvent, PrivacyScope
 
 from .models import SpeechUtterance, TurnDecision, TurnSignal, TurnState, UtteranceKind
@@ -18,10 +19,23 @@ _DIRECT_CONTINUITY_SECONDS = 25
 class ConversationEngine(BaseConversationEngine):
     """V1 conversation integration.
 
-    Verified semantic intentions still pass through the Turn Manager, but their
-    wording can now be generated from canonical Amora state. Remote cognition is
-    an independent opt-in and is never inferred from the disclosure scope.
+    Normal social turns now feed the local Emotion Engine before dialogue context
+    is compiled. Remote cognition remains an independent opt-in and is never
+    inferred from disclosure scope. Direct-address continuity is bounded by the
+    original explicit call and cannot renew itself indefinitely.
     """
+
+    def state(self) -> dict[str, object]:
+        state = super().state()
+        state.update(
+            {
+                "last_interaction_appraisal": getattr(self, "_last_interaction_appraisal", None),
+                "last_emotion_event_id": getattr(self, "_last_emotion_event_id", None),
+                "last_emotion_profile": getattr(self, "_last_emotion_profile", None),
+                "last_turn_test_mode": getattr(self, "_last_turn_test_mode", False),
+            }
+        )
+        return state
 
     async def observe_completed_utterance(
         self,
@@ -34,11 +48,26 @@ class ConversationEngine(BaseConversationEngine):
         remote_processing_allowed: bool = False,
         session_id: str | None = None,
         stt_confidence: float | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> tuple[TurnDecision, SpeechUtterance | None]:
+        turn_metadata = dict(metadata or {})
         addressee_id, continuity_inferred = self._resolve_conversational_addressee(
             speaker_id=speaker_id,
             addressee_id=addressee_id,
         )
+        turn_metadata["addressee_inferred_by_continuity"] = continuity_inferred
+        self._last_turn_test_mode = bool(turn_metadata.get("test_mode", False))
+
+        event_id = UUID(str(source_event_id)) if source_event_id else None
+        await self._appraise_interaction(
+            text,
+            speaker_id=speaker_id,
+            addressee_id=addressee_id,
+            source_event_id=event_id,
+            privacy_scope=privacy_scope,
+            metadata=turn_metadata,
+        )
+
         decision, item = await super().observe_completed_utterance(
             text,
             speaker_id=speaker_id,
@@ -48,12 +77,15 @@ class ConversationEngine(BaseConversationEngine):
             remote_processing_allowed=remote_processing_allowed,
             session_id=session_id,
             stt_confidence=stt_confidence,
+            metadata=turn_metadata,
         )
         if (
             self.cognition is None
             or item is None
             or not remote_processing_allowed
             or privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}
+            or bool(turn_metadata.get("test_mode", False))
+            or turn_metadata.get("memory_consolidation") is False
         ):
             return decision, item
 
@@ -65,7 +97,6 @@ class ConversationEngine(BaseConversationEngine):
         except ValueError:
             return decision, item
 
-        event_id = UUID(str(source_event_id)) if source_event_id else None
         reflection_request = CognitiveRequest(
             text=text,
             speaker_id=speaker_id,
@@ -76,15 +107,74 @@ class ConversationEngine(BaseConversationEngine):
             remote_processing_allowed=True,
             turn_id=turn_id,
             metadata={
+                **turn_metadata,
                 "cognitive_mode": "reflection",
                 "stt_confidence": stt_confidence,
                 "turn_state": decision.state.value,
                 "turn_reason_codes": decision.reason_codes,
-                "addressee_inferred_by_continuity": continuity_inferred,
             },
         )
         await self.cognition.reflect(reflection_request)
         return decision, item
+
+    async def _appraise_interaction(
+        self,
+        text: str,
+        *,
+        speaker_id: str,
+        addressee_id: str | None,
+        source_event_id: UUID | None,
+        privacy_scope: PrivacyScope,
+        metadata: dict[str, object],
+    ) -> None:
+        if privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+            return
+        # Ambient speech must not change Amora's directed affect just because the
+        # microphone heard it. Only a resolved direct social turn is appraised.
+        if addressee_id != "ENTITY_AMORA":
+            return
+
+        appraiser = getattr(self, "_interaction_appraiser", None)
+        if appraiser is None:
+            appraiser = InteractionAppraiser()
+            self._interaction_appraiser = appraiser
+
+        appraisal = appraiser.appraise_utterance(
+            text,
+            speaker_id=speaker_id,
+            addressee_id=addressee_id,
+            source_event_id=source_event_id,
+            privacy_scope=privacy_scope,
+        )
+        # Session-level speaker labels may not be canonical entities. Global mood
+        # can still be appraised, but directed affect must only target identities
+        # known to the Entity Registry.
+        if self.emotion.identities.get(speaker_id) is None:
+            appraisal = appraisal.model_copy(update={"target_id": None, "agent_id": None})
+
+        self._last_interaction_appraisal = appraisal.model_dump(mode="json")
+        self._last_emotion_profile = appraisal.metadata.get("profile")
+        persist = metadata.get("emotion_persistence") is not False
+        if bool(metadata.get("test_mode", False)) and "emotion_persistence" not in metadata:
+            persist = False
+
+        if not persist:
+            preview = self.emotion.appraisal.appraise(appraisal)
+            self._last_interaction_appraisal = {
+                **self._last_interaction_appraisal,
+                "preview": preview.model_dump(mode="json"),
+                "persistent": False,
+            }
+            self._last_emotion_event_id = None
+            return
+
+        result = await self.emotion.process(appraisal)
+        self._last_interaction_appraisal = {
+            **self._last_interaction_appraisal,
+            "result": result.appraisal.model_dump(mode="json"),
+            "persistent": True,
+        }
+        self._last_emotion_event_id = str(result.event.id) if result.event is not None else None
 
     def _resolve_conversational_addressee(
         self,
@@ -92,12 +182,11 @@ class ConversationEngine(BaseConversationEngine):
         speaker_id: str,
         addressee_id: str | None,
     ) -> tuple[str | None, bool]:
-        """Keep a brief direct-conversation window without answering ambient speech forever.
+        """Keep one fixed direct-conversation window after an explicit call.
 
-        Mobile VAD/STT can occasionally clip or mistranscribe a leading vocative
-        such as "Amora". After one explicit direct turn, an immediately following
-        utterance from the same speaker may therefore inherit ENTITY_AMORA for a
-        short bounded window. Explicit speech to another entity closes the window.
+        Inferred continuity can use the remaining explicit window but never renews
+        it. Otherwise ambient speech could bootstrap an effectively permanent
+        addressee authorization.
         """
         now = self.clock.now()
         deadlines = getattr(self, "_direct_addressee_deadlines", None)
@@ -118,8 +207,6 @@ class ConversationEngine(BaseConversationEngine):
             deadlines.pop(speaker_id, None)
             return None, False
 
-        # Refresh only while the same speaker keeps the conversation flowing.
-        deadlines[speaker_id] = now + timedelta(seconds=_DIRECT_CONTINUITY_SECONDS)
         return "ENTITY_AMORA", True
 
     async def handle_semantic_event(self, event: AmoraEvent) -> SpeechUtterance | None:

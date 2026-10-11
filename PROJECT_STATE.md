@@ -1,6 +1,6 @@
 # PROJECT_STATE — Amora-Chibi
 
-**Última atualização:** 2026-10-10  
+**Última atualização:** 2026-10-11  
 **Objetivo:** permitir continuidade segura entre chats/agentes sem depender do histórico integral da conversa.
 
 Este arquivo é um **snapshot operacional**. Para regras atuais, sempre leia primeiro `docs/canon/*`.
@@ -14,10 +14,12 @@ Ordem de leitura:
 1. `docs/canon/SKILL.md`;
 2. `docs/canon/ARCHITECTURE.md`;
 3. `docs/canon/GDD.md`;
-4. `docs/roadmap/VERSIONS.md`;
-5. `docs/decisions/`;
-6. este `PROJECT_STATE.md`;
-7. docs técnicos específicos de versão/módulo.
+4. `docs/canon/DIALOGUE_EMOTION.md`;
+5. `docs/canon/VOICE_IDENTITY.md`;
+6. `docs/roadmap/VERSIONS.md`;
+7. `docs/decisions/`;
+8. este `PROJECT_STATE.md`;
+9. docs técnicos específicos de versão/módulo.
 
 Docs antigos não são autoridade atual quando divergirem do canon.
 
@@ -54,7 +56,7 @@ Backend: modular monolith, SQLite, asyncio/FastAPI, Event Bus e APIs locais.
 
 ### Persistência cognitiva
 
-Schema atual da linha V1 inclui estruturas como:
+Schema V1 inclui estruturas como:
 
 - `conversation_messages`;
 - `cognitive_journal`;
@@ -103,7 +105,15 @@ Atos existentes incluem:
 
 Self-facts não definidos permanecem desconhecidos; provider não inventa idade/data/origem.
 
-Próximo refinamento da V1 deve adicionar opinião/stance/reação relacional/closing mode e validator estrutural para reduzir comportamento genérico de atendimento.
+**Defeito estrutural atual:** o plano ainda é enviado ao provider como instrução textual e não existe hard-control completo por `RealizationFrame` + validator. Step 2 corrige isso segundo ADR-0006.
+
+### Emotion Engine
+
+O Core já possui appraisal determinístico, Emotion Events, Global Mood, Entity Affect, decay, blame, intentionality, spillover e Social Bids.
+
+**Defeito estrutural atual:** o fluxo normal de conversa consulta `current_mood()` e affect, mas não está fechado o suficiente para transformar acontecimentos normais de conversa em appraisals persistentes. Isso explica cenários em que `mood_valence` permanece em baseline apesar de conversas longas.
+
+Step 2 deve conectar evento real → appraisal → Emotion Engine → Dialogue/Autonomy/Prosody conforme ADR-0007.
 
 ### Streaming cognition / speech
 
@@ -151,7 +161,9 @@ Direção aprovada para Step 3:
 
 ### Privacidade
 
-Android possui autorização explícita para cognição remota, separada de autorização de STT/áudio.
+Android possui autorização explícita para cognição remota de falas do usuário, separada de autorização de STT/áudio.
+
+`AMORA_REMOTE_COGNITION_ALLOWED` é fallback/controle de cognição remota autônoma quando o evento não traz autorização explícita; não deve substituir o toggle normal do app.
 
 AUTH nunca vai para provider remoto.
 
@@ -163,35 +175,42 @@ O servidor possui console operacional vivo para evitar spam infinito de polling 
 
 Logs estruturados completos permanecem separados do painel humano.
 
+Step 2 deve tornar observáveis último appraisal, último Emotion Event, DialoguePlan, RealizationFrame/validator e `test_mode`.
+
 ---
 
-## 5. Incidentes/decisões recentes importantes
+## 5. Decisões/incidentes recentes importantes
 
-### Gemini TTS quota
+### Step 1 — voz local: PASS de ativação
 
-Uso físico revelou `429 RESOURCE_EXHAUSTED` no Gemini TTS após poucas requisições do free tier.
+PR #27 foi mergeado após:
 
-Problema não era apenas indisponibilidade: fallback para Android TTS mudava a identidade vocal para uma voz muito robótica.
+- CI Core PASS;
+- Android build/test PASS;
+- modelo Faber empacotado e hash verificado;
+- Galaxy A15 reproduzir fisicamente a voz neural Faber via sherpa-onnx.
 
-Decisão: **Gemini TTS sai do caminho normal da voz**. Ver `docs/decisions/ADR-0002-local-voice-as-normal-path.md`.
+A causa principal do fallback robótico anterior foi um SHA-256 obsoleto que rejeitava o modelo Faber atual. A dev6 moveu o voice pack para build-time assets e removeu fallback automático oculto para Google/Android TTS.
 
-### Android TTS / delivery loop
-
-Houve estado em que falha/indisponibilidade de TTS podia reentregar a mesma utterance repetidamente.
-
-A linha V1 recebeu hardening de readiness/fallback; qualquer nova recorrência deve ser tratada como delivery-state bug, não mascarada com retry infinito.
-
-### Console server
-
-Polling HTTP repetitivo e tracebacks idênticos tornavam o terminal inutilizável.
-
-Direção vigente: painel vivo com estado/health + logs forenses separados.
+Faber continua **provisório e masculino**. A voz feminina canônica `amora-voice-v1` fica para Step 4.
 
 ### Comportamento “chatbot”
 
 Mesmo com `offer_help=false` / `ask_followup=false`, modelos gerais podem produzir reflexos de atendimento.
 
-Decisão: não resolver com prompt infinito/blacklist. Expandir semântica local + validator e comparar realizadores linguísticos por Cognitive Replay.
+Decisão: não resolver com prompt infinito/blacklist. Implementar `RealizationFrame` estruturado + validator local. Ver ADR-0003 e ADR-0006.
+
+### Emoção sem circuito completo
+
+Emotion Engine existe, mas precisa receber appraisals do fluxo normal de conversa/ação. Ler mood sem alimentá-lo é integração parcial.
+
+Decisão: fechar o circuito e adicionar isolamento de testes. Ver ADR-0007 e `docs/canon/DIALOGUE_EMOTION.md`.
+
+### Testes contaminando estado
+
+Baterias técnicas não devem virar biografia, relação ou emoção persistente.
+
+Direção: metadata de teste capaz de desabilitar consolidação de memória, aprendizado relacional e persistência emocional sem impedir o pipeline técnico.
 
 ---
 
@@ -199,51 +218,47 @@ Decisão: não resolver com prompt infinito/blacklist. Expandir semântica local
 
 ### Step 1 — Local Voice
 
-**Status operacional:** `IN_PROGRESS`.
+**Status operacional:** `PASS / MERGED`.
 
-PR ativo no momento deste snapshot:
+Entregue:
 
-```text
-#27 feat(v1.0): make Amora voice local and stable
-```
-
-Objetivo do PR:
-
-- `VoiceIdentity` pt-BR fixa;
+- `VoiceIdentity` pt-BR fixa e provisória;
 - sherpa-onnx `OfflineTts`;
-- Piper/VITS pt-BR provisório;
-- Voice Pack baixado uma vez;
-- verificação SHA-256;
+- Piper/VITS Faber provisório;
+- voice pack empacotado em build-time assets;
+- SHA-256 verificado;
 - PCM local via AudioTrack;
 - Gemini TTS removido do caminho normal;
-- Android TTS apenas bootstrap/emergência;
-- Android `1.0.0-dev4` / versionCode 7.
+- sem fallback automático silencioso para Android/Google TTS;
+- diagnóstico de voz no app;
+- confirmação física de Faber no Galaxy A15.
 
-**Importante:** compilação/CI não equivale a certificação física.
+Barge-in prolongado, estabilidade térmica e regressões de longa duração continuam no gate final de certificação V1, não como bloqueio estrutural de Step 2.
 
-Gate físico pendente no Galaxy A15:
+### Step 2 — Dialogue Identity + Emotion Integration
 
-- primeiro download/instalação;
-- checksum;
-- voz pt-BR;
-- latência;
-- RTF;
-- RAM/CPU/temperatura;
-- barge-in;
-- conversa prolongada;
-- confirmar zero requests de TTS remoto após pack ativo.
+**Status:** `IN_PROGRESS`.
 
-### Step 2 — Dialogue Identity
+Branch ativa:
 
-**Status:** `PLANNED`.
+```text
+feat/v1.0-dialogue-emotion-integration
+```
+
+Escopo:
 
 - atos sociais ricos;
 - stance/opinião;
 - relational attitude;
 - closing mode;
-- validator estrutural;
-- corrigir continuidade de addressee que não pode se auto-renovar infinitamente;
-- comparar GPT-OSS/Qwen/outros por Cognitive Replay antes de trocar provider.
+- `RealizationFrame` estruturado;
+- validator semântico estrutural;
+- realização local para atos triviais já resolvidos;
+- conectar conversa/eventos reais ao Emotion Engine;
+- emoção influenciar comportamento antes de prosódia;
+- test-mode sem contaminar memória/relação/mood persistente;
+- observabilidade de appraisal/plan/realization;
+- corrigir continuidade de addressee que não pode se auto-renovar infinitamente.
 
 ### Step 3 — Zero-Cost Provider Mesh
 
@@ -257,9 +272,13 @@ Gate físico pendente no Galaxy A15:
 
 ### Step 4 — Canonical Voice + V1 Certification
 
-**Status:** `PLANNED`.
+**Status:** `PLANNED / VOZ ESPECIFICADA`.
 
-- promover voz própria quando direitos/dataset/qualidade estiverem resolvidos;
+- seguir `docs/canon/VOICE_IDENTITY.md`;
+- obter dataset feminino pt-BR com direitos claros;
+- treinar/fine-tunar `amora-voice-v1` fora do A15, priorizando compute gratuito;
+- escolher medium/high por qualidade + benchmark, não pelo rótulo;
+- export ONNX e empacotar no mesmo runtime sherpa-onnx;
 - certificação longa no A15;
 - restart;
 - backup/restore;
@@ -267,11 +286,24 @@ Gate físico pendente no Galaxy A15:
 - conversa longa;
 - estabilidade térmica/memória.
 
-Não abrir o próximo step com defeito estrutural aberto no anterior.
+Treino pago não é requisito operacional. Se compute pago algum dia for avaliado, precisa de teto explícito; GPU gratuita é preferência.
 
 ---
 
-## 7. Roadmap posterior
+## 7. Regra de testes daqui para frente
+
+Um teste só deve existir se o resultado:
+
+1. decidir entre arquiteturas reais;
+2. provar um gate físico/hardware;
+3. detectar/prevenir regressão crítica;
+4. validar contrato que entra em produção.
+
+Evitar builds/experimentos descartáveis apenas por curiosidade quando não alteram decisão de projeto.
+
+---
+
+## 8. Roadmap posterior
 
 ### V1.1
 
@@ -293,7 +325,7 @@ Planejamento antigo V0.9/V0.95 foi dividido. Esses itens foram movidos, não can
 
 ---
 
-## 8. Git / Android workflow
+## 9. Git / Android workflow
 
 BK usa GitSync para atualizar o diretório compartilhado e não quer credenciais GitHub no Termux.
 
@@ -314,7 +346,7 @@ Provider secrets ficam no SecretStore local da Amora, nunca em chat/repo.
 
 ---
 
-## 9. Regras de continuidade para próximo chat/agente
+## 10. Regras de continuidade para próximo chat/agente
 
 Antes de sugerir arquitetura nova:
 
@@ -326,7 +358,10 @@ Antes de sugerir arquitetura nova:
 - não reintroduzir Gemini TTS como voz normal;
 - não transformar provider em identidade;
 - não inventar self-facts;
-- não declarar hardware PASS com base em CI;
+- não tratar blacklist como controle social principal;
+- não mapear emoção diretamente para pitch/volume como comportamento;
+- não deixar testes técnicos consolidarem estado persistente por padrão;
+- não declarar hardware PASS com base apenas em CI;
 - não expandir V1 com V1.1/V1.2 sem decisão explícita.
 
 Se a mesma área entrar em patch loop, parar e pesquisar/reavaliar ownership antes de continuar.

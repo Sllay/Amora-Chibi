@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from amora.app import AmoraCore
-from amora.cognition import CognitiveRequest, ProviderDelta, ProviderError
+from amora.cognition import CognitiveRequest, ProviderError
 from amora.events import PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.time import SimulatedClock
@@ -25,22 +25,34 @@ class ScriptedProvider:
             cost_score=0.0,
             provider_class=ProviderClass.REMOTE_EPHEMERAL,
             allowed_privacy_scopes=frozenset({PrivacyScope.PERSONAL}),
-            supports_streaming=True,
+            supports_streaming=False,
+            supports_structured_output=True,
             context_window_tokens=100_000,
             priority=priority,
         )
 
-    async def stream(self, context):
+    async def realize(self, context):
         self.calls += 1
         if self.mode == "fail503":
             raise ProviderError("temporary", status_code=503)
         if self.mode == "rate_limit":
             raise ProviderError("quota", status_code=429, retry_after="60")
-        if self.mode == "partial_fail":
-            yield ProviderDelta(text="Primeira frase.", status_code=200)
-            raise ProviderError("failed after speech", status_code=503)
-        yield ProviderDelta(text=f"Resposta de {self.descriptor.name}.", status_code=200, remaining_requests=10)
-        yield ProviderDelta(done=True, input_tokens=20, output_tokens=8, latency_ms=3.0, status_code=200, remaining_requests=10)
+        if self.mode == "incomplete_fail":
+            # No frame became authoritative and therefore no speech may have
+            # escaped. A second provider is still safe at this point.
+            raise ProviderError("failed before validated realization", status_code=503)
+        allowed = list(context.dialogue_plan["response_moves"])
+        return {
+            "moves": [{"kind": allowed[0], "text": f"Resposta de {self.descriptor.name}."}],
+            "closing": "statement",
+            "_usage": {
+                "input_tokens": 20,
+                "output_tokens": 8,
+                "latency_ms": 3.0,
+                "status_code": 200,
+                "remaining_requests": 10,
+            },
+        }
 
 
 def _clock() -> SimulatedClock:
@@ -49,15 +61,16 @@ def _clock() -> SimulatedClock:
 
 def _request() -> CognitiveRequest:
     return CognitiveRequest(
-        text="Oi Amora",
+        text="Amora, o que você acha desse jogo?",
         speaker_id="PERSON_BK",
+        target_id="ENTITY_AMORA",
         privacy_scope=PrivacyScope.PERSONAL,
         remote_processing_allowed=True,
     )
 
 
 @pytest.mark.asyncio
-async def test_provider_failure_before_speech_fails_over(tmp_path: Path, monkeypatch) -> None:
+async def test_provider_failure_before_validated_frame_fails_over(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=_clock())
     try:
@@ -79,20 +92,30 @@ async def test_provider_failure_before_speech_fails_over(tmp_path: Path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_provider_failure_after_speech_never_stitches_second_provider(tmp_path: Path, monkeypatch) -> None:
+async def test_incomplete_realization_emits_nothing_and_safe_failover_is_allowed(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=_clock())
     try:
-        primary = ScriptedProvider("primary", priority=9, mode="partial_fail")
+        primary = ScriptedProvider("primary", priority=9, mode="incomplete_fail")
         fallback = ScriptedProvider("secondary", priority=3, mode="success")
         core.cognition.register_provider(primary)
         core.cognition.register_provider(fallback)
-        plan = await core.cognition.respond(_request())
+        request = _request()
+        plan = await core.cognition.respond(request)
         assert primary.calls == 1
-        assert fallback.calls == 0
-        assert plan.provider == "primary"
-        assert "FAILOVER_BLOCKED_AFTER_SPEECH" in plan.reason_codes
-        assert plan.speech_segments == ["Primeira frase."]
+        assert fallback.calls == 1
+        assert plan.provider == "secondary"
+        assert plan.speech_segments == ["Resposta de secondary."]
+        assert "PROVIDER_FAILOVER_USED" in plan.reason_codes
+        # A provider that failed before validation may have usage/error journal
+        # rows, but it must never create an Amora speech message.
+        assistant_messages = [
+            item for item in core.cognition.store.list_messages(turn_id=request.turn_id)
+            if item.speaker_id == "ENTITY_AMORA"
+        ]
+        assert assistant_messages
+        assert all(item.provider != "primary" for item in assistant_messages)
+        assert any(item.provider == "secondary" for item in assistant_messages)
     finally:
         core.close()
 

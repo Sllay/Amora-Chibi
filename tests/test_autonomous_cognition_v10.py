@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from amora.app import AmoraCore
-from amora.cognition import ProviderDelta
+from amora.cognition.realization import RealizationValidator
 from amora.events import AmoraEvent, PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.time import SimulatedClock
@@ -24,17 +24,28 @@ class AutonomousProvider:
             cost_score=0.0,
             provider_class=ProviderClass.REMOTE_EPHEMERAL,
             allowed_privacy_scopes=frozenset({PrivacyScope.PERSONAL}),
-            supports_streaming=True,
+            supports_streaming=False,
+            supports_structured_output=True,
             context_window_tokens=100_000,
             priority=80,
         )
 
-    async def stream(self, context):
+    async def realize(self, context):
         assert "AUTONOMOUS_INITIATION" in context.reason_codes
         assert "não é uma fala recebida" in context.user_text.lower()
         self.seen_autonomous_context = True
-        yield ProviderDelta(text="Papis, pensei em você. Quer me mostrar o que tá fazendo?")
-        yield ProviderDelta(done=True, input_tokens=35, output_tokens=15, latency_ms=7.0, status_code=200)
+        allowed = list(context.dialogue_plan["response_moves"])
+        moves = [{"kind": "open_contact", "text": "Papis, pensei em você."}]
+        closing = "statement"
+        if bool(context.dialogue_plan.get("ask_followup")) and "ask_followup" in allowed:
+            moves.append({"kind": "ask_followup", "text": "Quer me mostrar o que tá fazendo?"})
+            closing = "question"
+        payload = {"moves": moves, "closing": closing}
+        RealizationValidator.parse_and_validate(context, payload)
+        return {
+            **payload,
+            "_usage": {"input_tokens": 35, "output_tokens": 15, "latency_ms": 7.0, "status_code": 200},
+        }
 
 
 def _clock() -> SimulatedClock:
@@ -66,6 +77,10 @@ async def test_autonomous_semantic_action_uses_canonical_cognition_when_opted_in
         item = await core.conversation.handle_semantic_event(_event(core))
         assert item is not None
         assert provider.seen_autonomous_context is True
+        state = core.cognition.state()
+        realization = state["last_realization"]
+        assert realization is not None, state["last_realization_rejection"]
+        assert realization["provider"] == "autonomy-provider"
         assert item.text == "Papis, pensei em você."
         assert item.metadata["autonomous"] is True
         assert item.metadata["cognitive_turn_id"]

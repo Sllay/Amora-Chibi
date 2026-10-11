@@ -1,3 +1,4 @@
+from .interaction import InteractionAppraisalProfile, InteractionAppraiser
 from .models import (
     AppraisalInput,
     AppraisalResult,
@@ -23,6 +24,8 @@ __all__ = [
     "EmotionStore",
     "EmotionType",
     "EntityAffect",
+    "InteractionAppraisalProfile",
+    "InteractionAppraiser",
     "MoodState",
     "SocialBid",
     "SocialBidStatus",
