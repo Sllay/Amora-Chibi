@@ -25,6 +25,7 @@ class VoiceOutput(
     context: Context,
     private val onSpeakingChanged: (Boolean) -> Unit,
     private val onFinished: (String, Outcome, Int?) -> Unit,
+    private val onVoicePackChanged: (VoicePackManager.Snapshot) -> Unit = {},
 ) : TextToSpeech.OnInitListener, AutoCloseable {
     enum class Outcome { SPOKEN, FAILED, INTERRUPTED, PARTIAL }
 
@@ -61,6 +62,7 @@ class VoiceOutput(
         })
 
         packManager.prepareAsync { state ->
+            onVoicePackChanged(state)
             when (state.state) {
                 VoicePackManager.State.READY -> Log.i(TAG, "Voz neural local pronta: ${state.detail}")
                 VoicePackManager.State.DOWNLOADING -> {
@@ -152,7 +154,6 @@ class VoiceOutput(
     private fun startAndroidEmergency(item: CoreClient.SpeechUtterance): Boolean {
         androidProgressKnown.set(true)
         lastSpokenEnd.set(0)
-        // Force Brazilian Portuguese even if an upstream locale accidentally drifts.
         val locale = Locale.forLanguageTag(identity.localeTag)
         val languageResult = tts.setLanguage(locale)
         if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
@@ -185,7 +186,6 @@ class VoiceOutput(
             }
         }
 
-        // Emergency means it must also work without another cloud dependency.
         val offline = voices.filter { !it.isNetworkConnectionRequired }
         val pool = if (offline.isNotEmpty()) offline else voices.toList()
         val languageMatches = pool.filter { it.locale.language.equals("pt", ignoreCase = true) }
