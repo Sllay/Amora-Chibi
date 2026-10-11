@@ -15,7 +15,7 @@ VAD_BYTES="643854"
 VOICE_ID="vits-piper-pt_BR-faber-medium"
 VOICE_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/${VOICE_ID}.tar.bz2"
 VOICE_MODEL="pt_BR-faber-medium.onnx"
-VOICE_MODEL_SHA="39fb6b580d6d40a3230b7a9d0851d282074537b9694892b5b3cd90ff87c6cbb3"
+VOICE_MODEL_SHA="956b4f1733903891c4ba0973d0603b2a3d8c09c8432fb3bb5203a90a7431daca"
 
 fetch_checked() {
   local url="$1" dest="$2" expected="$3" expected_size="${4:-}"
