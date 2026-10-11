@@ -15,11 +15,12 @@ Ordem de leitura:
 2. `docs/canon/ARCHITECTURE.md`;
 3. `docs/canon/GDD.md`;
 4. `docs/canon/DIALOGUE_EMOTION.md`;
-5. `docs/canon/VOICE_IDENTITY.md`;
-6. `docs/roadmap/VERSIONS.md`;
-7. `docs/decisions/`;
-8. este `PROJECT_STATE.md`;
-9. docs técnicos específicos de versão/módulo.
+5. `docs/canon/PROVIDER_MESH.md`;
+6. `docs/canon/VOICE_IDENTITY.md`;
+7. `docs/roadmap/VERSIONS.md`;
+8. `docs/decisions/`;
+9. este `PROJECT_STATE.md`;
+10. docs técnicos específicos de versão/módulo.
 
 Docs antigos não são autoridade atual quando divergirem do canon.
 
@@ -52,245 +53,193 @@ Backend: modular monolith, SQLite, asyncio/FastAPI, Event Bus e APIs locais.
 
 ---
 
-## 4. Estado técnico V1 já integrado
+## 4. Estado técnico V1 integrado
 
 ### Persistência cognitiva
 
-Schema V1 inclui estruturas como:
+Schema V1 inclui `conversation_messages`, `cognitive_journal`, `speech_segments` e `model_usage`.
 
-- `conversation_messages`;
-- `cognitive_journal`;
-- `speech_segments`;
-- `model_usage`.
-
-Restart e backup/restore devem preservar estado cognitivo persistente.
+Restart e backup/restore preservam estado cognitivo persistente.
 
 ### Context Compiler
 
-Compila somente contexto relevante a partir de:
+Compila somente contexto relevante a partir de Self Model, relationships, mood/affect, drives, intenção ativa, memories, World Model, conversa literal recente, privacy/remote authorization e DialoguePlan.
 
-- Self Model;
-- relationships;
-- mood/affect;
-- drives;
-- active intention;
-- memories;
-- World Model;
-- recent literal conversation;
-- privacy/remote authorization;
-- DialoguePlan.
+O turno humano atual aparece uma única vez para o provider. Turnos técnicos marcados com `test_mode` são excluídos como unidade causal do histórico futuro.
 
-### Histórico de diálogo
+### Dialogue Identity — Step 2 concluído
 
-O turno humano atual deve aparecer uma única vez para o provider.
+O Core possui `DialoguePlan` local e autoritativo com:
 
-Conversation History usa papéis nativos (`user/assistant`, `user/model`) em vez de achatar tudo em prompt.
+- dialogue act;
+- objective/moves;
+- stance;
+- relational attitude;
+- closing mode;
+- follow-up/help policy;
+- facts/grounding;
+- tone tags derivados de estado local.
 
-Segmentos de uma mesma resposta da Amora devem ser recompostos como um turno lógico para histórico.
+Atos incluem acknowledgement, self-fact, disclosure, support, resposta, continuação, opinião, discordância, reação brincalhona, reação relacional, boundary, autonomia e reflection.
 
-### Dialogue Orchestrator
+O provider não joga prose livre diretamente na fala. Fluxo atual:
 
-O Core possui `DialoguePlan` local e autoritativo.
+```text
+DialoguePlan
+→ provider gera RealizationFrame estruturado
+→ validator local
+→ somente então texto falável / SpeechSegment
+```
 
-Atos existentes incluem:
+Move não autorizado, follow-up/help proibido ou closing incompatível é rejeitado antes de qualquer fala.
 
-- acknowledgement;
-- self fact;
-- disclosure;
-- support request;
-- answer question;
-- continue topic;
-- autonomous initiation;
-- reflection.
+Self-facts simples e vocativos podem ser realizados localmente sem provider.
 
-Self-facts não definidos permanecem desconhecidos; provider não inventa idade/data/origem.
+### Emotion Engine — loop fechado
 
-**Defeito estrutural atual:** o plano ainda é enviado ao provider como instrução textual e não existe hard-control completo por `RealizationFrame` + validator. Step 2 corrige isso segundo ADR-0006.
+O Core possui appraisal determinístico, Emotion Events, Global Mood, Entity Affect, decay, blame, intentionality, spillover e Social Bids.
 
-### Emotion Engine
+A conversa normal agora alimenta o Emotion Engine **antes** da compilação cognitiva do mesmo turno por meio de `InteractionAppraiser` local e conservador.
 
-O Core já possui appraisal determinístico, Emotion Events, Global Mood, Entity Affect, decay, blame, intentionality, spillover e Social Bids.
+Consequências:
 
-**Defeito estrutural atual:** o fluxo normal de conversa consulta `current_mood()` e affect, mas não está fechado o suficiente para transformar acontecimentos normais de conversa em appraisals persistentes. Isso explica cenários em que `mood_valence` permanece em baseline apesar de conversas longas.
+- uma interação social significativa pode alterar mood/affect;
+- o mesmo turno já pode receber stance/attitude compatíveis com o estado atualizado;
+- perguntas neutras não fabricam emoção;
+- emoção influencia comportamento social antes da prosódia;
+- `test_mode` pode calcular preview sem persistir mood/affect.
 
-Step 2 deve conectar evento real → appraisal → Emotion Engine → Dialogue/Autonomy/Prosody conforme ADR-0007.
+Observabilidade inclui último appraisal, último Emotion Event/profile e último turno de teste.
 
-### Streaming cognition / speech
+### Test-state isolation
 
-- providers podem gerar incrementalmente;
-- `SpeechSegmenter` libera cláusulas estáveis;
-- `SpeechNormalizer` separa display/fala/nonverbal;
-- segmentos persistem antes da entrega;
-- estados incluem queued/speaking/spoken/interrupted/failed.
+Turnos técnicos podem usar:
 
-### Barge-in / cancellation
+```text
+test_mode=true
+memory_consolidation=false
+relationship_learning=false
+emotion_persistence=false
+```
 
-- Android monitora interrupção humana;
-- provider/turno pode ser cancelado;
-- não criar segmentos novos após cancelamento;
-- não costurar provider diferente depois que fala já começou;
-- entrega restante é interrompida/cancelada.
+Reflexão persistente é bloqueada nesses turnos; entrada + saída técnica são excluídas do histórico literal futuro e emoção pode ser apenas efêmera.
 
-### Structured reflection / proposals
+Existe rota autenticada `/v1/conversation/test-turn` para probes isolados.
 
-Provider pode propor, mas gates locais decidem:
+### Addressee continuity
 
-- memória;
-- belief hypothesis;
-- action suggestion;
-- tone metadata.
+Uma chamada explícita abre janela curta de continuidade. Follow-ups inferidos podem usar o tempo restante, mas **não renovam** a janela indefinidamente.
 
-Structured output do provider é não confiável até passar por validação local.
+### Provider resilience / mesh — Step 3 concluído
 
-### Provider resilience
+Malha V1:
 
-Linha atual inclui:
+1. Groq primary enquanto saudável;
+2. Cloudflare Workers AI como segundo eixo direto, quando explicitamente confirmado zero-cost;
+3. Gemini como fallback independente quando configurado;
+4. OpenRouter em rota explicitamente gratuita como broker/specialist/último recurso;
+5. fallback local.
 
-- Groq primary;
-- Gemini cognitive fallback quando configurado;
-- local fallback;
-- quota/cooldown/backoff;
-- failover antes de fala emitida;
-- Cognitive Replay sem mutação do estado.
+Cloudflare e OpenRouter usam adapters estruturados compatíveis com `RealizationFrame` e reflection proposals.
 
-Direção aprovada para Step 3:
+Guardas de custo:
 
-- adicionar Cloudflare Workers AI;
-- usar OpenRouter como specialist broker / último recurso;
-- manter objetivo operacional R$ 0 sempre que praticável.
+- Cloudflare só registra se token + account id existirem **e** `AMORA_CLOUDFLARE_ZERO_COST_CONFIRMED=true`;
+- adapter Cloudflare usa Workers AI direto, não Unified Billing;
+- OpenRouter só fica disponível para `openrouter/free` ou modelo `:free`;
+- modelo OpenRouter não-gratuito falha fechado;
+- ausência de credencial apenas remove aquele provider da malha;
+- quota/preço atual não é hardcoded como contrato eterno.
+
+Router continua selecionando por capability, privacy, saúde, quota, custo relativo e prioridade. Cooldown/backoff/failover continuam locais.
+
+Health report expõe providers configurados/registrados e nomes de providers sem expor secrets.
 
 ### Privacidade
 
-Android possui autorização explícita para cognição remota de falas do usuário, separada de autorização de STT/áudio.
+Android possui autorização explícita para cognição remota de falas do usuário, separada de STT/áudio.
 
-`AMORA_REMOTE_COGNITION_ALLOWED` é fallback/controle de cognição remota autônoma quando o evento não traz autorização explícita; não deve substituir o toggle normal do app.
+`AMORA_REMOTE_COGNITION_ALLOWED` é fallback/controle para cognição remota autônoma quando o evento não traz autorização explícita; não substitui o toggle normal do app.
 
-AUTH nunca vai para provider remoto.
-
-Disclosure e Remote Processing continuam políticas diferentes.
-
-### Observabilidade
-
-O servidor possui console operacional vivo para evitar spam infinito de polling e mostrar estados/módulos/providers/plugins.
-
-Logs estruturados completos permanecem separados do painel humano.
-
-Step 2 deve tornar observáveis último appraisal, último Emotion Event, DialoguePlan, RealizationFrame/validator e `test_mode`.
+AUTH/SECRET não vão para providers remotos.
 
 ---
 
-## 5. Decisões/incidentes recentes importantes
-
-### Step 1 — voz local: PASS de ativação
-
-PR #27 foi mergeado após:
-
-- CI Core PASS;
-- Android build/test PASS;
-- modelo Faber empacotado e hash verificado;
-- Galaxy A15 reproduzir fisicamente a voz neural Faber via sherpa-onnx.
-
-A causa principal do fallback robótico anterior foi um SHA-256 obsoleto que rejeitava o modelo Faber atual. A dev6 moveu o voice pack para build-time assets e removeu fallback automático oculto para Google/Android TTS.
-
-Faber continua **provisório e masculino**. A voz feminina canônica `amora-voice-v1` fica para Step 4.
-
-### Comportamento “chatbot”
-
-Mesmo com `offer_help=false` / `ask_followup=false`, modelos gerais podem produzir reflexos de atendimento.
-
-Decisão: não resolver com prompt infinito/blacklist. Implementar `RealizationFrame` estruturado + validator local. Ver ADR-0003 e ADR-0006.
-
-### Emoção sem circuito completo
-
-Emotion Engine existe, mas precisa receber appraisals do fluxo normal de conversa/ação. Ler mood sem alimentá-lo é integração parcial.
-
-Decisão: fechar o circuito e adicionar isolamento de testes. Ver ADR-0007 e `docs/canon/DIALOGUE_EMOTION.md`.
-
-### Testes contaminando estado
-
-Baterias técnicas não devem virar biografia, relação ou emoção persistente.
-
-Direção: metadata de teste capaz de desabilitar consolidação de memória, aprendizado relacional e persistência emocional sem impedir o pipeline técnico.
-
----
-
-## 6. Fechamento V1 — quatro passos
+## 5. Fechamento V1 — quatro passos
 
 ### Step 1 — Local Voice
 
-**Status operacional:** `PASS / MERGED`.
+**Status:** `PASS / MERGED` — PR #27.
 
 Entregue:
 
-- `VoiceIdentity` pt-BR fixa e provisória;
+- `VoiceIdentity` pt-BR provisória;
 - sherpa-onnx `OfflineTts`;
 - Piper/VITS Faber provisório;
-- voice pack empacotado em build-time assets;
-- SHA-256 verificado;
+- voice pack empacotado em build-time assets e SHA verificado;
 - PCM local via AudioTrack;
-- Gemini TTS removido do caminho normal;
-- sem fallback automático silencioso para Android/Google TTS;
+- Gemini TTS fora do caminho normal;
+- sem fallback automático silencioso para Google/Android TTS;
 - diagnóstico de voz no app;
-- confirmação física de Faber no Galaxy A15.
+- confirmação física do Faber no Galaxy A15.
 
-Barge-in prolongado, estabilidade térmica e regressões de longa duração continuam no gate final de certificação V1, não como bloqueio estrutural de Step 2.
+Faber é técnico/provisório e masculino.
 
 ### Step 2 — Dialogue Identity + Emotion Integration
 
-**Status:** `IN_PROGRESS`.
+**Status:** `PASS / MERGED` — PR #29, merge `dfe50de9a9312f0e6a3f08cc482e9b4dc0aee1d4`.
 
-Branch ativa:
+Entregue:
 
-```text
-feat/v1.0-dialogue-emotion-integration
-```
+- DialoguePlan rico;
+- RealizationFrame estruturado + validator local;
+- local realization para atos triviais;
+- emotion loop conversa → appraisal → Emotion Engine → diálogo;
+- test-state isolation;
+- observabilidade de appraisal/realization;
+- addressee continuity sem auto-renovação;
+- correção da ordem causal de `AUTONOMOUS_INITIATION`/`COGNITIVE_REFLECTION` antes do plano.
 
-Escopo:
-
-- atos sociais ricos;
-- stance/opinião;
-- relational attitude;
-- closing mode;
-- `RealizationFrame` estruturado;
-- validator semântico estrutural;
-- realização local para atos triviais já resolvidos;
-- conectar conversa/eventos reais ao Emotion Engine;
-- emoção influenciar comportamento antes de prosódia;
-- test-mode sem contaminar memória/relação/mood persistente;
-- observabilidade de appraisal/plan/realization;
-- corrigir continuidade de addressee que não pode se auto-renovar infinitamente.
+CI final: Python 3.11–3.14 PASS, **211 pytest tests** por matriz + doctor/autonomy/actions/conversation/avatar/backup smokes PASS.
 
 ### Step 3 — Zero-Cost Provider Mesh
 
-**Status:** `PLANNED`.
+**Status:** `PASS / READY TO MERGE` — PR #30.
 
-- Groq;
-- Cloudflare Workers AI;
-- OpenRouter specialist/last resort;
-- quota/cooldown/circuit breaker;
-- provider certification por task class.
+Entregue:
+
+- `docs/canon/PROVIDER_MESH.md`;
+- Cloudflare Workers AI direct adapter;
+- OpenRouter free-route adapter;
+- integração com structured realization/reflection;
+- zero-cost guards fail-closed;
+- health/usage observability;
+- deterministic offline tests sem consumir API real.
+
+CI run `38172639477`: Python 3.11, 3.12, 3.13 e 3.14 PASS; pytest e todos os smoke tests PASS.
 
 ### Step 4 — Canonical Voice + V1 Certification
 
-**Status:** `PLANNED / VOZ ESPECIFICADA`.
+**Status:** `NEXT / VOICE TARGET CANONIZED`.
+
+Próximo escopo:
 
 - seguir `docs/canon/VOICE_IDENTITY.md`;
-- obter dataset feminino pt-BR com direitos claros;
-- treinar/fine-tunar `amora-voice-v1` fora do A15, priorizando compute gratuito;
+- selecionar material feminino pt-BR com direitos/provenance claros;
+- priorizar GPU gratuita para treino/fine-tuning;
 - escolher medium/high por qualidade + benchmark, não pelo rótulo;
-- export ONNX e empacotar no mesmo runtime sherpa-onnx;
-- certificação longa no A15;
-- restart;
-- backup/restore;
-- quota/failover;
-- conversa longa;
-- estabilidade térmica/memória.
+- exportar ONNX e empacotar no mesmo runtime sherpa-onnx já comprovado;
+- calibrar Prosody Planner bounded;
+- teste prolongado no A15;
+- conversa/barge-in/provider failover/restart/backup-restore;
+- estabilidade térmica e de memória;
+- fechamento documental V1.
 
-Treino pago não é requisito operacional. Se compute pago algum dia for avaliado, precisa de teto explícito; GPU gratuita é preferência.
+Treino pago não é requisito. Se compute pago algum dia for avaliado, exige teto explícito de custo e decisão consciente. RAM do A15 não equivale a VRAM de GPU; o A15 permanece alvo de inferência/certificação por padrão.
 
 ---
 
-## 7. Regra de testes daqui para frente
+## 6. Regra de testes
 
 Um teste só deve existir se o resultado:
 
@@ -303,7 +252,7 @@ Evitar builds/experimentos descartáveis apenas por curiosidade quando não alte
 
 ---
 
-## 8. Roadmap posterior
+## 7. Roadmap posterior
 
 ### V1.1
 
@@ -325,11 +274,9 @@ Planejamento antigo V0.9/V0.95 foi dividido. Esses itens foram movidos, não can
 
 ---
 
-## 9. Git / Android workflow
+## 8. Git / Android workflow
 
 BK usa GitSync para atualizar o diretório compartilhado e não quer credenciais GitHub no Termux.
-
-Fluxo Android/Core:
 
 ```bash
 bash /storage/emulated/0/Documents/Amora-Chibi/tools/termux-sync.sh \
@@ -346,22 +293,20 @@ Provider secrets ficam no SecretStore local da Amora, nunca em chat/repo.
 
 ---
 
-## 10. Regras de continuidade para próximo chat/agente
+## 9. Regras de continuidade
 
 Antes de sugerir arquitetura nova:
 
-- ler canon;
-- ler roadmap;
-- procurar ADR;
+- ler canon/roadmap/ADRs;
 - verificar PRs ativos;
-- não confundir plano antigo com plano atual;
 - não reintroduzir Gemini TTS como voz normal;
 - não transformar provider em identidade;
 - não inventar self-facts;
 - não tratar blacklist como controle social principal;
 - não mapear emoção diretamente para pitch/volume como comportamento;
 - não deixar testes técnicos consolidarem estado persistente por padrão;
+- não ativar billing/pago silenciosamente;
 - não declarar hardware PASS com base apenas em CI;
 - não expandir V1 com V1.1/V1.2 sem decisão explícita.
 
-Se a mesma área entrar em patch loop, parar e pesquisar/reavaliar ownership antes de continuar.
+Se a mesma área entrar em patch loop, parar e reavaliar ownership antes de continuar.

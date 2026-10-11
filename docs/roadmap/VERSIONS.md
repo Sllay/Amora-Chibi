@@ -3,9 +3,7 @@
 **Status:** CANÔNICO  
 **Atualizado em:** 2026-10-11
 
-Este arquivo existe para impedir um erro recorrente: interpretar uma feature ausente da versão atual como “cancelada”.
-
-Cada item importante deve indicar origem, destino atual e motivo de movimento quando aplicável.
+Este arquivo impede interpretar feature ausente da versão atual como “cancelada”. `MOVED` não significa cancelado.
 
 ---
 
@@ -21,133 +19,63 @@ Cada item importante deve indicar origem, destino atual e motivo de movimento qu
 | `EXPERIMENTAL` | laboratório; não é canon operacional |
 | `REJECTED` | método/feature rejeitado; consultar ADR |
 
-`MOVED` **não** significa cancelado.
-
 ---
 
 ## 2. Linhagem histórica
 
 ### V0.1 — Core Foundations
 
-Escopo histórico:
-
-- Event Bus;
-- SQLite/migrations;
-- schemas;
-- API;
-- TimeService/Scheduler;
-- Entity Registry;
-- Relationship Graph;
-- Device/Session Identity;
-- Secrets Vault;
-- Model Router inicial.
+Event Bus, SQLite/migrations, schemas, API, TimeService/Scheduler, Entity Registry, Relationship Graph, Device/Session Identity, Secrets Vault e Model Router inicial.
 
 Destino atual: fundação absorvida pelo Core V1.
 
 ### V0.2 — Language / Social Foundation
 
-Escopo histórico:
+VAD/STT, speaker/addressee, Social Scene, Perspective Resolver e ACIR.
 
-- VAD/STT;
-- speaker/addressee;
-- Social Scene;
-- Perspective Resolver;
-- ACIR.
-
-Destino atual: fundação social/cognitiva do Core V1.
+Destino atual: fundação social/cognitiva V1.
 
 ### V0.3 — Memória
 
-Escopo histórico:
-
-- Raw Event Log;
-- memória episódica/semântica/relacional;
-- provenance;
-- retrieval;
-- backup inicial.
+Raw Event Log, memória episódica/semântica/relacional, provenance, retrieval e backup inicial.
 
 Destino atual: Memory System V1.
 
 ### V0.4 — Identidade avançada / World Model
 
-Escopo histórico:
-
-- relationship evolution;
-- self model;
-- beliefs;
-- world model;
-- consolidação de perspectiva.
+Relationship evolution, self model, beliefs, world model e consolidação de perspectiva.
 
 Destino atual: estado canônico V1.
 
 ### V0.5 — Emoção
 
-Escopo histórico concluído em 2026-10-08:
+Appraisal determinístico, Emotion Events causais, Global Mood, Entity Affect, blame/intentionality/spillover, decay, reparação/ambivalência e Social Bids candidatos.
 
-- appraisal determinístico;
-- Emotion Events causais;
-- Global Mood;
-- Entity Affect;
-- blame / intentionality / spillover;
-- decay;
-- reparação/ambivalência;
-- Social Bids candidatos.
-
-Destino atual: Emotion Engine V1.
-
-**Integração pendente descoberta na V1:** o engine existe, mas o fluxo normal de conversa/ação precisa alimentá-lo em loop fechado. Isso pertence ao V1 Step 2 e não reabre a V0.5.
+Destino atual: Emotion Engine V1. A integração normal conversa → appraisal → Emotion Engine foi fechada no Step 2.
 
 ### V0.6 — Autonomia
 
-Escopo histórico:
-
-- drives;
-- Utility;
-- BDI;
-- hysteresis;
-- arbitragem de Social Bids.
+Drives, Utility, BDI, hysteresis e arbitragem de Social Bids.
 
 Destino atual: Autonomy Engine V1.
 
 ### V0.7 — Ações
 
-Escopo histórico:
-
-- plugins;
-- tools;
-- planner;
-- skills;
-- execution monitor.
+Plugins, tools, planner, skills e execution monitor.
 
 Destino atual: action/plugin infrastructure V1.
 
 ### V0.8 — Conversa natural
 
-Escopo histórico:
-
-- voice pipeline;
-- Turn Manager;
-- backchannels;
-- autonomia social;
-- conversa/streaming inicial.
+Voice pipeline, Turn Manager, backchannels, autonomia social e conversa/cognição inicial.
 
 Destino atual: Conversation + Cognition V1.
 
 ---
 
-## 3. O que aconteceu com a V0.9 antiga
+## 3. V0.9/V0.95 antigos
 
-A V0.9 antiga concentrava avatar/corpo/customização e o planejamento posterior V0.95 concentrava percepção avançada.
-
-Durante a evolução da arquitetura, esse pacote ficou grande demais e misturava três problemas diferentes:
-
-1. corpo/percepção visual;
-2. identidade estética persistente;
-3. fechamento cognitivo/voz da V1.
-
-A decisão atual foi **dividir**, não descartar.
-
-### Mapa de migração
+O planejamento antigo misturava corpo/percepção, estética persistente e fechamento cognitivo/voz. Foi dividido, não descartado.
 
 ```text
 PLANEJAMENTO ANTIGO V0.9 / V0.95
@@ -162,122 +90,118 @@ PLANEJAMENTO ANTIGO V0.9 / V0.95
 └── ownership de autoimagem ─────────────────────→ V1.2
 ```
 
-O que já existia como infraestrutura/experimento de avatar pode continuar no repositório, mas **não obriga o fechamento V1.0 a terminar o corpo final**.
+Infraestrutura/experimentos antigos de avatar podem permanecer no repo, mas não bloqueiam o fechamento V1.0.
 
 ---
 
 ## 4. V1.0 — fechamento atual
 
-**Status:** `IN_PROGRESS`
+**Status:** `IN_PROGRESS — STEP 4 NEXT`
 
-Objetivo: fechar cognição, diálogo, emoção integrada, voz, provider resilience, Android e certificação sem reabrir escopo visual futuro.
-
-### Já faz parte da fundação V1
+Fundação atual inclui:
 
 - Context Compiler;
 - Conversation History literal;
 - Cognitive Journal;
-- streaming cognição → fala;
 - barge-in/cancellation;
-- structured proposals atrás de gates locais;
+- structured proposals e structured surface realization atrás de gates locais;
 - autonomia;
 - routing/quota/backoff/failover;
 - reflection;
 - Cognitive Replay;
-- privacy/consent de processamento remoto;
+- privacy/consent remoto;
 - backup/restore/observabilidade;
-- local Dialogue Orchestrator;
-- provider como realização linguística;
+- Dialogue Orchestrator local;
+- Emotion Engine em loop fechado com conversa;
+- test-state isolation;
+- provider mesh zero-cost fail-closed;
 - Android app/pareamento/foreground voice;
-- server console/health infrastructure;
-- Emotion Engine com appraisal/mood/affect;
-- voice path local sherpa-onnx comprovado fisicamente no Galaxy A15.
+- voice path sherpa-onnx fisicamente comprovado no Galaxy A15.
 
-### Fechamento em quatro passos
+### V1 Step 1 — Local Voice
 
-#### V1 Step 1 — Local Voice
-
-**Status:** `IMPLEMENTED / PHYSICAL PATH PASS`
+**Status:** `IMPLEMENTED / PHYSICAL PATH PASS / MERGED`
 
 Entregue:
 
-- VoiceIdentity pt-BR fixa/provisória;
-- sherpa-onnx + TTS local Piper/VITS Faber;
-- voice pack verificado e empacotado em build-time assets;
+- VoiceIdentity pt-BR provisória;
+- sherpa-onnx + Piper/VITS Faber;
+- voice pack verificado/empacotado em build-time assets;
 - síntese offline;
 - Gemini TTS fora do caminho normal;
-- sem fallback automático silencioso para Android/Google TTS;
+- sem fallback silencioso Google/Android;
 - diagnóstico local;
-- Galaxy A15 reproduziu fisicamente a voz neural Faber.
+- Galaxy A15 reproduziu fisicamente Faber.
 
-O Faber é somente voz técnica provisória. Barge-in prolongado, térmica e conversa longa permanecem no gate final V1.
+Faber continua voz técnica provisória. Long-run barge-in/térmica/conversa permanecem no gate final V1.
 
-#### V1 Step 2 — Dialogue Identity + Emotion Integration
+### V1 Step 2 — Dialogue Identity + Emotion Integration
 
-**Status:** `IN_PROGRESS`
+**Status:** `IMPLEMENTED / MERGED`
 
-Objetivo:
+Entregue:
 
-- atos locais de opinião/discordância/zoeira/reclamação/reação relacional/limite;
+- atos locais ricos;
 - stance e relational attitude;
 - closing mode;
-- `RealizationFrame` estruturado entre provider e fala;
-- validator estrutural/semântico pós-geração;
-- realização local para atos triviais já resolvidos;
-- conversation/action events alimentarem Emotion Engine em loop fechado;
-- estado emocional influenciar comportamento social antes da prosódia;
-- isolamento de testes (`test_mode`) para não consolidar memória/relação/mood quando desabilitado;
-- observabilidade do último appraisal, DialoguePlan e RealizationFrame;
-- correção da janela de addressee que não pode se auto-renovar.
+- RealizationFrame estruturado;
+- validator local antes da fala;
+- realização local para atos triviais/self-facts;
+- conversation events alimentando Emotion Engine antes do DialoguePlan;
+- emoção influenciando comportamento antes da prosódia;
+- test-mode sem consolidar estado persistente;
+- observabilidade de appraisal/plan/realization;
+- addressee continuity sem auto-renovação;
+- cognitive mode aplicado antes do plano.
 
-Critério de saída:
+PR #29 / merge `dfe50de9a9312f0e6a3f08cc482e9b4dc0aee1d4`.
 
-- reduzir comportamento de atendimento genérico por enforcement estrutural, não blacklist;
-- provider respeitar moves autorizados, `ask_followup`, `offer_help` e facts;
-- self-facts grounded;
-- conversa significativa conseguir alterar mood/affect quando aplicável;
-- emoção mudar comportamento sem trocar identidade;
-- testes técnicos poderem atravessar o pipeline sem contaminar estado persistente;
-- testes determinísticos e Cognitive Replay cobrirem as regressões conhecidas.
+CI: Python 3.11–3.14 PASS, 211 pytest tests por matriz e smokes de doctor/autonomy/actions/conversation/avatar/backup PASS.
 
-#### V1 Step 3 — Zero-Cost Provider Mesh
+### V1 Step 3 — Zero-Cost Provider Mesh
 
-**Status:** `PLANNED`
+**Status:** `IMPLEMENTED / CI PASS / READY TO MERGE`
 
-Objetivo:
+Entregue:
 
-- Groq como provider principal enquanto aprovado;
-- Cloudflare Workers AI como segundo eixo gratuito/failover;
-- OpenRouter como specialist broker / último recurso;
-- quota, cooldown, circuit breaker e failover por task class;
-- providers pagos não necessários ao uso casual.
+- `docs/canon/PROVIDER_MESH.md`;
+- Groq primary;
+- Cloudflare Workers AI como segundo eixo direto;
+- Gemini fallback independente;
+- OpenRouter free-route como specialist/last resort;
+- fallback local;
+- quota/cooldown/circuit breaker/failover preservados;
+- zero-cost guards fail-closed;
+- health/usage observability;
+- deterministic offline provider-mesh tests.
 
-Critério de saída:
+Guardas:
 
-- falha/quota de um provider não interrompe identidade;
-- uso e seleção observáveis;
-- rotas remotas respeitam privacy gate;
-- custo normal tende a R$ 0.
+- Cloudflare só registra com configuração + confirmação explícita de zero-cost;
+- OpenRouter só fica disponível para rota explicitamente gratuita;
+- nenhuma ausência de provider quebra o Core;
+- nenhum adapter ativa billing/pago silenciosamente.
 
-#### V1 Step 4 — Canonical Voice + V1 Certification
+PR #30. CI run `38172639477`: Python 3.11–3.14 PASS, pytest e todos os smoke tests PASS sem chamadas reais aos providers.
 
-**Status:** `PLANNED / VOICE TARGET CANONIZED`
+### V1 Step 4 — Canonical Voice + V1 Certification
+
+**Status:** `NEXT / VOICE TARGET CANONIZED`
 
 Objetivo:
 
 - seguir `docs/canon/VOICE_IDENTITY.md`;
 - selecionar material feminino pt-BR com direitos/provenance claros;
-- treinar/fine-tunar `amora-voice-v1` priorizando GPU gratuita;
+- priorizar GPU gratuita para treino/fine-tuning;
 - medium/high escolhido por naturalidade + benchmark, não pelo rótulo;
 - exportar ONNX e manter inferência local no sherpa-onnx;
+- integrar Prosody Planner bounded;
 - teste prolongado no A15;
-- conversa, barge-in, quota, failover, restart, backup/restore;
-- estabilidade térmica e de memória;
-- fechamento documental.
+- conversa, barge-in, provider failover, restart e backup/restore;
+- estabilidade térmica/memória;
+- fechamento documental V1.
 
-Compute pago não é dependência. Caso seja avaliado futuramente, exige teto explícito de custo e decisão consciente; nunca deixar instância sem limite previsível.
-
-Treino no Galaxy A15 não é padrão: RAM do aparelho não equivale a VRAM de GPU. O A15 permanece alvo de inferência/certificação.
+Compute pago não é dependência. Se for avaliado no futuro, exige teto explícito de custo e decisão consciente. Treino no Galaxy A15 não é padrão: RAM do aparelho não equivale a VRAM de GPU.
 
 ---
 
@@ -290,7 +214,7 @@ Um experimento/teste novo deve existir apenas quando seu resultado:
 3. detecta/previne regressão crítica;
 4. valida contrato destinado à produção.
 
-Experimentos descartáveis que apenas demonstram algo já provado devem ser evitados para reduzir tempo, complexidade e consumo de recursos.
+Evitar experimentos descartáveis que apenas demonstram algo já provado.
 
 ---
 
@@ -298,17 +222,13 @@ Experimentos descartáveis que apenas demonstram algo já provado devem ser evit
 
 **Status:** `PLANNED`
 
-Originado principalmente de partes antigas de V0.9/V0.95.
-
-Escopo:
-
 - percepção visual;
 - screen mapping;
-- seleção de keyframes/OCR/scene changes;
+- keyframes/OCR/scene changes;
 - corpo/avatar final;
 - renderer/rig/expressões necessários;
 - integração Mind → Avatar;
-- presença visual final mobile/stream quando aplicável.
+- presença visual mobile/stream quando aplicável.
 
 Não transformar V1.1 automaticamente em editor profissional de Live2D/rig completo.
 
@@ -318,10 +238,6 @@ Não transformar V1.1 automaticamente em editor profissional de Live2D/rig compl
 
 **Status:** `PLANNED`
 
-Originado de ideias antigas de customização que exigem estado persistente próprio, não apenas UI de troca de roupa.
-
-Escopo:
-
 - preferências estéticas persistentes;
 - desejo de alterar aparência;
 - escolha/avaliação de roupa;
@@ -329,27 +245,26 @@ Escopo:
 - self-image ownership;
 - evolução estética coerente com identidade/memória.
 
-Essas capacidades devem ser da Amora, não simplesmente presets controlados pelo provider.
+Essas capacidades devem ser da Amora, não presets controlados pelo provider.
 
 ---
 
 ## 8. Futuro / backlog
 
-Possibilidades futuras sem compromisso de versão ainda:
+Possibilidades sem compromisso de versão:
 
 - plugins de games;
-- Minecraft/servidor privado/mod/bridge;
+- Minecraft;
 - navegador;
 - Discord;
 - OBS/PRISM avançado;
 - automações externas;
 - modelos RP especializados;
 - TTS local zero-shot/voice cloning alternativo;
-- Pocket TTS ou outros backends após benchmark;
-- streaming próprio apenas se houver motivo real;
+- outros backends após benchmark necessário;
 - ferramentas especializadas via OpenRouter.
 
-Nada desta seção deve entrar automaticamente na V1/V1.1/V1.2.
+Nada desta seção entra automaticamente na V1/V1.1/V1.2.
 
 ---
 
@@ -358,20 +273,7 @@ Nada desta seção deve entrar automaticamente na V1/V1.1/V1.2.
 Quando uma decisão de versão mudar:
 
 1. não apagar silenciosamente o item antigo;
-2. atualizar este arquivo com `origin_version`, novo destino e motivo;
-3. criar/atualizar ADR se a mudança for relevante;
-4. atualizar GDD/Architecture/canon se a visão atual mudar;
+2. registrar origem, novo destino e motivo;
+3. criar/atualizar ADR quando relevante;
+4. atualizar canon/roadmap;
 5. manter histórico Git.
-
-Exemplo:
-
-```text
-Feature: estética persistente
-Origin: V0.9 planning
-Old target: V0.9
-New target: V1.2
-Status: MOVED
-Reason: separar corpo/render de preferência/autoimagem persistente
-```
-
-Isso evita que chats futuros “redescubram” um plano antigo e o tratem como novidade ou restaurem uma decisão já abandonada.
