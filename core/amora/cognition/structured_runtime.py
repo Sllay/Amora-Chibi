@@ -8,6 +8,7 @@ from amora.models import TaskClass
 
 from .models import CognitiveRequest, CognitiveResponsePlan, JournalStage
 from .production import CognitiveEngine as ProductionCognitiveEngine
+from .proposals import CognitiveProposalBundle
 from .providers import ProviderError
 from .providers_structured import GeminiCognitiveProvider
 from .realization import RealizationError, RealizationValidator, ValidatedRealization
@@ -23,6 +24,12 @@ class CognitiveEngine(ProductionCognitiveEngine):
     latency for semantic authority and safe provider failover.
     """
 
+    def state(self) -> dict[str, object]:
+        state = super().state()
+        state["last_realization"] = getattr(self, "_last_realization", None)
+        state["last_realization_rejection"] = getattr(self, "_last_realization_rejection", None)
+        return state
+
     def register_provider(self, provider) -> None:
         super().register_provider(provider)
         # ResilientCognitiveEngine historically bootstraps the V1 Gemini adapter.
@@ -35,6 +42,59 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 if structured.descriptor.available:
                     self._providers["gemini"] = structured
                     self.router.register(structured.descriptor)
+
+    async def reflect(self, request: CognitiveRequest) -> CognitiveProposalBundle:
+        """Never consolidate provider proposals from technical test turns."""
+        if bool(request.metadata.get("test_mode", False)) or request.metadata.get("memory_consolidation") is False:
+            self._journal(
+                request,
+                JournalStage.PROPOSALS_GATED,
+                summary="persistent reflection disabled for technical test turn",
+                reason_codes=["TEST_MODE", "PERSISTENT_REFLECTION_DISABLED"],
+                payload={
+                    "memory_consolidation": request.metadata.get("memory_consolidation"),
+                    "relationship_learning": request.metadata.get("relationship_learning"),
+                },
+                dedupe_key=f"journal:test-reflection-gate:{request.turn_id}",
+            )
+            return CognitiveProposalBundle(
+                reason_codes=["TEST_MODE", "PERSISTENT_REFLECTION_DISABLED", "NO_STATE_MUTATION"]
+            )
+        return await super().reflect(request)
+
+    async def _emit_segment(
+        self,
+        request: CognitiveRequest,
+        raw_text: str,
+        ordinal: int,
+        provider: str | None,
+        model: str | None,
+        on_segment: SegmentSink | None,
+        *,
+        source=None,
+    ) -> str | None:
+        speech = await super()._emit_segment(
+            request,
+            raw_text,
+            ordinal,
+            provider,
+            model,
+            on_segment,
+            source=source,
+        )
+        if not speech:
+            return speech
+        execution = _execution_metadata(request.metadata)
+        if execution:
+            segment = next(
+                (item for item in self.store.list_segments(request.turn_id) if item.ordinal == ordinal),
+                None,
+            )
+            if segment is not None:
+                message_id = segment.metadata.get("message_id")
+                if message_id:
+                    self.store.merge_message_metadata(str(message_id), execution)
+        return speech
 
     async def _respond_with_failover(
         self,
@@ -61,6 +121,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 "active_intention_kind": (context.active_intention or {}).get("kind"),
                 "estimated_tokens": estimated_tokens,
                 "token_budget": context.token_budget,
+                "test_mode": bool(request.metadata.get("test_mode", False)),
             },
         )
 
@@ -114,6 +175,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
             realize = getattr(provider, "realize", None) if provider is not None else None
             if not callable(realize):
                 last_failure = "PROVIDER_NO_REALIZATION_INTERFACE"
+                self._last_realization_rejection = {
+                    "provider": descriptor.name,
+                    "code": last_failure,
+                    "turn_id": str(request.turn_id),
+                }
                 self._journal(
                     request,
                     JournalStage.ERROR,
@@ -152,6 +218,12 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 validated = RealizationValidator.parse_and_validate(context, raw)
             except RealizationError as exc:
                 last_failure = exc.code
+                self._last_realization_rejection = {
+                    "provider": descriptor.name,
+                    "model": descriptor.model,
+                    "code": exc.code,
+                    "turn_id": str(request.turn_id),
+                }
                 self.store.record_usage(
                     provider=descriptor.name,
                     model=descriptor.model or "unknown",
@@ -174,6 +246,12 @@ class CognitiveEngine(ProductionCognitiveEngine):
             except Exception as exc:
                 status = exc.status_code if isinstance(exc, ProviderError) else None
                 last_failure = type(exc).__name__
+                self._last_realization_rejection = {
+                    "provider": descriptor.name,
+                    "model": descriptor.model,
+                    "code": last_failure,
+                    "turn_id": str(request.turn_id),
+                }
                 self._record_provider_failure(
                     request,
                     descriptor,
@@ -267,6 +345,15 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 started=started,
             )
 
+        frame_dump = validated.frame.model_dump(mode="json")
+        self._last_realization = {
+            "turn_id": str(request.turn_id),
+            "provider": provider,
+            "model": model,
+            "frame": frame_dump,
+            "reason_codes": list(reason_codes),
+        }
+        self._last_realization_rejection = None
         self._journal(
             request,
             JournalStage.RESPONSE_PLANNED,
@@ -275,7 +362,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             provider=provider,
             model=model,
             payload={
-                "realization_frame": validated.frame.model_dump(mode="json"),
+                "realization_frame": frame_dump,
                 "segments": len(emitted),
             },
             dedupe_key=f"journal:realization-validated:{request.turn_id}",
@@ -292,13 +379,18 @@ class CognitiveEngine(ProductionCognitiveEngine):
             output_tokens=_optional_int(usage.get("output_tokens")),
             latency_ms=(perf_counter() - started) * 1000.0,
             metadata={
-                "realization_frame": validated.frame.model_dump(mode="json"),
+                "realization_frame": frame_dump,
                 "realization_validated": True,
                 "candidate_index": usage.get("candidate_index"),
             },
         )
         self._finish_plan(request, plan)
         return plan
+
+
+def _execution_metadata(metadata: dict[str, Any]) -> dict[str, object]:
+    keys = ("test_mode", "memory_consolidation", "relationship_learning", "emotion_persistence")
+    return {key: metadata[key] for key in keys if key in metadata}
 
 
 def _optional_int(value: object) -> int | None:
