@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -43,11 +42,7 @@ class RealizationError(ValueError):
 
 
 class RealizationValidator:
-    """Validate provider wording against the Core-owned DialoguePlan.
-
-    The validator controls semantic structure rather than exact phrasing. It is
-    intentionally small and deterministic so provider swaps cannot alter policy.
-    """
+    """Validate provider wording against the Core-owned DialoguePlan."""
 
     _LOCAL_ACTS = {"acknowledge_call", "answer_self_fact"}
 
@@ -125,7 +120,7 @@ class RealizationValidator:
             return None
 
         if act == "acknowledge_call":
-            text = "Oi, papis." if _speaker_is_parent(context) else "Oi?"
+            text = "Oi, papis." if _speaker_is_parent(context) else "Oi."
             frame = RealizationFrame(
                 moves=[RealizationMove(kind="acknowledge_call", text=text)],
                 closing=RealizationClosing.STATEMENT,
