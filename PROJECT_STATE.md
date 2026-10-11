@@ -1,265 +1,332 @@
 # PROJECT_STATE — Amora-Chibi
 
-Última atualização: 2026-10-10 — branch `feat/v1.0-cognitive-integration`.
+**Última atualização:** 2026-10-10  
+**Objetivo:** permitir continuidade segura entre chats/agentes sem depender do histórico integral da conversa.
 
-Este arquivo existe para permitir continuidade segura entre chats/agentes sem depender do histórico da conversa.
+Este arquivo é um **snapshot operacional**. Para regras atuais, sempre leia primeiro `docs/canon/*`.
 
-## Fonte de verdade
+---
 
-Antes de alterar arquitetura/comportamento, usar em conjunto:
+## 1. Fonte de verdade
 
-1. `ARCHITECTURE.md` — arquitetura canônica do projeto quando disponível no contexto de desenvolvimento;
-2. `GDD.md` — escopo/visão canônica;
-3. `SKILL.md` — regras de implementação/continuidade;
-4. `AGENTS.md` — guardrails essenciais do repositório;
-5. este arquivo — estado operacional atual;
-6. `docs/V1.0_COGNITIVE_INTEGRATION.md` — contrato técnico da V1.
+Ordem de leitura:
 
-## Regra de identidade
+1. `docs/canon/SKILL.md`;
+2. `docs/canon/ARCHITECTURE.md`;
+3. `docs/canon/GDD.md`;
+4. `docs/roadmap/VERSIONS.md`;
+5. `docs/decisions/`;
+6. este `PROJECT_STATE.md`;
+7. docs técnicos específicos de versão/módulo.
 
-A Amora não é um LLM.
+Docs antigos não são autoridade atual quando divergirem do canon.
+
+---
+
+## 2. Invariante de identidade
 
 ```text
-Provider = capacidade cognitiva substituível
+Provider = capacidade cognitiva/linguística substituível
 Amora Core = identidade + estado + memória + relações + emoção + drives + intenção + causalidade
 ```
 
-Trocar Groq/Gemini/outro provider não pode trocar `ENTITY_AMORA`.
+A Amora não é um LLM.
 
-## Escopo atual
+Trocar Groq/Gemini/Cloudflare/OpenRouter/outro provider não pode trocar `ENTITY_AMORA`.
 
-### V1.0
+---
 
-V1.0 é **Cognitive Integration / Soul**:
+## 3. Plataforma
 
-- Context Compiler;
-- Cognitive Journal;
-- persistent Conversation History;
-- streaming cognition;
-- streaming/expressive voice;
-- causal barge-in;
-- autonomia generativa;
-- reflexão estruturada com gates locais;
-- provider failover/quota/backoff;
-- Cognitive Replay/model certification;
-- privacidade/consentimento remoto;
-- estabilidade, restart, backup/restore e observabilidade.
-
-### V1.1
-
-**Imagem, foto, câmera, screenshots e percepção visual avançada pertencem à V1.1.**
-
-Não mover percepção visual de volta para V1.0 por causa de versões antigas do roadmap.
-
-## Branch de trabalho
+Host principal atual:
 
 ```text
-feat/v1.0-cognitive-integration
+Galaxy A15 5G
+├── Termux / Python → Amora Core
+└── Android / Kotlin → microfone, áudio, UI, foreground service, pairing e voz local
 ```
 
-A branch nasceu sobre a V0.9 e contém todo o trabalho cognitivo da V1. Não recriar V1 em outra branch sem motivo.
+Backend: modular monolith, SQLite, asyncio/FastAPI, Event Bus e APIs locais.
 
-## Implementado na V1
+---
 
-### Cognitive persistence
+## 4. Estado técnico V1 já integrado
 
-- schema 10;
+### Persistência cognitiva
+
+Schema atual da linha V1 inclui estruturas como:
+
 - `conversation_messages`;
 - `cognitive_journal`;
 - `speech_segments`;
-- `model_usage`;
-- restart e backup/restore preservam o estado cognitivo.
+- `model_usage`.
+
+Restart e backup/restore devem preservar estado cognitivo persistente.
 
 ### Context Compiler
 
-Compila estado canônico selecionado:
+Compila somente contexto relevante a partir de:
 
 - Self Model;
 - relationships;
-- mood;
-- directed affect;
+- mood/affect;
 - drives;
 - active intention;
-- memory retrieval;
+- memories;
 - World Model;
-- recent conversation history;
-- privacy + remote-processing authorization.
+- recent literal conversation;
+- privacy/remote authorization;
+- DialoguePlan.
 
-### Streaming cognition
+### Histórico de diálogo
 
-- provider gera incrementalmente;
+O turno humano atual deve aparecer uma única vez para o provider.
+
+Conversation History usa papéis nativos (`user/assistant`, `user/model`) em vez de achatar tudo em prompt.
+
+Segmentos de uma mesma resposta da Amora devem ser recompostos como um turno lógico para histórico.
+
+### Dialogue Orchestrator
+
+O Core possui `DialoguePlan` local e autoritativo.
+
+Atos existentes incluem:
+
+- acknowledgement;
+- self fact;
+- disclosure;
+- support request;
+- answer question;
+- continue topic;
+- autonomous initiation;
+- reflection.
+
+Self-facts não definidos permanecem desconhecidos; provider não inventa idade/data/origem.
+
+Próximo refinamento da V1 deve adicionar opinião/stance/reação relacional/closing mode e validator estrutural para reduzir comportamento genérico de atendimento.
+
+### Streaming cognition / speech
+
+- providers podem gerar incrementalmente;
 - `SpeechSegmenter` libera cláusulas estáveis;
-- `SpeechNormalizer` separa display, fala e nonverbal cues;
-- segmentos são persistidos antes da entrega;
-- delivery state diferencia queued/speaking/spoken/interrupted/failed.
+- `SpeechNormalizer` separa display/fala/nonverbal;
+- segmentos persistem antes da entrega;
+- estados incluem queued/speaking/spoken/interrupted/failed.
 
-### Causal cancellation / barge-in
+### Barge-in / cancellation
 
-- Android usa Acoustic Echo Cancellation quando disponível;
-- barge-in exige energia humana sustentada acima do residual;
-- pre-roll curto preserva o começo da fala humana;
-- cancelamento usa executor de controle separado;
-- Core cancela a task/stream cognitivo;
-- segmentos novos não podem nascer após cancelamento;
-- utterances restantes são canceladas;
-- `TURN_FINISHED` só ocorre quando a entrega está terminal;
-- TTS local registra prefixo falado conhecido;
-- PCM remoto registra prefixo desconhecido em vez de inventar precisão.
+- Android monitora interrupção humana;
+- provider/turno pode ser cancelado;
+- não criar segmentos novos após cancelamento;
+- não costurar provider diferente depois que fala já começou;
+- entrega restante é interrompida/cancelada.
 
-### Voice
+### Structured reflection / proposals
 
-- Gemini expressive TTS quando permitido/configurado;
-- streaming PCM para Android;
-- fallback Android TextToSpeech;
-- seleção de voz local;
-- privacy gate antes de TTS remoto;
-- usage/journal de voz.
+Provider pode propor, mas gates locais decidem:
 
-### Autonomous cognition
-
-Ações semânticas verificadas podem passar por:
-
-```text
-BDI/action semantic request
-→ Turn Manager
-→ Context Compiler
-→ provider
-→ streaming speech
-```
-
-Cognição remota autônoma exige opt-in independente:
-
-```bash
-AMORA_REMOTE_COGNITION_ALLOWED=true
-```
-
-Default: false.
-
-### Structured reflection
-
-Provider pode propor:
-
-- memory candidates;
-- belief hypotheses;
-- action suggestions;
+- memória;
+- belief hypothesis;
+- action suggestion;
 - tone metadata.
 
-Gates locais:
-
-- Memory Write Gate decide memória;
-- beliefs do provider entram apenas como `HYPOTHESIS` temporária;
-- action suggestion vira evento candidato/deferido, nunca execução direta;
-- entidades inventadas são removidas/rejeitadas.
-
-Reflexão possui failover de provider com seleção task-local via `ContextVar`.
+Structured output do provider é não confiável até passar por validação local.
 
 ### Provider resilience
 
-- ranked candidates;
-- quota-aware selection;
+Linha atual inclui:
+
 - Groq primary;
 - Gemini cognitive fallback quando configurado;
 - local fallback;
-- 429/Retry-After;
-- cooldown/backoff pelo Clock canônico;
-- failover só antes de fala emitida;
-- nunca costurar dois providers numa mesma fala parcial.
+- quota/cooldown/backoff;
+- failover antes de fala emitida;
+- Cognitive Replay sem mutação do estado.
 
-### Cognitive Replay
+Direção aprovada para Step 3:
 
-- snapshot local do contexto usado pelo turno;
-- AUTH/SECRET não recebem snapshot;
-- replay compara providers sobre o mesmo contexto;
-- replay não altera history/journal/memory/world/emotion/autonomy/usage ledger;
-- API: `POST /v1/cognition/replay/{turn_id}`.
+- adicionar Cloudflare Workers AI;
+- usar OpenRouter como specialist broker / último recurso;
+- manter objetivo operacional R$ 0 sempre que praticável.
 
-### Remote cognition consent
+### Privacidade
 
-Android não envia mais `remote_processing_allowed=true` fixo.
+Android possui autorização explícita para cognição remota, separada de autorização de STT/áudio.
 
-Existe checkbox explícito, desligado por padrão:
+AUTH nunca vai para provider remoto.
 
-```text
-Permitir cognição remota para minhas falas
-```
+Disclosure e Remote Processing continuam políticas diferentes.
 
-Isso controla cognição depois do STT; autorização de STT/áudio continua sendo decisão separada.
+### Observabilidade
 
-## Testes adicionados/expandidos
+O servidor possui console operacional vivo para evitar spam infinito de polling e mostrar estados/módulos/providers/plugins.
 
-Principais arquivos V1:
+Logs estruturados completos permanecem separados do painel humano.
 
-```text
-tests/test_cognition_v10.py
-tests/test_voice_v10.py
-tests/test_cognition_cancellation_v10.py
-tests/test_autonomous_cognition_v10.py
-tests/test_reflection_v10.py
-tests/test_cognitive_failover_v10.py
-tests/test_cognitive_replay_v10.py
-tests/test_delivery_truth_v10.py
-tests/test_reflection_failover_v10.py
-tests/test_cognition_backup_v10.py
-tests/test_cognitive_action_bdi_v10.py
-tests/test_provider_bootstrap_v10.py
-tests/test_v10_release_hygiene.py
-android/app/src/test/java/dev/amora/chibi/audio/BargeInDetectorTest.kt
-```
+---
 
-CI obrigatório antes de merge:
+## 5. Incidentes/decisões recentes importantes
 
-- Core Python 3.11;
-- Core Python 3.12;
-- Core Python 3.13;
-- Core Python 3.14;
-- Android unit tests;
-- Android debug APK build;
-- regressões V0.1–V0.9.
+### Gemini TTS quota
 
-## Auditoria automatizada de release
+Uso físico revelou `429 RESOURCE_EXHAUSTED` no Gemini TTS após poucas requisições do free tier.
 
-Auditoria concluída em 2026-10-10 sobre o código V1 no HEAD `b0235115045f40ebfa7190b8812750e02fdf8e79` (antes deste commit apenas documental):
+Problema não era apenas indisponibilidade: fallback para Android TTS mudava a identidade vocal para uma voz muito robótica.
 
-- branch comparada com `main`: 67 commits à frente, 0 atrás;
-- PR #16 aberto, não-draft e mergeável;
-- Core CI verde em Python 3.11, 3.12, 3.13 e 3.14;
-- doctor/autonomy/actions/conversation/avatar/backup smoke tests verdes;
-- Android unit tests verdes;
-- Android debug APK build verde;
-- release hygiene verde: sem `TODO`, `FIXME`, `NotImplementedError`/`NotImplementedException` nas superfícies críticas V1;
-- release hygiene confirma que as camadas V1 (`production`/`resilient`/`hardened`, Context Compiler V1, providers V1, store V1, autonomia integrada e conversation integrada) estão conectadas e não órfãs;
-- README e contrato `docs/V1.0_COGNITIVE_INTEGRATION.md` presentes e alinhados com o escopo V1;
-- imagem/foto/câmera/screenshots continuam explicitamente fora da V1 e pertencem à V1.1.
+Decisão: **Gemini TTS sai do caminho normal da voz**. Ver `docs/decisions/ADR-0002-local-voice-as-normal-path.md`.
 
-Nenhum bug conhecido foi identificado pela auditoria automatizada. Isso não substitui a certificação física no Galaxy A15.
+### Android TTS / delivery loop
 
-## Estado de release
+Houve estado em que falha/indisponibilidade de TTS podia reentregar a mesma utterance repetidamente.
 
-A V1 está em **release-candidate**. O código automatizável está fechado e certificado; não deve ser marcado como `v1.0.0` estável antes da certificação física no A15.
+A linha V1 recebeu hardening de readiness/fallback; qualquer nova recorrência deve ser tratada como delivery-state bug, não mascarada com retry infinito.
 
-Gates antes do merge/release:
+### Console server
+
+Polling HTTP repetitivo e tracebacks idênticos tornavam o terminal inutilizável.
+
+Direção vigente: painel vivo com estado/health + logs forenses separados.
+
+### Comportamento “chatbot”
+
+Mesmo com `offer_help=false` / `ask_followup=false`, modelos gerais podem produzir reflexos de atendimento.
+
+Decisão: não resolver com prompt infinito/blacklist. Expandir semântica local + validator e comparar realizadores linguísticos por Cognitive Replay.
+
+---
+
+## 6. Fechamento V1 — quatro passos
+
+### Step 1 — Local Voice
+
+**Status operacional:** `IN_PROGRESS`.
+
+PR ativo no momento deste snapshot:
 
 ```text
-[x] todos os workflows relevantes do HEAD de código verdes
-[x] revisar diff contra main
-[x] procurar TODO/FIXME/stubs na superfície V1
-[x] confirmar README/documentação V1
-[ ] executar certificação física A15
-[ ] corrigir qualquer falha física encontrada e repetir CI
-[ ] promover PR #16 para merge/release estável
+#27 feat(v1.0): make Amora voice local and stable
 ```
 
-A certificação física está descrita em `docs/V1.0_COGNITIVE_INTEGRATION.md` e cobre acústica real, echo cancellation, barge-in, pre-roll, TTS local/remoto, troca/falha de provider, restart e backup/restore.
+Objetivo do PR:
 
-## Não fazer
+- `VoiceIdentity` pt-BR fixa;
+- sherpa-onnx `OfflineTts`;
+- Piper/VITS pt-BR provisório;
+- Voice Pack baixado uma vez;
+- verificação SHA-256;
+- PCM local via AudioTrack;
+- Gemini TTS removido do caminho normal;
+- Android TTS apenas bootstrap/emergência;
+- Android `1.0.0-dev4` / versionCode 7.
 
-- não mover imagem/foto para V1;
+**Importante:** compilação/CI não equivale a certificação física.
+
+Gate físico pendente no Galaxy A15:
+
+- primeiro download/instalação;
+- checksum;
+- voz pt-BR;
+- latência;
+- RTF;
+- RAM/CPU/temperatura;
+- barge-in;
+- conversa prolongada;
+- confirmar zero requests de TTS remoto após pack ativo.
+
+### Step 2 — Dialogue Identity
+
+**Status:** `PLANNED`.
+
+- atos sociais ricos;
+- stance/opinião;
+- relational attitude;
+- closing mode;
+- validator estrutural;
+- corrigir continuidade de addressee que não pode se auto-renovar infinitamente;
+- comparar GPT-OSS/Qwen/outros por Cognitive Replay antes de trocar provider.
+
+### Step 3 — Zero-Cost Provider Mesh
+
+**Status:** `PLANNED`.
+
+- Groq;
+- Cloudflare Workers AI;
+- OpenRouter specialist/last resort;
+- quota/cooldown/circuit breaker;
+- provider certification por task class.
+
+### Step 4 — Canonical Voice + V1 Certification
+
+**Status:** `PLANNED`.
+
+- promover voz própria quando direitos/dataset/qualidade estiverem resolvidos;
+- certificação longa no A15;
+- restart;
+- backup/restore;
+- quota/failover;
+- conversa longa;
+- estabilidade térmica/memória.
+
+Não abrir o próximo step com defeito estrutural aberto no anterior.
+
+---
+
+## 7. Roadmap posterior
+
+### V1.1
+
+- percepção visual;
+- screen mapping;
+- corpo/avatar final;
+- renderer/rig/expressões necessários;
+- integração semântica Mind → Avatar.
+
+### V1.2
+
+- desejo estético persistente;
+- escolhas de aparência;
+- avaliação de roupa;
+- preferências visuais;
+- propriedade sobre autoimagem.
+
+Planejamento antigo V0.9/V0.95 foi dividido. Esses itens foram movidos, não cancelados.
+
+---
+
+## 8. Git / Android workflow
+
+BK usa GitSync para atualizar o diretório compartilhado e não quer credenciais GitHub no Termux.
+
+Fluxo Android/Core:
+
+```bash
+bash /storage/emulated/0/Documents/Amora-Chibi/tools/termux-sync.sh \
+  /storage/emulated/0/Documents/Amora-Chibi
+
+source ~/.venvs/amora/bin/activate
+cd ~/amora-src
+amora serve --port 8765
+```
+
+Não pedir GitHub token no Termux.
+
+Provider secrets ficam no SecretStore local da Amora, nunca em chat/repo.
+
+---
+
+## 9. Regras de continuidade para próximo chat/agente
+
+Antes de sugerir arquitetura nova:
+
+- ler canon;
+- ler roadmap;
+- procurar ADR;
+- verificar PRs ativos;
+- não confundir plano antigo com plano atual;
+- não reintroduzir Gemini TTS como voz normal;
 - não transformar provider em identidade;
-- não permitir provider gravar BELIEF/memória/ação diretamente;
-- não tratar speaker ID como autenticação;
-- não mandar AUTH/SECRET para provider;
-- não inferir autorização remota a partir de disclosure scope;
-- não usar `sleep()` como relógio de backoff canônico;
-- não considerar texto gerado como texto efetivamente falado;
-- não fazer merge de V1 com CI quebrado;
-- não apagar migrations antigas nem recriar schema do zero.
+- não inventar self-facts;
+- não declarar hardware PASS com base em CI;
+- não expandir V1 com V1.1/V1.2 sem decisão explícita.
+
+Se a mesma área entrar em patch loop, parar e pesquisar/reavaliar ownership antes de continuar.
