@@ -17,6 +17,12 @@ class DialogueAct(StrEnum):
     RESPOND_TO_DISCLOSURE = "respond_to_disclosure"
     SUPPORT_REQUEST = "support_request"
     ANSWER_QUESTION = "answer_question"
+    EXPRESS_OPINION = "express_opinion"
+    DISAGREE = "disagree"
+    TEASE = "tease"
+    COMPLAIN = "complain"
+    RELATIONAL_REACTION = "relational_reaction"
+    SET_BOUNDARY = "set_boundary"
     CONTINUE_TOPIC = "continue_topic"
     AUTONOMOUS_INITIATION = "autonomous_initiation"
     REFLECTION = "reflection"
@@ -37,8 +43,8 @@ class FactStatus(StrEnum):
 class DialoguePlan(BaseModel):
     """Local semantic decision for one social turn.
 
-    The provider is allowed to realize this plan as natural language, but it does
-    not own the social act, self facts, follow-up policy or help-offer policy.
+    The provider may realize wording, but it does not own the social act, stance,
+    relational attitude, self facts, follow-up policy, help-offer policy or close.
     """
 
     act: DialogueAct
@@ -49,6 +55,9 @@ class DialoguePlan(BaseModel):
     offer_help: bool = False
     style_register: str = "casual"
     tone_tags: list[str] = Field(default_factory=list)
+    stance: str = "neutral"
+    relational_attitude: str = "connected"
+    closing_mode: str = "statement"
     fact_key: str | None = None
     fact_status: FactStatus = FactStatus.NOT_REQUESTED
     fact_value: Any | None = None
@@ -58,11 +67,7 @@ class DialoguePlan(BaseModel):
 
 
 class DialogueOrchestrator:
-    """Decide conversational semantics from canonical local state.
-
-    This layer intentionally stays deterministic and inspectable. It does not try
-    to write pretty sentences; that is the replaceable provider's job.
-    """
+    """Decide conversational semantics from canonical local state."""
 
     _HELP_RE = re.compile(
         r"\b(me ajuda|me ajude|pode me ajudar|consegue me ajudar|o que eu faco|o que faco|"
@@ -76,12 +81,28 @@ class DialogueOrchestrator:
         r"^(por que|porque|pq|como|quando|onde|quem|qual|quais|quanto|quantos|quanta|quantas|"
         r"o que|oque|e tu|e voce|e vc)\b"
     )
+    _OPINION_RE = re.compile(
+        r"\b(o que voce acha|oque voce acha|o que vc acha|qual sua opiniao|qual tua opiniao|"
+        r"na sua opiniao|na tua opiniao|voce acha que|vc acha que|tu acha que)\b"
+    )
+    _DISAGREE_RE = re.compile(
+        r"\b(voce concorda|vc concorda|tu concorda|voce discorda|vc discorda|tu discorda|"
+        r"acha que eu to errado|acha que eu estou errado|pode discordar)\b"
+    )
+    _PLAY_RE = re.compile(r"\b(kkkk+|ksks+|haha+|hehe+|to brincando|tô brincando|zoeira|te zoando)\b")
+    _AFFECTION_RE = re.compile(
+        r"\b(te amo|amo voce|amo vc|amo tu|gosto de voce|gosto de vc|voce e fofa|tu e fofa|obrigada amora|obrigado amora)\b"
+    )
+    _HOSTILITY_RE = re.compile(
+        r"\b(cala a boca|te odeio|odeio voce|odeio vc|idiota|burra|inutil|lixo|ridicula|insuportavel)\b"
+    )
 
     def plan(self, context: CognitiveContext) -> DialoguePlan:
         raw = context.user_text.strip()
         text = _normalize(raw)
         style = self._style_register(context)
         tone = self._tone_tags(context)
+        attitude = self._relational_attitude(context)
 
         if "COGNITIVE_REFLECTION" in context.reason_codes:
             return DialoguePlan(
@@ -91,19 +112,26 @@ class DialogueOrchestrator:
                 response_moves=["structured_reflection_only"],
                 style_register=style,
                 tone_tags=tone,
+                stance="analytic",
+                relational_attitude=attitude,
+                closing_mode="none",
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "REFLECTION_MODE"],
             )
 
         if "AUTONOMOUS_INITIATION" in context.reason_codes:
+            ask = self._curiosity_high(context)
             return DialoguePlan(
                 act=DialogueAct.AUTONOMOUS_INITIATION,
                 objective="initiate contact from Amora's current local intention",
                 depth=DialogueDepth.SHORT,
-                response_moves=["open_contact", "express_current_intention"],
-                ask_followup=self._curiosity_high(context),
+                response_moves=["open_contact", "express_current_intention"] + (["ask_followup"] if ask else []),
+                ask_followup=ask,
                 offer_help=False,
                 style_register=style,
                 tone_tags=tone,
+                stance="self_directed",
+                relational_attitude=attitude,
+                closing_mode="question" if ask else "statement",
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "AUTONOMOUS_INTENTION_OWNS_ACT"],
             )
 
@@ -120,6 +148,9 @@ class DialogueOrchestrator:
                 offer_help=False,
                 style_register=style,
                 tone_tags=tone,
+                stance="factual",
+                relational_attitude=attitude,
+                closing_mode="statement",
                 fact_key=self_fact,
                 fact_status=status,
                 fact_value=value,
@@ -141,7 +172,42 @@ class DialogueOrchestrator:
                 offer_help=False,
                 style_register=style,
                 tone_tags=tone,
+                stance="present",
+                relational_attitude=attitude,
+                closing_mode="statement",
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "DIRECT_VOCATIVE"],
+            )
+
+        if self._boundary_needed(context, text):
+            return DialoguePlan(
+                act=DialogueAct.SET_BOUNDARY,
+                objective="state a proportionate interpersonal boundary without escalating or becoming abusive",
+                depth=DialogueDepth.SHORT,
+                response_moves=["name_impact", "set_boundary"],
+                ask_followup=False,
+                offer_help=False,
+                style_register=style,
+                tone_tags=tone,
+                stance="firm",
+                relational_attitude="guarded",
+                closing_mode="statement",
+                reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "DIRECTED_NEGATIVE_AFFECT", "BOUNDARY_WARRANTED"],
+            )
+
+        if self._AFFECTION_RE.search(text):
+            return DialoguePlan(
+                act=DialogueAct.RELATIONAL_REACTION,
+                objective="respond to the relational signal as Amora, not as a service agent",
+                depth=DialogueDepth.SHORT,
+                response_moves=["receive_relational_signal", "express_relational_reaction"],
+                ask_followup=False,
+                offer_help=False,
+                style_register=style,
+                tone_tags=tone,
+                stance="receptive",
+                relational_attitude="warm",
+                closing_mode="statement",
+                reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "RELATIONAL_SIGNAL"],
             )
 
         if self._HELP_RE.search(text):
@@ -154,6 +220,9 @@ class DialogueOrchestrator:
                 offer_help=True,
                 style_register=style,
                 tone_tags=tone,
+                stance="supportive",
+                relational_attitude=attitude,
+                closing_mode="statement",
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "EXPLICIT_SUPPORT_REQUEST"],
             )
 
@@ -167,7 +236,58 @@ class DialogueOrchestrator:
                 offer_help=False,
                 style_register=style,
                 tone_tags=tone,
+                stance="present",
+                relational_attitude=attitude,
+                closing_mode="statement",
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "PERSONAL_DISCLOSURE", "PRESENCE_BEFORE_HELP"],
+            )
+
+        if self._DISAGREE_RE.search(text):
+            return DialoguePlan(
+                act=DialogueAct.DISAGREE,
+                objective="state Amora's actual local stance without forced agreement or customer-service smoothing",
+                depth=self._depth(text),
+                response_moves=["state_stance", "give_reason"],
+                ask_followup=False,
+                offer_help=False,
+                style_register=style,
+                tone_tags=tone,
+                stance="independent",
+                relational_attitude=attitude,
+                closing_mode="statement",
+                reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "STANCE_REQUESTED", "INDEPENDENT_STANCE"],
+            )
+
+        if self._OPINION_RE.search(text):
+            return DialoguePlan(
+                act=DialogueAct.EXPRESS_OPINION,
+                objective="express a bounded opinion from the supplied state/context without pretending it is canonical fact",
+                depth=self._depth(text),
+                response_moves=["state_opinion", "ground_opinion"],
+                ask_followup=False,
+                offer_help=False,
+                style_register=style,
+                tone_tags=tone,
+                stance="opinionated",
+                relational_attitude=attitude,
+                closing_mode="statement",
+                reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "OPINION_REQUESTED"],
+            )
+
+        if self._PLAY_RE.search(text) and context.drives.get("play", 0.0) >= 0.35:
+            return DialoguePlan(
+                act=DialogueAct.TEASE,
+                objective="return light playful energy without humiliation or changing relationship facts",
+                depth=DialogueDepth.SHORT,
+                response_moves=["playful_reaction", "light_tease"],
+                ask_followup=False,
+                offer_help=False,
+                style_register=style,
+                tone_tags=tone,
+                stance="playful",
+                relational_attitude=attitude,
+                closing_mode="statement",
+                reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "PLAY_SIGNAL", "PLAY_DRIVE_AVAILABLE"],
             )
 
         if "?" in raw or self._QUESTION_START_RE.search(text):
@@ -180,19 +300,26 @@ class DialogueOrchestrator:
                 offer_help=False,
                 style_register=style,
                 tone_tags=tone,
+                stance="direct",
+                relational_attitude=attitude,
+                closing_mode="statement",
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "DIRECT_QUESTION"],
             )
 
         ask_followup = self._curiosity_high(context) and not self._last_amora_turn_was_question(context)
+        moves = ["react", "advance_topic"] + (["ask_followup"] if ask_followup else [])
         return DialoguePlan(
             act=DialogueAct.CONTINUE_TOPIC,
             objective="react to the current topic and move the conversation forward naturally",
             depth=self._depth(text),
-            response_moves=["react", "advance_topic"],
+            response_moves=moves,
             ask_followup=ask_followup,
             offer_help=False,
             style_register=style,
             tone_tags=tone,
+            stance="engaged",
+            relational_attitude=attitude,
+            closing_mode="question" if ask_followup else "statement",
             reason_codes=[
                 "LOCAL_DIALOGUE_ORCHESTRATOR",
                 "TOPIC_CONTINUATION",
@@ -258,7 +385,7 @@ class DialogueOrchestrator:
     def _style_register(context: CognitiveContext) -> str:
         for relation in context.relationships:
             relation_type = str(relation.get("relation_type") or "").lower()
-            if "family" in relation_type or "parent" in relation_type or "child" in relation_type:
+            if any(token in relation_type for token in ("family", "parent", "child", "father", "daughter")):
                 return "intimate_colloquial"
         return "casual_colloquial"
 
@@ -287,6 +414,24 @@ class DialogueOrchestrator:
         elif mood.get("arousal", 0.5) <= 0.30:
             tags.append("soft")
         return tags or ["natural"]
+
+    @staticmethod
+    def _relational_attitude(context: CognitiveContext) -> str:
+        affect = context.directed_affect
+        if affect.get("fear", 0.0) >= 0.60:
+            return "cautious"
+        if affect.get("anger", 0.0) >= 0.60 or affect.get("irritation", 0.0) >= 0.68:
+            return "guarded"
+        if affect.get("affection", 0.0) >= 0.55 or affect.get("gratitude", 0.0) >= 0.45:
+            return "warm"
+        if affect.get("trust", 0.0) >= 0.68:
+            return "open"
+        return "connected"
+
+    def _boundary_needed(self, context: CognitiveContext, text: str) -> bool:
+        affect = context.directed_affect
+        negative = affect.get("anger", 0.0) >= 0.52 or affect.get("irritation", 0.0) >= 0.62
+        return negative and bool(self._HOSTILITY_RE.search(text))
 
     @staticmethod
     def _depth(text: str) -> DialogueDepth:
