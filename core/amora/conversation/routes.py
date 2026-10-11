@@ -21,6 +21,9 @@ class CancelSpeechRequest(BaseModel):
 
 
 def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Callable[..., None]) -> None:
+    def console():
+        return getattr(app.state, "server_console", None)
+
     @app.get("/v1/conversation/state", dependencies=[Depends(require_auth)])
     def conversation_state() -> dict[str, object]:
         return core.conversation.state()
@@ -40,10 +43,38 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
 
     @app.post("/v1/conversation/utterances/{utterance_id}/ack", dependencies=[Depends(require_auth)])
     async def acknowledge_utterance(utterance_id: str, ack: SpeechAck) -> dict[str, object]:
-        item = await core.conversation.acknowledge(utterance_id, ack)
+        dashboard = console()
+        if ack.spoken:
+            item = await core.conversation.acknowledge(utterance_id, ack)
+            if item is None:
+                raise HTTPException(status_code=404, detail="utterance not found")
+            if dashboard is not None:
+                dashboard.set_module("android.tts", "Android TTS", "ON", "fala concluída")
+                dashboard.set_activity("IDLE", "fala concluída no Android", ttl_seconds=1.5)
+            return {"utterance": item.model_dump(mode="json")}
+
+        # A client-side TTS failure is not the same thing as a transient network
+        # claim failure. Re-queueing it forever makes the Android service bounce
+        # between "ouvindo" and "falando" while retrying the exact same utterance.
+        # Cancel the whole cognitive turn instead: the next human utterance can
+        # produce a fresh reply after the voice path has recovered.
+        reason = (ack.reason or "tts_delivery_failed")[:96]
+        item, cancelled = await core.conversation.cancel_utterance(
+            utterance_id,
+            reason=reason,
+            spoken_chars=None,
+        )
         if item is None:
             raise HTTPException(status_code=404, detail="utterance not found")
-        return {"utterance": item.model_dump(mode="json")}
+        if dashboard is not None:
+            dashboard.set_module("android.tts", "Android TTS", "DEGRADED", reason)
+            dashboard.set_activity("FALHA DE VOZ", "Android TTS não confirmou a fala", ttl_seconds=8.0)
+            dashboard.record_error("Android TTS", f"{reason}; {cancelled} fala(s) cancelada(s)")
+        return {
+            "utterance": item.model_dump(mode="json"),
+            "cancelled_utterances": cancelled,
+            "delivery_failed": True,
+        }
 
     @app.post("/v1/conversation/utterances/{utterance_id}/cancel", dependencies=[Depends(require_auth)])
     async def cancel_utterance(utterance_id: str, request: CancelSpeechRequest) -> dict[str, object]:
