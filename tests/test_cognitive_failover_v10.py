@@ -107,8 +107,15 @@ async def test_incomplete_realization_emits_nothing_and_safe_failover_is_allowed
         assert plan.provider == "secondary"
         assert plan.speech_segments == ["Resposta de secondary."]
         assert "PROVIDER_FAILOVER_USED" in plan.reason_codes
-        # The failed provider never created a speech segment/message.
-        assert all(item.provider != "primary" for item in core.cognition.store.list_segments(request.turn_id))
+        # A provider that failed before validation may have usage/error journal
+        # rows, but it must never create an Amora speech message.
+        assistant_messages = [
+            item for item in core.cognition.store.list_messages(turn_id=request.turn_id)
+            if item.speaker_id == "ENTITY_AMORA"
+        ]
+        assert assistant_messages
+        assert all(item.provider != "primary" for item in assistant_messages)
+        assert any(item.provider == "secondary" for item in assistant_messages)
     finally:
         core.close()
 
