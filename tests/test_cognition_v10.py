@@ -6,15 +6,15 @@ from pathlib import Path
 import pytest
 
 from amora.app import AmoraCore
-from amora.cognition import CognitiveJournalEntry, CognitiveRequest, ConversationMessage, JournalStage, MessageSource, MessageStatus, ProviderDelta, SpeechNormalizer, SpeechSegmenter
+from amora.cognition import CognitiveJournalEntry, CognitiveRequest, ConversationMessage, JournalStage, MessageSource, MessageStatus, SpeechNormalizer, SpeechSegmenter
 from amora.events import PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.time import SimulatedClock
 from amora.world import SelfLayer
 
 
-class FakeStreamingProvider:
-    def __init__(self, name: str = "fake-stream") -> None:
+class FakeStructuredProvider:
+    def __init__(self, name: str = "fake-structured") -> None:
         self.descriptor = ProviderDescriptor(
             name=name,
             model=f"{name}-model",
@@ -24,18 +24,26 @@ class FakeStreamingProvider:
             cost_score=0.0,
             provider_class=ProviderClass.REMOTE_EPHEMERAL,
             allowed_privacy_scopes=frozenset({PrivacyScope.PERSONAL, PrivacyScope.PRIVATE}),
-            supports_streaming=True,
+            supports_streaming=False,
+            supports_structured_output=True,
             context_window_tokens=100_000,
             priority=20,
         )
 
-    async def stream(self, context):
+    async def realize(self, context):
         assert context.speaker_id == "PERSON_BK"
         assert context.self_model["core_identity"]["entity_id"] == "ENTITY_AMORA"
-        yield ProviderDelta(text="Claro, papis 💜. ")
-        yield ProviderDelta(text="Eu lembro disso — e queria comentar uma coisa.")
-        yield ProviderDelta(input_tokens=321, output_tokens=19)
-        yield ProviderDelta(done=True, finish_reason="stop", latency_ms=42.0, status_code=200)
+        allowed = list(context.dialogue_plan["response_moves"])
+        return {
+            "moves": [
+                {
+                    "kind": allowed[0],
+                    "text": "Claro, papis 💜. Eu lembro disso — e queria comentar uma coisa.",
+                }
+            ],
+            "closing": "statement",
+            "_usage": {"input_tokens": 321, "output_tokens": 19, "latency_ms": 42.0, "status_code": 200},
+        }
 
 
 def _clock() -> SimulatedClock:
@@ -59,17 +67,18 @@ def test_segmenter_releases_stable_clause_before_full_response() -> None:
 
 
 @pytest.mark.asyncio
-async def test_streaming_response_persists_segments_and_actual_spoken_text(tmp_path: Path, monkeypatch) -> None:
+async def test_validated_response_persists_segments_and_actual_spoken_text(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora")); core = AmoraCore.bootstrap(clock=_clock())
     try:
-        core.cognition.register_provider(FakeStreamingProvider()); queued = []
+        core.cognition.register_provider(FakeStructuredProvider()); queued = []
         async def sink(segment): queued.append(segment)
         request = CognitiveRequest(text="Amora, lembra disso?", speaker_id="PERSON_BK", target_id="ENTITY_AMORA", privacy_scope=PrivacyScope.PERSONAL, remote_processing_allowed=True)
         plan = await core.cognition.respond(request, on_segment=sink)
-        assert plan.provider == "fake-stream" and plan.fallback_used is False and len(queued) == 2
+        assert plan.provider == "fake-structured" and plan.fallback_used is False and len(queued) == 2
         assert queued[0].speech_text == "Claro, papis."
         assert queued[1].speech_text == "Eu lembro disso, e queria comentar uma coisa."
         assert plan.input_tokens == 321 and plan.output_tokens == 19
+        assert plan.metadata["realization_validated"] is True
         first = queued[0]
         core.cognition.mark_segment_speaking(first.id, turn_id=request.turn_id)
         core.cognition.acknowledge_segment(first.id, spoken=True, turn_id=request.turn_id)
@@ -101,14 +110,14 @@ def test_auth_content_is_redacted_from_history_and_journal(tmp_path: Path, monke
 async def test_history_and_journal_survive_restart_and_provider_identity_does_not(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora")); clock = _clock(); first = AmoraCore.bootstrap(clock=clock)
     try:
-        first.cognition.register_provider(FakeStreamingProvider("provider-a")); request = CognitiveRequest(text="Oi Amora", speaker_id="PERSON_BK", privacy_scope=PrivacyScope.PERSONAL, remote_processing_allowed=True)
+        first.cognition.register_provider(FakeStructuredProvider("provider-a")); request = CognitiveRequest(text="Amora, lembra daquele assunto?", speaker_id="PERSON_BK", target_id="ENTITY_AMORA", privacy_scope=PrivacyScope.PERSONAL, remote_processing_allowed=True)
         plan = await first.cognition.respond(request); assert plan.provider == "provider-a"; turn_id = request.turn_id; assert first.cognition.store.message_count() >= 3
     finally: first.close()
     second = AmoraCore.bootstrap(clock=clock)
     try:
         assert second.cognition.store.list_messages(turn_id=turn_id); assert second.cognition.store.journal_for_turn(turn_id)
         assert second.self_model.get(SelfLayer.CORE_IDENTITY, "entity_id").value == "ENTITY_AMORA"
-        second.cognition.register_provider(FakeStreamingProvider("provider-b")); next_request = CognitiveRequest(text="Continua sendo você?", speaker_id="PERSON_BK", privacy_scope=PrivacyScope.PERSONAL, remote_processing_allowed=True)
+        second.cognition.register_provider(FakeStructuredProvider("provider-b")); next_request = CognitiveRequest(text="Amora, continua sendo você?", speaker_id="PERSON_BK", target_id="ENTITY_AMORA", privacy_scope=PrivacyScope.PERSONAL, remote_processing_allowed=True)
         plan = await second.cognition.respond(next_request); assert plan.provider == "provider-b"
         assert second.self_model.get(SelfLayer.CORE_IDENTITY, "entity_id").value == "ENTITY_AMORA"
     finally: second.close()
@@ -118,7 +127,7 @@ async def test_history_and_journal_survive_restart_and_provider_identity_does_no
 async def test_remote_processing_disabled_forces_local_fallback(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora")); core = AmoraCore.bootstrap(clock=_clock())
     try:
-        core.cognition.register_provider(FakeStreamingProvider()); request = CognitiveRequest(text="Não mande isso pra fora", speaker_id="PERSON_BK", privacy_scope=PrivacyScope.PRIVATE, remote_processing_allowed=False)
+        core.cognition.register_provider(FakeStructuredProvider()); request = CognitiveRequest(text="Não mande isso pra fora", speaker_id="PERSON_BK", privacy_scope=PrivacyScope.PRIVATE, remote_processing_allowed=False)
         plan = await core.cognition.respond(request, fallback_text="Tá bom, papis.")
         assert plan.fallback_used is True and plan.provider is None and "REMOTE_PROCESSING_NOT_ALLOWED" in plan.reason_codes
         assert any("REMOTE_PROCESSING_NOT_ALLOWED" in item.reason_codes for item in core.cognition.store.journal_for_turn(request.turn_id))
