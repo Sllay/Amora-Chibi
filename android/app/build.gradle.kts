@@ -10,8 +10,8 @@ android {
         applicationId = "dev.amora.chibi"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.0.0-dev5"
+        versionCode = 9
+        versionName = "1.0.0-dev6"
     }
 
     buildFeatures {
@@ -33,6 +33,5 @@ android {
 
 dependencies {
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
-    implementation("org.apache.commons:commons-compress:1.27.1")
     testImplementation("junit:junit:4.13.2")
 }
