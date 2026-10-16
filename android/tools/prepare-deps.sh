@@ -17,6 +17,18 @@ VOICE_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/${
 VOICE_MODEL="pt_BR-faber-medium.onnx"
 VOICE_MODEL_SHA="956b4f1733903891c4ba0973d0603b2a3d8c09c8432fb3bb5203a90a7431daca"
 
+SUPERTONIC_ID="sherpa-onnx-supertonic-3-tts-int8-2026-05-11"
+SUPERTONIC_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/${SUPERTONIC_ID}.tar.bz2"
+SUPERTONIC_REQUIRED=(
+  "duration_predictor.int8.onnx"
+  "text_encoder.int8.onnx"
+  "vector_estimator.int8.onnx"
+  "vocoder.int8.onnx"
+  "tts.json"
+  "unicode_indexer.bin"
+  "voice.bin"
+)
+
 fetch_checked() {
   local url="$1" dest="$2" expected="$3" expected_size="${4:-}"
   if [[ -f "$dest" ]]; then
@@ -93,8 +105,47 @@ stage_voice_assets() {
   trap - RETURN
 }
 
+stage_supertonic_assets() {
+  local target="$ASSET_DIR/$SUPERTONIC_ID"
+  local complete=true
+  for file in "${SUPERTONIC_REQUIRED[@]}"; do
+    [[ -f "$target/$file" ]] || complete=false
+  done
+  if [[ "$complete" == true ]]; then
+    echo "[android-deps] OK: Supertonic Voice Lab já empacotado ($SUPERTONIC_ID)"
+    return
+  fi
+
+  local work archive anchor source_root
+  work="$(mktemp -d)"
+  archive="$work/supertonic.tar.bz2"
+  trap 'rm -rf "$work"' RETURN
+
+  echo "[android-deps] Baixando Supertonic 3 INT8 experimental para o Voice Lab..."
+  curl -fL --retry 3 --retry-delay 2 "$SUPERTONIC_URL" -o "$archive"
+  tar -xjf "$archive" -C "$work"
+
+  anchor="$(find "$work" -type f -name "duration_predictor.int8.onnx" -print -quit)"
+  [[ -n "$anchor" ]] || { echo "[android-deps] ERRO: duration_predictor.int8.onnx ausente" >&2; exit 1; }
+  source_root="$(dirname "$anchor")"
+  for file in "${SUPERTONIC_REQUIRED[@]}"; do
+    [[ -f "$source_root/$file" ]] || { echo "[android-deps] ERRO: Supertonic sem $file" >&2; exit 1; }
+  done
+
+  rm -rf "$target"
+  mkdir -p "$target"
+  cp -a "$source_root/." "$target/"
+  if [[ -f "$source_root/LICENSE" ]]; then
+    cp "$source_root/LICENSE" "$target/LICENSE"
+  fi
+  echo "[android-deps] OK: $SUPERTONIC_ID empacotado em assets; licença upstream preservada quando presente"
+  rm -rf "$work"
+  trap - RETURN
+}
+
 fetch_checked "$SHERPA_URL" "$AAR_DIR/sherpa-onnx-1.13.8.aar" "$SHERPA_SHA"
 fetch_checked "$VAD_URL" "$ASSET_DIR/silero_vad.onnx" "$VAD_SHA" "$VAD_BYTES"
 stage_voice_assets
+stage_supertonic_assets
 
-echo "[android-deps] Dependências nativas e voz neural verificadas."
+echo "[android-deps] Dependências nativas, voz neural e Voice Lab verificadas."
