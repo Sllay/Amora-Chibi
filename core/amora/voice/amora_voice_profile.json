@@ -2,6 +2,7 @@
   "schema_version": 1,
   "profile_id": "amora-voice-v1",
   "revision": 1,
+  "active_profile": "NATURAL",
   "base": {
     "backend": "supertonic3-int8",
     "speaker_id": 0,
@@ -28,7 +29,7 @@
   "prosody": {
     "min_speed": 0.88,
     "max_speed": 1.12,
-    "arousal_rate_amount": 0.04,
+    "arousal_rate_amount": 0.0,
     "pitch_to_presence_db": 0.9,
     "valence_to_air_db": 0.35,
     "arousal_to_presence_db": 0.45
