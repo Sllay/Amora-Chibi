@@ -16,11 +16,11 @@ data class VoiceProfileSnapshot(
 class VoiceProfileStore(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
-    fun load(): VoiceProfileSnapshot {
+    fun load(expectedModelId: String? = null): VoiceProfileSnapshot {
         val raw = preferences.getString(KEY_JSON, null)
         if (!raw.isNullOrBlank()) {
             val cached = runCatching { VoiceProfileCatalog.parse(raw) }.getOrNull()
-            if (cached != null) {
+            if (cached != null && (expectedModelId == null || cached.modelId == expectedModelId)) {
                 return VoiceProfileSnapshot(
                     catalog = cached,
                     source = "cache",
@@ -35,8 +35,8 @@ class VoiceProfileStore(context: Context) {
         )
     }
 
-    fun refresh(client: CoreClient): VoiceProfileSnapshot {
-        val current = load()
+    fun refresh(client: CoreClient, expectedModelId: String): VoiceProfileSnapshot {
+        val current = load(expectedModelId)
         val response = client.fetchVoiceProfiles(current.etag)
         if (response.notModified) {
             return current.copy(source = if (current.source == "APK") "APK" else "Core/cache")
@@ -44,6 +44,9 @@ class VoiceProfileStore(context: Context) {
 
         val raw = requireNotNull(response.body) { "Core respondeu catálogo vocal sem body" }
         val parsed = VoiceProfileCatalog.parse(raw)
+        require(parsed.modelId == expectedModelId) {
+            "Core enviou perfil para ${parsed.modelId}; APK contém $expectedModelId"
+        }
         preferences.edit()
             .putString(KEY_JSON, raw)
             .putString(KEY_ETAG, response.etag)
