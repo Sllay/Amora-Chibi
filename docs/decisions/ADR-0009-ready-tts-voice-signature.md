@@ -74,16 +74,16 @@ O backend é substituível. Deve priorizar:
 - desempenho aceitável em mobile;
 - previsibilidade.
 
-Supertonic 3 INT8 via sherpa-onnx é o primeiro candidato do laboratório atual, **não é automaticamente a voz final**.
+Supertonic 3 INT8 via sherpa-onnx foi o primeiro candidato do laboratório e, após comparação física por BK no Galaxy A15, **speaker 0 foi selecionado como base canônica V1**.
 
 ### 2. VoiceSignature
 
-A identidade vocal não fica presa a um único modelo treinado. Ela será expressa por uma camada determinística/versionada capaz de aplicar, conforme o backend suportar e os testes aprovarem:
+A identidade vocal não fica presa a um único modelo treinado. Ela é expressa por uma camada determinística/versionada capaz de aplicar, conforme o backend suportar e os testes aprovarem:
 
-- pitch delta pequeno;
-- formant/ressonância;
+- pitch delta pequeno quando houver implementação de qualidade aprovada;
+- formant/ressonância quando houver implementação de qualidade aprovada;
 - EQ/cor tonal;
-- de-essing;
+- de-essing quando necessário;
 - compressão/controle de dinâmica;
 - textura sintética discreta;
 - ganho/limiter;
@@ -91,34 +91,51 @@ A identidade vocal não fica presa a um único modelo treinado. Ela será expres
 
 Nenhum efeito deve sacrificar inteligibilidade pt-BR apenas para soar diferente.
 
+A primeira implementação real usa EQ, saturação suave, textura harmônica paralela discreta, compressor e limiter. Não declaramos pitch/formant reais enquanto o runtime não os implementar com qualidade suficiente.
+
 ### 3. VoiceProfile
 
-Separar identidade canônica de fantasias temporárias.
+Separar identidade canônica de expressão/fantasias temporárias.
 
 ```text
-AMORA_CANONICAL  -> voz normal / identidade persistente
-CHIBI            -> fantasia
-SYNTH            -> fantasia
-MASC_JOKE        -> fantasia futura
-outros           -> experimentais
+NATURAL  -> voz normal / identidade persistente
+SOFT     -> expressão mais macia
+SHY      -> expressão mais contida
+SYNTH    -> fantasia sintética mais evidente
+CHIBI    -> fantasia mais viva/brilhante
 ```
 
-Trocar para uma fantasia deve ser explícito e temporário; não altera a identidade canônica nem memória/self da Amora.
+O profile nunca pode trocar silenciosamente o speaker/base da identidade.
 
-### 4. Promoção para produção
+### 4. Profile servido pelo Core
 
-O `Voice Lab` permanece isolado. `LocalVoiceEngine` atual não é substituído até o candidato vencer teste físico no Galaxy A15.
+Os parâmetros de tuning da assinatura e expressão ficam em um documento versionado no Core (`amora_voice_profile.json`). O Android busca o documento autenticado, valida contra `VoiceIdentity.AMORA_V1`, guarda o último profile válido e usa ETag para revalidação barata.
 
-A promoção exige pelo menos:
+Objetivo operacional: depois de uma build estrutural instalada, calibração de parâmetros não exige novo APK.
+
+Falha no Core/profile não quebra a fala local: o Android conserva o último profile válido ou um default seguro empacotado.
+
+### 5. Emoção
+
+O Emotion Engine/Core continua sendo autoridade emocional. `SpeechStyle` entrega sinais bounded (`rate`, `pitch`, `volume`, `valence`, `arousal`) para a voz.
+
+A integração atual do Supertonic via sherpa-onnx não expõe um controle nativo de emoção comprovado. Portanto a V1 não inventa suporte inexistente; usa os sinais do cérebro sobre o mesmo speaker/base e a mesma VoiceSignature.
+
+Caso um backend futuro ofereça emoção nativa real, o adapter pode consumi-la atrás deste contrato após teste físico.
+
+### 6. Promoção para produção
+
+A seleção de base já ocorreu. A promoção final/merge da assinatura exige:
 
 - português claramente compreensível;
-- speaker/base escolhidos por audição comparativa;
+- speaker 0 reconhecível após VoiceSignature;
+- assinatura aprovada por BK sem caráter metálico/robótico indesejado;
 - RTF e latência aceitáveis;
 - RAM/CPU/temperatura aceitáveis;
 - estabilidade longa;
 - licença/provenance registradas;
-- assinatura vocal aprovada por BK;
-- ausência de regressão em barge-in/playback.
+- ausência de regressão em barge-in/playback;
+- hot tuning do profile funcionando sem rebuild de APK.
 
 ## Motivos
 
@@ -128,15 +145,16 @@ A promoção exige pelo menos:
 - preserva modularidade: backend pode mudar sem redefinir quem a Amora é;
 - cria suporte natural a perfis/fantasias vocais;
 - combina com a filosofia `provider != identidade` já usada no Core;
-- permite portar a mesma VoiceSignature para Android e futuro Web/PWA.
+- permite portar a mesma VoiceSignature para Android e futuro Web/PWA;
+- separa mudança estrutural de app de tuning auditivo iterativo.
 
 ## Consequências
 
-- `amora-voice-v1` deixa de significar obrigatoriamente "um checkpoint treinado por nós" e passa a significar uma **identidade vocal versionada** composta por backend aprovado + speaker/base + VoiceSignature + parâmetros de prosódia.
+- `amora-voice-v1` significa uma identidade vocal versionada composta por backend aprovado + speaker/base + VoiceSignature + parâmetros de prosódia/expressão.
 - ADR-0008 fica `SUPERSEDED` como estratégia obrigatória de fechamento da V1.
-- Faber permanece técnico/provisório até promoção física de novo backend.
-- Supertonic e seus presets atuais são laboratório, não canon de identidade.
-- DSP avançado só deve ser adicionado depois de escolher uma base que já fale português bem.
+- Supertonic 3 INT8 speaker 0 é a base canônica em certificação.
+- Faber passa a ser legado técnico de rollout e pode ser removido dos assets depois da aceitação física do novo caminho.
+- DSP avançado só entra quando houver ganho auditivo real e custo mobile aceitável.
 - um modelo próprio treinado pode ser revisitado futuramente se houver compute/dataset/benefício suficientes.
 
 ## Critério para revisitar
