@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "revision": "voice-lab-2026-10-17-a",
+  "backend": {
+    "id": "supertonic-3-int8",
+    "model_id": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
+    "language": "pt",
+    "sample_rate_hz": 24000
+  },
+  "lab": {
+    "default_speaker_id": 0,
+    "default_profile_id": "NATURAL",
+    "canonical": false
+  },
+  "profiles": [
+    {
+      "id": "NATURAL",
+      "label": "NATURAL",
+      "description": "Referência limpa do speaker/base, sem fantasia vocal.",
+      "speed": 1.0,
+      "silence_scale": 1.0,
+      "num_steps": 8,
+      "output_gain": 0.92
+    },
+    {
+      "id": "AMORA_SOFT",
+      "label": "AMORA_SOFT",
+      "description": "Mais calma e macia, ainda próxima da base.",
+      "speed": 0.95,
+      "silence_scale": 1.05,
+      "num_steps": 8,
+      "output_gain": 0.92
+    },
+    {
+      "id": "AMORA_SYNTH",
+      "label": "AMORA_SYNTH",
+      "description": "Fantasia experimental um pouco mais seca e sintética.",
+      "speed": 0.92,
+      "silence_scale": 0.9,
+      "num_steps": 5,
+      "output_gain": 0.9
+    },
+    {
+      "id": "CHIBI",
+      "label": "CHIBI",
+      "description": "Fantasia mais rápida; não representa a identidade canônica.",
+      "speed": 1.08,
+      "silence_scale": 0.9,
+      "num_steps": 6,
+      "output_gain": 0.88
+    }
+  ],
+  "emotion_modulation": {
+    "enabled": true,
+    "speed_arousal": 0.06,
+    "speed_valence": 0.015,
+    "silence_arousal": -0.08,
+    "silence_valence": -0.02,
+    "gain_arousal": 0.04,
+    "gain_valence": 0.01,
+    "speed_min": 0.85,
+    "speed_max": 1.15,
+    "silence_min": 0.75,
+    "silence_max": 1.2,
+    "gain_min": 0.75,
+    "gain_max": 1.0
+  }
+}

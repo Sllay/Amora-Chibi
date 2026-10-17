@@ -66,6 +66,7 @@ class SpeechStyle(BaseModel):
     volume: float = Field(default=1.0, ge=0.0, le=1.0)
     valence: float = Field(default=0.0, ge=-1.0, le=1.0)
     arousal: float = Field(default=0.0, ge=-1.0, le=1.0)
+    dominance: float = Field(default=0.0, ge=-1.0, le=1.0)
 
 
 class SpeechUtterance(BaseModel):

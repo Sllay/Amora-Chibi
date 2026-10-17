@@ -22,19 +22,11 @@
             </intent-filter>
         </activity>
 
-        <!--
-          Experimental launcher kept separate from MainActivity on purpose.
-          It cannot replace LocalVoiceEngine or Amora's production voice path.
-        -->
+        <!-- Experimental only; opened explicitly from MainActivity. -->
         <activity
             android:name=".voice.lab.VoiceLabActivity"
-            android:exported="true"
-            android:label="Amora Voice Lab">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:exported="false"
+            android:label="Amora Voice Lab" />
 
         <service
             android:name=".audio.AudioCaptureService"

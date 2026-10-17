@@ -21,6 +21,7 @@ import android.widget.TextView
 import dev.amora.chibi.audio.AudioCaptureService
 import dev.amora.chibi.core.CoreClient
 import dev.amora.chibi.voice.VoiceDiagnostics
+import dev.amora.chibi.voice.lab.VoiceLabActivity
 
 class MainActivity : Activity() {
     private lateinit var statusView: TextView
@@ -151,7 +152,7 @@ class MainActivity : Activity() {
 
     private fun buildVoiceCard(): LinearLayout = card().apply {
         addView(sectionLabel("CONVERSA / VOZ LOCAL"))
-        addView(bodyText("VAD local, interrupção por voz e sherpa-onnx offline. Nesta build a voz Faber provisória vem empacotada no APK; não existe fallback automático para a voz do Google."))
+        addView(bodyText("A conversa normal continua usando Faber provisório até BK escolher a nova voz-base. O Voice Lab fica isolado para testar Supertonic sem arriscar a voz de produção."))
 
         voiceDiagnosticView = TextView(this@MainActivity).also {
             it.textSize = 13F
@@ -161,9 +162,14 @@ class MainActivity : Activity() {
             addView(it)
         }
 
+        addView(actionButton("Abrir Voice Lab / escolher voz-base", primary = true).apply {
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, VoiceLabActivity::class.java))
+            }
+        }, sectionParams(topDp = 10))
         addView(actionButton("Atualizar diagnóstico da voz", primary = false).apply {
             setOnClickListener { refreshVoiceDiagnostics() }
-        }, sectionParams(topDp = 8))
+        }, sectionParams(topDp = 10))
         addView(actionButton("Começar a ouvir e falar", primary = true).apply {
             setOnClickListener { startListening() }
         }, sectionParams(topDp = 12))

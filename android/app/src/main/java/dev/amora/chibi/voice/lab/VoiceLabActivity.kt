@@ -11,6 +11,11 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import dev.amora.chibi.R
+import dev.amora.chibi.core.CoreClient
+import dev.amora.chibi.voice.LabEmotionPreset
+import dev.amora.chibi.voice.VoiceProfileCatalog
+import dev.amora.chibi.voice.VoiceProfileSnapshot
+import dev.amora.chibi.voice.VoiceProfileStore
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -18,21 +23,32 @@ import java.util.concurrent.Executors
 class VoiceLabActivity : Activity() {
     private val executor = Executors.newSingleThreadExecutor()
     private lateinit var engine: SupertonicVoiceLabEngine
+    private lateinit var coreClient: CoreClient
+    private lateinit var profileStore: VoiceProfileStore
+    private lateinit var catalog: VoiceProfileCatalog
     private lateinit var statusView: TextView
+    private lateinit var profileSourceView: TextView
     private lateinit var textInput: EditText
     private lateinit var speakerButton: Button
-    private lateinit var presetButton: Button
+    private lateinit var profileButton: Button
+    private lateinit var emotionButton: Button
+    private lateinit var syncButton: Button
     private lateinit var synthesizeButton: Button
     private lateinit var stopButton: Button
 
     @Volatile private var closing = false
     private var speakerCount = 0
     private var selectedSpeaker = 0
-    private var selectedPreset = SupertonicVoiceLabEngine.Preset.NATURAL
+    private var selectedProfileId = "NATURAL"
+    private var selectedEmotion = LabEmotionPreset.NEUTRAL
+    private var profileSource = "APK"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         engine = SupertonicVoiceLabEngine(this)
+        coreClient = CoreClient(this)
+        profileStore = VoiceProfileStore(this)
+        applySnapshot(profileStore.load(SupertonicVoiceLabEngine.MODEL_ID))
         setContentView(buildUi())
         prepareEngine()
     }
@@ -55,7 +71,7 @@ class VoiceLabActivity : Activity() {
             setTextColor(getColor(R.color.amora_white))
         })
         root.addView(TextView(this).apply {
-            text = "Supertonic 3 INT8 • laboratório offline • não altera a voz de produção"
+            text = "Supertonic 3 INT8 • laboratório offline • perfis sincronizados pelo Core"
             textSize = 13F
             setTextColor(getColor(R.color.amora_pink))
             setPadding(0, dp(4), 0, dp(14))
@@ -67,11 +83,17 @@ class VoiceLabActivity : Activity() {
                 it.setTextColor(getColor(R.color.amora_white))
                 addView(it)
             }
+            profileSourceView = bodyText(profileSourceText()).also { addView(it) }
+
+            syncButton = actionButton("Atualizar perfis do Core", primary = false).apply {
+                setOnClickListener { syncProfiles() }
+            }
+            addView(syncButton, sectionParams(topDp = 10))
         }, sectionParams())
 
         root.addView(card().apply {
-            addView(sectionLabel("VOZ / PERFIL"))
-            addView(bodyText("Troque o speaker e o perfil, gere exatamente as mesmas frases e escolha pelo ouvido. O idioma do motor fica fixo em português."))
+            addView(sectionLabel("VOZ BASE / PERFIL / EMOÇÃO"))
+            addView(bodyText("Speaker = voz base. Perfil = assinatura/fantasia. Emoção = modulação pequena vinda do Core. O modelo continua local no APK; só os parâmetros leves podem mudar pelo servidor."))
 
             speakerButton = actionButton("Speaker: preparando…", primary = false).apply {
                 isEnabled = false
@@ -84,16 +106,26 @@ class VoiceLabActivity : Activity() {
             }
             addView(speakerButton, sectionParams(topDp = 12))
 
-            presetButton = actionButton("Perfil: ${selectedPreset.label}", primary = false).apply {
+            profileButton = actionButton("Perfil: preparando…", primary = false).apply {
                 setOnClickListener {
-                    val values = SupertonicVoiceLabEngine.Preset.entries
-                    selectedPreset = values[(selectedPreset.ordinal + 1) % values.size]
+                    val profiles = catalog.profiles
+                    val current = profiles.indexOfFirst { it.id == selectedProfileId }.coerceAtLeast(0)
+                    selectedProfileId = profiles[(current + 1) % profiles.size].id
                     refreshSelectors()
                 }
             }
-            addView(presetButton, sectionParams(topDp = 10))
+            addView(profileButton, sectionParams(topDp = 10))
 
-            addView(bodyText("NATURAL = referência limpa • AMORA_SOFT = um pouco mais calma • AMORA_SYNTH = fantasia mais seca • CHIBI = fantasia mais rápida. Pitch não é alterado nesta prova."))
+            emotionButton = actionButton("Emoção: ${selectedEmotion.label}", primary = false).apply {
+                setOnClickListener {
+                    val values = LabEmotionPreset.entries
+                    selectedEmotion = values[(selectedEmotion.ordinal + 1) % values.size]
+                    refreshSelectors()
+                }
+            }
+            addView(emotionButton, sectionParams(topDp = 10))
+
+            addView(bodyText("A emoção do laboratório só simula valence/arousal/dominance para A/B. Na conversa real esses valores já vêm do Emotion Engine. Pitch/formant DSP ainda não é aplicado nesta etapa."))
         }, sectionParams())
 
         root.addView(card().apply {
@@ -137,7 +169,7 @@ class VoiceLabActivity : Activity() {
         }, sectionParams())
 
         root.addView(TextView(this).apply {
-            text = "Voice Lab experimental • a vencedora só vira voz-base após teste físico no Galaxy A15"
+            text = "Edite config/voice_profiles.json no GitHub/Termux, reinicie o Core e toque em Atualizar perfis. Sem recompilar APK."
             textSize = 12F
             gravity = Gravity.CENTER
             setTextColor(getColor(R.color.amora_text_muted))
@@ -150,23 +182,71 @@ class VoiceLabActivity : Activity() {
     private fun prepareEngine() {
         setBusy(true)
         executor.execute {
-            runCatching { engine.prepare() }
-                .onSuccess { count ->
+            val engineResult = runCatching { engine.prepare() }
+            if (engineResult.isFailure) {
+                val error = engineResult.exceptionOrNull() ?: IllegalStateException("falha desconhecida")
+                if (!closing) runOnUiThread {
+                    setBusy(false, failed = true)
+                    setStatus("Falha ao abrir o Voice Lab: ${describe(error)}")
+                }
+                return@execute
+            }
+
+            val count = engineResult.getOrThrow()
+            val syncResult = if (coreClient.isPaired()) {
+                runCatching { profileStore.refresh(coreClient, SupertonicVoiceLabEngine.MODEL_ID) }
+            } else {
+                Result.success(profileStore.load(SupertonicVoiceLabEngine.MODEL_ID))
+            }
+
+            if (!closing) runOnUiThread {
+                speakerCount = count
+                syncResult.onSuccess { applySnapshot(it) }
+                selectedSpeaker = selectedSpeaker.coerceIn(0, (speakerCount - 1).coerceAtLeast(0))
+                refreshSelectors()
+                refreshProfileSource()
+                setBusy(false)
+                val syncNote = syncResult.exceptionOrNull()?.let { " • sync falhou: ${describe(it)}" }.orEmpty()
+                setStatus("Supertonic 3 pronto • $count speakers • offline • ${catalog.language}$syncNote")
+            }
+        }
+    }
+
+    private fun syncProfiles() {
+        if (!coreClient.isPaired()) {
+            setStatus("Pareie o app com o Core antes de sincronizar perfis.")
+            return
+        }
+        setBusy(true)
+        setStatus("Verificando perfis de voz no Core…")
+        executor.execute {
+            runCatching { profileStore.refresh(coreClient, SupertonicVoiceLabEngine.MODEL_ID) }
+                .onSuccess { snapshot ->
                     if (!closing) runOnUiThread {
-                        speakerCount = count
-                        selectedSpeaker = 0
+                        applySnapshot(snapshot)
+                        if (speakerCount > 0) {
+                            selectedSpeaker = selectedSpeaker.coerceIn(0, speakerCount - 1)
+                        }
                         refreshSelectors()
+                        refreshProfileSource()
                         setBusy(false)
-                        setStatus("Supertonic 3 pronto • $count speakers • offline • pt")
+                        setStatus("Perfis atualizados • ${catalog.revision} • fonte $profileSource")
                     }
                 }
                 .onFailure { error ->
                     if (!closing) runOnUiThread {
-                        setBusy(false, failed = true)
-                        setStatus("Falha ao abrir o Voice Lab: ${describe(error)}")
+                        setBusy(false)
+                        setStatus("Falha ao atualizar perfis; mantendo cache atual: ${describe(error)}")
                     }
                 }
         }
+    }
+
+    private fun applySnapshot(snapshot: VoiceProfileSnapshot) {
+        catalog = snapshot.catalog
+        profileSource = snapshot.source
+        selectedProfileId = catalog.defaultProfileId
+        selectedSpeaker = catalog.defaultSpeakerId
     }
 
     private fun synthesize() {
@@ -181,19 +261,30 @@ class VoiceLabActivity : Activity() {
         }
 
         val speaker = selectedSpeaker
-        val preset = selectedPreset
+        val profile = catalog.profile(selectedProfileId) ?: catalog.defaultProfile()
+        val emotion = selectedEmotion
+        val modulation = catalog.emotionModulation
+        val language = catalog.language
         setBusy(true)
         executor.execute {
             runCatching {
-                engine.synthesizeAndPlay(text, speaker, preset) { stage ->
+                engine.synthesizeAndPlay(
+                    text = text,
+                    speakerId = speaker,
+                    profile = profile,
+                    emotion = emotion.emotion,
+                    modulation = modulation,
+                    language = language,
+                ) { stage ->
                     if (!closing) runOnUiThread { setStatus(stage) }
                 }
             }.onSuccess { result ->
                 if (!closing) runOnUiThread {
                     setBusy(false)
                     setStatus(
-                        "Concluído • speaker ${result.speakerId} • ${result.preset.label} • " +
-                            "${format(result.audioSeconds)} s • RTF ${format(result.rtf)}",
+                        "Concluído • speaker ${result.speakerId} • ${result.profileId} • ${emotion.label} • " +
+                            "speed ${format(result.effectiveSpeed.toDouble())} • silence ${format(result.effectiveSilenceScale.toDouble())} • " +
+                            "gain ${format(result.effectiveGain.toDouble())} • ${format(result.audioSeconds)} s • RTF ${format(result.rtf)}",
                     )
                 }
             }.onFailure { error ->
@@ -207,18 +298,31 @@ class VoiceLabActivity : Activity() {
 
     private fun refreshSelectors() {
         speakerButton.text = if (speakerCount > 0) {
-            "Speaker: $selectedSpeaker / ${speakerCount - 1}  • toque para trocar"
+            "Speaker base: $selectedSpeaker / ${speakerCount - 1}  • toque para trocar"
         } else {
-            "Speaker: indisponível"
+            "Speaker base: indisponível"
         }
         speakerButton.isEnabled = speakerCount > 1
-        presetButton.text = "Perfil: ${selectedPreset.label}  • toque para trocar"
+
+        val profile = catalog.profile(selectedProfileId) ?: catalog.defaultProfile()
+        profileButton.text = "Perfil: ${profile.label}  • toque para trocar"
+        emotionButton.text = "Emoção: ${selectedEmotion.label}  • toque para trocar"
     }
 
+    private fun refreshProfileSource() {
+        if (::profileSourceView.isInitialized) profileSourceView.text = profileSourceText()
+    }
+
+    private fun profileSourceText(): String =
+        "Config: $profileSource • revisão ${catalog.revision} • ${if (catalog.canonical) "CANÔNICA" else "LAB / não canônica"}"
+
     private fun setBusy(busy: Boolean, failed: Boolean = false) {
+        if (!::synthesizeButton.isInitialized) return
         synthesizeButton.isEnabled = !busy && !failed && speakerCount > 0
-        presetButton.isEnabled = !busy
+        profileButton.isEnabled = !busy
+        emotionButton.isEnabled = !busy
         speakerButton.isEnabled = !busy && speakerCount > 1
+        syncButton.isEnabled = !busy
         textInput.isEnabled = !busy
         stopButton.isEnabled = true
     }
