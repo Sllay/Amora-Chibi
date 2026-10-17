@@ -16,6 +16,7 @@ class LocalSpeechComposer:
             volume=1.0,
             valence=mood.valence,
             arousal=mood.arousal,
+            dominance=mood.dominance,
         )
 
     def semantic_text(self, action_kind: str, target_id: str | None) -> str:
