@@ -1,7 +1,7 @@
 # AMORA — Version Lineage / Roadmap Canônico
 
 **Status:** CANÔNICO  
-**Atualizado em:** 2026-10-11
+**Atualizado em:** 2026-10-16
 
 Este arquivo impede interpretar feature ausente da versão atual como “cancelada”. `MOVED` não significa cancelado.
 
@@ -96,7 +96,7 @@ Infraestrutura/experimentos antigos de avatar podem permanecer no repo, mas não
 
 ## 4. V1.0 — fechamento atual
 
-**Status:** `IN_PROGRESS — STEP 4 NEXT`
+**Status:** `IN_PROGRESS — STEP 4 VOICE LAB / PHYSICAL SELECTION`
 
 Fundação atual inclui:
 
@@ -160,7 +160,7 @@ CI: Python 3.11–3.14 PASS, 211 pytest tests por matriz e smokes de doctor/auto
 
 ### V1 Step 3 — Zero-Cost Provider Mesh
 
-**Status:** `IMPLEMENTED / CI PASS / READY TO MERGE`
+**Status:** `IMPLEMENTED / MERGED`
 
 Entregue:
 
@@ -182,26 +182,53 @@ Guardas:
 - nenhuma ausência de provider quebra o Core;
 - nenhum adapter ativa billing/pago silenciosamente.
 
-PR #30. CI run `38172639477`: Python 3.11–3.14 PASS, pytest e todos os smoke tests PASS sem chamadas reais aos providers.
+PR #30 foi integrado ao `main`; o provider mesh faz parte da fundação V1 atual.
 
 ### V1 Step 4 — Canonical Voice + V1 Certification
 
-**Status:** `NEXT / VOICE TARGET CANONIZED`
+**Status:** `IN_PROGRESS / VOICE LAB MERGED / PHYSICAL SELECTION PENDING`
 
-Objetivo:
+Decisão atual segue `docs/canon/VOICE_IDENTITY.md` + ADR-0009.
 
-- seguir `docs/canon/VOICE_IDENTITY.md`;
-- selecionar material feminino pt-BR com direitos/provenance claros;
-- priorizar GPU gratuita para treino/fine-tuning;
-- medium/high escolhido por naturalidade + benchmark, não pelo rótulo;
-- exportar ONNX e manter inferência local no sherpa-onnx;
-- integrar Prosody Planner bounded;
-- teste prolongado no A15;
-- conversa, barge-in, provider failover, restart e backup/restore;
-- estabilidade térmica/memória;
-- fechamento documental V1.
+O treino/fine-tuning próprio deixou de ser requisito da V1. A estratégia atual separa backend de TTS e identidade vocal:
 
-Compute pago não é dependência. Se for avaliado no futuro, exige teto explícito de custo e decisão consciente. Treino no Galaxy A15 não é padrão: RAM do aparelho não equivale a VRAM de GPU.
+```text
+TtsBackend local
+↓
+speaker/base aprovada
+↓
+VoiceSignature AMORA_CANONICAL
+↓
+Prosody Planner bounded
+↓
+PCM / AudioTrack
+```
+
+Entregue nesta etapa até agora:
+
+- `Voice Lab` Android isolado do `LocalVoiceEngine` de produção;
+- Supertonic 3 INT8 via sherpa-onnx como primeiro candidato;
+- múltiplos speakers enumeráveis no aparelho;
+- presets `NATURAL`, `AMORA_SOFT`, `AMORA_SYNTH` e `CHIBI`;
+- frases fixas + texto livre;
+- playback local e RTF visível;
+- launcher separado para o laboratório;
+- produção continua no Faber até promoção explícita.
+
+Merge do Voice Lab no `main`: `5cf93d5975f659adce9748f155dbd962a7140750`.
+
+Próximos gates:
+
+1. testar Supertonic no Galaxy A15;
+2. avaliar português, speakers, latência/RTF, RAM/CPU/temperatura e estabilidade;
+3. selecionar a melhor base feminina/adequada;
+4. implementar/calibrar `VoiceSignature` real (pitch/formant/EQ/de-ess/dynamics/textura apenas quando aprovados);
+5. separar `AMORA_CANONICAL` de fantasias temporárias;
+6. promover o backend vencedor para produção;
+7. conversa longa, barge-in, provider failover, restart e backup/restore;
+8. fechamento documental V1.
+
+Treino próprio pode ser revisitado no futuro, mas não bloqueia a V1.
 
 ---
 
@@ -218,7 +245,44 @@ Evitar experimentos descartáveis que apenas demonstram algo já provado.
 
 ---
 
-## 6. V1.1 — percepção e corpo
+## 6. V1.0.1 — Web/PWA + portabilidade de plataforma
+
+**Status:** `PLANNED — IMEDIATAMENTE APÓS FECHAMENTO DA VOZ/V1`
+
+Objetivo: permitir uso diário no iPhone sem depender de APK/compilação Android para cada iteração.
+
+Direção:
+
+- cliente Web/PWA instalável pela Tela de Início do Safari;
+- UI web separada do Core;
+- `platform adapters` para áudio/storage/microfone/web em vez de duplicar lógica da Amora;
+- mesma identidade/estado canônico compartilhados entre Android e Web;
+- VoiceSignature especificada de forma portável quando tecnicamente viável;
+- frontend estático pode usar hosting como Render Static Site ou equivalente;
+- modelos/voice packs web podem ser baixados na primeira execução e armazenados localmente quando a plataforma suportar;
+- não tratar site/PWA como "APK rodando no navegador"; é outro cliente sobre contratos comuns.
+
+### Core remoto / disponibilidade contínua
+
+Depois do cliente PWA, avaliar separação entre frontend e Core persistente remoto de custo zero/baixo.
+
+Candidatos arquiteturais incluem Cloudflare Workers/Durable Objects/D1 ou equivalentes, desde que passem gates de:
+
+- persistência real;
+- backup/restore;
+- privacidade;
+- custo previsível/zero-cost guard;
+- latência;
+- ausência de dependência de celular ligado;
+- capacidade de manter identidade/memória fora do provider cognitivo.
+
+**Importante:** cognição por API continua sendo provider; hospedar o Core não significa hospedar o LLM.
+
+Nenhuma migração do Core Termux deve ocorrer antes de prova de persistência/backup e ADR específico.
+
+---
+
+## 7. V1.1 — percepção e corpo
 
 **Status:** `PLANNED`
 
@@ -234,7 +298,7 @@ Não transformar V1.1 automaticamente em editor profissional de Live2D/rig compl
 
 ---
 
-## 7. V1.2 — estética e autoimagem
+## 8. V1.2 — estética e autoimagem
 
 **Status:** `PLANNED`
 
@@ -249,7 +313,31 @@ Essas capacidades devem ser da Amora, não presets controlados pelo provider.
 
 ---
 
-## 8. Futuro / backlog
+## 9. Modularização estrutural — direção contínua
+
+**Status:** `PLANNED / INCREMENTAL`
+
+A evolução deve reduzir acoplamento a scripts grandes e preservar um Core pequeno/estável.
+
+Taxonomia alvo:
+
+```text
+core/       -> identidade, estado, decisão e orquestração
+contracts/  -> eventos, schemas e capabilities
+modules/    -> voz, audição, visão, memória, presença
+providers/  -> cognição, STT, TTS e implementações substituíveis
+plugins/    -> integrações externas (Discord, GitHub, etc.)
+platforms/  -> Android, Web e futuros adapters
+runtime/    -> registry, loader, event bus e lifecycle
+```
+
+Regra: adicionar Discord, trocar TTS ou criar cliente Web não deve exigir cirurgia no Cognitive Core.
+
+Essa modularização será feita por fronteiras reais/contratos e refactors guiados por uso, não por reescrita total preventiva.
+
+---
+
+## 10. Futuro / backlog
 
 Possibilidades sem compromisso de versão:
 
@@ -261,14 +349,16 @@ Possibilidades sem compromisso de versão:
 - automações externas;
 - modelos RP especializados;
 - TTS local zero-shot/voice cloning alternativo;
+- modelo de voz treinado próprio caso volte a ter vantagem clara;
 - outros backends após benchmark necessário;
-- ferramentas especializadas via OpenRouter.
+- ferramentas especializadas via OpenRouter;
+- singing synthesis separado do TTS normal, compartilhando identidade vocal quando viável.
 
 Nada desta seção entra automaticamente na V1/V1.1/V1.2.
 
 ---
 
-## 9. Regra para mudanças futuras
+## 11. Regra para mudanças futuras
 
 Quando uma decisão de versão mudar:
 
