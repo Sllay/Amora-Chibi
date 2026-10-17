@@ -19,6 +19,16 @@ class VoiceLabSelection(BaseModel):
     canonical: bool = False
 
 
+class VoiceDspProfile(BaseModel):
+    pitch_semitones: float = Field(default=0.0, ge=-6.0, le=6.0)
+    drive: float = Field(default=1.0, ge=0.75, le=2.5)
+    bit_depth: int = Field(default=16, ge=8, le=16)
+    sample_hold: int = Field(default=1, ge=1, le=6)
+    digital_mix: float = Field(default=0.0, ge=0.0, le=0.8)
+    ring_mod_hz: float = Field(default=0.0, ge=0.0, le=120.0)
+    ring_mix: float = Field(default=0.0, ge=0.0, le=0.25)
+
+
 class VoiceProfile(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     label: str = Field(min_length=1, max_length=96)
@@ -27,6 +37,7 @@ class VoiceProfile(BaseModel):
     silence_scale: float = Field(default=1.0, ge=0.5, le=1.5)
     num_steps: int = Field(default=8, ge=2, le=16)
     output_gain: float = Field(default=0.92, ge=0.5, le=1.0)
+    dsp: VoiceDspProfile = Field(default_factory=VoiceDspProfile)
 
 
 class EmotionVoiceModulation(BaseModel):
@@ -76,7 +87,7 @@ class VoiceProfileCatalog(BaseModel):
 class VoiceProfileCatalogStore:
     """Loads the editable server-side catalog and fingerprints the exact bytes.
 
-    The file lives outside the Python package so BK can change a few bounded
+    The file lives outside the Python package so BK can change bounded profile/DSP
     parameters, `git pull`, restart `amora serve`, and let Android refresh the
     catalog without rebuilding the APK.
     """

@@ -12,6 +12,7 @@ import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsSupertonicModelConfig
 import dev.amora.chibi.voice.EmotionVoiceModulation
+import dev.amora.chibi.voice.VoiceDspProcessor
 import dev.amora.chibi.voice.VoiceEmotion
 import dev.amora.chibi.voice.VoiceProfile
 import dev.amora.chibi.voice.VoiceProsodyModulator
@@ -28,12 +29,16 @@ class SupertonicVoiceLabEngine(context: Context) : AutoCloseable {
     data class Result(
         val speakerId: Int,
         val profileId: String,
-        val sampleRate: Int,
+        val sourceSampleRate: Int,
+        val playbackSampleRate: Int,
         val audioSeconds: Double,
         val synthesisSeconds: Double,
         val effectiveSpeed: Float,
+        val synthesisSpeed: Float,
         val effectiveSilenceScale: Float,
         val effectiveGain: Float,
+        val pitchSemitones: Float,
+        val digitalMix: Float,
     ) {
         val rtf: Double
             get() = if (audioSeconds > 0.0) synthesisSeconds / audioSeconds else 0.0
@@ -72,13 +77,18 @@ class SupertonicVoiceLabEngine(context: Context) : AutoCloseable {
         require(language.isNotBlank()) { "idioma do TTS vazio" }
 
         val tuning = VoiceProsodyModulator.apply(profile, emotion, modulation)
-        onStage("Sintetizando speaker $speakerId • ${profile.label}…")
+        val sourceRate = localEngine.sampleRate()
+        val initialPlan = VoiceDspProcessor.plan(tuning.speed, sourceRate, profile.dsp)
+        onStage(
+            "Sintetizando speaker $speakerId • ${profile.label} • " +
+                "pitch ${formatSigned(profile.dsp.pitchSemitones)} st…",
+        )
         val startedNs = System.nanoTime()
         val audio = localEngine.generateWithConfig(
             text = cleanText,
             config = GenerationConfig(
                 silenceScale = tuning.silenceScale,
-                speed = tuning.speed,
+                speed = initialPlan.synthesisSpeed,
                 sid = speakerId,
                 numSteps = tuning.numSteps,
                 extra = mapOf("lang" to language),
@@ -88,29 +98,44 @@ class SupertonicVoiceLabEngine(context: Context) : AutoCloseable {
         require(audio.samples.isNotEmpty() && audio.sampleRate > 0) {
             "Supertonic retornou áudio vazio"
         }
-        val audioSeconds = audio.samples.size.toDouble() / audio.sampleRate.toDouble()
 
-        onStage("Reproduzindo ${"%.2f".format(audioSeconds)} s • ${audio.sampleRate} Hz…")
-        playSamples(audio.samples, audio.sampleRate, tuning.outputGain)
+        val finalPlan = VoiceDspProcessor.plan(tuning.speed, audio.sampleRate, profile.dsp)
+        val processed = VoiceDspProcessor.process(audio.samples, audio.sampleRate, profile.dsp)
+        val audioSeconds = processed.size.toDouble() / finalPlan.playbackSampleRate.toDouble()
+
+        onStage(
+            "Reproduzindo ${"%.2f".format(audioSeconds)} s • " +
+                "${finalPlan.playbackSampleRate} Hz • DSP ${if (profile.dsp.digitalMix > 0f) "ON" else "limpo"}…",
+        )
+        playSamples(processed, finalPlan.playbackSampleRate, tuning.outputGain)
 
         val result = Result(
             speakerId = speakerId,
             profileId = profile.id,
-            sampleRate = audio.sampleRate,
+            sourceSampleRate = audio.sampleRate,
+            playbackSampleRate = finalPlan.playbackSampleRate,
             audioSeconds = audioSeconds,
             synthesisSeconds = synthesisSeconds,
             effectiveSpeed = tuning.speed,
+            synthesisSpeed = finalPlan.synthesisSpeed,
             effectiveSilenceScale = tuning.silenceScale,
             effectiveGain = tuning.outputGain,
+            pitchSemitones = profile.dsp.pitchSemitones,
+            digitalMix = profile.dsp.digitalMix,
         )
         Log.i(
             TAG,
-            "Voice Lab speaker=%d profile=%s speed=%.3f silence=%.3f gain=%.3f synth=%.0fms audio=%.2fs rtf=%.3f".format(
+            "Voice Lab speaker=%d profile=%s speed=%.3f synthSpeed=%.3f silence=%.3f gain=%.3f pitch=%+.2fst digital=%.2f rate=%d->%d synth=%.0fms audio=%.2fs rtf=%.3f".format(
                 result.speakerId,
                 result.profileId,
                 result.effectiveSpeed,
+                result.synthesisSpeed,
                 result.effectiveSilenceScale,
                 result.effectiveGain,
+                result.pitchSemitones,
+                result.digitalMix,
+                result.sourceSampleRate,
+                result.playbackSampleRate,
                 result.synthesisSeconds * 1000.0,
                 result.audioSeconds,
                 result.rtf,
@@ -249,6 +274,8 @@ class SupertonicVoiceLabEngine(context: Context) : AutoCloseable {
     private fun assetExists(path: String): Boolean = runCatching {
         appContext.assets.open(path).use { true }
     }.getOrDefault(false)
+
+    private fun formatSigned(value: Float): String = String.format(java.util.Locale.US, "%+.1f", value)
 
     override fun close() {
         stop()

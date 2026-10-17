@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": "voice-lab-2026-10-17-a",
+  "revision": "voice-lab-2026-10-17-b-vocal-synth",
   "backend": {
     "id": "supertonic-3-int8",
     "model_id": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
@@ -20,7 +20,8 @@
       "speed": 1.0,
       "silence_scale": 1.0,
       "num_steps": 8,
-      "output_gain": 0.92
+      "output_gain": 0.92,
+      "dsp": {}
     },
     {
       "id": "AMORA_SOFT",
@@ -29,25 +30,65 @@
       "speed": 0.95,
       "silence_scale": 1.05,
       "num_steps": 8,
-      "output_gain": 0.92
+      "output_gain": 0.92,
+      "dsp": {
+        "pitch_semitones": 0.6,
+        "drive": 1.0
+      }
     },
     {
       "id": "AMORA_SYNTH",
       "label": "AMORA_SYNTH",
-      "description": "Fantasia experimental um pouco mais seca e sintética.",
-      "speed": 0.92,
+      "description": "Fantasia digital moderada com pitch, textura e modulação leves.",
+      "speed": 0.96,
       "silence_scale": 0.9,
-      "num_steps": 5,
-      "output_gain": 0.9
+      "num_steps": 6,
+      "output_gain": 0.9,
+      "dsp": {
+        "pitch_semitones": 2.4,
+        "drive": 1.15,
+        "bit_depth": 12,
+        "sample_hold": 2,
+        "digital_mix": 0.28,
+        "ring_mod_hz": 38.0,
+        "ring_mix": 0.05
+      }
     },
     {
       "id": "CHIBI",
       "label": "CHIBI",
-      "description": "Fantasia mais rápida; não representa a identidade canônica.",
-      "speed": 1.08,
+      "description": "Mais aguda e pequena; ainda inteligível e menos robótica.",
+      "speed": 1.06,
       "silence_scale": 0.9,
       "num_steps": 6,
-      "output_gain": 0.88
+      "output_gain": 0.88,
+      "dsp": {
+        "pitch_semitones": 3.2,
+        "drive": 1.05,
+        "bit_depth": 13,
+        "sample_hold": 1,
+        "digital_mix": 0.15,
+        "ring_mod_hz": 30.0,
+        "ring_mix": 0.03
+      }
+    },
+    {
+      "id": "VIRTUAL_SINGER",
+      "label": "VIRTUAL_SINGER",
+      "description": "Vocal synth deliberadamente artificial para procurar uma identidade de cantora virtual, sem copiar uma voz existente.",
+      "speed": 0.98,
+      "silence_scale": 0.82,
+      "num_steps": 6,
+      "output_gain": 0.86,
+      "dsp": {
+        "pitch_semitones": 4.0,
+        "drive": 1.28,
+        "bit_depth": 10,
+        "sample_hold": 2,
+        "digital_mix": 0.46,
+        "ring_mod_hz": 52.0,
+        "ring_mix": 0.1
+      }
     }
   ],
   "emotion_modulation": {

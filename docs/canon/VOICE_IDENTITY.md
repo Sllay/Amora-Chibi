@@ -1,9 +1,9 @@
 # AMORA — Identidade Vocal Canônica
 
 **Status:** CANÔNICO / ESPECIFICAÇÃO DE ALVO  
-**Atualizado em:** 2026-10-16  
+**Atualizado em:** 2026-10-17  
 **Runtime de produção atual:** sherpa-onnx + Piper/VITS Faber provisório  
-**Laboratório atual:** Supertonic 3 INT8 via sherpa-onnx  
+**Laboratório atual:** Supertonic 3 INT8 via sherpa-onnx + VoiceProfile/DSP bounded  
 **Alvo final:** `amora-voice-v1` como identidade vocal versionada = backend aprovado + speaker/base + VoiceSignature + prosódia bounded.
 
 ---
@@ -98,6 +98,7 @@ A Amora pode possuir múltiplos `VoiceProfile`, mas apenas um é a voz normal ca
 AMORA_CANONICAL  -> identidade normal persistente
 CHIBI            -> fantasia temporária
 SYNTH            -> fantasia temporária
+VIRTUAL_SINGER   -> fantasia/laboratório de sintetizador vocal
 MASC_JOKE        -> fantasia futura
 outros           -> experimentais
 ```
@@ -204,16 +205,29 @@ Objetivo:
 - comparar as mesmas frases pt-BR;
 - medir RTF/latência;
 - escolher uma base pela audição, não pelo nome;
-- testar presets temporários sem alterar produção.
+- testar presets temporários sem alterar produção;
+- explorar uma assinatura de sintetizador vocal deliberadamente artificial antes de congelar a voz-base.
 
 Presets atuais do laboratório:
 
 - `NATURAL`;
 - `AMORA_SOFT`;
 - `AMORA_SYNTH`;
-- `CHIBI`.
+- `CHIBI`;
+- `VIRTUAL_SINGER`.
 
-Esses presets atuais mexem principalmente em speed/silence/steps; **ainda não são a VoiceSignature final** e não fazem pitch/formant DSP.
+Os perfis do laboratório são definidos em `config/voice_profiles.json`, validados pelo Core, sincronizados pelo Android com ETag/cache e permanecem `canonical=false`.
+
+A camada DSP experimental aceita apenas parâmetros bounded:
+
+- pitch por alteração da taxa de playback com compensação do speed de síntese;
+- drive;
+- quantização de bit-depth;
+- sample-hold;
+- mix digital;
+- ring modulation leve.
+
+Esses transforms existem para A/B no laboratório e **ainda não são a VoiceSignature final**. Formant tracking, EQ, de-essing, compressor/limiter e outros transforms mais sofisticados só entram depois que uma base física for escolhida e houver evidência de que melhoram a identidade sem prejudicar pt-BR.
 
 O `LocalVoiceEngine` de produção continua usando Faber até promoção explícita após teste físico.
 
@@ -263,5 +277,7 @@ O backend pode diferir por plataforma; o objetivo é preservar a mesma identidad
 
 - Faber masculino = voz técnica/provisória de produção que certificou o pipeline local.
 - Supertonic 3 INT8 = candidato de laboratório já integrado de forma isolada.
+- VoiceProfile sync = ativo para parâmetros leves; o Core não distribui os pesos do modelo.
+- DSP vocal-synth = experimental/bounded no Voice Lab; não canônico.
 - voz final = **ainda não escolhida**; depende do teste físico de BK.
-- próximo passo = testar speakers/presets no Galaxy A15, selecionar a melhor base e então implementar/calibrar a VoiceSignature real.
+- próximo passo = testar speakers com `NATURAL` e `VIRTUAL_SINGER` no Galaxy A15, selecionar a melhor base e calibrar a VoiceSignature real.
