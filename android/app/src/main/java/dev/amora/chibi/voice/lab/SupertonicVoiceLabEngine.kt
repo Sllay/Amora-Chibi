@@ -11,6 +11,10 @@ import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsSupertonicModelConfig
+import dev.amora.chibi.voice.EmotionVoiceModulation
+import dev.amora.chibi.voice.VoiceEmotion
+import dev.amora.chibi.voice.VoiceProfile
+import dev.amora.chibi.voice.VoiceProsodyModulator
 import kotlin.math.roundToInt
 
 /**
@@ -21,24 +25,15 @@ import kotlin.math.roundToInt
  * physical-device certification.
  */
 class SupertonicVoiceLabEngine(context: Context) : AutoCloseable {
-    enum class Preset(
-        val label: String,
-        val speed: Float,
-        val silenceScale: Float,
-        val numSteps: Int,
-    ) {
-        NATURAL("NATURAL", 1.00f, 1.00f, 8),
-        AMORA_SOFT("AMORA_SOFT", 0.95f, 1.05f, 8),
-        AMORA_SYNTH("AMORA_SYNTH", 0.92f, 0.90f, 5),
-        CHIBI("CHIBI", 1.08f, 0.90f, 6),
-    }
-
     data class Result(
         val speakerId: Int,
-        val preset: Preset,
+        val profileId: String,
         val sampleRate: Int,
         val audioSeconds: Double,
         val synthesisSeconds: Double,
+        val effectiveSpeed: Float,
+        val effectiveSilenceScale: Float,
+        val effectiveGain: Float,
     ) {
         val rtf: Double
             get() = if (audioSeconds > 0.0) synthesisSeconds / audioSeconds else 0.0
@@ -58,7 +53,10 @@ class SupertonicVoiceLabEngine(context: Context) : AutoCloseable {
     fun synthesizeAndPlay(
         text: String,
         speakerId: Int,
-        preset: Preset,
+        profile: VoiceProfile,
+        emotion: VoiceEmotion,
+        modulation: EmotionVoiceModulation,
+        language: String = "pt",
         onStage: (String) -> Unit = {},
     ): Result {
         val cleanText = text.trim()
@@ -71,17 +69,19 @@ class SupertonicVoiceLabEngine(context: Context) : AutoCloseable {
         require(speakerId in 0 until speakers) {
             "speaker $speakerId inválido; disponíveis: 0..${speakers - 1}"
         }
+        require(language.isNotBlank()) { "idioma do TTS vazio" }
 
-        onStage("Sintetizando speaker $speakerId • ${preset.label}…")
+        val tuning = VoiceProsodyModulator.apply(profile, emotion, modulation)
+        onStage("Sintetizando speaker $speakerId • ${profile.label}…")
         val startedNs = System.nanoTime()
         val audio = localEngine.generateWithConfig(
             text = cleanText,
             config = GenerationConfig(
-                silenceScale = preset.silenceScale,
-                speed = preset.speed,
+                silenceScale = tuning.silenceScale,
+                speed = tuning.speed,
                 sid = speakerId,
-                numSteps = preset.numSteps,
-                extra = mapOf("lang" to "pt"),
+                numSteps = tuning.numSteps,
+                extra = mapOf("lang" to language),
             ),
         )
         val synthesisSeconds = (System.nanoTime() - startedNs) / 1_000_000_000.0
@@ -91,20 +91,26 @@ class SupertonicVoiceLabEngine(context: Context) : AutoCloseable {
         val audioSeconds = audio.samples.size.toDouble() / audio.sampleRate.toDouble()
 
         onStage("Reproduzindo ${"%.2f".format(audioSeconds)} s • ${audio.sampleRate} Hz…")
-        playSamples(audio.samples, audio.sampleRate)
+        playSamples(audio.samples, audio.sampleRate, tuning.outputGain)
 
         val result = Result(
             speakerId = speakerId,
-            preset = preset,
+            profileId = profile.id,
             sampleRate = audio.sampleRate,
             audioSeconds = audioSeconds,
             synthesisSeconds = synthesisSeconds,
+            effectiveSpeed = tuning.speed,
+            effectiveSilenceScale = tuning.silenceScale,
+            effectiveGain = tuning.outputGain,
         )
         Log.i(
             TAG,
-            "Voice Lab speaker=%d preset=%s synth=%.0fms audio=%.2fs rtf=%.3f".format(
+            "Voice Lab speaker=%d profile=%s speed=%.3f silence=%.3f gain=%.3f synth=%.0fms audio=%.2fs rtf=%.3f".format(
                 result.speakerId,
-                result.preset.label,
+                result.profileId,
+                result.effectiveSpeed,
+                result.effectiveSilenceScale,
+                result.effectiveGain,
                 result.synthesisSeconds * 1000.0,
                 result.audioSeconds,
                 result.rtf,
@@ -155,7 +161,7 @@ class SupertonicVoiceLabEngine(context: Context) : AutoCloseable {
         }
     }
 
-    private fun playSamples(samples: FloatArray, sampleRate: Int) {
+    private fun playSamples(samples: FloatArray, sampleRate: Int, outputGain: Float) {
         stop()
         var track: AudioTrack? = null
         try {
@@ -170,7 +176,7 @@ class SupertonicVoiceLabEngine(context: Context) : AutoCloseable {
                 for (index in 0 until count) {
                     buffer[index] = (
                         samples[sourceOffset + index].coerceIn(-1f, 1f) *
-                            OUTPUT_GAIN * Short.MAX_VALUE
+                            outputGain.coerceIn(0.5f, 1.0f) * Short.MAX_VALUE
                         ).roundToInt().toShort()
                 }
                 var writtenOffset = 0
@@ -257,7 +263,6 @@ class SupertonicVoiceLabEngine(context: Context) : AutoCloseable {
         private const val TAG = "AmoraVoiceLab"
         private const val PCM_CHUNK_SAMPLES = 4_096
         private const val PLAYBACK_GRACE_MS = 1_500L
-        private const val OUTPUT_GAIN = 0.92f
         private val REQUIRED_FILES = listOf(
             "duration_predictor.int8.onnx",
             "text_encoder.int8.onnx",
