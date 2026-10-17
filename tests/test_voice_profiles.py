@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from amora.api import create_api
 from amora.app import AmoraCore
-from amora.voice.profiles import VoiceProfileCatalogStore
+from amora.voice.profiles import VoiceDspProfile, VoiceProfileCatalogStore
 
 
 def _core(tmp_path: Path, monkeypatch) -> AmoraCore:
@@ -22,8 +24,21 @@ def test_default_voice_profile_catalog_is_valid_and_not_canonical() -> None:
     assert catalog.backend.language == "pt"
     assert catalog.lab.canonical is False
     assert catalog.lab.default_profile_id in {profile.id for profile in catalog.profiles}
-    assert len(catalog.profiles) >= 4
+    assert len(catalog.profiles) >= 5
+    virtual = next(profile for profile in catalog.profiles if profile.id == "VIRTUAL_SINGER")
+    assert virtual.dsp.pitch_semitones > 0
+    assert virtual.dsp.digital_mix > 0
+    assert virtual.dsp.bit_depth < 16
     assert etag.startswith('"') and etag.endswith('"')
+
+
+def test_dsp_profile_rejects_parameters_outside_safe_bounds() -> None:
+    with pytest.raises(ValidationError):
+        VoiceDspProfile(pitch_semitones=12.0)
+    with pytest.raises(ValidationError):
+        VoiceDspProfile(digital_mix=1.0)
+    with pytest.raises(ValidationError):
+        VoiceDspProfile(ring_mix=0.5)
 
 
 def test_voice_profile_api_requires_auth_and_supports_conditional_refresh(tmp_path: Path, monkeypatch) -> None:
