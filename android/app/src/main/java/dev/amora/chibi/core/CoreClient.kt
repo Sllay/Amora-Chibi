@@ -121,7 +121,6 @@ class CoreClient(context: Context) {
             val etag = connection.getHeaderField("ETag")?.takeIf { it.isNotBlank() }
             val revision = connection.getHeaderField("X-Amora-Voice-Revision")?.takeIf { it.isNotBlank() }
             if (code == HttpURLConnection.HTTP_NOT_MODIFIED) {
-                connection.inputStream?.close()
                 return VoiceProfileSyncResult(
                     notModified = true,
                     body = null,
