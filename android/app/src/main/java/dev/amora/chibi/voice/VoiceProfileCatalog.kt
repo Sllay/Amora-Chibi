@@ -2,6 +2,16 @@ package dev.amora.chibi.voice
 
 import org.json.JSONObject
 
+data class VoiceDspProfile(
+    val pitchSemitones: Float = 0f,
+    val drive: Float = 1f,
+    val bitDepth: Int = 16,
+    val sampleHold: Int = 1,
+    val digitalMix: Float = 0f,
+    val ringModHz: Float = 0f,
+    val ringMix: Float = 0f,
+)
+
 data class VoiceProfile(
     val id: String,
     val label: String,
@@ -10,6 +20,7 @@ data class VoiceProfile(
     val silenceScale: Float,
     val numSteps: Int,
     val outputGain: Float,
+    val dsp: VoiceDspProfile = VoiceDspProfile(),
 )
 
 data class EmotionVoiceModulation(
@@ -69,6 +80,7 @@ data class VoiceProfileCatalog(
                             silenceScale = item.getDouble("silence_scale").toFloat().also { require(it in 0.5f..1.5f) },
                             numSteps = item.getInt("num_steps").also { require(it in 2..16) },
                             outputGain = item.getDouble("output_gain").toFloat().also { require(it in 0.5f..1.0f) },
+                            dsp = parseDsp(item.optJSONObject("dsp")),
                         ),
                     )
                 }
@@ -113,6 +125,29 @@ data class VoiceProfileCatalog(
 
         fun builtIn(): VoiceProfileCatalog = parse(BUILTIN_JSON)
 
+        private fun parseDsp(raw: JSONObject?): VoiceDspProfile {
+            if (raw == null) return VoiceDspProfile()
+            return VoiceDspProfile(
+                pitchSemitones = raw.optDouble("pitch_semitones", 0.0).toFloat(),
+                drive = raw.optDouble("drive", 1.0).toFloat(),
+                bitDepth = raw.optInt("bit_depth", 16),
+                sampleHold = raw.optInt("sample_hold", 1),
+                digitalMix = raw.optDouble("digital_mix", 0.0).toFloat(),
+                ringModHz = raw.optDouble("ring_mod_hz", 0.0).toFloat(),
+                ringMix = raw.optDouble("ring_mix", 0.0).toFloat(),
+            ).also(::validateDsp)
+        }
+
+        private fun validateDsp(value: VoiceDspProfile) {
+            require(value.pitchSemitones in -6f..6f) { "pitch_semitones fora do limite" }
+            require(value.drive in 0.75f..2.5f) { "drive fora do limite" }
+            require(value.bitDepth in 8..16) { "bit_depth fora do limite" }
+            require(value.sampleHold in 1..6) { "sample_hold fora do limite" }
+            require(value.digitalMix in 0f..0.8f) { "digital_mix fora do limite" }
+            require(value.ringModHz in 0f..120f) { "ring_mod_hz fora do limite" }
+            require(value.ringMix in 0f..0.25f) { "ring_mix fora do limite" }
+        }
+
         private fun validateEmotion(value: EmotionVoiceModulation) {
             require(value.speedArousal in -0.25f..0.25f)
             require(value.speedValence in -0.25f..0.25f)
@@ -128,7 +163,7 @@ data class VoiceProfileCatalog(
         private const val BUILTIN_JSON = """
             {
               "schema_version": 1,
-              "revision": "apk-builtin-voice-lab-v1",
+              "revision": "apk-builtin-voice-lab-v2-dsp",
               "backend": {
                 "id": "supertonic-3-int8",
                 "model_id": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
@@ -141,10 +176,11 @@ data class VoiceProfileCatalog(
                 "canonical": false
               },
               "profiles": [
-                {"id":"NATURAL","label":"NATURAL","description":"Referência limpa.","speed":1.0,"silence_scale":1.0,"num_steps":8,"output_gain":0.92},
-                {"id":"AMORA_SOFT","label":"AMORA_SOFT","description":"Mais calma e macia.","speed":0.95,"silence_scale":1.05,"num_steps":8,"output_gain":0.92},
-                {"id":"AMORA_SYNTH","label":"AMORA_SYNTH","description":"Fantasia mais seca.","speed":0.92,"silence_scale":0.9,"num_steps":5,"output_gain":0.90},
-                {"id":"CHIBI","label":"CHIBI","description":"Fantasia mais rápida.","speed":1.08,"silence_scale":0.9,"num_steps":6,"output_gain":0.88}
+                {"id":"NATURAL","label":"NATURAL","description":"Referência limpa.","speed":1.0,"silence_scale":1.0,"num_steps":8,"output_gain":0.92,"dsp":{}},
+                {"id":"AMORA_SOFT","label":"AMORA_SOFT","description":"Mais calma e macia.","speed":0.95,"silence_scale":1.05,"num_steps":8,"output_gain":0.92,"dsp":{"pitch_semitones":0.6,"drive":1.0}},
+                {"id":"AMORA_SYNTH","label":"AMORA_SYNTH","description":"Fantasia digital moderada.","speed":0.96,"silence_scale":0.9,"num_steps":6,"output_gain":0.90,"dsp":{"pitch_semitones":2.4,"drive":1.15,"bit_depth":12,"sample_hold":2,"digital_mix":0.28,"ring_mod_hz":38.0,"ring_mix":0.05}},
+                {"id":"CHIBI","label":"CHIBI","description":"Mais aguda e pequena.","speed":1.06,"silence_scale":0.9,"num_steps":6,"output_gain":0.88,"dsp":{"pitch_semitones":3.2,"drive":1.05,"bit_depth":13,"sample_hold":1,"digital_mix":0.15,"ring_mod_hz":30.0,"ring_mix":0.03}},
+                {"id":"VIRTUAL_SINGER","label":"VIRTUAL_SINGER","description":"Vocal synth deliberadamente artificial para procurar uma identidade tipo cantora virtual, sem copiar uma voz existente.","speed":0.98,"silence_scale":0.82,"num_steps":6,"output_gain":0.86,"dsp":{"pitch_semitones":4.0,"drive":1.28,"bit_depth":10,"sample_hold":2,"digital_mix":0.46,"ring_mod_hz":52.0,"ring_mix":0.10}}
               ],
               "emotion_modulation": {
                 "enabled": true,
