@@ -96,7 +96,7 @@ Infraestrutura/experimentos antigos de avatar podem permanecer no repo, mas não
 
 ## 4. V1.0 — fechamento atual
 
-**Status:** `IN_PROGRESS — STEP 4 VOICE LAB / PHYSICAL SELECTION`
+**Status:** `IN_PROGRESS — STEP 4 CANONICAL VOICE / PHYSICAL SIGNATURE CERTIFICATION`
 
 Fundação atual inclui:
 
@@ -133,7 +133,7 @@ Entregue:
 - diagnóstico local;
 - Galaxy A15 reproduziu fisicamente Faber.
 
-Faber continua voz técnica provisória. Long-run barge-in/térmica/conversa permanecem no gate final V1.
+Faber cumpriu o papel de voz técnica que certificou o caminho offline. Long-run barge-in/térmica/conversa permanecem no gate final V1.
 
 ### V1 Step 2 — Dialogue Identity + Emotion Integration
 
@@ -186,46 +186,52 @@ PR #30 foi integrado ao `main`; o provider mesh faz parte da fundação V1 atual
 
 ### V1 Step 4 — Canonical Voice + V1 Certification
 
-**Status:** `IN_PROGRESS / VOICE LAB MERGED / PHYSICAL SELECTION PENDING`
+**Status:** `IN_PROGRESS / BASE PHYSICALLY SELECTED / PRODUCTION SIGNATURE IMPLEMENTED / APK ACCEPTANCE PENDING`
 
 Decisão atual segue `docs/canon/VOICE_IDENTITY.md` + ADR-0009.
 
-O treino/fine-tuning próprio deixou de ser requisito da V1. A estratégia atual separa backend de TTS e identidade vocal:
+O treino/fine-tuning próprio deixou de ser requisito da V1. A identidade agora é:
 
 ```text
-TtsBackend local
+Supertonic 3 INT8 local
 ↓
-speaker/base aprovada
+speaker 0 fisicamente selecionado
 ↓
 VoiceSignature AMORA_CANONICAL
 ↓
-Prosody Planner bounded
+SpeechStyle / Emotion Engine bounded
 ↓
 PCM / AudioTrack
 ```
 
-Entregue nesta etapa até agora:
+Entregue nesta etapa:
 
-- `Voice Lab` Android isolado do `LocalVoiceEngine` de produção;
-- Supertonic 3 INT8 via sherpa-onnx como primeiro candidato;
-- múltiplos speakers enumeráveis no aparelho;
-- presets `NATURAL`, `AMORA_SOFT`, `AMORA_SYNTH` e `CHIBI`;
-- frases fixas + texto livre;
-- playback local e RTF visível;
-- launcher separado para o laboratório;
-- produção continua no Faber até promoção explícita.
+- Voice Lab Android isolado;
+- Supertonic 3 INT8 via sherpa-onnx;
+- múltiplos speakers comparados fisicamente no Galaxy A15;
+- **speaker 0 selecionado por BK como base canônica**;
+- `LocalVoiceEngine` de produção migrado para speaker 0;
+- VoiceSignature V1 com EQ/cor tonal, saturação suave, textura harmônica discreta, compressor e limiter;
+- `SpeechStyle` agora entrega rate/pitch-signal/volume/valence/arousal ao Android;
+- Emotion Engine continua autoridade emocional e modula a expressão sem trocar identidade;
+- profile versionado `amora_voice_profile.json` servido pelo Core;
+- Android revalida profile com ETag, guarda último válido e continua offline em falha;
+- tuning de assinatura/perfis pode mudar no Core sem recompilar APK;
+- profiles `NATURAL`, `SOFT`, `SHY`, `SYNTH`, `CHIBI` agora possuem parâmetros realmente distintos;
+- identidade canônica bloqueia troca silenciosa de backend/speaker pelo profile;
+- testes de contrato Core/Android adicionados para speaker 0, bounds, hot profile e DSP determinístico.
 
-Merge do Voice Lab no `main`: `5cf93d5975f659adce9748f155dbd962a7140750`.
+O backend Supertonic integrado hoje não possui controle nativo de emoção comprovado pelo adapter sherpa utilizado. Portanto V1 não finge suporte inexistente: a emoção é aplicada pelo cérebro/`SpeechStyle` e pela camada bounded de assinatura. Um adapter futuro pode usar emoção nativa real se outro backend a expuser e passar gate físico.
 
-Próximos gates:
+Próximos gates, sem nova fase de protótipo:
 
-1. testar Supertonic no Galaxy A15;
-2. avaliar português, speakers, latência/RTF, RAM/CPU/temperatura e estabilidade;
-3. selecionar a melhor base feminina/adequada;
-4. implementar/calibrar `VoiceSignature` real (pitch/formant/EQ/de-ess/dynamics/textura apenas quando aprovados);
-5. separar `AMORA_CANONICAL` de fantasias temporárias;
-6. promover o backend vencedor para produção;
-7. conversa longa, barge-in, provider failover, restart e backup/restore;
+1. CI Python + Android da branch de produção;
+2. instalar uma build estrutural `1.0.0-dev8-amora-voice` no Galaxy A15;
+3. validar qualidade de `NATURAL` e distinguir `SOFT`/`SHY`/`SYNTH`/`CHIBI`;
+4. tunar `amora_voice_profile.json` via Core/hot reload, sem rebuild de APK;
+5. validar emoção real da conversa, pronúncia, artefatos, RTF/latência/RAM/CPU/temperatura;
+6. conversa longa, barge-in, restart e offline;
+7. remover assets Faber do pacote após aceite do novo caminho, se nenhuma compatibilidade exigir sua permanência;
 8. fechamento documental V1.
 
 Treino próprio pode ser revisitado no futuro, mas não bloqueia a V1.
