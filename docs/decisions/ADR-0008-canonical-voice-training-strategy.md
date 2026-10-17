@@ -1,15 +1,17 @@
 # ADR-0008 — Estratégia de treino da voz canônica
 
-**Status:** ACCEPTED  
+**Status:** SUPERSEDED  
 **Data:** 2026-10-11  
 **Builds on:** ADR-0002, `docs/canon/VOICE_IDENTITY.md`  
-**Superseded by:** none
+**Superseded by:** ADR-0009
 
 ## Contexto
 
 O caminho local de voz foi fisicamente comprovado no Galaxy A15 com sherpa-onnx + Piper/VITS Faber. O Faber é masculino e existe apenas como voz técnica provisória; a V1 precisa de uma voz feminina própria da Amora.
 
 Não há atualmente uma pessoa conhecida disponível para gravar várias horas de dataset. Compute pago também não pode ser requisito padrão: preços por hora, cobrança acumulada e variação de disponibilidade criam risco desnecessário para um artefato que só precisa ser treinado ocasionalmente.
+
+> Esta estratégia foi válida enquanto o treino/fine-tuning próprio era tratado como caminho de fechamento da V1. Em 2026-10-16 ela foi substituída pelo ADR-0009 após o ciclo de treino gratuito demonstrar custo operacional, instabilidade e baixa reprodutibilidade incompatíveis com o objetivo do projeto.
 
 ## Decisão
 
