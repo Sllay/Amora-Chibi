@@ -1,19 +1,20 @@
 # AMORA — Identidade Vocal Canônica
 
 **Status:** CANÔNICO / ESPECIFICAÇÃO DE ALVO  
-**Atualizado em:** 2026-10-11  
-**Runtime atual:** sherpa-onnx + Piper/VITS provisional Faber  
-**Alvo final:** `amora-voice-v1` feminina própria, local/offline e rights-clear.
+**Atualizado em:** 2026-10-16  
+**Runtime de produção atual:** sherpa-onnx + Piper/VITS Faber provisório  
+**Laboratório atual:** Supertonic 3 INT8 via sherpa-onnx  
+**Alvo final:** `amora-voice-v1` como identidade vocal versionada = backend aprovado + speaker/base + VoiceSignature + prosódia bounded.
 
 ---
 
 ## 1. Princípio
 
-> A voz é parte da identidade contínua da Amora.
+> A voz é parte da identidade contínua da Amora, mas a identidade vocal não deve ficar presa a um único checkpoint treinado.
 
-O backend de TTS pode mudar no futuro, mas a identidade vocal percebida não pode variar aleatoriamente entre providers, sessões ou estados emocionais.
+O backend de TTS é capacidade substituível. A identidade percebida deve permanecer estável por meio de seleção de base, `VoiceSignature`, `VoiceProfile` e parâmetros de prosódia versionados.
 
-A voz final deve funcionar localmente no Galaxy A15 sem depender de quota remota.
+A voz normal deve priorizar execução local/offline e não depender de quota remota.
 
 ---
 
@@ -22,54 +23,95 @@ A voz final deve funcionar localmente no Galaxy A15 sem depender de quota remota
 A voz canônica da Amora deve soar como:
 
 - feminina;
-- brasileira / pt-BR natural;
+- brasileira / pt-BR natural e inteligível;
 - jovem adulta;
 - doce sem infantilização;
-- madura o suficiente para não soar como voz de anime/chibi exageradamente aguda;
+- madura o suficiente para não soar como anime/chibi exageradamente aguda;
 - ainda jovem, sem peso de voz muito madura/mais velha;
 - região base entre médio e médio-grave, com brilho/agudos naturais quando a expressão pedir;
 - dicção clara, mas não de narradora, locutora, assistente ou anúncio;
 - ritmo base moderado, ligeiramente vivo/brasileiro, sem falar acelerado por padrão;
 - energia presente, espontânea e conversacional, sem hiperatividade artificial;
 - microvariações naturais de ritmo, pausa e intensidade;
-- capaz de intimidade, brincadeira, firmeza, baixa energia e irritação sem perder o mesmo timbre-base.
+- capaz de intimidade, brincadeira, firmeza, baixa energia e irritação sem perder a mesma identidade-base.
 
-Não é objetivo imitar uma pessoa pública ou voz sem direitos claros.
-
----
-
-## 3. Identidade fixa vs expressão dinâmica
-
-### 3.1 Identidade fixa
-
-Deve permanecer reconhecível em todos os estados:
-
-- timbre-base;
-- faixa aparente de idade;
-- sotaque/base fonética pt-BR;
-- peso/brilho característicos;
-- ressonância;
-- assinatura de dicção;
-- identidade do speaker/modelo.
-
-### 3.2 Expressão dinâmica
-
-Pode variar dentro de limites pequenos e controlados:
-
-- rate;
-- energia;
-- duração de pausas;
-- intensidade;
-- firmeza;
-- suavidade;
-- pitch delta pequeno quando tecnicamente suportado sem deformar timbre;
-- timing/fraseado.
-
-Emoção não escolhe diretamente parâmetros crus. O `Prosody Planner` recebe estado interno + intenção + tipo de fala e produz uma configuração bounded.
+Não é objetivo imitar pessoa pública, pessoa real sem autorização ou voz cuja licença impeça o uso pretendido.
 
 ---
 
-## 4. Mapeamento emocional
+## 3. Componentes da identidade vocal
+
+A identidade canônica é composta por quatro camadas separadas:
+
+```text
+TtsBackend
+    ↓
+speaker/base aprovada
+    ↓
+VoiceSignature AMORA_CANONICAL
+    ↓
+Prosody Planner bounded
+```
+
+### 3.1 TtsBackend
+
+Responsável por produzir fala base inteligível. Pode ser substituído se outro backend local oferecer melhor pt-BR, licença e desempenho.
+
+O backend **não é sozinho a identidade da Amora**.
+
+### 3.2 Speaker/base
+
+Quando o backend possuir múltiplos speakers, um speaker-base deve ser pinado para a voz normal após benchmark físico. Não escolher speaker aleatoriamente entre sessões.
+
+### 3.3 VoiceSignature
+
+`VoiceSignature` é a camada determinística/versionada que transforma o PCM base para aproximá-lo da identidade vocal alvo.
+
+Transforms candidatos, apenas quando tecnicamente aprovados:
+
+- pitch delta pequeno;
+- formant/ressonância;
+- EQ/cor tonal;
+- de-essing;
+- compressão leve;
+- textura sintética discreta;
+- ganho/limiter;
+- outros transforms bounded e auditáveis.
+
+A ordem, intensidade e implementação desses transforms fazem parte da versão da assinatura.
+
+**Regra:** inteligibilidade pt-BR tem prioridade sobre efeito estilístico.
+
+### 3.4 Prosody Planner
+
+Humor/intenção podem alterar levemente rate, energia, pausas, firmeza, suavidade e timing, dentro de limites pequenos.
+
+Emoção não escolhe parâmetros crus diretamente; o `Prosody Planner` recebe estado interno + intenção + tipo de fala e produz uma configuração bounded.
+
+---
+
+## 4. Identidade canônica vs fantasias
+
+A Amora pode possuir múltiplos `VoiceProfile`, mas apenas um é a voz normal canônica.
+
+```text
+AMORA_CANONICAL  -> identidade normal persistente
+CHIBI            -> fantasia temporária
+SYNTH            -> fantasia temporária
+MASC_JOKE        -> fantasia futura
+outros           -> experimentais
+```
+
+Perfis temporários:
+
+- devem ser ativados explicitamente;
+- não alteram self/memória/identidade da Amora;
+- não substituem silenciosamente a voz normal;
+- podem usar parâmetros mais exagerados porque são efeitos/fantasias assumidos.
+
+---
+
+## 5. Mapeamento emocional
 
 Exemplos conceituais, não fórmulas fixas:
 
@@ -79,7 +121,7 @@ Exemplos conceituais, não fórmulas fixas:
 - pausas maiores;
 - energia menor;
 - respostas possivelmente mais curtas pelo DialoguePlan;
-- sem transformar a voz em monotonia robótica.
+- sem monotonia robótica forçada.
 
 ### Alegria / animação
 
@@ -92,7 +134,7 @@ Exemplos conceituais, não fórmulas fixas:
 
 - comportamento social fica mais firme antes da voz mudar;
 - wording pode ficar mais curto/direto conforme DialoguePlan;
-- prosódia pode ganhar firmeza e tensão leve;
+- prosódia pode ganhar firmeza/tensão leve;
 - não representar raiva simplesmente como pitch/volume altos.
 
 ### Afeto / intimidade
@@ -104,90 +146,122 @@ Exemplos conceituais, não fórmulas fixas:
 
 ---
 
-## 5. Modelo final
+## 6. Backend e licença
 
-O alvo é um modelo single-speaker próprio compatível com inferência local, preferencialmente exportável para ONNX e utilizável no pipeline sherpa-onnx já comprovado.
-
-Qualidade `medium` vs `high` não será escolhida pelo rótulo. A escolha final considera:
-
-- naturalidade;
-- artefatos metálicos/mecânicos;
-- pronúncia pt-BR;
-- consistência de identidade;
-- tamanho;
-- RTF;
-- RAM/CPU/temperatura no Galaxy A15.
-
-Um modelo maior é aceitável se a melhora de qualidade for perceptível e o A15 permanecer estável.
-
----
-
-## 6. Dataset e direitos
-
-Material de treino precisa ter origem e licença auditáveis.
+Qualquer backend/speaker candidato precisa de provenance e licença compatíveis com o uso pretendido.
 
 Aceitável:
 
-- gravação própria com consentimento explícito;
-- dataset público cuja licença permita o uso pretendido e derivação/distribuição do modelo;
-- material sintético apenas quando os termos da voz/fonte autorizarem explicitamente uso para treinamento/derivação.
+- modelo local com licença permissiva/compatível;
+- voz/speaker incluídos no modelo com termos adequados;
+- material próprio com consentimento explícito;
+- modelo próprio treinado no futuro, caso volte a ser vantajoso e reproduzível.
 
 Não aceitável como base canônica:
 
-- voz de pessoa pública sem autorização;
-- voz comercial/API cujos termos proíbam treinamento/derivação;
-- dataset de origem obscura;
-- voice clone sem consentimento/direitos claros.
+- clone de pessoa pública sem autorização;
+- voz real/comercial cuja licença impeça uso/derivação necessários;
+- artefato de origem obscura;
+- provider remoto que mude de voz por quota como caminho normal.
 
-A provenance do dataset deve ser registrada junto da versão do voice pack.
-
----
-
-## 7. Estratégia de compute
-
-Objetivo operacional: **R$ 0 sempre que praticável**.
-
-Ordem de preferência para treino/fine-tuning:
-
-1. GPU gratuita temporária disponível em notebook/serviço acadêmico/comunitário;
-2. hardware gratuito já acessível;
-3. alternativas de treino mais leves/checkpoint/fine-tuning que reduzam VRAM;
-4. apenas após evidência de necessidade, avaliar compute pago com teto de custo explícito.
-
-Treinar no Galaxy A15 **não é o plano padrão**. RAM do celular não equivale a VRAM de GPU, e treino intenso traz risco térmico, tempo excessivo e desgaste. O A15 é o alvo de **inferência e certificação**, não a máquina principal de treinamento.
-
-Nenhum serviço pago deve ser deixado rodando sem limite/teto verificável.
+A provenance deve ficar registrada junto da versão do voice pack/manifesto da assinatura.
 
 ---
 
-## 8. Pipeline final esperado
+## 7. Estratégia atual de implementação
+
+Treinar/fine-tunar um checkpoint próprio **não é mais requisito da V1**. O ADR-0008 foi superseded pelo ADR-0009.
+
+Fluxo atual:
 
 ```text
-dataset rights-clear
+backend local pronto + rights-clear
         ↓
-preparo / limpeza / metadata
+benchmark de speakers/base
         ↓
-fine-tuning / treinamento fora do A15
+seleção física no Galaxy A15
         ↓
-export ONNX
+VoiceSignature determinística
         ↓
-validação de licença + hash + qualidade
-        ↓
-Voice Pack amora-voice-v1
-        ↓
-sherpa-onnx Android
+AMORA_CANONICAL
         ↓
 Prosody Planner bounded
         ↓
 PCM / AudioTrack
 ```
 
+Treino próprio continua permitido como pesquisa futura se houver evidência clara de ganho e compute/dataset reproduzíveis.
+
 ---
 
-## 9. Estado atual
+## 8. Voice Lab atual
 
-O Faber masculino permanece somente como **voz provisória técnica** que certificou o caminho local.
+Existe um laboratório Android isolado usando **Supertonic 3 INT8 via sherpa-onnx**.
 
-Ele não define a identidade vocal final da Amora.
+Objetivo:
 
-A criação/treino de `amora-voice-v1` ocorre na fase final da V1, depois de Dialogue Identity, Emotion wiring e provider resilience estarem estruturalmente fechados.
+- ouvir todos os speakers disponíveis;
+- comparar as mesmas frases pt-BR;
+- medir RTF/latência;
+- escolher uma base pela audição, não pelo nome;
+- testar presets temporários sem alterar produção.
+
+Presets atuais do laboratório:
+
+- `NATURAL`;
+- `AMORA_SOFT`;
+- `AMORA_SYNTH`;
+- `CHIBI`.
+
+Esses presets atuais mexem principalmente em speed/silence/steps; **ainda não são a VoiceSignature final** e não fazem pitch/formant DSP.
+
+O `LocalVoiceEngine` de produção continua usando Faber até promoção explícita após teste físico.
+
+---
+
+## 9. Gate físico
+
+A voz só pode ser promovida como `AMORA_CANONICAL` após teste real no Galaxy A15.
+
+Avaliar pelo menos:
+
+- pt-BR real e inteligível;
+- pronúncia de Amora/BK/gírias/frases difíceis;
+- consistência de speaker;
+- latência de primeira fala;
+- RTF;
+- RAM/CPU;
+- temperatura;
+- estabilidade prolongada;
+- barge-in/playback;
+- funcionamento offline;
+- ausência de chamadas TTS remotas;
+- qualidade da VoiceSignature;
+- diferença clara entre identidade canônica e fantasias temporárias.
+
+CI não substitui esse gate.
+
+---
+
+## 10. Portabilidade futura
+
+A `VoiceSignature` deve ser especificada de modo que possa ser reproduzida em mais de um cliente quando tecnicamente viável.
+
+Direção planejada:
+
+```text
+Android TtsBackend ─┐
+                    ├─ VoiceSignature AMORA_CANONICAL
+Web/PWA TtsBackend ─┘
+```
+
+O backend pode diferir por plataforma; o objetivo é preservar a mesma identidade percebida e parâmetros versionados, não obrigar todos os clientes a usar exatamente o mesmo runtime.
+
+---
+
+## 11. Estado atual
+
+- Faber masculino = voz técnica/provisória de produção que certificou o pipeline local.
+- Supertonic 3 INT8 = candidato de laboratório já integrado de forma isolada.
+- voz final = **ainda não escolhida**; depende do teste físico de BK.
+- próximo passo = testar speakers/presets no Galaxy A15, selecionar a melhor base e então implementar/calibrar a VoiceSignature real.
