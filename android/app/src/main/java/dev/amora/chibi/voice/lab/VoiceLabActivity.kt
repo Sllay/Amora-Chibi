@@ -71,7 +71,7 @@ class VoiceLabActivity : Activity() {
             setTextColor(getColor(R.color.amora_white))
         })
         root.addView(TextView(this).apply {
-            text = "Supertonic 3 INT8 • laboratório offline • perfis sincronizados pelo Core"
+            text = "Supertonic 3 INT8 • laboratório offline • perfis/DSP sincronizados pelo Core"
             textSize = 13F
             setTextColor(getColor(R.color.amora_pink))
             setPadding(0, dp(4), 0, dp(14))
@@ -93,7 +93,7 @@ class VoiceLabActivity : Activity() {
 
         root.addView(card().apply {
             addView(sectionLabel("VOZ BASE / PERFIL / EMOÇÃO"))
-            addView(bodyText("Speaker = voz base. Perfil = assinatura/fantasia. Emoção = modulação pequena vinda do Core. O modelo continua local no APK; só os parâmetros leves podem mudar pelo servidor."))
+            addView(bodyText("Speaker = voz base. Perfil = assinatura/fantasia + DSP. Emoção = modulação pequena vinda do Core. O modelo continua local no APK; parâmetros leves de pitch/textura podem mudar pelo servidor."))
 
             speakerButton = actionButton("Speaker: preparando…", primary = false).apply {
                 isEnabled = false
@@ -125,7 +125,7 @@ class VoiceLabActivity : Activity() {
             }
             addView(emotionButton, sectionParams(topDp = 10))
 
-            addView(bodyText("A emoção do laboratório só simula valence/arousal/dominance para A/B. Na conversa real esses valores já vêm do Emotion Engine. Pitch/formant DSP ainda não é aplicado nesta etapa."))
+            addView(bodyText("O Lab agora aplica pitch por playback com compensação de velocidade e uma cadeia digital bounded (drive, bit-depth, sample-hold e ring modulation). Formant/pitch-tracking avançados continuam para uma etapa posterior."))
         }, sectionParams())
 
         root.addView(card().apply {
@@ -169,7 +169,7 @@ class VoiceLabActivity : Activity() {
         }, sectionParams())
 
         root.addView(TextView(this).apply {
-            text = "Edite config/voice_profiles.json no GitHub/Termux, reinicie o Core e toque em Atualizar perfis. Sem recompilar APK."
+            text = "Depois desta build, pitch/textura/drive do profile vêm de config/voice_profiles.json: GitSync + reiniciar Core + Atualizar perfis. Sem recompilar APK para cada ajuste."
             textSize = 12F
             gravity = Gravity.CENTER
             setTextColor(getColor(R.color.amora_text_muted))
@@ -206,7 +206,7 @@ class VoiceLabActivity : Activity() {
                 refreshSelectors()
                 refreshProfileSource()
                 setBusy(false)
-                val syncNote = syncResult.exceptionOrNull()?.let { " • sync falhou: ${describe(it)}" }.orEmpty()
+                val syncNote = syncResult.exceptionOrNull()?.let { " • ${describeSyncError(it)}" }.orEmpty()
                 setStatus("Supertonic 3 pronto • $count speakers • offline • ${catalog.language}$syncNote")
             }
         }
@@ -230,13 +230,13 @@ class VoiceLabActivity : Activity() {
                         refreshSelectors()
                         refreshProfileSource()
                         setBusy(false)
-                        setStatus("Perfis atualizados • ${catalog.revision} • fonte $profileSource")
+                        setStatus("Perfis/DSP atualizados • ${catalog.revision} • fonte $profileSource")
                     }
                 }
                 .onFailure { error ->
                     if (!closing) runOnUiThread {
                         setBusy(false)
-                        setStatus("Falha ao atualizar perfis; mantendo cache atual: ${describe(error)}")
+                        setStatus("Falha ao atualizar perfis; mantendo cache atual: ${describeSyncError(error)}")
                     }
                 }
         }
@@ -283,6 +283,7 @@ class VoiceLabActivity : Activity() {
                     setBusy(false)
                     setStatus(
                         "Concluído • speaker ${result.speakerId} • ${result.profileId} • ${emotion.label} • " +
+                            "pitch ${formatSigned(result.pitchSemitones.toDouble())} st • digital ${format(result.digitalMix.toDouble())} • " +
                             "speed ${format(result.effectiveSpeed.toDouble())} • silence ${format(result.effectiveSilenceScale.toDouble())} • " +
                             "gain ${format(result.effectiveGain.toDouble())} • ${format(result.audioSeconds)} s • RTF ${format(result.rtf)}",
                     )
@@ -305,7 +306,9 @@ class VoiceLabActivity : Activity() {
         speakerButton.isEnabled = speakerCount > 1
 
         val profile = catalog.profile(selectedProfileId) ?: catalog.defaultProfile()
-        profileButton.text = "Perfil: ${profile.label}  • toque para trocar"
+        val dsp = profile.dsp
+        profileButton.text =
+            "Perfil: ${profile.label} • pitch ${formatSigned(dsp.pitchSemitones.toDouble())} st • digital ${format(dsp.digitalMix.toDouble())}"
         emotionButton.text = "Emoção: ${selectedEmotion.label}  • toque para trocar"
     }
 
@@ -331,12 +334,23 @@ class VoiceLabActivity : Activity() {
         statusView.text = value
     }
 
+    private fun describeSyncError(error: Throwable): String {
+        val detail = describe(error)
+        return if (detail.contains("HTTP 404")) {
+            "Core desatualizado: a rota /v1/voice/profiles ainda não existe nesse processo. Faça GitSync/pull da main e reinicie `amora serve --port 8765`."
+        } else {
+            detail
+        }
+    }
+
     private fun describe(error: Throwable): String {
         val message = error.message?.takeIf { it.isNotBlank() }
         return if (message == null) error.javaClass.simpleName else "${error.javaClass.simpleName}: $message"
     }
 
     private fun format(value: Double): String = String.format(Locale.US, "%.2f", value)
+
+    private fun formatSigned(value: Double): String = String.format(Locale.US, "%+.1f", value)
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
