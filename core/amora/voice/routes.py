@@ -3,9 +3,10 @@ from __future__ import annotations
 import math
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
+from .profiles import VoiceProfileCatalogStore
 from .tts import GeminiStreamingTTS, RemoteVoiceNotAllowed, VoiceEngine, VoiceUnavailable
 
 
@@ -17,6 +18,7 @@ def register_voice_routes(app: FastAPI, core, require_auth) -> None:
         GeminiStreamingTTS(core.secrets),
         core.clock,
     )
+    profile_catalog = VoiceProfileCatalogStore()
 
     def console():
         return getattr(app.state, "server_console", None)
@@ -50,6 +52,29 @@ def register_voice_routes(app: FastAPI, core, require_auth) -> None:
             elif state.get("expressive_tts_available"):
                 dashboard.clear_module_override("gemini.tts")
         return state
+
+    @app.get("/v1/voice/profiles", dependencies=auth)
+    def voice_profiles(request: Request) -> Response:
+        try:
+            catalog, etag = profile_catalog.load()
+        except (OSError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"voice profile catalog invalid: {type(exc).__name__}",
+            ) from exc
+
+        headers = {
+            "ETag": etag,
+            "Cache-Control": "no-cache",
+            "X-Amora-Voice-Revision": catalog.revision,
+        }
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+        return Response(
+            content=catalog.model_dump_json(),
+            media_type="application/json",
+            headers=headers,
+        )
 
     @app.get("/v1/voice/utterances/{utterance_id}/audio", dependencies=auth)
     async def utterance_audio(utterance_id: UUID):
