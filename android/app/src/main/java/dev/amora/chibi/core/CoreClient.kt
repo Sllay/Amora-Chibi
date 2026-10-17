@@ -23,6 +23,9 @@ class CoreClient(context: Context) {
         val rate: Float,
         val pitch: Float,
         val volume: Float,
+        val valence: Float,
+        val arousal: Float,
+        val dominance: Float,
         val remoteTtsAllowed: Boolean,
         val cognitiveTurnId: String?,
     )
@@ -31,6 +34,13 @@ class CoreClient(context: Context) {
         val usedRemote: Boolean,
         val completed: Boolean,
         val bytesReceived: Long,
+    )
+
+    data class VoiceProfileSyncResult(
+        val notModified: Boolean,
+        val body: String?,
+        val etag: String?,
+        val revision: String?,
     )
 
     private val appContext = context.applicationContext
@@ -95,9 +105,42 @@ class CoreClient(context: Context) {
             rate = style.optDouble("rate", 1.0).toFloat(),
             pitch = style.optDouble("pitch", 1.0).toFloat(),
             volume = style.optDouble("volume", 1.0).toFloat(),
+            valence = style.optDouble("valence", 0.0).toFloat(),
+            arousal = style.optDouble("arousal", 0.0).toFloat(),
+            dominance = style.optDouble("dominance", 0.0).toFloat(),
             remoteTtsAllowed = metadata.optBoolean("remote_tts_allowed", false),
             cognitiveTurnId = metadata.optString("cognitive_turn_id").takeIf { it.isNotBlank() },
         )
+    }
+
+    fun fetchVoiceProfiles(ifNoneMatch: String? = null): VoiceProfileSyncResult {
+        val connection = open("/v1/voice/profiles", "GET", authenticated = true)
+        if (!ifNoneMatch.isNullOrBlank()) connection.setRequestProperty("If-None-Match", ifNoneMatch)
+        try {
+            val code = connection.responseCode
+            val etag = connection.getHeaderField("ETag")?.takeIf { it.isNotBlank() }
+            val revision = connection.getHeaderField("X-Amora-Voice-Revision")?.takeIf { it.isNotBlank() }
+            if (code == HttpURLConnection.HTTP_NOT_MODIFIED) {
+                connection.inputStream?.close()
+                return VoiceProfileSyncResult(
+                    notModified = true,
+                    body = null,
+                    etag = etag ?: ifNoneMatch,
+                    revision = revision,
+                )
+            }
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) throw IllegalStateException("Core respondeu HTTP $code: $body")
+            return VoiceProfileSyncResult(
+                notModified = false,
+                body = body,
+                etag = etag,
+                revision = revision,
+            )
+        } finally {
+            connection.disconnect()
+        }
     }
 
     fun streamVoiceAudio(
