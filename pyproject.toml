@@ -36,6 +36,9 @@ package-dir = {"" = "core"}
 [tool.setuptools.packages.find]
 where = ["core"]
 
+[tool.setuptools.package-data]
+amora = ["voice/*.json"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
