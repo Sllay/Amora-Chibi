@@ -65,7 +65,8 @@ Superseded by: ADR-NNNN / none
 - `ADR-0005-roadmap-split-v09-v11-v12.md` — escopo antigo V0.9/V0.95 dividido entre V1.1 e V1.2.
 - `ADR-0006-structured-dialogue-realization.md` — `DialoguePlan` vira `RealizationFrame` estruturado e validado; prompt/blacklist não são enforcement suficiente.
 - `ADR-0007-emotion-loop-and-test-isolation.md` — conversa/ações alimentam Emotion Engine em loop fechado; testes podem executar sem contaminar memória/relação/mood persistente.
-- `ADR-0008-canonical-voice-training-strategy.md` — voz feminina canônica com provenance auditável, treino gratuito primeiro, Piper medium antes de high e A15 como alvo de inferência/certificação.
+- `ADR-0008-canonical-voice-training-strategy.md` — **SUPERSEDED**; registrava treino/fine-tuning próprio como caminho canônico.
+- `ADR-0009-ready-tts-voice-signature.md` — backend TTS local pronto + `VoiceSignature` versionada; treino próprio deixa de ser requisito da V1.
 
 ## Regra de uso
 

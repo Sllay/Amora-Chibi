@@ -1,6 +1,6 @@
 # PROJECT_STATE — Amora-Chibi
 
-**Última atualização:** 2026-10-11  
+**Última atualização:** 2026-10-16  
 **Objetivo:** permitir continuidade segura entre chats/agentes sem depender do histórico integral da conversa.
 
 Este arquivo é um **snapshot operacional**. Para regras atuais, sempre leia primeiro `docs/canon/*`.
@@ -18,11 +18,12 @@ Ordem de leitura:
 5. `docs/canon/PROVIDER_MESH.md`;
 6. `docs/canon/VOICE_IDENTITY.md`;
 7. `docs/roadmap/VERSIONS.md`;
-8. `docs/decisions/`;
+8. ADRs relevantes em `docs/decisions/`;
 9. este `PROJECT_STATE.md`;
-10. docs técnicos específicos de versão/módulo.
+10. docs técnicos específicos de versão/módulo;
+11. código, main, PRs e workflows atuais.
 
-Docs antigos não são autoridade atual quando divergirem do canon.
+Docs antigos não são autoridade atual quando divergirem do canon/ADR vigente.
 
 ---
 
@@ -37,9 +38,17 @@ A Amora não é um LLM.
 
 Trocar Groq/Gemini/Cloudflare/OpenRouter/outro provider não pode trocar `ENTITY_AMORA`.
 
+A mesma regra agora vale para voz:
+
+```text
+TtsBackend != identidade vocal
+```
+
+A identidade vocal é uma composição versionada de speaker/base + VoiceSignature + prosódia bounded.
+
 ---
 
-## 3. Plataforma
+## 3. Plataforma atual
 
 Host principal atual:
 
@@ -50,6 +59,24 @@ Galaxy A15 5G
 ```
 
 Backend: modular monolith, SQLite, asyncio/FastAPI, Event Bus e APIs locais.
+
+Comandos operacionais atuais no Termux:
+
+```bash
+source ~/.venvs/amora/bin/activate
+cd ~/amora-src
+amora serve --port 8765
+```
+
+Pareamento:
+
+```bash
+source ~/.venvs/amora/bin/activate
+cd ~/amora-src
+amora pair
+```
+
+BK usa GitSync para atualizar o diretório compartilhado e não quer credenciais GitHub no Termux.
 
 ---
 
@@ -69,20 +96,9 @@ O turno humano atual aparece uma única vez para o provider. Turnos técnicos ma
 
 ### Dialogue Identity — Step 2 concluído
 
-O Core possui `DialoguePlan` local e autoritativo com:
+O Core possui `DialoguePlan` local e autoritativo com dialogue act, objective/moves, stance, relational attitude, closing mode, follow-up/help policy, facts/grounding e tone tags derivados de estado local.
 
-- dialogue act;
-- objective/moves;
-- stance;
-- relational attitude;
-- closing mode;
-- follow-up/help policy;
-- facts/grounding;
-- tone tags derivados de estado local.
-
-Atos incluem acknowledgement, self-fact, disclosure, support, resposta, continuação, opinião, discordância, reação brincalhona, reação relacional, boundary, autonomia e reflection.
-
-O provider não joga prose livre diretamente na fala. Fluxo atual:
+Fluxo atual:
 
 ```text
 DialoguePlan
@@ -91,25 +107,13 @@ DialoguePlan
 → somente então texto falável / SpeechSegment
 ```
 
-Move não autorizado, follow-up/help proibido ou closing incompatível é rejeitado antes de qualquer fala.
-
 Self-facts simples e vocativos podem ser realizados localmente sem provider.
 
 ### Emotion Engine — loop fechado
 
 O Core possui appraisal determinístico, Emotion Events, Global Mood, Entity Affect, decay, blame, intentionality, spillover e Social Bids.
 
-A conversa normal agora alimenta o Emotion Engine **antes** da compilação cognitiva do mesmo turno por meio de `InteractionAppraiser` local e conservador.
-
-Consequências:
-
-- uma interação social significativa pode alterar mood/affect;
-- o mesmo turno já pode receber stance/attitude compatíveis com o estado atualizado;
-- perguntas neutras não fabricam emoção;
-- emoção influencia comportamento social antes da prosódia;
-- `test_mode` pode calcular preview sem persistir mood/affect.
-
-Observabilidade inclui último appraisal, último Emotion Event/profile e último turno de teste.
+A conversa normal alimenta o Emotion Engine antes da compilação cognitiva do mesmo turno por meio de `InteractionAppraiser` local e conservador.
 
 ### Test-state isolation
 
@@ -121,8 +125,6 @@ memory_consolidation=false
 relationship_learning=false
 emotion_persistence=false
 ```
-
-Reflexão persistente é bloqueada nesses turnos; entrada + saída técnica são excluídas do histórico literal futuro e emoção pode ser apenas efêmera.
 
 Existe rota autenticada `/v1/conversation/test-turn` para probes isolados.
 
@@ -142,30 +144,17 @@ Malha V1:
 
 Cloudflare e OpenRouter usam adapters estruturados compatíveis com `RealizationFrame` e reflection proposals.
 
-Guardas de custo:
-
-- Cloudflare só registra se token + account id existirem **e** `AMORA_CLOUDFLARE_ZERO_COST_CONFIRMED=true`;
-- adapter Cloudflare usa Workers AI direto, não Unified Billing;
-- OpenRouter só fica disponível para `openrouter/free` ou modelo `:free`;
-- modelo OpenRouter não-gratuito falha fechado;
-- ausência de credencial apenas remove aquele provider da malha;
-- quota/preço atual não é hardcoded como contrato eterno.
-
-Router continua selecionando por capability, privacy, saúde, quota, custo relativo e prioridade. Cooldown/backoff/failover continuam locais.
-
-Health report expõe providers configurados/registrados e nomes de providers sem expor secrets.
+Guardas de custo permanecem fail-closed.
 
 ### Privacidade
 
 Android possui autorização explícita para cognição remota de falas do usuário, separada de STT/áudio.
 
-`AMORA_REMOTE_COGNITION_ALLOWED` é fallback/controle para cognição remota autônoma quando o evento não traz autorização explícita; não substitui o toggle normal do app.
-
 AUTH/SECRET não vão para providers remotos.
 
 ---
 
-## 5. Fechamento V1 — quatro passos
+## 5. Fechamento V1 — estado real
 
 ### Step 1 — Local Voice
 
@@ -189,62 +178,229 @@ Faber é técnico/provisório e masculino.
 
 **Status:** `PASS / MERGED` — PR #29, merge `dfe50de9a9312f0e6a3f08cc482e9b4dc0aee1d4`.
 
-Entregue:
-
-- DialoguePlan rico;
-- RealizationFrame estruturado + validator local;
-- local realization para atos triviais;
-- emotion loop conversa → appraisal → Emotion Engine → diálogo;
-- test-state isolation;
-- observabilidade de appraisal/realization;
-- addressee continuity sem auto-renovação;
-- correção da ordem causal de `AUTONOMOUS_INITIATION`/`COGNITIVE_REFLECTION` antes do plano.
-
-CI final: Python 3.11–3.14 PASS, **211 pytest tests** por matriz + doctor/autonomy/actions/conversation/avatar/backup smokes PASS.
-
 ### Step 3 — Zero-Cost Provider Mesh
 
-**Status:** `PASS / READY TO MERGE` — PR #30.
+**Status:** `PASS / MERGED`.
 
-Entregue:
-
-- `docs/canon/PROVIDER_MESH.md`;
-- Cloudflare Workers AI direct adapter;
-- OpenRouter free-route adapter;
-- integração com structured realization/reflection;
-- zero-cost guards fail-closed;
-- health/usage observability;
-- deterministic offline tests sem consumir API real.
-
-CI run `38172639477`: Python 3.11, 3.12, 3.13 e 3.14 PASS; pytest e todos os smoke tests PASS.
+PR #30 já foi integrado ao `main`. O provider mesh faz parte da fundação atual.
 
 ### Step 4 — Canonical Voice + V1 Certification
 
-**Status:** `NEXT / VOICE TARGET CANONIZED`.
+**Status:** `IN PROGRESS — VOICE LAB MERGED / PHYSICAL TEST PENDING`.
 
-Próximo escopo:
+A estratégia de treino próprio foi **superseded** pelo ADR-0009.
 
-- seguir `docs/canon/VOICE_IDENTITY.md`;
-- selecionar material feminino pt-BR com direitos/provenance claros;
-- priorizar GPU gratuita para treino/fine-tuning;
-- escolher medium/high por qualidade + benchmark, não pelo rótulo;
-- exportar ONNX e empacotar no mesmo runtime sherpa-onnx já comprovado;
-- calibrar Prosody Planner bounded;
-- teste prolongado no A15;
-- conversa/barge-in/provider failover/restart/backup-restore;
-- estabilidade térmica e de memória;
-- fechamento documental V1.
+Nova direção:
 
-Treino pago não é requisito. Se compute pago algum dia for avaliado, exige teto explícito de custo e decisão consciente. RAM do A15 não equivale a VRAM de GPU; o A15 permanece alvo de inferência/certificação por padrão.
+```text
+TtsBackend local pronto
+↓
+speaker/base escolhida no hardware
+↓
+VoiceSignature determinística/versionada
+↓
+AMORA_CANONICAL
+↓
+Prosody Planner bounded
+↓
+PCM / AudioTrack
+```
+
+Treinar/fine-tunar modelo próprio **não é requisito da V1**.
 
 ---
 
-## 6. Regra de testes
+## 6. Voice Lab — estado atual
+
+O `main` contém o Voice Lab isolado, merge:
+
+```text
+5cf93d5975f659adce9748f155dbd962a7140750
+feat(v1.0): add isolated Supertonic Voice Lab
+```
+
+Implementação:
+
+- `android/app/src/main/java/dev/amora/chibi/voice/lab/SupertonicVoiceLabEngine.kt`;
+- `android/app/src/main/java/dev/amora/chibi/voice/lab/VoiceLabActivity.kt`;
+- launcher separado no `AndroidManifest.xml`;
+- `prepare-deps.sh` empacota o modelo Supertonic do laboratório;
+- produção `LocalVoiceEngine` permanece Faber e não foi trocada.
+
+Modelo do laboratório:
+
+```text
+sherpa-onnx-supertonic-3-tts-int8-2026-05-11
+```
+
+Runtime:
+
+- sherpa-onnx `1.13.8`;
+- CPU;
+- 2 threads;
+- idioma passado ao motor como `pt`;
+- speakers vêm de `voice.bin` e são enumerados no aparelho.
+
+Presets atuais:
+
+- `NATURAL` — speed 1.00, silence 1.00, 8 steps;
+- `AMORA_SOFT` — speed 0.95, silence 1.05, 8 steps;
+- `AMORA_SYNTH` — speed 0.92, silence 0.90, 5 steps;
+- `CHIBI` — speed 1.08, silence 0.90, 6 steps.
+
+**Importante:** esses presets ainda NÃO são DSP de VoiceSignature. Eles não fazem pitch/formant; servem para benchmark inicial de base/speaker.
+
+Frases fixas do Voice Lab:
+
+1. `Bom dia. Como você dormiu?`
+2. `Eu realmente não concordo com isso.`
+3. `Você deixou suas coisas espalhadas pela sala.`
+4. `Três pratos de trigo para três tigres tristes.`
+5. `Essas escolhas precisam ser consideradas com cuidado.`
+6. `Amor, você sabe que isso não faz o menor sentido, né?`
+
+O laboratório mostra speaker/preset, duração e RTF.
+
+### Gate físico pendente
+
+BK precisa instalar a build atual no Galaxy A15 e testar:
+
+- se o Supertonic abre;
+- quantos speakers aparecem;
+- quais speakers são femininos/adequados;
+- pt-BR/inteligibilidade;
+- pronúncia das seis frases;
+- RTF/latência;
+- travamentos;
+- temperatura/RAM/CPU perceptíveis;
+- melhor combinação speaker + preset.
+
+A voz final só é escolhida **depois desse relato físico**.
+
+---
+
+## 7. VoiceSignature — próximo passo após escolher a base
+
+Depois que BK escolher o melhor speaker/base:
+
+1. congelar base vencedora;
+2. implementar `VoiceProfile` separado de backend;
+3. implementar `AMORA_CANONICAL`;
+4. calibrar transforms bounded como pitch/formant/EQ/de-ess/dynamics/textura apenas quando necessários;
+5. preservar `CHIBI`, `SYNTH` e futuros perfis como fantasias temporárias;
+6. comparar A/B com a base limpa;
+7. só então substituir Faber no caminho normal.
+
+Perfil alvo continua:
+
+- feminina;
+- jovem adulta;
+- pt-BR claro;
+- doce sem infantilização;
+- médio/médio-grave com brilho natural;
+- conversacional;
+- não locutora;
+- não anime/chibi exagerada como voz normal.
+
+---
+
+## 8. Próxima frente após voz — Web/PWA para iPhone
+
+Prioridade declarada por BK depois da voz:
+
+- cliente Web/PWA instalável pela Tela de Início do Safari;
+- uso diário no iPhone sem compilar APK a cada mudança;
+- frontend separado do Core;
+- Render Static Site ou hosting estático equivalente pode hospedar o cliente;
+- modelos/pacotes web podem ser baixados na primeira execução e armazenados localmente quando possível;
+- Android e Web devem compartilhar contratos, não duplicar a Amora.
+
+Conceito:
+
+```text
+Amora Core / contratos comuns
+        ├── Android platform adapter
+        └── Web/PWA platform adapter
+```
+
+Não tratar PWA como "APK rodando no site".
+
+### Hospedagem futura do Core
+
+BK quer eliminar dependência de um celular sempre ligado.
+
+Depois do cliente PWA, investigar Core remoto persistente com objetivo R$ 0, separando:
+
+```text
+Frontend/PWA
+!=
+Core persistente
+!=
+providers cognitivos/LLMs
+```
+
+Cloudflare Workers/Durable Objects/D1 ou equivalente são candidatos para pesquisa, mas **nenhuma migração do Core foi aprovada ainda**. Antes disso precisa ADR + prova de persistência, backup/restore, privacidade, custo e latência.
+
+Não confundir `Cloudflare Workers` com `ChatGPT Work`.
+
+---
+
+## 9. Modularização — direção pedida por BK
+
+BK quer reduzir scripts gigantes e impedir que novo recurso exija alterar o núcleo inteiro.
+
+Taxonomia alvo:
+
+```text
+core/       -> identidade, estado, decisão e orquestração
+contracts/  -> eventos, schemas, capabilities
+modules/    -> voz, audição, visão, memória, presença
+providers/  -> cognição, STT, TTS
+plugins/    -> Discord/GitHub/etc.
+platforms/  -> Android/Web
+runtime/    -> registry/loader/event bus/lifecycle
+```
+
+Princípios:
+
+- Core pequeno e estável, mas não "imutável";
+- plugin falha sem derrubar Core;
+- trocar TTS não toca identidade/cognição;
+- criar cliente Web não duplica Core;
+- adicionar Discord não exige cirurgia no núcleo;
+- refactor deve acontecer incrementalmente em fronteiras reais, não como reescrita total especulativa.
+
+---
+
+## 10. Android build / teste
+
+Workflow oficial prepara dependências e monta debug APK.
+
+Localmente, quando necessário:
+
+```bash
+bash android/tools/prepare-deps.sh
+gradle -p android --no-daemon :app:testDebugUnitTest :app:assembleDebug
+```
+
+APK:
+
+```text
+android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+No APK atual o Voice Lab possui launcher próprio chamado **Amora Voice Lab**.
+
+CI/build não substitui certificação física do Galaxy A15.
+
+---
+
+## 11. Regra de testes
 
 Um teste só deve existir se o resultado:
 
 1. decidir entre arquiteturas reais;
-2. provar um gate físico/hardware;
+2. provar gate físico/hardware;
 3. detectar/prevenir regressão crítica;
 4. validar contrato que entra em produção.
 
@@ -252,53 +408,13 @@ Evitar builds/experimentos descartáveis apenas por curiosidade quando não alte
 
 ---
 
-## 7. Roadmap posterior
-
-### V1.1
-
-- percepção visual;
-- screen mapping;
-- corpo/avatar final;
-- renderer/rig/expressões necessários;
-- integração semântica Mind → Avatar.
-
-### V1.2
-
-- desejo estético persistente;
-- escolhas de aparência;
-- avaliação de roupa;
-- preferências visuais;
-- propriedade sobre autoimagem.
-
-Planejamento antigo V0.9/V0.95 foi dividido. Esses itens foram movidos, não cancelados.
-
----
-
-## 8. Git / Android workflow
-
-BK usa GitSync para atualizar o diretório compartilhado e não quer credenciais GitHub no Termux.
-
-```bash
-bash /storage/emulated/0/Documents/Amora-Chibi/tools/termux-sync.sh \
-  /storage/emulated/0/Documents/Amora-Chibi
-
-source ~/.venvs/amora/bin/activate
-cd ~/amora-src
-amora serve --port 8765
-```
-
-Não pedir GitHub token no Termux.
-
-Provider secrets ficam no SecretStore local da Amora, nunca em chat/repo.
-
----
-
-## 9. Regras de continuidade
+## 12. Regras de continuidade
 
 Antes de sugerir arquitetura nova:
 
 - ler canon/roadmap/ADRs;
-- verificar PRs ativos;
+- verificar `main`, PRs ativos e CI;
+- consultar ADR-0009 antes de sugerir novo ciclo de treino de voz;
 - não reintroduzir Gemini TTS como voz normal;
 - não transformar provider em identidade;
 - não inventar self-facts;
@@ -307,6 +423,25 @@ Antes de sugerir arquitetura nova:
 - não deixar testes técnicos consolidarem estado persistente por padrão;
 - não ativar billing/pago silenciosamente;
 - não declarar hardware PASS com base apenas em CI;
-- não expandir V1 com V1.1/V1.2 sem decisão explícita.
+- não migrar o Core para cloud apenas porque um free tier existe hoje.
 
 Se a mesma área entrar em patch loop, parar e reavaliar ownership antes de continuar.
+
+---
+
+## 13. Próximo trabalho imediato
+
+Ordem atual:
+
+```text
+1. Galaxy A15: testar Voice Lab / Supertonic
+2. escolher melhor speaker/base
+3. implementar e calibrar VoiceSignature AMORA_CANONICAL
+4. promover voz vencedora para produção
+5. certificação final de voz/V1
+6. iniciar cliente Web/PWA para iPhone
+7. depois pesquisar/migrar hospedagem persistente do Core, se aprovada
+8. continuar modularização incremental
+```
+
+**Não voltar para Colab/treino Kristin/Faber híbrido como próximo passo.** Esse caminho saiu do crítico da V1.
