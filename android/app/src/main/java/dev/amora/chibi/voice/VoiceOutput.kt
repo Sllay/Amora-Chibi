@@ -9,20 +9,21 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * Authoritative V1 voice output.
  *
- * The provisional neural identity is bundled with the APK. Android TextToSpeech
- * is intentionally not used as an automatic fallback here: a hidden fallback
- * changes Amora's identity and masks physical integration failures.
+ * Speech stays local/offline. The paired local Core only serves the small,
+ * versioned VoiceProfile used to tune Amora's base signature and bounded prosody.
  */
 class VoiceOutput(
     context: Context,
+    private val coreClient: CoreClient,
     private val onSpeakingChanged: (Boolean) -> Unit,
     private val onFinished: (String, Outcome, Int?) -> Unit,
     private val onVoiceStatusChanged: (VoiceDiagnostics.Snapshot) -> Unit = {},
 ) : AutoCloseable {
     enum class Outcome { SPOKEN, FAILED, INTERRUPTED, PARTIAL }
 
-    private val identity = VoiceIdentity.AMORA_V1_PROVISIONAL
+    private val identity = VoiceIdentity.AMORA_V1
     private val diagnostics = VoiceDiagnostics(context.applicationContext)
+    private val profileRepository = VoiceProfileRepository(context.applicationContext, identity)
     private val stopRequested = AtomicBoolean(false)
     private val current = AtomicReference<CoreClient.SpeechUtterance?>(null)
     private val localVoice = LocalVoiceEngine(
@@ -33,24 +34,44 @@ class VoiceOutput(
     )
 
     init {
+        val profile = profileRepository.current()
         if (localVoice.assetsAvailable()) {
-            diagnostics.record(VoiceDiagnostics.STAGE_ASSETS_READY, "voz provisória empacotada no APK")
+            diagnostics.record(
+                VoiceDiagnostics.STAGE_ASSETS_READY,
+                "Supertonic speaker ${identity.speakerId} · profile ${profile.profile.activeProfile} r${profile.profile.revision} (${profile.source})",
+            )
         } else {
-            diagnostics.record(VoiceDiagnostics.STAGE_FAILED, "assets da voz provisória não estão no APK")
+            diagnostics.record(VoiceDiagnostics.STAGE_FAILED, "assets Supertonic da Amora não estão no APK")
         }
         onVoiceStatusChanged(diagnostics.snapshot())
     }
 
     fun currentUtterance(): CoreClient.SpeechUtterance? = current.get()
 
+    /** Safe to call periodically off the audio thread. */
+    fun refreshProfile(): VoiceProfileRepository.Snapshot {
+        val updated = profileRepository.refresh(coreClient)
+        diagnostics.record(
+            VoiceDiagnostics.STAGE_READY,
+            "VoiceProfile ${updated.profile.activeProfile} r${updated.profile.revision} · ${updated.source}",
+        )
+        onVoiceStatusChanged(diagnostics.snapshot())
+        return updated
+    }
+
     fun speak(item: CoreClient.SpeechUtterance): Boolean {
         if (!current.compareAndSet(null, item)) return false
         stopRequested.set(false)
+        val profile = profileRepository.current().profile
 
         val result = localVoice.play(
             text = item.text,
             requestedRate = item.rate,
+            requestedPitch = item.pitch,
+            valence = item.valence,
+            arousal = item.arousal,
             volume = item.volume,
+            profile = profile,
             stopRequested = stopRequested,
             onStarted = { onSpeakingChanged(true) },
         )
