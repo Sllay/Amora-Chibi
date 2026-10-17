@@ -151,7 +151,7 @@ class MainActivity : Activity() {
 
     private fun buildVoiceCard(): LinearLayout = card().apply {
         addView(sectionLabel("CONVERSA / VOZ LOCAL"))
-        addView(bodyText("VAD local, interrupção por voz e sherpa-onnx offline. Nesta build a voz Faber provisória vem empacotada no APK; não existe fallback automático para a voz do Google."))
+        addView(bodyText("VAD local, interrupção por voz e sherpa-onnx offline. A voz canônica usa Supertonic speaker 0 + Amora VoiceSignature; o perfil de tuning vem do Core e pode atualizar sem recompilar o APK."))
 
         voiceDiagnosticView = TextView(this@MainActivity).also {
             it.textSize = 13F

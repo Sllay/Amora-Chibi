@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "profile_id": "amora-voice-v1",
+  "revision": 1,
+  "active_profile": "NATURAL",
+  "base": {
+    "backend": "supertonic3-int8",
+    "speaker_id": 0,
+    "language": "pt"
+  },
+  "synthesis": {
+    "speed": 1.0,
+    "silence_scale": 1.0,
+    "num_steps": 8
+  },
+  "signature": {
+    "low_shelf_db": -0.7,
+    "presence_db": 1.1,
+    "air_db": 0.8,
+    "soft_saturation": 0.055,
+    "fantasy_texture": 0.025,
+    "compressor_threshold": 0.74,
+    "compressor_ratio": 1.8,
+    "compressor_attack_ms": 5.0,
+    "compressor_release_ms": 70.0,
+    "output_gain": 0.94,
+    "limiter": 0.98
+  },
+  "prosody": {
+    "min_speed": 0.88,
+    "max_speed": 1.12,
+    "arousal_rate_amount": 0.0,
+    "pitch_to_presence_db": 0.9,
+    "valence_to_air_db": 0.35,
+    "arousal_to_presence_db": 0.45
+  },
+  "profiles": {
+    "NATURAL": {
+      "speed_scale": 1.0,
+      "presence_delta_db": 0.0,
+      "air_delta_db": 0.0,
+      "texture_scale": 1.0,
+      "saturation_scale": 1.0
+    },
+    "SOFT": {
+      "speed_scale": 0.97,
+      "presence_delta_db": -0.35,
+      "air_delta_db": 0.35,
+      "texture_scale": 0.75,
+      "saturation_scale": 0.85
+    },
+    "SHY": {
+      "speed_scale": 0.96,
+      "presence_delta_db": -0.5,
+      "air_delta_db": 0.45,
+      "texture_scale": 0.8,
+      "saturation_scale": 0.8
+    },
+    "SYNTH": {
+      "speed_scale": 1.0,
+      "presence_delta_db": 0.25,
+      "air_delta_db": 0.15,
+      "texture_scale": 2.2,
+      "saturation_scale": 1.25
+    },
+    "CHIBI": {
+      "speed_scale": 1.06,
+      "presence_delta_db": 0.4,
+      "air_delta_db": 0.35,
+      "texture_scale": 1.35,
+      "saturation_scale": 1.05
+    }
+  }
+}

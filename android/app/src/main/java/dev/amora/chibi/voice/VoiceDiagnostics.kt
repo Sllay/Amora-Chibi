@@ -27,12 +27,12 @@ class VoiceDiagnostics(context: Context) {
         updatedAtMs = preferences.getLong(KEY_UPDATED_AT, 0L),
     )
 
-    fun describe(identity: VoiceIdentity = VoiceIdentity.AMORA_V1_PROVISIONAL): String {
+    fun describe(identity: VoiceIdentity = VoiceIdentity.AMORA_V1): String {
         val current = snapshot()
         val abi = Build.SUPPORTED_ABIS.joinToString().ifBlank { "desconhecida" }
         return buildString {
             append("Backend: sherpa-onnx 1.13.8 · local/offline\n")
-            append("Voz provisória: ${identity.packId}\n")
+            append("Voz canônica: ${identity.packId} · speaker ${identity.speakerId}\n")
             append("ABI: $abi\n")
             append("Estado: ${current.stage}\n")
             append("Detalhe: ${current.detail}")

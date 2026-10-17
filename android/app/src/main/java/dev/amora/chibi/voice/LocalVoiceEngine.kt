@@ -6,26 +6,24 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.util.Log
+import com.k2fsa.sherpa.onnx.GenerationConfig
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
-import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
-import java.io.File
-import java.io.FileOutputStream
+import com.k2fsa.sherpa.onnx.OfflineTtsSupertonicModelConfig
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 /**
- * Neural, quota-free speech synthesis for Amora.
+ * Canonical local/offline Amora speech path.
  *
- * The provisional V1 voice is packaged in APK assets at build time, matching the
- * sherpa-onnx Android reference path that was physically proven on Galaxy A15.
- * Model/tokens remain assets; espeak-ng-data is copied to a real app-private
- * directory because the native espeak runtime requires a filesystem dataDir.
+ * Supertonic speaker 0 produces the base PCM selected physically by BK. A
+ * validated VoiceProfile from the local Core then controls bounded prosody and
+ * deterministic VoiceSignature DSP. No profile update can swap the base speaker.
  */
 class LocalVoiceEngine(
     context: Context,
-    private val identity: VoiceIdentity = VoiceIdentity.AMORA_V1_PROVISIONAL,
+    private val identity: VoiceIdentity = VoiceIdentity.AMORA_V1,
     private val diagnostics: VoiceDiagnostics = VoiceDiagnostics(context),
     private val onStatusChanged: (VoiceDiagnostics.Snapshot) -> Unit = {},
 ) : AutoCloseable {
@@ -37,29 +35,41 @@ class LocalVoiceEngine(
     @Volatile private var activeTrack: AudioTrack? = null
     @Volatile private var lastFailure: String? = null
 
-    fun assetsAvailable(): Boolean {
-        val model = assetExists("${identity.packId}/${identity.modelFileName}")
-        val tokens = assetExists("${identity.packId}/${identity.tokensFileName}")
-        val data = runCatching {
-            appContext.assets.list("${identity.packId}/${identity.dataDirectoryName}")?.isNotEmpty() == true
-        }.getOrDefault(false)
-        return model && tokens && data
-    }
+    fun assetsAvailable(): Boolean = identity.requiredFiles.all { assetExists("${identity.packId}/$it") }
 
     fun lastFailure(): String? = lastFailure
 
     fun play(
         text: String,
         requestedRate: Float,
+        requestedPitch: Float,
+        valence: Float,
+        arousal: Float,
         volume: Float,
+        profile: VoiceProfileConfig,
         stopRequested: AtomicBoolean,
         onStarted: () -> Unit,
     ): PlayResult {
         if (!assetsAvailable()) {
-            fail("assets da voz provisória ausentes no APK")
+            fail("assets Supertonic da voz canônica ausentes no APK")
             return PlayResult.UNAVAILABLE
         }
-        publish(VoiceDiagnostics.STAGE_ASSETS_READY, "modelo, tokens e espeak empacotados")
+        val validatedProfile = try {
+            profile.validateFor(identity)
+        } catch (error: Throwable) {
+            fail("voice profile inválido: ${describe(error)}", error)
+            return PlayResult.FAILED
+        }
+        val effective = validatedProfile.effective(
+            requestedRate = requestedRate,
+            requestedPitch = requestedPitch,
+            valence = valence,
+            arousal = arousal,
+        )
+        publish(
+            VoiceDiagnostics.STAGE_ASSETS_READY,
+            "Supertonic speaker ${identity.speakerId} · ${validatedProfile.activeProfile} r${validatedProfile.revision}",
+        )
 
         val localEngine = try {
             ensureEngine()
@@ -68,13 +78,18 @@ class LocalVoiceEngine(
             return PlayResult.FAILED
         }
 
-        publish(VoiceDiagnostics.STAGE_SYNTHESIZING, "gerando PCM local")
+        publish(VoiceDiagnostics.STAGE_SYNTHESIZING, "gerando PCM base local + VoiceSignature")
         val startedNs = System.nanoTime()
         val audio = try {
-            localEngine.generate(
+            localEngine.generateWithConfig(
                 text = text,
-                sid = 0,
-                speed = identity.speedFor(requestedRate),
+                config = GenerationConfig(
+                    silenceScale = effective.silenceScale,
+                    speed = effective.speed,
+                    sid = identity.speakerId,
+                    numSteps = effective.numSteps,
+                    extra = mapOf("lang" to identity.language),
+                ),
             )
         } catch (error: Throwable) {
             fail("síntese: ${describe(error)}", error)
@@ -86,16 +101,26 @@ class LocalVoiceEngine(
             return PlayResult.FAILED
         }
 
+        val processed = try {
+            VoiceSignatureProcessor.process(audio.samples, audio.sampleRate, effective)
+        } catch (error: Throwable) {
+            fail("VoiceSignature: ${describe(error)}", error)
+            return PlayResult.FAILED
+        }
+        if (stopRequested.get()) return PlayResult.INTERRUPTED
+
         val synthesisSeconds = (System.nanoTime() - startedNs) / 1_000_000_000.0
-        val audioSeconds = audio.samples.size.toDouble() / audio.sampleRate.toDouble()
+        val audioSeconds = processed.size.toDouble() / audio.sampleRate.toDouble()
         val rtf = if (audioSeconds > 0.0) synthesisSeconds / audioSeconds else 0.0
         Log.i(
             TAG,
-            "Voz local sintetizada: %.0fms áudio=%.2fs rtf=%.3f modelo=%s".format(
+            "Amora voice sintetizada: %.0fms áudio=%.2fs rtf=%.3f speaker=%d profile=%s r%d".format(
                 synthesisSeconds * 1000.0,
                 audioSeconds,
                 rtf,
-                identity.id,
+                identity.speakerId,
+                validatedProfile.activeProfile,
+                validatedProfile.revision,
             ),
         )
 
@@ -104,13 +129,16 @@ class LocalVoiceEngine(
             track = createTrack(audio.sampleRate, volume)
             activeTrack = track
             track.play()
-            publish(VoiceDiagnostics.STAGE_PLAYING, "PCM ${audio.sampleRate} Hz via AudioTrack")
+            publish(
+                VoiceDiagnostics.STAGE_PLAYING,
+                "AMORA_CANONICAL ${audio.sampleRate} Hz · ${validatedProfile.activeProfile} r${validatedProfile.revision}",
+            )
             onStarted()
-            val framesWritten = writeSamples(track, audio.samples, stopRequested)
+            val framesWritten = writeSamples(track, processed, stopRequested)
             if (stopRequested.get()) {
                 PlayResult.INTERRUPTED
-            } else if (framesWritten != audio.samples.size) {
-                fail("AudioTrack escreveu $framesWritten de ${audio.samples.size} amostras")
+            } else if (framesWritten != processed.size) {
+                fail("AudioTrack escreveu $framesWritten de ${processed.size} amostras")
                 PlayResult.FAILED
             } else {
                 waitForPlayback(track, framesWritten, audio.sampleRate, stopRequested)
@@ -118,7 +146,10 @@ class LocalVoiceEngine(
                     PlayResult.INTERRUPTED
                 } else {
                     lastFailure = null
-                    publish(VoiceDiagnostics.STAGE_READY, "Faber local sintetizou e reproduziu com sucesso")
+                    publish(
+                        VoiceDiagnostics.STAGE_READY,
+                        "Amora Voice pronta · speaker ${identity.speakerId} · ${validatedProfile.activeProfile} r${validatedProfile.revision}",
+                    )
                     PlayResult.COMPLETED
                 }
             }
@@ -149,61 +180,39 @@ class LocalVoiceEngine(
         engine?.let { return it }
         synchronized(engineLock) {
             engine?.let { return it }
-            publish(VoiceDiagnostics.STAGE_PREPARING_DATA, "copiando espeak-ng-data para storage privado")
-            val dataDir = prepareEspeakData()
-            val assetRoot = identity.packId
+            require(assetsAvailable()) { "pacote ${identity.packId} incompleto" }
+            val root = identity.packId
             val config = OfflineTtsConfig(
                 model = OfflineTtsModelConfig(
-                    vits = OfflineTtsVitsModelConfig(
-                        model = "$assetRoot/${identity.modelFileName}",
-                        tokens = "$assetRoot/${identity.tokensFileName}",
-                        dataDir = dataDir.absolutePath,
+                    supertonic = OfflineTtsSupertonicModelConfig(
+                        durationPredictor = "$root/duration_predictor.int8.onnx",
+                        textEncoder = "$root/text_encoder.int8.onnx",
+                        vectorEstimator = "$root/vector_estimator.int8.onnx",
+                        vocoder = "$root/vocoder.int8.onnx",
+                        ttsJson = "$root/tts.json",
+                        unicodeIndexer = "$root/unicode_indexer.bin",
+                        voiceStyle = "$root/voice.bin",
                     ),
                     numThreads = identity.numThreads,
                     debug = false,
                     provider = "cpu",
                 ),
                 maxNumSentences = 1,
-                silenceScale = 0.2f,
+                silenceScale = 1.0f,
             )
-            return OfflineTts(assetManager = appContext.assets, config = config).also {
-                val sampleRate = it.sampleRate()
-                require(sampleRate > 0) { "sherpa retornou sampleRate inválido=$sampleRate" }
-                engine = it
+            return OfflineTts(assetManager = appContext.assets, config = config).also { created ->
+                require(created.sampleRate() > 0) { "sherpa retornou sampleRate inválido" }
+                require(created.numSpeakers() > identity.speakerId) {
+                    "speaker ${identity.speakerId} indisponível; modelo expõe ${created.numSpeakers()}"
+                }
+                engine = created
                 lastFailure = null
-                publish(VoiceDiagnostics.STAGE_ENGINE_READY, "OfflineTts pronto · ${sampleRate} Hz")
-                Log.i(TAG, "LocalVoiceEngine pronto: ${identity.id} sampleRate=$sampleRate")
+                publish(
+                    VoiceDiagnostics.STAGE_ENGINE_READY,
+                    "Supertonic pronto · speaker ${identity.speakerId} · ${created.sampleRate()} Hz",
+                )
+                Log.i(TAG, "LocalVoiceEngine pronto: ${identity.id} sampleRate=${created.sampleRate()}")
             }
-        }
-    }
-
-    private fun prepareEspeakData(): File {
-        val runtimeRoot = File(appContext.filesDir, "voice_runtime/${identity.packId}")
-        val dataDir = File(runtimeRoot, identity.dataDirectoryName)
-        val marker = File(runtimeRoot, ".espeak-${identity.expectedModelSha256.take(16)}")
-        if (marker.isFile && dataDir.isDirectory && dataDir.list()?.isNotEmpty() == true) return dataDir
-
-        runtimeRoot.deleteRecursively()
-        runtimeRoot.mkdirs()
-        val assetPath = "${identity.packId}/${identity.dataDirectoryName}"
-        copyAssetTree(assetPath, dataDir)
-        require(dataDir.isDirectory && dataDir.list()?.isNotEmpty() == true) { "espeak-ng-data não foi copiado" }
-        marker.writeText(identity.expectedModelSha256, Charsets.UTF_8)
-        return dataDir
-    }
-
-    private fun copyAssetTree(assetPath: String, destination: File) {
-        val children = appContext.assets.list(assetPath) ?: emptyArray()
-        if (children.isEmpty()) {
-            destination.parentFile?.mkdirs()
-            appContext.assets.open(assetPath).use { input ->
-                FileOutputStream(destination).use { output -> input.copyTo(output, COPY_BUFFER_BYTES) }
-            }
-            return
-        }
-        destination.mkdirs()
-        for (child in children) {
-            copyAssetTree("$assetPath/$child", File(destination, child))
         }
     }
 
@@ -245,8 +254,8 @@ class LocalVoiceEngine(
         while (sourceOffset < source.size && !stopRequested.get()) {
             val count = minOf(buffer.size, source.size - sourceOffset)
             for (index in 0 until count) {
-                val scaled = source[sourceOffset + index] * identity.outputGain
-                buffer[index] = (scaled.coerceIn(-1f, 1f) * Short.MAX_VALUE).roundToInt().toShort()
+                buffer[index] = (source[sourceOffset + index].coerceIn(-1f, 1f) * Short.MAX_VALUE)
+                    .roundToInt().toShort()
             }
             var writtenOffset = 0
             while (writtenOffset < count && !stopRequested.get()) {
@@ -302,7 +311,6 @@ class LocalVoiceEngine(
 
     companion object {
         private const val TAG = "AmoraLocalVoice"
-        private const val COPY_BUFFER_BYTES = 64 * 1024
         private const val PCM_CHUNK_SAMPLES = 4_096
         private const val PLAYBACK_GRACE_MS = 1_500L
     }

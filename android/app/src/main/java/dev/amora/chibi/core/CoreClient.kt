@@ -23,6 +23,8 @@ class CoreClient(context: Context) {
         val rate: Float,
         val pitch: Float,
         val volume: Float,
+        val valence: Float,
+        val arousal: Float,
         val remoteTtsAllowed: Boolean,
         val cognitiveTurnId: String?,
     )
@@ -31,6 +33,12 @@ class CoreClient(context: Context) {
         val usedRemote: Boolean,
         val completed: Boolean,
         val bytesReceived: Long,
+    )
+
+    data class VoiceProfileFetchResult(
+        val notModified: Boolean,
+        val etag: String?,
+        val json: String?,
     )
 
     private val appContext = context.applicationContext
@@ -95,9 +103,34 @@ class CoreClient(context: Context) {
             rate = style.optDouble("rate", 1.0).toFloat(),
             pitch = style.optDouble("pitch", 1.0).toFloat(),
             volume = style.optDouble("volume", 1.0).toFloat(),
+            valence = style.optDouble("valence", 0.0).toFloat().coerceIn(-1f, 1f),
+            arousal = style.optDouble("arousal", 0.0).toFloat().coerceIn(-1f, 1f),
             remoteTtsAllowed = metadata.optBoolean("remote_tts_allowed", false),
             cognitiveTurnId = metadata.optString("cognitive_turn_id").takeIf { it.isNotBlank() },
         )
+    }
+
+    /**
+     * Revalidates the small voice tuning document hosted by the local Core.
+     * TTS model/audio never leaves Android on the canonical path.
+     */
+    fun fetchVoiceProfile(ifNoneMatch: String? = null): VoiceProfileFetchResult {
+        val connection = open("/v1/voice/profile", "GET", authenticated = true)
+        if (!ifNoneMatch.isNullOrBlank()) connection.setRequestProperty("If-None-Match", ifNoneMatch)
+        try {
+            val code = connection.responseCode
+            val etag = connection.getHeaderField("ETag")
+            if (code == HttpURLConnection.HTTP_NOT_MODIFIED) {
+                connection.inputStream?.close()
+                return VoiceProfileFetchResult(notModified = true, etag = etag ?: ifNoneMatch, json = null)
+            }
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) throw IllegalStateException("Core voice profile respondeu HTTP $code: $body")
+            return VoiceProfileFetchResult(notModified = false, etag = etag, json = body)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     fun streamVoiceAudio(

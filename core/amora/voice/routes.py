@@ -3,9 +3,10 @@ from __future__ import annotations
 import math
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
+from .profile import load_voice_profile
 from .tts import GeminiStreamingTTS, RemoteVoiceNotAllowed, VoiceEngine, VoiceUnavailable
 
 
@@ -39,9 +40,58 @@ def register_voice_routes(app: FastAPI, core, require_auth) -> None:
             headers=headers,
         )
 
+    @app.get("/v1/voice/profile", dependencies=auth)
+    def voice_profile(request: Request) -> Response:
+        """Return the small, hot-reloadable voice tuning contract.
+
+        The TTS model remains local in Android. This endpoint only distributes
+        bounded identity/prosody/DSP parameters, so tuning after `git pull` does
+        not require rebuilding the APK. The file is intentionally loaded per
+        request: a profile-only Git update becomes visible without restarting the
+        Core. ETag makes the Android revalidation effectively free when unchanged.
+        """
+        try:
+            profile, etag, canonical = load_voice_profile()
+        except (OSError, ValueError, TypeError) as exc:
+            dashboard = console()
+            if dashboard is not None:
+                dashboard.record_error("Amora Voice Profile", f"{type(exc).__name__}: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="canonical voice profile is invalid",
+            ) from exc
+
+        quoted = f'"{etag}"'
+        if request.headers.get("if-none-match") == quoted:
+            return Response(
+                status_code=status.HTTP_304_NOT_MODIFIED,
+                headers={"ETag": quoted, "Cache-Control": "no-cache"},
+            )
+        return Response(
+            content=canonical,
+            media_type="application/json",
+            headers={
+                "ETag": quoted,
+                "Cache-Control": "no-cache",
+                "X-Amora-Voice-Profile": profile.profile_id,
+                "X-Amora-Voice-Revision": str(profile.revision),
+            },
+        )
+
     @app.get("/v1/voice/state", dependencies=auth)
     def voice_state() -> dict[str, object]:
         state = engine.state()
+        try:
+            profile, etag, _ = load_voice_profile()
+            state.update({
+                "canonical_voice_profile": profile.profile_id,
+                "canonical_voice_revision": profile.revision,
+                "canonical_voice_etag": etag,
+                "canonical_voice_backend": profile.base.backend,
+                "canonical_voice_speaker": profile.base.speaker_id,
+            })
+        except (OSError, ValueError, TypeError):
+            state["canonical_voice_profile"] = "invalid"
         dashboard = console()
         if dashboard is not None:
             cooldown = int(state.get("expressive_tts_cooldown_seconds") or 0)
