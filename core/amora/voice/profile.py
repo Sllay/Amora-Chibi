@@ -63,6 +63,7 @@ class AmoraVoiceProfile(BaseModel):
     schema_version: int = Field(ge=1, le=1)
     profile_id: str = Field(pattern=r"^amora-voice-v[0-9]+$")
     revision: int = Field(ge=1)
+    active_profile: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,31}$")
     base: VoiceBaseProfile
     synthesis: VoiceSynthesisProfile
     signature: VoiceSignatureProfile
@@ -79,6 +80,8 @@ class AmoraVoiceProfile(BaseModel):
         required = {"NATURAL", "SOFT", "SHY", "SYNTH", "CHIBI"}
         if not required.issubset(self.profiles):
             raise ValueError(f"missing voice profiles: {sorted(required - set(self.profiles))}")
+        if self.active_profile not in self.profiles:
+            raise ValueError("active_profile must name a configured profile")
         return self
 
 
