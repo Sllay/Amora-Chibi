@@ -31,6 +31,7 @@ class AudioCaptureService : Service() {
     private val networkExecutor = Executors.newSingleThreadExecutor()
     private val controlExecutor = Executors.newSingleThreadExecutor()
     private val voiceExecutor = Executors.newSingleThreadScheduledExecutor()
+    private val profileExecutor = Executors.newSingleThreadScheduledExecutor()
     private val bargeIn = BargeInDetector()
     private var captureThread: Thread? = null
     private var recorder: AudioRecord? = null
@@ -47,6 +48,7 @@ class AudioCaptureService : Service() {
         coreClient = CoreClient(this)
         voiceOutput = VoiceOutput(
             this,
+            coreClient = coreClient,
             onSpeakingChanged = { active ->
                 speaking.set(active)
                 resetSegmenter.set(true)
@@ -82,6 +84,9 @@ class AudioCaptureService : Service() {
             },
         )
         voiceExecutor.scheduleWithFixedDelay(::pollVoice, 350, 450, TimeUnit.MILLISECONDS)
+        // Voice tuning is config, not APK state. Revalidate cheaply with ETag;
+        // speech keeps using the last valid cached profile if Core is offline.
+        profileExecutor.scheduleWithFixedDelay(::refreshVoiceProfile, 0, 15, TimeUnit.SECONDS)
     }
 
     override fun onStartCommand(intent: android.content.Intent?, flags: Int, startId: Int): Int {
@@ -108,11 +113,18 @@ class AudioCaptureService : Service() {
         segmenter?.close()
         segmenter = null
         voiceExecutor.shutdownNow()
+        profileExecutor.shutdownNow()
         voiceOutput?.close()
         voiceOutput = null
         networkExecutor.shutdownNow()
         controlExecutor.shutdownNow()
         super.onDestroy()
+    }
+
+    private fun refreshVoiceProfile() {
+        if (!coreClient.isPaired()) return
+        runCatching { voiceOutput?.refreshProfile() }
+            .onFailure { error -> Log.d(TAG, "VoiceProfile continua em cache: ${error.message}") }
     }
 
     private fun pollVoice() {
