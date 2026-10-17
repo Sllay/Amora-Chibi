@@ -5,21 +5,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VoiceIdentityTest {
-    private val voice = VoiceIdentity.AMORA_V1_PROVISIONAL
+    private val voice = VoiceIdentity.AMORA_V1
 
     @Test
-    fun canonicalVoiceIsBrazilianPortugueseAndPinned() {
+    fun canonicalVoiceIsPhysicallySelectedSupertonicSpeakerZero() {
         assertEquals("pt-BR", voice.localeTag)
-        assertEquals("vits-piper-pt_BR-faber-medium", voice.packId)
-        assertEquals("pt_BR-faber-medium.onnx", voice.modelFileName)
-        assertEquals(64, voice.expectedModelSha256.length)
-        assertTrue(voice.downloadUrl.startsWith("https://"))
+        assertEquals("sherpa-onnx-supertonic-3-tts-int8-2026-05-11", voice.packId)
+        assertEquals("supertonic3-int8", voice.backendId)
+        assertEquals(0, voice.speakerId)
+        assertEquals("pt", voice.language)
+        assertEquals(2, voice.numThreads)
+        assertTrue(voice.requiredFiles.contains("voice.bin"))
+        assertTrue(voice.requiredFiles.contains("vocoder.int8.onnx"))
     }
 
     @Test
-    fun prosodyRateCannotMutateTheVoiceOutsideItsSafeWindow() {
-        assertEquals(voice.minSpeed, voice.speedFor(0.1f), 0.0001f)
-        assertEquals(1.0f, voice.speedFor(1.0f), 0.0001f)
-        assertEquals(voice.maxSpeed, voice.speedFor(4.0f), 0.0001f)
+    fun canonicalIdentityIsSeparateFromHotTuningProfile() {
+        val profile = VoiceProfileConfig.safeDefault(voice)
+        assertEquals("amora-voice-v1", profile.profileId)
+        assertEquals("NATURAL", profile.activeProfile)
+        assertEquals(voice.backendId, profile.base.backend)
+        assertEquals(voice.speakerId, profile.base.speakerId)
     }
 }
