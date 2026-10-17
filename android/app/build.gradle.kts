@@ -10,8 +10,8 @@ android {
         applicationId = "dev.amora.chibi"
         minSdk = 26
         targetSdk = 36
-        versionCode = 11
-        versionName = "1.0.0-dev8-voice-profile-sync"
+        versionCode = 12
+        versionName = "1.0.0-dev9-vocal-synth-dsp"
     }
 
     buildFeatures {
