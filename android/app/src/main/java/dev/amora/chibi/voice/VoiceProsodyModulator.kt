@@ -8,7 +8,7 @@ data class VoiceEmotion(
 ) {
     fun bounded(): VoiceEmotion = VoiceEmotion(
         valence = valence.coerceIn(-1f, 1f),
-        arousal = arousal.coerceIn(-1f, 1f),
+        arousal = arousal.coerceIn(0f, 1f),
         dominance = dominance.coerceIn(-1f, 1f),
     )
 }
@@ -62,5 +62,5 @@ enum class LabEmotionPreset(
     HAPPY("FELIZ", VoiceEmotion(valence = 0.7f, arousal = 0.55f, dominance = 0.2f)),
     TENDER("CARINHOSA", VoiceEmotion(valence = 0.8f, arousal = 0.18f, dominance = 0.0f)),
     ANGRY("BRAVA", VoiceEmotion(valence = -0.65f, arousal = 0.85f, dominance = 0.65f)),
-    SAD("TRISTE", VoiceEmotion(valence = -0.7f, arousal = -0.35f, dominance = -0.35f)),
+    SAD("TRISTE", VoiceEmotion(valence = -0.7f, arousal = 0.10f, dominance = -0.35f)),
 }
