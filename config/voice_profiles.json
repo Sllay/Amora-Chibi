@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": "voice-lab-2026-10-17-b-vocal-synth",
+  "revision": "voice-lab-2026-10-17-c-amora-synth-fem",
   "backend": {
     "id": "supertonic-3-int8",
     "model_id": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
@@ -39,7 +39,7 @@
     {
       "id": "AMORA_SYNTH",
       "label": "AMORA_SYNTH",
-      "description": "Fantasia digital moderada com pitch, textura e modulação leves.",
+      "description": "Baseline aprovada por BK: fantasia digital moderada com pitch, textura e modulação leves.",
       "speed": 0.96,
       "silence_scale": 0.9,
       "num_steps": 6,
@@ -52,6 +52,24 @@
         "digital_mix": 0.28,
         "ring_mod_hz": 38.0,
         "ring_mix": 0.05
+      }
+    },
+    {
+      "id": "AMORA_SYNTH_FEM",
+      "label": "AMORA_SYNTH_FEM",
+      "description": "A/B da baseline AMORA_SYNTH: um pouco mais feminina e menos rouca, preservando a textura vocal-synth aprovada.",
+      "speed": 0.96,
+      "silence_scale": 0.9,
+      "num_steps": 6,
+      "output_gain": 0.9,
+      "dsp": {
+        "pitch_semitones": 3.1,
+        "drive": 1.06,
+        "bit_depth": 13,
+        "sample_hold": 1,
+        "digital_mix": 0.24,
+        "ring_mod_hz": 36.0,
+        "ring_mix": 0.04
       }
     },
     {
