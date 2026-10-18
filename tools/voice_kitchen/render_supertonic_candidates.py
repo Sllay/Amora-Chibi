@@ -72,11 +72,12 @@ def main() -> int:
                 phrase,
                 voice_style=style,
                 lang="pt",
-                total_step=args.steps,
+                total_steps=args.steps,
                 speed=args.speed,
             )
-            tts.save_audio(wav, phrase_dir / f"{label}.wav")
-            print(phrase_dir / f"{label}.wav")
+            output_path = phrase_dir / f"{label}.wav"
+            tts.save_audio(wav, str(output_path))
+            print(output_path)
 
     return 0
 
