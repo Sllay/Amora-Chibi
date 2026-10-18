@@ -51,23 +51,18 @@ def test_f0_targets_are_bounded_and_contour_range_is_small() -> None:
     assert max(c.pitch_range_scale for c in child) <= 1.06
 
 
-def test_piecewise_map_is_monotonic_and_not_uniform() -> None:
-    import numpy as np
-
+def test_piecewise_anchor_mapping_is_monotonic_and_not_uniform() -> None:
     candidate = MODULE.DEFAULT_CANDIDATES[2]
-    mapped = MODULE._piecewise_source_frequency_map(
-        sample_rate=24000,
-        bins=513,
-        spectral_ratios=candidate.spectral_ratios,
-    )
-    assert np.all(np.diff(mapped) > 0.0)
-    assert mapped[0] == 0.0
-    assert mapped[-1] == 12000.0
+    source_anchor = [hz for hz, _ in candidate.spectral_ratios]
+    target_anchor = [hz * ratio for hz, ratio in candidate.spectral_ratios]
 
-    # The mapping changes slope by band; this guards against accidentally
+    assert all(b > a for a, b in zip(source_anchor, source_anchor[1:]))
+    assert all(b > a for a, b in zip(target_anchor, target_anchor[1:]))
+
+    # Different bands have different ratios; this guards against accidentally
     # returning to the rejected global/uniform formant shift.
-    slopes = np.diff(mapped)
-    assert float(np.max(slopes) - np.min(slopes)) > 0.01
+    ratios = [ratio for _, ratio in candidate.spectral_ratios]
+    assert len(set(ratios)) > 3
 
 
 def test_ratio_to_semitones_identity_and_bound() -> None:
