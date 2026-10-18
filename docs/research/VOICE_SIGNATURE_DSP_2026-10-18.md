@@ -1,6 +1,6 @@
 # VoiceSignature DSP research — 2026-10-18
 
-**Status:** EXPERIMENTAL / research note  
+**Status:** EXPERIMENTAL / SIGNALSMITH AUDITION REJECTED  
 **Canonical authority:** `docs/canon/VOICE_IDENTITY.md` + ADR-0009  
 **Purpose:** choose the next Voice Kitchen method after playback-rate pitch produced a chipmunk/alien artefact.
 
@@ -22,9 +22,9 @@ Confirmed properties:
 - modified BSD license;
 - explicitly designed for high-quality speech manipulation and real-time applications.
 
-Strength: very strong research/reference tool for independent speech-parameter manipulation.
+Strength: strong research/reference tool for independent speech-parameter manipulation.
 
-Concern for Amora V1: integration is a larger monophonic vocoder pipeline and would need a separate Android/mobile implementation path plus later Web/PWA work.
+Concern for Amora V1: integration is a larger monophonic vocoder pipeline and still needs separate Android/mobile measurement plus later Web/PWA work.
 
 ### Signalsmith Stretch
 
@@ -46,7 +46,7 @@ Confirmed properties:
 - official Web Audio/WASM release exists;
 - upstream notes that its formant correction is less sharp than specialised monophonic algorithms such as PSOLA.
 
-Strength for Amora: directly addresses the current chipmunk failure while remaining small, local, streamable and portable toward the planned Web/PWA client.
+The quality-first audition used 120 ms block / 4x overlap and measured 120 ms algorithmic latency for that configuration. Processing on the GitHub x86_64 runner was fast (mean RTF about 0.015), but that number does not certify Galaxy A15.
 
 ### Rubber Band
 
@@ -60,13 +60,9 @@ Confirmed properties:
 
 Decision: not preferred for the V1 default because licensing is a worse fit for a zero-cost, multi-platform project, especially with the planned Apple/PWA direction.
 
-## Experimental decision
+## Signalsmith audition result
 
-For the next audition, **Signalsmith Stretch is the production-shaped candidate**.
-
-This is not yet a canonical promotion. The experiment must first prove by ear that formant manipulation improves the 60/40 source without producing chipmunk artefacts.
-
-The first candidate set intentionally keeps pitch near zero:
+The Voice Kitchen generated these candidates from the same Supertonic 60/40 base:
 
 | ID | pitch | formant |
 |---|---:|---:|
@@ -75,31 +71,54 @@ The first candidate set intentionally keeps pitch near zero:
 | `SS_FORMANT_2P5_PITCH_0P5` | +0.5 st | +2.5 st |
 | `SS_FORMANT_3P5_PITCH_0P5` | +0.5 st | +3.5 st |
 
-All use automatic formant-base estimation and the upstream default-style 120 ms block / 4x overlap for the quality-first audition.
+Physical listening result from BK:
 
-## Latency gate
+```text
+chipmunk/esquilo: improved
+alien timbre: failed
+```
 
-The Voice Kitchen records two different measurements:
+Therefore uniform formant shifting with this Signalsmith setup is **rejected as the next VoiceSignature path**. It proved that separating pitch from formant solves one failure mode, but it did not preserve a believable vocal-tract identity.
 
-1. **algorithmic latency** reported by Signalsmith for the configured block/overlap;
-2. **processing RTF** measured on the GitHub x86_64 runner.
+## New direction
 
-Neither is Galaxy A15 certification.
-
-If the sound wins the A/B test, the next step is an Android-native benchmark using the same pinned implementation, measuring first-utterance latency, streaming latency, RTF, CPU, RAM, temperature and barge-in impact on the Galaxy A15 before promotion.
-
-## Vocal-synth texture
-
-This pass deliberately does **not** add Vocaloid-like texture. The pipeline is split:
+The next audition moves to WORLD and uses substantially smaller transformations:
 
 ```text
 Supertonic 60/40 base
         ↓
-formant / very small pitch shaping
+WORLD analysis
+├─ F0
+├─ spectral envelope
+└─ aperiodicity
+        ↓
+very small, independent transforms
+        ↓
+WORLD resynthesis
+```
+
+A neutral WORLD resynthesis is included so BK can determine whether any alien quality comes from the vocoder itself before judging the transforms.
+
+The first WORLD set keeps:
+
+- F0 at 0 to +0.35 semitone;
+- vocal-tract spectral warp at 1.000x to 1.055x (about 0 to +0.93 semitone equivalent);
+- aperiodicity at 1.00x to 0.96x.
+
+This is intentionally much more conservative than the rejected +1.5 to +3.5 semitone uniform formant pass.
+
+## Vocal-synth texture
+
+The experiment still deliberately does **not** add Vocaloid-like texture yet. The pipeline remains split:
+
+```text
+Supertonic 60/40 base
+        ↓
+clean source/filter shaping
         ↓
 clean stable voice
         ↓
 future vocal-synth texture layer
 ```
 
-This prevents us from debugging vocal identity and synthetic texture at the same time.
+If WORLD also produces an alien identity even in neutral resynthesis or tiny transforms, stop classical DSP escalation and evaluate a neural voice-conversion / different voice-generation backend instead of stacking more filters.
