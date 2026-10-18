@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Apply conservative WORLD source-filter transforms to the preferred Amora mix.
+"""Apply child/young-vocal-tract WORLD transforms to the preferred Amora mix.
 
-This lab intentionally separates three dimensions that simple pitch shifting or
-uniform formant shifting conflates:
+This audition is intentionally different from the earlier uniform formant warp.
+BK reported that the previous pass removed the chipmunk but still sounded like a
+thin/nasal adult voice. Here we model age cues more directly:
 
-- F0 (source pitch contour)
-- spectral envelope (vocal-tract / resonance shape)
-- aperiodicity (noisy / breathy component)
+- F0 median is moved toward a bounded target while preserving the contour;
+- the spectral envelope is warped non-uniformly (stronger in low/mid formants,
+  tapering toward the high spectrum instead of shifting everything equally);
+- the low body below ~250 Hz is preserved;
+- aperiodicity is left intact so this pass does not accidentally add a synthetic
+  or over-cleaned timbre.
 
-The goal is NOT to create the final Vocaloid texture yet. It is to find a
-cleaner young/feminine base without chipmunk or alien artefacts.
+This is still a Voice Kitchen experiment, not the canonical VoiceSignature.
 """
 
 from __future__ import annotations
@@ -24,42 +27,154 @@ from typing import NamedTuple
 
 class WorldCandidate(NamedTuple):
     id: str
-    pitch_semitones: float
-    tract_ratio: float
-    aperiodicity_scale: float
+    target_f0_median_hz: float | None
+    max_f0_ratio: float
+    pitch_range_scale: float
+    spectral_ratios: tuple[tuple[float, float], ...]
+    aperiodicity_scale: float = 1.0
 
 
+NEUTRAL_SPECTRAL_RATIOS = (
+    (0.0, 1.0),
+    (250.0, 1.0),
+    (700.0, 1.0),
+    (1500.0, 1.0),
+    (3000.0, 1.0),
+    (5000.0, 1.0),
+    (8000.0, 1.0),
+)
+
+# The key difference from the rejected uniform formant pass is that the
+# low/mid vocal-tract region moves more than the high spectrum. This changes
+# perceived vocal-tract size instead of merely making the whole voice thin.
 DEFAULT_CANDIDATES = (
-    WorldCandidate("WORLD_RESYNTH_NEUTRAL", 0.0, 1.0, 1.0),
-    WorldCandidate("WORLD_VTL_1P025", 0.0, 1.025, 1.0),
-    WorldCandidate("WORLD_VTL_1P04_CLEAN", 0.20, 1.04, 0.98),
-    WorldCandidate("WORLD_VTL_1P055_CLEAN", 0.35, 1.055, 0.96),
+    WorldCandidate(
+        "WORLD_RESYNTH_NEUTRAL",
+        None,
+        1.0,
+        1.0,
+        NEUTRAL_SPECTRAL_RATIOS,
+    ),
+    WorldCandidate(
+        "WORLD_CHILD_SOFT",
+        245.0,
+        1.10,
+        1.02,
+        (
+            (0.0, 1.0),
+            (250.0, 1.0),
+            (700.0, 1.06),
+            (1500.0, 1.055),
+            (3000.0, 1.04),
+            (5000.0, 1.02),
+            (8000.0, 1.005),
+        ),
+    ),
+    WorldCandidate(
+        "WORLD_CHILD_BALANCED",
+        260.0,
+        1.14,
+        1.04,
+        (
+            (0.0, 1.0),
+            (250.0, 1.0),
+            (700.0, 1.09),
+            (1500.0, 1.08),
+            (3000.0, 1.055),
+            (5000.0, 1.03),
+            (8000.0, 1.01),
+        ),
+    ),
+    WorldCandidate(
+        "WORLD_CHILD_CLEAR",
+        275.0,
+        1.18,
+        1.06,
+        (
+            (0.0, 1.0),
+            (250.0, 1.0),
+            (700.0, 1.12),
+            (1500.0, 1.10),
+            (3000.0, 1.075),
+            (5000.0, 1.04),
+            (8000.0, 1.015),
+        ),
+    ),
 )
 
 
-def semitone_ratio(semitones: float) -> float:
-    return 2.0 ** (semitones / 12.0)
-
-
-def tract_ratio_to_semitones(ratio: float) -> float:
+def ratio_to_semitones(ratio: float) -> float:
     return 12.0 * math.log2(ratio)
 
 
-def _warp_spectral_envelope(sp, sample_rate: int, tract_ratio: float):
+def _target_f0(f0, candidate: WorldCandidate):
     import numpy as np
 
-    if abs(tract_ratio - 1.0) < 1e-9:
+    out = f0.copy()
+    voiced = out > 0.0
+    if not np.any(voiced) or candidate.target_f0_median_hz is None:
+        return out, None, 1.0
+
+    source_median = float(np.median(out[voiced]))
+    if source_median <= 0.0:
+        return out, None, 1.0
+
+    desired_ratio = candidate.target_f0_median_hz / source_median
+    applied_ratio = max(1.0, min(candidate.max_f0_ratio, desired_ratio))
+    target_median = source_median * applied_ratio
+
+    # Work in log-F0 so we move the centre without flattening the speaker's
+    # original melodic contour. A tiny range expansion is included because
+    # child speech tends to have a somewhat wider relative F0 excursion.
+    log_values = np.log(out[voiced])
+    log_median = float(np.median(log_values))
+    target_log_median = math.log(target_median)
+    out[voiced] = np.exp(
+        target_log_median
+        + (log_values - log_median) * candidate.pitch_range_scale
+    )
+    return out, source_median, applied_ratio
+
+
+def _piecewise_source_frequency_map(sample_rate: int, bins: int, spectral_ratios):
+    import numpy as np
+
+    nyquist = sample_rate / 2.0
+    anchors = [(float(hz), float(ratio)) for hz, ratio in spectral_ratios if hz < nyquist]
+    if not anchors or anchors[0][0] != 0.0:
+        anchors.insert(0, (0.0, 1.0))
+    if anchors[-1][0] < nyquist:
+        anchors.append((nyquist, 1.0))
+
+    source_anchor = np.asarray([hz for hz, _ in anchors], dtype=np.float64)
+    ratio_anchor = np.asarray([ratio for _, ratio in anchors], dtype=np.float64)
+    target_anchor = source_anchor * ratio_anchor
+
+    # The last point must terminate exactly at Nyquist. This also prevents a
+    # high-frequency stretch from producing an out-of-band mapping.
+    source_anchor[-1] = nyquist
+    target_anchor[-1] = nyquist
+
+    if np.any(np.diff(target_anchor) <= 0.0):
+        raise ValueError("spectral warp anchors must remain strictly monotonic")
+
+    output_freqs = np.linspace(0.0, nyquist, bins, dtype=np.float64)
+    return np.interp(output_freqs, target_anchor, source_anchor)
+
+
+def _warp_spectral_envelope_piecewise(sp, sample_rate: int, spectral_ratios):
+    import numpy as np
+
+    if all(abs(float(ratio) - 1.0) < 1e-9 for _, ratio in spectral_ratios):
         return sp.copy()
 
     bins = sp.shape[1]
     freqs = np.linspace(0.0, sample_rate / 2.0, bins, dtype=np.float64)
-    source_freqs = np.clip(freqs / tract_ratio, 0.0, sample_rate / 2.0)
+    source_freqs = _piecewise_source_frequency_map(sample_rate, bins, spectral_ratios)
     warped = np.empty_like(sp)
 
     for frame_index, frame in enumerate(sp):
         out = np.interp(source_freqs, freqs, frame)
-        # Preserve broad frame energy so the audition is about resonance/timbre
-        # rather than a loudness jump introduced by the frequency warp.
         source_energy = float(np.sum(frame))
         output_energy = float(np.sum(out))
         if source_energy > 0.0 and output_energy > 0.0:
@@ -81,11 +196,12 @@ def transform_world(x, sample_rate: int, candidate: WorldCandidate):
     sp = pw.cheaptrick(x, f0, temporal_positions, sample_rate)
     ap = pw.d4c(x, f0, temporal_positions, sample_rate)
 
-    f0_out = f0.copy()
-    voiced = f0_out > 0.0
-    f0_out[voiced] *= semitone_ratio(candidate.pitch_semitones)
-
-    sp_out = _warp_spectral_envelope(sp, sample_rate, candidate.tract_ratio)
+    f0_out, source_f0_median, applied_f0_ratio = _target_f0(f0, candidate)
+    sp_out = _warp_spectral_envelope_piecewise(
+        sp,
+        sample_rate,
+        candidate.spectral_ratios,
+    )
     ap_out = np.clip(ap * candidate.aperiodicity_scale, 0.0, 1.0)
 
     y = pw.synthesize(
@@ -99,11 +215,11 @@ def transform_world(x, sample_rate: int, candidate: WorldCandidate):
     peak = float(np.max(np.abs(y))) if y.size else 0.0
     if peak > 0.99:
         y = y * (0.99 / peak)
-    return y
+    return y, source_f0_median, applied_f0_ratio
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="WORLD VTL/F0/ap audition for Amora Voice Kitchen")
+    parser = argparse.ArgumentParser(description="WORLD piecewise child-VTL audition for Amora Voice Kitchen")
     parser.add_argument("--root", type=Path, default=Path("voice-kitchen-wavs"))
     args = parser.parse_args()
 
@@ -112,11 +228,11 @@ def main() -> int:
 
     report = {
         "source_name": "amora_mix_p60_s40.wav",
-        "method": "WORLD DIO+StoneMask / CheapTrick / D4C / synthesize",
+        "method": "WORLD + bounded median-F0 + non-uniform spectral warp",
         "outputs": 0,
         "note": (
-            "RTF medido no runner GitHub x86_64. Não certifica Galaxy A15. "
-            "WORLD_RESYNTH_NEUTRAL serve para separar artefato do vocoder de artefato do transform."
+            "Age-cue audition after BK reported thin/nasal adult timbre from uniform formant shaping. "
+            "Low body is preserved, low/mid formants move more than highs, and F0 contour is retained."
         ),
         "phrases": [],
     }
@@ -143,7 +259,11 @@ def main() -> int:
 
         for candidate in DEFAULT_CANDIDATES:
             started = time.perf_counter()
-            y = transform_world(x, int(sample_rate), candidate)
+            y, source_f0_median, applied_f0_ratio = transform_world(
+                x,
+                int(sample_rate),
+                candidate,
+            )
             elapsed = time.perf_counter() - started
             rtf = elapsed / duration if duration > 0 else 0.0
             all_rtfs.append(rtf)
@@ -155,11 +275,14 @@ def main() -> int:
             phrase_entry["candidates"].append(
                 {
                     "id": candidate.id,
-                    "pitch_semitones": candidate.pitch_semitones,
-                    "tract_ratio": candidate.tract_ratio,
-                    "tract_shift_equivalent_semitones": round(
-                        tract_ratio_to_semitones(candidate.tract_ratio), 4
+                    "target_f0_median_hz": candidate.target_f0_median_hz,
+                    "source_f0_median_hz": (
+                        round(source_f0_median, 3) if source_f0_median is not None else None
                     ),
+                    "applied_f0_ratio": round(applied_f0_ratio, 6),
+                    "applied_f0_shift_semitones": round(ratio_to_semitones(applied_f0_ratio), 4),
+                    "pitch_range_scale": candidate.pitch_range_scale,
+                    "spectral_ratios": [list(item) for item in candidate.spectral_ratios],
                     "aperiodicity_scale": candidate.aperiodicity_scale,
                     "output": str(output_path.relative_to(args.root)),
                     "processing_seconds": round(elapsed, 6),

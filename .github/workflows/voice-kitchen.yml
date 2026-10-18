@@ -34,52 +34,61 @@ jobs:
             --steps 8 \
             --speed 1.0
 
-      - name: Apply WORLD source-filter candidates
+      - name: Apply WORLD child-VTL candidates
         run: |
           python tools/voice_kitchen/apply_world_vtl_candidates.py \
             --root voice-kitchen-wavs
 
           cat > voice-kitchen-wavs/README.txt <<'EOF'
-          AMORA VOICE KITCHEN — WORLD source-filter audition
+          AMORA VOICE KITCHEN — child / young vocal-tract audition
 
-          Base preferida por BK:
+          Base:
           - amora_mix_p60_s40.wav = 60% speaker 0/F1 + 40% speaker 4/F5
 
-          IMPORTANTE:
-          - o experimento Signalsmith anterior removeu o chipmunk, mas BK relatou
-            timbre alienígena; por isso não é o caminho desta rodada.
-          - esta rodada usa WORLD para separar F0, envelope espectral e
-            aperiodicidade e faz mudanças muito menores.
+          Feedback que originou esta rodada:
+          - o warp uniforme tirou o esquilo, mas ficou alienígena;
+          - o WORLD conservador seguinte ainda pareceu uma adulta fina/nasal,
+            como voz com nariz tampado, em vez de realmente mais jovem/criança.
 
-          Ouça nesta ordem:
+          Esta rodada muda a técnica:
+          - F0 vai para uma mediana-alvo bounded e preserva o contorno original;
+          - o envelope NÃO sobe inteiro: low/mid formants movem mais e o efeito
+            cai progressivamente nos agudos;
+          - abaixo de ~250 Hz o corpo é preservado;
+          - aperiodicidade fica intacta nesta rodada para não adicionar textura
+            artificial junto com a mudança de idade.
+
+          Ouça nesta ordem em cada phrase_XX:
           1. amora_mix_p60_s40.wav
           2. world_resynth_neutral.wav
-          3. world_vtl_1p025.wav
-          4. world_vtl_1p04_clean.wav
-          5. world_vtl_1p055_clean.wav
+          3. world_child_soft.wav
+          4. world_child_balanced.wav
+          5. world_child_clear.wav
 
           Candidatos:
-          - WORLD_RESYNTH_NEUTRAL: sem mudança intencional; mede a assinatura do
-            próprio vocoder WORLD.
-          - WORLD_VTL_1P025: F0 0 st / trato 1.025x (~+0.43 st equivalente) /
-            aperiodicidade intacta.
-          - WORLD_VTL_1P04_CLEAN: F0 +0.20 st / trato 1.04x (~+0.68 st) /
-            aperiodicidade 0.98x.
-          - WORLD_VTL_1P055_CLEAN: F0 +0.35 st / trato 1.055x (~+0.93 st) /
-            aperiodicidade 0.96x.
+          - WORLD_CHILD_SOFT:
+            mediana F0 alvo 245 Hz, aumento limitado a 1.10x;
+            warp máximo ~1.06x na região baixa/média, caindo para ~1.005x em 8 kHz.
+          - WORLD_CHILD_BALANCED:
+            mediana F0 alvo 260 Hz, aumento limitado a 1.14x;
+            warp máximo ~1.09x, caindo para ~1.01x em 8 kHz.
+          - WORLD_CHILD_CLEAR:
+            mediana F0 alvo 275 Hz, aumento limitado a 1.18x;
+            warp máximo ~1.12x, caindo para ~1.015x em 8 kHz.
 
-          Ainda NÃO existe textura Vocaloid nesta rodada. Primeiro a base precisa
-          ficar limpa, jovem/feminina e sem esquilo/alien. Só depois entra a
-          textura vocal-synth como camada separada.
+          O objetivo é testar percepção de idade/tamanho vocal, NÃO textura
+          Vocaloid. Se isso continuar soando como adulta afinada/nasal, o próximo
+          passo deixa de ser empilhar DSP e passa para outro método/base.
 
-          world-processing-report.json contém RTF medido no runner x86_64.
+          world-processing-report.json registra, por frase, a mediana F0 medida,
+          o ratio realmente aplicado e o RTF no runner x86_64.
           Isso não certifica Galaxy A15.
           EOF
 
       - name: Upload WAV audition pack
         uses: actions/upload-artifact@v4
         with:
-          name: amora-voice-kitchen-world-vtl
+          name: amora-voice-kitchen-world-child-vtl
           path: voice-kitchen-wavs/
           if-no-files-found: error
           retention-days: 30
