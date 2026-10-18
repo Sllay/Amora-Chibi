@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - "tools/voice_kitchen/**"
+      - "tests/test_voice_kitchen_*.py"
       - ".github/workflows/voice-kitchen.yml"
 
 jobs:
@@ -33,10 +34,62 @@ jobs:
             --steps 8 \
             --speed 1.0
 
+      - name: Build pinned Signalsmith Stretch
+        env:
+          SIGNALSMITH_REF: a670068d9aeb64913331d5cc29337b19a457a7df
+        run: |
+          set -euo pipefail
+          SS_DIR="$RUNNER_TEMP/signalsmith-stretch"
+          git clone --recursive https://github.com/Signalsmith-Audio/signalsmith-stretch.git "$SS_DIR"
+          git -C "$SS_DIR" checkout --detach "$SIGNALSMITH_REF"
+          git -C "$SS_DIR" submodule update --init --recursive
+          test "$(git -C "$SS_DIR" rev-parse HEAD)" = "$SIGNALSMITH_REF"
+
+          g++ -std=c++11 -O3 \
+            -I "$SS_DIR/include" \
+            "$SS_DIR/cmd/main.cpp" \
+            -o "$RUNNER_TEMP/signalsmith-stretch-cli"
+
+          g++ -std=c++11 -O3 \
+            -I "$SS_DIR/include" \
+            tools/voice_kitchen/signalsmith_latency_probe.cpp \
+            -o "$RUNNER_TEMP/signalsmith-latency-probe"
+
+          "$RUNNER_TEMP/signalsmith-latency-probe" 24000 120 4 \
+            > voice-kitchen-wavs/signalsmith-latency.json
+
+      - name: Apply independent pitch and formant candidates
+        run: |
+          python tools/voice_kitchen/apply_signalsmith_candidates.py \
+            --stretch-bin "$RUNNER_TEMP/signalsmith-stretch-cli" \
+            --root voice-kitchen-wavs
+
+          cat > voice-kitchen-wavs/README.txt <<'EOF'
+          AMORA VOICE KITCHEN — Signalsmith formant audition
+
+          Base preferida por BK nesta rodada:
+          - amora_mix_p60_s40.wav = 60% speaker 0/F1 + 40% speaker 4/F5
+
+          Candidatos novos, todos partindo desse mesmo 60/40:
+          - ss_formant_1p5_pitch_0.wav   = pitch 0.0 st / formant +1.5 st
+          - ss_formant_2p5_pitch_0.wav   = pitch 0.0 st / formant +2.5 st
+          - ss_formant_2p5_pitch_0p5.wav = pitch +0.5 st / formant +2.5 st
+          - ss_formant_3p5_pitch_0p5.wav = pitch +0.5 st / formant +3.5 st
+
+          O objetivo desta rodada NÃO é adicionar ainda a textura Vocaloid.
+          Primeiro isolamos a sensação de tamanho/ressonância vocal sem o efeito
+          de esquilo causado por pitch alto. Depois a textura vocal-synth entra
+          como uma camada separada.
+
+          signalsmith-latency.json contém a latência algorítmica da configuração
+          usada. signalsmith-processing-report.json contém RTF no runner x86_64.
+          Nenhum desses números certifica o Galaxy A15; o hardware real é gate.
+          EOF
+
       - name: Upload WAV audition pack
         uses: actions/upload-artifact@v4
         with:
-          name: amora-voice-kitchen-f1-f5
+          name: amora-voice-kitchen-signalsmith-formants
           path: voice-kitchen-wavs/
           if-no-files-found: error
           retention-days: 30
