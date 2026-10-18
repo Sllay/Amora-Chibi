@@ -18,28 +18,58 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
-def test_world_candidates_are_conservative_and_include_neutral_resynthesis() -> None:
+def test_world_candidates_include_neutral_and_three_child_levels() -> None:
     candidates = MODULE.DEFAULT_CANDIDATES
-    assert len(candidates) == 4
-    assert candidates[0].id == "WORLD_RESYNTH_NEUTRAL"
-    assert candidates[0].pitch_semitones == 0.0
-    assert candidates[0].tract_ratio == 1.0
-    assert candidates[0].aperiodicity_scale == 1.0
+    assert [c.id for c in candidates] == [
+        "WORLD_RESYNTH_NEUTRAL",
+        "WORLD_CHILD_SOFT",
+        "WORLD_CHILD_BALANCED",
+        "WORLD_CHILD_CLEAR",
+    ]
 
-    assert max(abs(c.pitch_semitones) for c in candidates) <= 0.35
-    assert max(c.tract_ratio for c in candidates) <= 1.055
-    assert min(c.aperiodicity_scale for c in candidates) >= 0.96
+    neutral = candidates[0]
+    assert neutral.target_f0_median_hz is None
+    assert neutral.max_f0_ratio == 1.0
+    assert neutral.pitch_range_scale == 1.0
+    assert all(ratio == 1.0 for _, ratio in neutral.spectral_ratios)
 
 
-def test_tract_ratio_is_far_smaller_than_rejected_uniform_formant_shift() -> None:
-    # 1.055x is below +1 semitone equivalent, deliberately smaller than the
-    # previous Signalsmith audition whose minimum uniform formant shift was +1.5 st.
-    maximum_equivalent = max(
-        MODULE.tract_ratio_to_semitones(c.tract_ratio) for c in MODULE.DEFAULT_CANDIDATES
+def test_child_candidates_preserve_low_body_and_taper_highs() -> None:
+    for candidate in MODULE.DEFAULT_CANDIDATES[1:]:
+        ratios = dict(candidate.spectral_ratios)
+        assert ratios[0.0] == 1.0
+        assert ratios[250.0] == 1.0
+        assert ratios[700.0] > ratios[3000.0] > ratios[8000.0] >= 1.0
+        assert max(ratios.values()) <= 1.12
+        assert candidate.aperiodicity_scale == 1.0
+
+
+def test_f0_targets_are_bounded_and_contour_range_is_small() -> None:
+    child = MODULE.DEFAULT_CANDIDATES[1:]
+    assert [c.target_f0_median_hz for c in child] == [245.0, 260.0, 275.0]
+    assert max(c.max_f0_ratio for c in child) <= 1.18
+    assert max(c.pitch_range_scale for c in child) <= 1.06
+
+
+def test_piecewise_map_is_monotonic_and_not_uniform() -> None:
+    import numpy as np
+
+    candidate = MODULE.DEFAULT_CANDIDATES[2]
+    mapped = MODULE._piecewise_source_frequency_map(
+        sample_rate=24000,
+        bins=513,
+        spectral_ratios=candidate.spectral_ratios,
     )
-    assert 0.9 < maximum_equivalent < 1.0
+    assert np.all(np.diff(mapped) > 0.0)
+    assert mapped[0] == 0.0
+    assert mapped[-1] == 12000.0
+
+    # The mapping changes slope by band; this guards against accidentally
+    # returning to the rejected global/uniform formant shift.
+    slopes = np.diff(mapped)
+    assert float(np.max(slopes) - np.min(slopes)) > 0.01
 
 
-def test_semitone_ratio_identity_and_small_shift() -> None:
-    assert MODULE.semitone_ratio(0.0) == 1.0
-    assert 1.01 < MODULE.semitone_ratio(0.35) < 1.03
+def test_ratio_to_semitones_identity_and_bound() -> None:
+    assert MODULE.ratio_to_semitones(1.0) == 0.0
+    assert 2.7 < MODULE.ratio_to_semitones(1.18) < 2.9
