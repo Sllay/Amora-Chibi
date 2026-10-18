@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Apply child/young-vocal-tract WORLD transforms to the preferred Amora mix.
 
-This audition is intentionally different from the earlier uniform formant warp.
-BK reported that the previous pass removed the chipmunk but still sounded like a
-thin/nasal adult voice. Here we model age cues more directly:
+This audition builds on the first child-VTL round. BK liked BALANCED/CLEAR, which
+finally changed perceived age, but asked for just a little more child character
+and less stridency. This pass therefore keeps the successful age-cue strategy and
+adds a small spectral polish instead of increasing pitch aggressively:
 
-- F0 median is moved toward a bounded target while preserving the contour;
-- the spectral envelope is warped non-uniformly (stronger in low/mid formants,
-  tapering toward the high spectrum instead of shifting everything equally);
-- the low body below ~250 Hz is preserved;
-- aperiodicity is left intact so this pass does not accidentally add a synthetic
-  or over-cleaned timbre.
+- F0 median remains bounded and contour-preserving;
+- the spectral envelope uses non-uniform vocal-tract warping;
+- the low body below ~250 Hz stays intact;
+- the upper spectrum tapers harder than the previous CLEAR candidate;
+- a gentle high shelf is applied to the WORLD spectral envelope to reduce harsh /
+  strident energy without dulling the whole voice;
+- aperiodicity remains untouched so the round isolates age + tonal polish.
 
 This is still a Voice Kitchen experiment, not the canonical VoiceSignature.
 """
@@ -32,6 +34,7 @@ class WorldCandidate(NamedTuple):
     pitch_range_scale: float
     spectral_ratios: tuple[tuple[float, float], ...]
     aperiodicity_scale: float = 1.0
+    high_shelf_db: float = 0.0
 
 
 NEUTRAL_SPECTRAL_RATIOS = (
@@ -44,9 +47,9 @@ NEUTRAL_SPECTRAL_RATIOS = (
     (8000.0, 1.0),
 )
 
-# The key difference from the rejected uniform formant pass is that the
-# low/mid vocal-tract region moves more than the high spectrum. This changes
-# perceived vocal-tract size instead of merely making the whole voice thin.
+# The first four candidates are retained as references from the previous round.
+# The final three are the new polished A/B set requested after BALANCED/CLEAR
+# sounded good but slightly too strident and could be a touch more child-like.
 DEFAULT_CANDIDATES = (
     WorldCandidate(
         "WORLD_RESYNTH_NEUTRAL",
@@ -100,6 +103,57 @@ DEFAULT_CANDIDATES = (
             (8000.0, 1.015),
         ),
     ),
+    WorldCandidate(
+        "WORLD_CHILD_BALANCED_POLISHED",
+        268.0,
+        1.15,
+        1.035,
+        (
+            (0.0, 1.0),
+            (250.0, 1.0),
+            (700.0, 1.10),
+            (1500.0, 1.09),
+            (3000.0, 1.06),
+            (5000.0, 1.025),
+            (8000.0, 1.005),
+        ),
+        1.0,
+        -1.5,
+    ),
+    WorldCandidate(
+        "WORLD_CHILD_CLEAR_POLISHED",
+        280.0,
+        1.18,
+        1.045,
+        (
+            (0.0, 1.0),
+            (250.0, 1.0),
+            (700.0, 1.12),
+            (1500.0, 1.105),
+            (3000.0, 1.065),
+            (5000.0, 1.02),
+            (8000.0, 1.0),
+        ),
+        1.0,
+        -2.0,
+    ),
+    WorldCandidate(
+        "WORLD_CHILD_PLUS_POLISHED",
+        288.0,
+        1.19,
+        1.05,
+        (
+            (0.0, 1.0),
+            (250.0, 1.0),
+            (700.0, 1.13),
+            (1500.0, 1.115),
+            (3000.0, 1.07),
+            (5000.0, 1.02),
+            (8000.0, 1.0),
+        ),
+        1.0,
+        -2.6,
+    ),
 )
 
 
@@ -124,8 +178,8 @@ def _target_f0(f0, candidate: WorldCandidate):
     target_median = source_median * applied_ratio
 
     # Work in log-F0 so we move the centre without flattening the speaker's
-    # original melodic contour. A tiny range expansion is included because
-    # child speech tends to have a somewhat wider relative F0 excursion.
+    # original melodic contour. Only a tiny range expansion is used: the new
+    # round gets "more child" mainly from tract-size cues, not brute pitch.
     log_values = np.log(out[voiced])
     log_median = float(np.median(log_values))
     target_log_median = math.log(target_median)
@@ -150,8 +204,6 @@ def _piecewise_source_frequency_map(sample_rate: int, bins: int, spectral_ratios
     ratio_anchor = np.asarray([ratio for _, ratio in anchors], dtype=np.float64)
     target_anchor = source_anchor * ratio_anchor
 
-    # The last point must terminate exactly at Nyquist. This also prevents a
-    # high-frequency stretch from producing an out-of-band mapping.
     source_anchor[-1] = nyquist
     target_anchor[-1] = nyquist
 
@@ -184,6 +236,31 @@ def _warp_spectral_envelope_piecewise(sp, sample_rate: int, spectral_ratios):
     return warped
 
 
+def _apply_high_shelf_polish(sp, sample_rate: int, high_shelf_db: float):
+    """Apply a gentle smooth HF shelf to WORLD's power spectral envelope.
+
+    The shelf begins around 3 kHz and reaches its requested attenuation by
+    7 kHz. This targets the reported stridency while leaving low/mid age cues
+    and consonant intelligibility largely intact.
+    """
+    import numpy as np
+
+    if abs(high_shelf_db) < 1e-9:
+        return sp.copy()
+
+    bins = sp.shape[1]
+    nyquist = sample_rate / 2.0
+    freqs = np.linspace(0.0, nyquist, bins, dtype=np.float64)
+    shelf_db = np.interp(
+        freqs,
+        np.asarray([0.0, 2500.0, 3500.0, 7000.0, nyquist], dtype=np.float64),
+        np.asarray([0.0, 0.0, high_shelf_db * 0.35, high_shelf_db, high_shelf_db], dtype=np.float64),
+    )
+    # CheapTrick returns a power spectral envelope, so dB -> power gain uses /10.
+    gain = np.power(10.0, shelf_db / 10.0)
+    return sp * gain[None, :]
+
+
 def transform_world(x, sample_rate: int, candidate: WorldCandidate):
     import numpy as np
     import pyworld as pw
@@ -202,6 +279,7 @@ def transform_world(x, sample_rate: int, candidate: WorldCandidate):
         sample_rate,
         candidate.spectral_ratios,
     )
+    sp_out = _apply_high_shelf_polish(sp_out, sample_rate, candidate.high_shelf_db)
     ap_out = np.clip(ap * candidate.aperiodicity_scale, 0.0, 1.0)
 
     y = pw.synthesize(
@@ -219,7 +297,7 @@ def transform_world(x, sample_rate: int, candidate: WorldCandidate):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="WORLD piecewise child-VTL audition for Amora Voice Kitchen")
+    parser = argparse.ArgumentParser(description="WORLD child-VTL + polish audition for Amora Voice Kitchen")
     parser.add_argument("--root", type=Path, default=Path("voice-kitchen-wavs"))
     args = parser.parse_args()
 
@@ -228,11 +306,12 @@ def main() -> int:
 
     report = {
         "source_name": "amora_mix_p60_s40.wav",
-        "method": "WORLD + bounded median-F0 + non-uniform spectral warp",
+        "method": "WORLD + bounded median-F0 + non-uniform spectral warp + gentle HF shelf",
         "outputs": 0,
         "note": (
-            "Age-cue audition after BK reported thin/nasal adult timbre from uniform formant shaping. "
-            "Low body is preserved, low/mid formants move more than highs, and F0 contour is retained."
+            "Polish audition after BK liked BALANCED/CLEAR but asked for slightly more child character "
+            "and less stridency. Pitch remains bounded; the extra child cue comes mostly from low/mid "
+            "tract shaping, while a gentle high shelf reduces harshness."
         ),
         "phrases": [],
     }
@@ -284,6 +363,7 @@ def main() -> int:
                     "pitch_range_scale": candidate.pitch_range_scale,
                     "spectral_ratios": [list(item) for item in candidate.spectral_ratios],
                     "aperiodicity_scale": candidate.aperiodicity_scale,
+                    "high_shelf_db": candidate.high_shelf_db,
                     "output": str(output_path.relative_to(args.root)),
                     "processing_seconds": round(elapsed, 6),
                     "processing_rtf": round(rtf, 6),
