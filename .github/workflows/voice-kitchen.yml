@@ -22,10 +22,10 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install Supertonic runtime
+      - name: Install audition runtimes
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "supertonic==1.3.1"
+          python -m pip install "supertonic==1.3.1" "pyworld-prebuilt==0.3.6.post1"
 
       - name: Render F1/F5 candidates
         run: |
@@ -34,71 +34,52 @@ jobs:
             --steps 8 \
             --speed 1.0
 
-      - name: Build pinned Signalsmith Stretch
-        env:
-          SIGNALSMITH_REF: a670068d9aeb64913331d5cc29337b19a457a7df
-          SIGNALSMITH_LINEAR_REF: de55e6a50ffcf6f8f43f649692d94691c7025151
+      - name: Apply WORLD source-filter candidates
         run: |
-          set -euo pipefail
-          SS_DIR="$RUNNER_TEMP/signalsmith-stretch"
-          LINEAR_DIR="$RUNNER_TEMP/signalsmith-linear"
-
-          git clone --recursive https://github.com/Signalsmith-Audio/signalsmith-stretch.git "$SS_DIR"
-          git -C "$SS_DIR" checkout --detach "$SIGNALSMITH_REF"
-          git -C "$SS_DIR" submodule update --init --recursive
-          test "$(git -C "$SS_DIR" rev-parse HEAD)" = "$SIGNALSMITH_REF"
-
-          git clone https://github.com/Signalsmith-Audio/linear.git "$LINEAR_DIR"
-          git -C "$LINEAR_DIR" checkout --detach "$SIGNALSMITH_LINEAR_REF"
-          test "$(git -C "$LINEAR_DIR" rev-parse HEAD)" = "$SIGNALSMITH_LINEAR_REF"
-
-          g++ -std=c++11 -O3 \
-            -I "$SS_DIR/include" \
-            -I "$LINEAR_DIR/include" \
-            "$SS_DIR/cmd/main.cpp" \
-            -o "$RUNNER_TEMP/signalsmith-stretch-cli"
-
-          g++ -std=c++11 -O3 \
-            -I "$SS_DIR/include" \
-            -I "$LINEAR_DIR/include" \
-            tools/voice_kitchen/signalsmith_latency_probe.cpp \
-            -o "$RUNNER_TEMP/signalsmith-latency-probe"
-
-          "$RUNNER_TEMP/signalsmith-latency-probe" 24000 120 4 \
-            > voice-kitchen-wavs/signalsmith-latency.json
-
-      - name: Apply independent pitch and formant candidates
-        run: |
-          python tools/voice_kitchen/apply_signalsmith_candidates.py \
-            --stretch-bin "$RUNNER_TEMP/signalsmith-stretch-cli" \
+          python tools/voice_kitchen/apply_world_vtl_candidates.py \
             --root voice-kitchen-wavs
 
           cat > voice-kitchen-wavs/README.txt <<'EOF'
-          AMORA VOICE KITCHEN — Signalsmith formant audition
+          AMORA VOICE KITCHEN — WORLD source-filter audition
 
-          Base preferida por BK nesta rodada:
+          Base preferida por BK:
           - amora_mix_p60_s40.wav = 60% speaker 0/F1 + 40% speaker 4/F5
 
-          Candidatos novos, todos partindo desse mesmo 60/40:
-          - ss_formant_1p5_pitch_0.wav   = pitch 0.0 st / formant +1.5 st
-          - ss_formant_2p5_pitch_0.wav   = pitch 0.0 st / formant +2.5 st
-          - ss_formant_2p5_pitch_0p5.wav = pitch +0.5 st / formant +2.5 st
-          - ss_formant_3p5_pitch_0p5.wav = pitch +0.5 st / formant +3.5 st
+          IMPORTANTE:
+          - o experimento Signalsmith anterior removeu o chipmunk, mas BK relatou
+            timbre alienígena; por isso não é o caminho desta rodada.
+          - esta rodada usa WORLD para separar F0, envelope espectral e
+            aperiodicidade e faz mudanças muito menores.
 
-          O objetivo desta rodada NÃO é adicionar ainda a textura Vocaloid.
-          Primeiro isolamos a sensação de tamanho/ressonância vocal sem o efeito
-          de esquilo causado por pitch alto. Depois a textura vocal-synth entra
-          como uma camada separada.
+          Ouça nesta ordem:
+          1. amora_mix_p60_s40.wav
+          2. world_resynth_neutral.wav
+          3. world_vtl_1p025.wav
+          4. world_vtl_1p04_clean.wav
+          5. world_vtl_1p055_clean.wav
 
-          signalsmith-latency.json contém a latência algorítmica da configuração
-          usada. signalsmith-processing-report.json contém RTF no runner x86_64.
-          Nenhum desses números certifica o Galaxy A15; o hardware real é gate.
+          Candidatos:
+          - WORLD_RESYNTH_NEUTRAL: sem mudança intencional; mede a assinatura do
+            próprio vocoder WORLD.
+          - WORLD_VTL_1P025: F0 0 st / trato 1.025x (~+0.43 st equivalente) /
+            aperiodicidade intacta.
+          - WORLD_VTL_1P04_CLEAN: F0 +0.20 st / trato 1.04x (~+0.68 st) /
+            aperiodicidade 0.98x.
+          - WORLD_VTL_1P055_CLEAN: F0 +0.35 st / trato 1.055x (~+0.93 st) /
+            aperiodicidade 0.96x.
+
+          Ainda NÃO existe textura Vocaloid nesta rodada. Primeiro a base precisa
+          ficar limpa, jovem/feminina e sem esquilo/alien. Só depois entra a
+          textura vocal-synth como camada separada.
+
+          world-processing-report.json contém RTF medido no runner x86_64.
+          Isso não certifica Galaxy A15.
           EOF
 
       - name: Upload WAV audition pack
         uses: actions/upload-artifact@v4
         with:
-          name: amora-voice-kitchen-signalsmith-formants
+          name: amora-voice-kitchen-world-vtl
           path: voice-kitchen-wavs/
           if-no-files-found: error
           retention-days: 30
