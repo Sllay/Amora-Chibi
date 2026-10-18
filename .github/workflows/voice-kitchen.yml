@@ -39,54 +39,59 @@ jobs:
           python tools/voice_kitchen/apply_world_vtl_candidates.py \
             --root voice-kitchen-wavs
 
+      - name: Render final CLEAR/PLUS A-B
+        run: |
+          python tools/voice_kitchen/apply_world_final_ab.py \
+            --root voice-kitchen-wavs
+
           cat > voice-kitchen-wavs/README.txt <<'EOF'
-          AMORA VOICE KITCHEN — child polish audition
+          AMORA VOICE KITCHEN — FINAL CLEAR / PLUS A-B
 
           Base:
-          - amora_mix_p60_s40.wav = 60% speaker 0/F1 + 40% speaker 4/F5
+          - amora_mix_p60_s40.wav = 60% speaker 0 + 40% speaker 4
 
-          Feedback que originou esta rodada:
-          - WORLD_CHILD_BALANCED e WORLD_CHILD_CLEAR finalmente mudaram a percepção
-            de idade/tamanho vocal e ficaram bons;
-          - BK pediu só um pouco mais de sensação infantil;
-          - ainda havia estridência/brilho excessivo.
+          Feedback consolidado:
+          - CLEAR_POLISHED: mais limpa, clara e fácil de entender;
+          - PLUS_POLISHED: um pouco mais natural;
+          - ambos já estão na região boa de idade/tamanho vocal.
 
-          Então esta rodada NÃO volta para pitch alto. Ela mantém F0 bounded,
-          aumenta muito pouco os sinais de trato vocal menor e adiciona um shelf
-          suave nos agudos diretamente no envelope WORLD.
+          Esta rodada fecha o intervalo entre os dois e NÃO abre uma nova busca.
 
-          Compare primeiro em phrase_01 nesta ordem:
-          1. world_child_balanced.wav
-          2. world_child_balanced_polished.wav
-          3. world_child_clear.wav
-          4. world_child_clear_polished.wav
-          5. world_child_plus_polished.wav
+          Compare em phrase_01:
+          1. world_child_clear_polished.wav
+          2. amora_child_final_a_clear60.wav
+          3. amora_child_final_b_plus60.wav
+          4. world_child_plus_polished.wav
 
-          Novos candidatos:
-          - WORLD_CHILD_BALANCED_POLISHED
-            alvo F0 268 Hz; max F0 1.15x; warp low/mid max 1.10x;
-            shelf HF -1.5 dB.
-          - WORLD_CHILD_CLEAR_POLISHED
-            alvo F0 280 Hz; max F0 1.18x; warp low/mid max 1.12x;
-            shelf HF -2.0 dB.
-          - WORLD_CHILD_PLUS_POLISHED
-            alvo F0 288 Hz; max F0 1.19x; warp low/mid max 1.13x;
-            shelf HF -2.6 dB.
+          FINAL_A_CLEAR60
+          - 60% da direção CLEAR / 40% da direção PLUS
+          - F0 alvo: 283.2 Hz
+          - max F0: 1.184x
+          - pitch range: 1.047x
+          - warp: 700 Hz 1.124x / 1500 Hz 1.109x / 3000 Hz 1.067x
+          - HF shelf: -2.24 dB
+          - objetivo: preservar um pouco mais de clareza/inteligibilidade.
 
-          O topo espectral volta para ~1.0x em 8 kHz nos novos candidatos para
-          não transformar o ganho de idade em nasalidade/estridência.
+          FINAL_B_PLUS60
+          - 40% da direção CLEAR / 60% da direção PLUS
+          - F0 alvo: 284.8 Hz
+          - max F0: 1.186x
+          - pitch range: 1.048x
+          - warp: 700 Hz 1.126x / 1500 Hz 1.111x / 3000 Hz 1.068x
+          - HF shelf: -2.36 dB
+          - objetivo: preservar um pouco mais da naturalidade do PLUS.
 
-          Ainda NÃO há textura Vocaloid nesta rodada. Primeiro fechamos a base
-          vocal jovem/limpa; a assinatura vocal-synth continua como camada separada.
+          Ainda NÃO há textura Vocaloid nesta rodada. O vencedor desta comparação
+          deve congelar a base de idade/tamanho vocal antes da VoiceSignature synth.
 
-          world-processing-report.json registra a mediana F0 medida, o ratio real,
-          shelf e RTF no runner x86_64. Isso não certifica Galaxy A15.
+          final-ab-report.json registra os parâmetros realmente usados.
+          Isso continua sendo Voice Kitchen; não certifica APK/Galaxy A15.
           EOF
 
       - name: Upload WAV audition pack
         uses: actions/upload-artifact@v4
         with:
-          name: amora-voice-kitchen-world-child-polish
+          name: amora-voice-kitchen-final-ab
           path: voice-kitchen-wavs/
           if-no-files-found: error
           retention-days: 30
