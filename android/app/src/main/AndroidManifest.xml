@@ -22,7 +22,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Experimental only; opened explicitly from MainActivity. -->
+        <activity
+            android:name=".voice.candidate.VoiceCandidateActivity"
+            android:exported="false"
+            android:label="Amora Voice Candidate" />
+
+        <!-- Experimental legacy lab; opened explicitly from MainActivity. -->
         <activity
             android:name=".voice.lab.VoiceLabActivity"
             android:exported="false"
