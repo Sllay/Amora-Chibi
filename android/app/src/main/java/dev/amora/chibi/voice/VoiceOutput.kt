@@ -7,11 +7,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Authoritative V1 voice output.
+ * Physical-gate voice output for the approved Amora laboratory stack.
  *
- * The provisional neural identity is bundled with the APK. Android TextToSpeech
- * is intentionally not used as an automatic fallback here: a hidden fallback
- * changes Amora's identity and masks physical integration failures.
+ * This dev build intentionally promotes the candidate inside Android so BK can
+ * test the real conversation path on Galaxy A15. It is NOT a canonical release
+ * promotion until that device gate passes. There is no hidden Faber/system-TTS
+ * fallback because a fallback would mask integration regressions.
  */
 class VoiceOutput(
     context: Context,
@@ -21,22 +22,23 @@ class VoiceOutput(
 ) : AutoCloseable {
     enum class Outcome { SPOKEN, FAILED, INTERRUPTED, PARTIAL }
 
-    private val identity = VoiceIdentity.AMORA_V1_PROVISIONAL
     private val diagnostics = VoiceDiagnostics(context.applicationContext)
     private val stopRequested = AtomicBoolean(false)
     private val current = AtomicReference<CoreClient.SpeechUtterance?>(null)
-    private val localVoice = LocalVoiceEngine(
+    private val candidateVoice = AmoraSupertonicVoiceEngine(
         context = context.applicationContext,
-        identity = identity,
         diagnostics = diagnostics,
         onStatusChanged = onVoiceStatusChanged,
     )
 
     init {
-        if (localVoice.assetsAvailable()) {
-            diagnostics.record(VoiceDiagnostics.STAGE_ASSETS_READY, "voz provisória empacotada no APK")
+        if (candidateVoice.assetsAvailable()) {
+            diagnostics.record(
+                VoiceDiagnostics.STAGE_ASSETS_READY,
+                "FINAL_B + VoiceSignature V1 + Emotion V2 empacotados para gate físico",
+            )
         } else {
-            diagnostics.record(VoiceDiagnostics.STAGE_FAILED, "assets da voz provisória não estão no APK")
+            diagnostics.record(VoiceDiagnostics.STAGE_FAILED, "assets da candidata Amora não estão completos no APK")
         }
         onVoiceStatusChanged(diagnostics.snapshot())
     }
@@ -47,19 +49,29 @@ class VoiceOutput(
         if (!current.compareAndSet(null, item)) return false
         stopRequested.set(false)
 
-        val result = localVoice.play(
+        // Core remains the owner of emotional state. Android only maps the V/A/D
+        // carried by the utterance into the frozen V2 expression contract.
+        val expression = runCatching {
+            AmoraVoiceExpressionPlanner.fromVad(
+                valence = item.valence,
+                arousal = item.arousal,
+                dominance = item.dominance,
+            )
+        }.getOrElse { AmoraVoiceExpression.NEUTRAL }
+
+        val result = candidateVoice.play(
             text = item.text,
-            requestedRate = item.rate,
+            expression = expression,
             volume = item.volume,
             stopRequested = stopRequested,
             onStarted = { onSpeakingChanged(true) },
         )
         when (result) {
-            LocalVoiceEngine.PlayResult.COMPLETED -> finish(item, Outcome.SPOKEN)
-            LocalVoiceEngine.PlayResult.INTERRUPTED -> finish(item, Outcome.INTERRUPTED)
-            LocalVoiceEngine.PlayResult.UNAVAILABLE,
-            LocalVoiceEngine.PlayResult.FAILED -> {
-                Log.e(TAG, "Voz neural local indisponível: ${localVoice.lastFailure()}")
+            AmoraSupertonicVoiceEngine.PlayResult.COMPLETED -> finish(item, Outcome.SPOKEN)
+            AmoraSupertonicVoiceEngine.PlayResult.INTERRUPTED -> finish(item, Outcome.INTERRUPTED)
+            AmoraSupertonicVoiceEngine.PlayResult.UNAVAILABLE,
+            AmoraSupertonicVoiceEngine.PlayResult.FAILED -> {
+                Log.e(TAG, "Candidata de voz indisponível: ${candidateVoice.lastFailure()}")
                 finish(item, Outcome.FAILED)
             }
         }
@@ -69,7 +81,7 @@ class VoiceOutput(
     fun stopCurrent(): CoreClient.SpeechUtterance? {
         val item = current.get() ?: return null
         stopRequested.set(true)
-        localVoice.stop()
+        candidateVoice.stop()
         finish(item, Outcome.INTERRUPTED)
         return item
     }
@@ -84,7 +96,7 @@ class VoiceOutput(
     override fun close() {
         stopRequested.set(true)
         current.getAndSet(null)
-        localVoice.close()
+        candidateVoice.close()
         onSpeakingChanged(false)
     }
 
