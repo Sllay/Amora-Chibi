@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AAR_DIR="$ROOT/app/libs"
 ASSET_DIR="$ROOT/app/src/main/assets"
-mkdir -p "$AAR_DIR" "$ASSET_DIR"
+CPP_DIR="$ROOT/app/src/main/cpp"
+mkdir -p "$AAR_DIR" "$ASSET_DIR" "$CPP_DIR"
 
 SHERPA_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar"
 SHERPA_SHA="633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96"
@@ -28,6 +29,9 @@ SUPERTONIC_REQUIRED=(
   "unicode_indexer.bin"
   "voice.bin"
 )
+
+WORLD_REPO="https://github.com/mmorise/World.git"
+WORLD_COMMIT="d625e7608ca23a870018f01e7c562ac683d9847f" # v1.0.1
 
 fetch_checked() {
   local url="$1" dest="$2" expected="$3" expected_size="${4:-}"
@@ -69,7 +73,7 @@ stage_voice_assets() {
     local existing
     existing="$(sha256sum "$target/$VOICE_MODEL" | awk '{print $1}')"
     if [[ "$existing" == "$VOICE_MODEL_SHA" ]]; then
-      echo "[android-deps] OK: voz neural já empacotada ($VOICE_ID)"
+      echo "[android-deps] OK: voz neural legada já empacotada ($VOICE_ID)"
       return
     fi
   fi
@@ -79,7 +83,7 @@ stage_voice_assets() {
   archive="$work/voice.tar.bz2"
   trap 'rm -rf "$work"' RETURN
 
-  echo "[android-deps] Baixando voz provisória PT-BR para empacotar no APK..."
+  echo "[android-deps] Baixando voz provisória PT-BR legada..."
   curl -fL --retry 3 --retry-delay 2 "$VOICE_URL" -o "$archive"
   tar -xjf "$archive" -C "$work"
 
@@ -90,17 +94,11 @@ stage_voice_assets() {
   [[ -d "$source_root/espeak-ng-data" ]] || { echo "[android-deps] ERRO: espeak-ng-data ausente" >&2; exit 1; }
 
   actual="$(sha256sum "$extracted_model" | awk '{print $1}')"
-  if [[ "$actual" != "$VOICE_MODEL_SHA" ]]; then
-    echo "[android-deps] ERRO: SHA-256 do modelo Faber não confere" >&2
-    echo "[android-deps] esperado: $VOICE_MODEL_SHA" >&2
-    echo "[android-deps] recebido: $actual" >&2
-    exit 1
-  fi
+  [[ "$actual" == "$VOICE_MODEL_SHA" ]] || { echo "[android-deps] ERRO: SHA Faber não confere" >&2; exit 1; }
 
   rm -rf "$target"
   mkdir -p "$target"
   cp -a "$source_root/." "$target/"
-  echo "[android-deps] OK: $VOICE_ID empacotado em assets com modelo verificado"
   rm -rf "$work"
   trap - RETURN
 }
@@ -112,7 +110,7 @@ stage_supertonic_assets() {
     [[ -f "$target/$file" ]] || complete=false
   done
   if [[ "$complete" == true ]]; then
-    echo "[android-deps] OK: Supertonic Voice Lab já empacotado ($SUPERTONIC_ID)"
+    echo "[android-deps] OK: Supertonic já empacotado ($SUPERTONIC_ID)"
     return
   fi
 
@@ -121,7 +119,7 @@ stage_supertonic_assets() {
   archive="$work/supertonic.tar.bz2"
   trap 'rm -rf "$work"' RETURN
 
-  echo "[android-deps] Baixando Supertonic 3 INT8 experimental para o Voice Lab..."
+  echo "[android-deps] Baixando Supertonic 3 INT8..."
   curl -fL --retry 3 --retry-delay 2 "$SUPERTONIC_URL" -o "$archive"
   tar -xjf "$archive" -C "$work"
 
@@ -135,17 +133,60 @@ stage_supertonic_assets() {
   rm -rf "$target"
   mkdir -p "$target"
   cp -a "$source_root/." "$target/"
-  if [[ -f "$source_root/LICENSE" ]]; then
-    cp "$source_root/LICENSE" "$target/LICENSE"
-  fi
-  echo "[android-deps] OK: $SUPERTONIC_ID empacotado em assets; licença upstream preservada quando presente"
+  [[ ! -f "$source_root/LICENSE" ]] || cp "$source_root/LICENSE" "$target/LICENSE"
   rm -rf "$work"
   trap - RETURN
+}
+
+stage_amora_style() {
+  local root="$ASSET_DIR/$SUPERTONIC_ID"
+  local source="$root/voice.bin"
+  local output="$root/amora_voice.bin"
+  local report="$root/amora_voice.json"
+  [[ -f "$source" ]] || { echo "[android-deps] ERRO: voice.bin original ausente" >&2; exit 1; }
+  python3 "$ROOT/tools/build_amora_voice_bin.py" \
+    --source "$source" \
+    --output "$output" \
+    --report "$report" \
+    --primary-speaker 0 \
+    --secondary-speaker 4 \
+    --primary-weight 0.60
+  [[ -s "$output" ]] || { echo "[android-deps] ERRO: amora_voice.bin não foi gerado" >&2; exit 1; }
+  echo "[android-deps] OK: style 60/40 congelado gerado em amora_voice.bin"
+}
+
+stage_world_source() {
+  local target="$CPP_DIR/third_party/world"
+  local marker="$target/.amora-world-commit"
+  if [[ -f "$marker" ]] && [[ "$(cat "$marker")" == "$WORLD_COMMIT" ]] && [[ -f "$target/src/dio.cpp" ]]; then
+    echo "[android-deps] OK: WORLD $WORLD_COMMIT"
+    return
+  fi
+
+  local work
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' RETURN
+  echo "[android-deps] Baixando WORLD v1.0.1 fixado em $WORLD_COMMIT..."
+  git clone --quiet --filter=blob:none "$WORLD_REPO" "$work/world"
+  git -C "$work/world" checkout --quiet "$WORLD_COMMIT"
+  local actual
+  actual="$(git -C "$work/world" rev-parse HEAD)"
+  [[ "$actual" == "$WORLD_COMMIT" ]] || { echo "[android-deps] ERRO: commit WORLD inesperado $actual" >&2; exit 1; }
+  rm -rf "$target"
+  mkdir -p "$(dirname "$target")"
+  cp -a "$work/world" "$target"
+  rm -rf "$target/.git"
+  printf '%s\n' "$WORLD_COMMIT" > "$marker"
+  rm -rf "$work"
+  trap - RETURN
+  echo "[android-deps] OK: WORLD $WORLD_COMMIT preparado para CMake"
 }
 
 fetch_checked "$SHERPA_URL" "$AAR_DIR/sherpa-onnx-1.13.8.aar" "$SHERPA_SHA"
 fetch_checked "$VAD_URL" "$ASSET_DIR/silero_vad.onnx" "$VAD_SHA" "$VAD_BYTES"
 stage_voice_assets
 stage_supertonic_assets
+stage_amora_style
+stage_world_source
 
-echo "[android-deps] Dependências nativas, voz neural e Voice Lab verificadas."
+echo "[android-deps] Dependências, style Amora 60/40 e WORLD verificados."
