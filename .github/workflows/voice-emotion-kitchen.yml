@@ -40,50 +40,59 @@ jobs:
             --steps 8
 
           cat > voice-emotion-wavs/README.txt <<'EOF'
-          AMORA VOICE KITCHEN — EMOTION / PROSODY V1
+          AMORA VOICE KITCHEN — EMOTION / PROSODY V2
 
-          IDENTIDADE CONGELADA
+          MOTIVO DA V2
+          A primeira rodada ficou boa conceitualmente, mas leve demais na escuta.
+          BK pediu mais percepção emocional sem teatralizar nem trocar a voz.
+
+          IDENTIDADE CONTINUA CONGELADA
           - Base: AMORA_CHILD_FINAL_B_PLUS60
           - Assinatura: AMORA_VOICE_SIGNATURE_V1_SOFT
-          - sem pitch shift absoluto novo
-          - sem novo formant/VTL
-          - sem mudar a textura fixa da VoiceSignature por emoção
+          - speaker/style 60/40 não muda por emoção
+          - nenhum novo formant/VTL
+          - textura fixa da VoiceSignature não muda
 
-          MODULAÇÃO TESTADA
-          - rate_scale: pequena mudança de cadência
-          - pitch_range_scale: só amplitude do contorno F0 ao redor da mesma mediana
-          - energy_scale: energia/volume bounded
+          EXPRESSÃO V2
+          - rate_scale: tristeza e carinho mais lentos; raiva/felicidade mais vivas
+          - energy_scale: tristeza mais baixa; raiva mais firme
+          - pitch_range_scale: contorno emocional mais perceptível
+          - f0_register_scale: micro-registro bounded 0.97..1.02; tristeza pode
+            descer levemente sem virar efeito de pitch/identidade
+          - softness/firmness: nesta audição controlam apenas um shelf tonal muito
+            pequeno, RMS-matched, para carinho soar mais macio e raiva mais seca
+          - pause_scale continua no contrato para o adapter/runtime; não inventamos
+            API de pausa no helper Python do Supertonic
 
-          CONTRATO RESERVADO PARA O RUNTIME
-          - pause_scale
-          - softness
-          - firmness
-          Esses campos já fazem parte do plano modular, mas o helper Python do
-          Supertonic não expõe um silenceScale equivalente de forma verificada,
-          então esta audição não inventa API.
+          PRESETS
+          - emotion_neutra_v2.wav
+          - emotion_feliz_v2.wav
+          - emotion_carinhosa_v2.wav
+          - emotion_brava_v2.wav
+          - emotion_triste_v2.wav
 
-          PRESETS PARA ESCUTA
-          - emotion_neutra.wav
-          - emotion_feliz.wav
-          - emotion_carinhosa.wav
-          - emotion_brava.wav
-          - emotion_triste.wav
+          O QUE OUVIR
+          - TRISTE: mais lenta, mais baixa, registro um pouco menor e contorno mais
+            fechado; melancólica sem virar voz diferente.
+          - CARINHOSA: um pouco mais lenta/baixa e bem mais macia; sensação de
+            afeto/proximidade sem parecer triste.
+          - BRAVA: mais firme, energética e seca, mas sem gritar.
+          - FELIZ: um pouco mais viva e aberta.
+          - NEUTRA: deve continuar sendo a referência aprovada.
 
-          Comece por phrase_04: ela tem conteúdo relacional e deixa diferença de
-          expressão mais fácil de perceber. Depois confirme phrase_01 e phrase_02.
+          Comece por phrase_04 e depois confirme phrase_01/02.
 
           REGRA DE FALHA
-          VoiceProsodyPlanner é opcional. safe_plan() retorna NEUTRO se o módulo
-          falhar; a VoiceSignature/base continuam funcionando normalmente.
+          VoiceProsodyPlanner continua opcional. safe_plan() retorna NEUTRO se
+          falhar; base + VoiceSignature continuam funcionando normalmente.
 
-          emotion-expression-report.json contém os estados V/A/D e os parâmetros
-          efetivamente planejados para cada preset.
+          emotion-expression-v2-report.json registra os planos usados.
           EOF
 
       - name: Upload emotion audition pack
         uses: actions/upload-artifact@v4
         with:
-          name: amora-voice-emotion-prosody-v1
+          name: amora-voice-emotion-prosody-v2
           path: voice-emotion-wavs/
           if-no-files-found: error
           retention-days: 30
