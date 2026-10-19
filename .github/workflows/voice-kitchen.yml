@@ -39,59 +39,57 @@ jobs:
           python tools/voice_kitchen/apply_world_vtl_candidates.py \
             --root voice-kitchen-wavs
 
-      - name: Render final CLEAR/PLUS A-B
+      - name: Render frozen FINAL_B reference
         run: |
           python tools/voice_kitchen/apply_world_final_ab.py \
             --root voice-kitchen-wavs
 
+      - name: Render subtle VoiceSignature v1
+        run: |
+          python tools/voice_kitchen/apply_amora_signature_v1.py \
+            --root voice-kitchen-wavs
+
           cat > voice-kitchen-wavs/README.txt <<'EOF'
-          AMORA VOICE KITCHEN — FINAL CLEAR / PLUS A-B
+          AMORA VOICE KITCHEN — VOICE SIGNATURE V1 SOFT
 
-          Base:
-          - amora_mix_p60_s40.wav = 60% speaker 0 + 40% speaker 4
+          Base congelada por BK:
+          - amora_child_final_b_plus60.wav
+          - 40% da direção CLEAR / 60% PLUS
+          - esta rodada NÃO altera novamente idade/tamanho vocal.
 
-          Feedback consolidado:
-          - CLEAR_POLISHED: mais limpa, clara e fácil de entender;
-          - PLUS_POLISHED: um pouco mais natural;
-          - ambos já estão na região boa de idade/tamanho vocal.
+          Candidato de assinatura:
+          - amora_voice_signature_v1_soft.wav
 
-          Esta rodada fecha o intervalo entre os dois e NÃO abre uma nova busca.
+          O que muda sobre FINAL_B:
+          - aperiodicidade WORLD: 0.965x (mudança mínima para uma textura um pouco
+            mais limpa/periódica de vocal synth);
+          - camada harmônica soft: drive 1.30, wet apenas 5%, com RMS preservado.
 
-          Compare em phrase_01:
-          1. world_child_clear_polished.wav
-          2. amora_child_final_a_clear60.wav
-          3. amora_child_final_b_plus60.wav
-          4. world_child_plus_polished.wav
+          O que NÃO entra:
+          - nenhum pitch extra;
+          - nenhum novo formant/VTL;
+          - bitcrush: OFF;
+          - sample-hold: OFF;
+          - ring modulation: OFF.
 
-          FINAL_A_CLEAR60
-          - 60% da direção CLEAR / 40% da direção PLUS
-          - F0 alvo: 283.2 Hz
-          - max F0: 1.184x
-          - pitch range: 1.047x
-          - warp: 700 Hz 1.124x / 1500 Hz 1.109x / 3000 Hz 1.067x
-          - HF shelf: -2.24 dB
-          - objetivo: preservar um pouco mais de clareza/inteligibilidade.
+          Objetivo:
+          dar uma assinatura própria discretamente sintética sem transformar a
+          voz em robô, alien, esquilo ou efeito chamativo. A base precisa continuar
+          reconhecível como FINAL_B e a inteligibilidade deve permanecer intacta.
 
-          FINAL_B_PLUS60
-          - 40% da direção CLEAR / 60% da direção PLUS
-          - F0 alvo: 284.8 Hz
-          - max F0: 1.186x
-          - pitch range: 1.048x
-          - warp: 700 Hz 1.126x / 1500 Hz 1.111x / 3000 Hz 1.068x
-          - HF shelf: -2.36 dB
-          - objetivo: preservar um pouco mais da naturalidade do PLUS.
+          Compare em cada phrase_XX:
+          1. amora_child_final_b_plus60.wav
+          2. amora_voice_signature_v1_soft.wav
 
-          Ainda NÃO há textura Vocaloid nesta rodada. O vencedor desta comparação
-          deve congelar a base de idade/tamanho vocal antes da VoiceSignature synth.
-
-          final-ab-report.json registra os parâmetros realmente usados.
-          Isso continua sendo Voice Kitchen; não certifica APK/Galaxy A15.
+          amora-signature-v1-report.json registra os parâmetros e RTF no runner.
+          Isto ainda é Voice Kitchen: promoção Android/produção continua sujeita
+          ao teste físico e à aprovação auditiva de BK.
           EOF
 
       - name: Upload WAV audition pack
         uses: actions/upload-artifact@v4
         with:
-          name: amora-voice-kitchen-final-ab
+          name: amora-voice-kitchen-signature-v1-soft
           path: voice-kitchen-wavs/
           if-no-files-found: error
           retention-days: 30
