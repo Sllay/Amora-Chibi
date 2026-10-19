@@ -24,8 +24,23 @@
 
         <activity
             android:name=".voice.candidate.VoiceCandidateActivity"
-            android:exported="false"
-            android:label="Amora Voice Candidate" />
+            android:exported="true"
+            android:label="Amora Voice Gate" />
+
+        <!-- Second launcher entry exists only in this dev candidate so the
+             physical voice gate can be opened without pairing/Core/Termux. -->
+        <activity-alias
+            android:name=".VoiceCandidateLauncher"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="Amora Voice Gate"
+            android:targetActivity=".voice.candidate.VoiceCandidateActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <!-- Experimental legacy lab; opened explicitly from MainActivity. -->
         <activity
