@@ -27,12 +27,15 @@ class VoiceDiagnostics(context: Context) {
         updatedAtMs = preferences.getLong(KEY_UPDATED_AT, 0L),
     )
 
-    fun describe(identity: VoiceIdentity = VoiceIdentity.AMORA_V1_PROVISIONAL): String {
+    fun describe(): String {
         val current = snapshot()
         val abi = Build.SUPPORTED_ABIS.joinToString().ifBlank { "desconhecida" }
         return buildString {
-            append("Backend: sherpa-onnx 1.13.8 · local/offline\n")
-            append("Voz provisória: ${identity.packId}\n")
+            append("Backend: Supertonic 3 INT8 / sherpa-onnx 1.13.8 · local/offline\n")
+            append("Base: AMORA_CHILD_FINAL_B_PLUS60\n")
+            append("Assinatura: AMORA_VOICE_SIGNATURE_V1_SOFT\n")
+            append("Expressão: AMORA_VOICE_EXPRESSION_V2\n")
+            append("Status canônico: candidata · gate Galaxy A15 pendente\n")
             append("ABI: $abi\n")
             append("Estado: ${current.stage}\n")
             append("Detalhe: ${current.detail}")
@@ -42,12 +45,12 @@ class VoiceDiagnostics(context: Context) {
     companion object {
         const val STAGE_NOT_STARTED = "NÃO INICIADA"
         const val STAGE_ASSETS_READY = "ASSETS OK"
-        const val STAGE_PREPARING_DATA = "PREPARANDO ESPEAK"
+        const val STAGE_PREPARING_DATA = "PREPARANDO DADOS"
         const val STAGE_ENGINE_READY = "ENGINE OK"
         const val STAGE_SYNTHESIZING = "SINTETIZANDO"
         const val STAGE_PLAYING = "REPRODUZINDO"
-        const val STAGE_READY = "VOZ NEURAL OK"
-        const val STAGE_FAILED = "FALHA NEURAL"
+        const val STAGE_READY = "VOZ CANDIDATA OK"
+        const val STAGE_FAILED = "FALHA DE VOZ"
 
         private const val PREFERENCES = "amora_voice_diagnostics"
         private const val KEY_STAGE = "stage"
