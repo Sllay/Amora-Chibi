@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Render bounded emotion/prosody auditions on top of Amora VoiceSignature V1.
+"""Render Emotion/Prosody V2 auditions on top of Amora VoiceSignature V1.
 
-The frozen identity is never replaced here:
-- 60/40 Supertonic style remains the source identity;
-- FINAL_B morphology remains fixed;
-- VoiceSignature V1 texture remains fixed.
+BK approved the identity and signature, but the first emotion pass was too subtle.
+V2 therefore makes delivery cues easier to hear while keeping identity frozen:
+- rate/cadence is stronger for tender/sad/angry speech;
+- F0 contour range remains bounded;
+- a tiny emotional F0-register shift is allowed (0.97..1.02);
+- energy is more clearly differentiated;
+- softness/firmness drive a small post-signature tone shelf, RMS matched.
 
-Only provider-independent expression dimensions are auditioned: source speech
-rate, F0 contour range around the same median, and bounded output energy. No
-absolute pitch shift or new formant/VTL transform is introduced.
+No formant/VTL change, speaker/style change, or VoiceSignature texture change is
+allowed by emotion.
 """
 
 from __future__ import annotations
@@ -77,6 +79,8 @@ def _affect(**values: float) -> EntityAffect:
     )
 
 
+# These are audition scenarios, not hard-coded emotion states for production.
+# Production will feed the planner from the real Core mood/event/affect values.
 PRESETS = (
     {
         "id": "NEUTRA",
@@ -89,45 +93,79 @@ PRESETS = (
         "id": "FELIZ",
         "mood": _mood(0.65, 0.45, 0.18),
         "emotion": EmotionType.JOY,
-        "intensity": 0.65,
+        "intensity": 0.75,
         "affect": None,
     },
     {
         "id": "CARINHOSA",
         "mood": _mood(0.55, 0.16, 0.0),
         "emotion": EmotionType.GRATITUDE,
-        "intensity": 0.35,
+        "intensity": 0.70,
         "affect": _affect(affection=0.85, gratitude=0.45, trust=0.80),
     },
     {
         "id": "BRAVA",
         "mood": _mood(-0.65, 0.78, 0.55),
         "emotion": EmotionType.ANGER,
-        "intensity": 0.80,
+        "intensity": 0.90,
         "affect": _affect(anger=0.75, irritation=0.60, trust=0.35),
     },
     {
         "id": "TRISTE",
         "mood": _mood(-0.65, 0.10, -0.30),
         "emotion": EmotionType.DISAPPOINTMENT,
-        "intensity": 0.80,
+        "intensity": 0.90,
         "affect": None,
     },
 )
 
 
-def _signature_candidate(pitch_range_scale: float) -> WorldCandidate:
-    # Keep FINAL_B identity and Signature V1 texture fixed. Only F0 contour range
-    # changes around the same target median.
+def _signature_candidate(*, pitch_range_scale: float, f0_register_scale: float) -> WorldCandidate:
+    # FINAL_B morphology and Signature V1 remain fixed. Expression may only move
+    # the F0 register a few percent and widen/narrow its contour.
     return WorldCandidate(
-        f"AMORA_EXPRESSION_RANGE_{pitch_range_scale:.4f}",
-        FINAL_B.target_f0_median_hz,
+        f"AMORA_EXPRESSION_V2_{pitch_range_scale:.4f}_{f0_register_scale:.4f}",
+        FINAL_B.target_f0_median_hz * f0_register_scale,
         FINAL_B.max_f0_ratio,
         FINAL_B.pitch_range_scale * pitch_range_scale,
         FINAL_B.spectral_ratios,
         SIGNATURE.APERIODICITY_SCALE,
         FINAL_B.high_shelf_db,
     )
+
+
+def _apply_expression_tone(samples, sample_rate: int, *, softness: float, firmness: float):
+    """Apply a tiny RMS-matched brightness shelf from the expression plan.
+
+    This is not a new timbre identity layer. It is a bounded proxy for voice
+    quality in the audition pack: tender delivery softens the upper spectrum a
+    little; firm/angry delivery gives consonants slightly more presence.
+    """
+    import numpy as np
+
+    x = np.asarray(samples, dtype=np.float64)
+    if x.size == 0:
+        return x.copy(), 0.0
+
+    delta_db = 0.90 * (float(firmness) - 0.15) - 1.10 * (float(softness) - 0.25)
+    delta_db = float(max(-0.70, min(0.80, delta_db)))
+    if abs(delta_db) < 1e-6:
+        return x.copy(), 0.0
+
+    spectrum = np.fft.rfft(x)
+    freqs = np.fft.rfftfreq(x.size, d=1.0 / float(sample_rate))
+    start_hz = 1800.0
+    full_hz = 5000.0
+    t = np.clip((freqs - start_hz) / (full_hz - start_hz), 0.0, 1.0)
+    smooth = t * t * (3.0 - 2.0 * t)
+    gain = np.power(10.0, (delta_db * smooth) / 20.0)
+    y = np.fft.irfft(spectrum * gain, n=x.size)
+
+    source_rms = float(np.sqrt(np.mean(x * x)))
+    output_rms = float(np.sqrt(np.mean(y * y)))
+    if source_rms > 1e-9 and output_rms > 1e-9:
+        y *= source_rms / output_rms
+    return y, delta_db
 
 
 def _apply_energy(samples, scale: float):
@@ -141,7 +179,7 @@ def _apply_energy(samples, scale: float):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Render Amora emotion/prosody auditions")
+    parser = argparse.ArgumentParser(description="Render Amora emotion/prosody V2 auditions")
     parser.add_argument("--out-dir", type=Path, default=Path("voice-emotion-wavs"))
     parser.add_argument("--steps", type=int, default=8)
     args = parser.parse_args()
@@ -175,19 +213,27 @@ def main() -> int:
     report: dict[str, object] = {
         "identity_base": "AMORA_CHILD_FINAL_B_PLUS60",
         "voice_signature": SIGNATURE.SIGNATURE_ID,
-        "expression_contract": "AMORA_VOICE_EXPRESSION_V1",
+        "expression_contract": "AMORA_VOICE_EXPRESSION_V2",
         "rules": {
-            "absolute_pitch_shift": False,
             "new_formant_or_vtl_shift": False,
-            "signature_parameters_changed_by_emotion": False,
+            "speaker_or_style_changed_by_emotion": False,
+            "signature_texture_changed_by_emotion": False,
+            "f0_register_is_bounded_expression": [0.97, 1.02],
             "optional_module_fails_to_neutral": True,
         },
-        "python_audition_applies": ["rate_scale", "pitch_range_scale", "energy_scale"],
-        "reserved_for_runtime_adapter": ["pause_scale", "softness", "firmness"],
+        "python_audition_applies": [
+            "rate_scale",
+            "pitch_range_scale",
+            "f0_register_scale",
+            "energy_scale",
+            "softness/firmness via bounded RMS-matched tone shelf",
+        ],
+        "reserved_for_runtime_adapter": ["pause_scale"],
         "presets": [],
         "outputs": 0,
     }
 
+    plans: dict[str, object] = {}
     for preset in PRESETS:
         plan = planner.safe_plan(
             preset["mood"],
@@ -195,6 +241,7 @@ def main() -> int:
             intensity=float(preset["intensity"]),
             affect=preset["affect"],
         )
+        plans[str(preset["id"])] = plan
         report["presets"].append(
             {
                 "id": preset["id"],
@@ -211,13 +258,7 @@ def main() -> int:
         (phrase_dir / "text.txt").write_text(phrase + "\n", encoding="utf-8")
 
         for preset in PRESETS:
-            plan = planner.safe_plan(
-                preset["mood"],
-                emotion=preset["emotion"],
-                intensity=float(preset["intensity"]),
-                affect=preset["affect"],
-            )
-
+            plan = plans[str(preset["id"])]
             wav, _duration = tts.synthesize(
                 phrase,
                 voice_style=style,
@@ -226,8 +267,6 @@ def main() -> int:
                 speed=plan.rate_scale,
             )
 
-            # save_audio is the public Supertonic path and guarantees the correct
-            # model sample rate without guessing an undocumented runtime field.
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
                 temp_path = Path(handle.name)
             try:
@@ -240,17 +279,26 @@ def main() -> int:
                 source = np.mean(source, axis=1)
             source = np.asarray(source, dtype=np.float64)
 
-            candidate = _signature_candidate(plan.pitch_range_scale)
+            candidate = _signature_candidate(
+                pitch_range_scale=plan.pitch_range_scale,
+                f0_register_scale=plan.f0_register_scale,
+            )
             processed, _source_f0, _applied_ratio = transform_world(source, int(sample_rate), candidate)
             processed = apply_soft_harmonic_texture(processed)
+            processed, tone_delta_db = _apply_expression_tone(
+                processed,
+                int(sample_rate),
+                softness=plan.softness,
+                firmness=plan.firmness,
+            )
             processed = _apply_energy(processed, plan.energy_scale)
 
-            output_path = phrase_dir / f"emotion_{str(preset['id']).lower()}.wav"
+            output_path = phrase_dir / f"emotion_{str(preset['id']).lower()}_v2.wav"
             sf.write(str(output_path), processed, int(sample_rate), subtype="PCM_16")
             report["outputs"] = int(report["outputs"]) + 1
-            print(output_path)
+            print(f"{output_path} tone_delta_db={tone_delta_db:+.3f}")
 
-    (out_dir / "emotion-expression-report.json").write_text(
+    (out_dir / "emotion-expression-v2-report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
