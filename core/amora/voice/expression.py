@@ -14,16 +14,17 @@ def _clamp(value: float, low: float, high: float) -> float:
 class VoiceExpressionPlan(BaseModel):
     """Provider-independent, bounded vocal expression around Amora's fixed identity.
 
-    The plan deliberately does not contain an absolute pitch shift or formant/VTL
-    transform. Identity belongs to VoiceSignature; this layer may only modulate
-    delivery around that identity.
+    Identity still belongs to VoiceSignature. This layer may change delivery and
+    may move the F0 register only inside a tiny bounded region; it never changes
+    formants/VTL, the frozen child morphology, or the fixed VoiceSignature texture.
     """
 
-    id: str = "AMORA_VOICE_EXPRESSION_V1"
+    id: str = "AMORA_VOICE_EXPRESSION_V2"
     rate_scale: float = Field(default=1.0, ge=0.90, le=1.08)
     pause_scale: float = Field(default=1.0, ge=0.88, le=1.16)
     energy_scale: float = Field(default=1.0, ge=0.88, le=1.06)
     pitch_range_scale: float = Field(default=1.0, ge=0.90, le=1.08)
+    f0_register_scale: float = Field(default=1.0, ge=0.97, le=1.02)
     softness: float = Field(default=0.25, ge=0.0, le=1.0)
     firmness: float = Field(default=0.15, ge=0.0, le=1.0)
     source_emotion: EmotionType | None = None
@@ -45,75 +46,88 @@ class _EmotionBias:
     pause: float = 0.0
     energy: float = 0.0
     pitch_range: float = 0.0
+    f0_register: float = 0.0
     softness: float = 0.0
     firmness: float = 0.0
 
 
 class VoiceProsodyPlanner:
-    """Maps Core affect to a conservative expression plan.
+    """Maps Core affect to a perceptible but still bounded expression plan.
+
+    V2 keeps the identity invariants from V1 but responds to BK's physical
+    audition: the first pass was too subtle in normal conversation. Sadness and
+    tenderness therefore get clearer cadence/energy cues, anger gets firmer
+    delivery, and a tiny F0-register control is allowed for emotional colour.
 
     Design rules:
-    - emotion never changes Amora's canonical timbre/age/formants;
-    - no absolute pitch-shift knob exists here;
-    - changes are intentionally small and clamped;
-    - `safe_plan()` must always be able to fall back to a neutral plan.
+    - emotion never changes canonical timbre/age/formants/VTL;
+    - f0_register_scale is tiny (0.97..1.02), not a new identity/pitch effect;
+    - changes stay bounded and continuous with intensity;
+    - `safe_plan()` always falls back to neutral expression on failure.
     """
 
     _BIAS: dict[EmotionType, _EmotionBias] = {
         EmotionType.JOY: _EmotionBias(
-            rate=0.016,
-            pause=-0.020,
-            energy=0.014,
-            pitch_range=0.020,
-            softness=0.035,
-        ),
-        EmotionType.GRATITUDE: _EmotionBias(
-            rate=-0.006,
-            pause=0.025,
-            energy=-0.006,
-            pitch_range=-0.006,
-            softness=0.120,
-            firmness=-0.025,
-        ),
-        EmotionType.RELIEF: _EmotionBias(
-            rate=-0.020,
-            pause=0.060,
-            energy=-0.020,
-            pitch_range=-0.020,
-            softness=0.080,
-            firmness=-0.030,
-        ),
-        EmotionType.ANGER: _EmotionBias(
-            rate=0.020,
+            rate=0.030,
             pause=-0.040,
             energy=0.025,
-            pitch_range=0.030,
-            softness=-0.100,
-            firmness=0.250,
+            pitch_range=0.040,
+            f0_register=0.006,
+            softness=0.055,
+        ),
+        EmotionType.GRATITUDE: _EmotionBias(
+            rate=-0.040,
+            pause=0.080,
+            energy=-0.030,
+            pitch_range=-0.015,
+            f0_register=-0.006,
+            softness=0.250,
+            firmness=-0.050,
+        ),
+        EmotionType.RELIEF: _EmotionBias(
+            rate=-0.050,
+            pause=0.100,
+            energy=-0.040,
+            pitch_range=-0.035,
+            f0_register=-0.010,
+            softness=0.160,
+            firmness=-0.060,
+        ),
+        EmotionType.ANGER: _EmotionBias(
+            rate=0.035,
+            pause=-0.070,
+            energy=0.050,
+            pitch_range=0.050,
+            f0_register=0.006,
+            softness=-0.180,
+            firmness=0.420,
         ),
         EmotionType.IRRITATION: _EmotionBias(
-            rate=0.010,
-            pause=-0.022,
-            energy=0.014,
-            pitch_range=0.014,
-            softness=-0.055,
-            firmness=0.150,
+            rate=0.022,
+            pause=-0.045,
+            energy=0.030,
+            pitch_range=0.026,
+            f0_register=0.003,
+            softness=-0.100,
+            firmness=0.260,
         ),
         EmotionType.FEAR: _EmotionBias(
-            rate=0.022,
-            pause=-0.010,
-            energy=-0.005,
-            pitch_range=0.038,
-            softness=-0.030,
-            firmness=-0.080,
+            rate=0.035,
+            pause=-0.018,
+            energy=-0.012,
+            pitch_range=0.060,
+            f0_register=0.010,
+            softness=-0.040,
+            firmness=-0.110,
         ),
         EmotionType.DISAPPOINTMENT: _EmotionBias(
-            rate=-0.035,
-            pause=0.080,
-            energy=-0.035,
-            pitch_range=-0.040,
-            softness=0.030,
-            firmness=-0.060,
+            rate=-0.075,
+            pause=0.140,
+            energy=-0.080,
+            pitch_range=-0.075,
+            f0_register=-0.030,
+            softness=0.140,
+            firmness=-0.120,
         ),
     }
 
@@ -130,12 +144,13 @@ class VoiceProsodyPlanner:
         dominance = _clamp(mood.dominance, -1.0, 1.0)
         strength = _clamp(intensity, 0.0, 1.0)
 
-        # Continuous mood provides the small baseline motion. Crucially, the F0
-        # median stays untouched; only contour range may breathe a little.
+        # Mood supplies low-level continuous motion. Discrete emotion may then
+        # push the same dimensions more clearly, still inside strict bounds.
         rate = 1.0 + 0.025 * arousal + 0.006 * valence
         pause = 1.0 - 0.040 * arousal - 0.008 * valence
         energy = 1.0 + 0.024 * arousal + 0.010 * dominance
         pitch_range = 1.0 + 0.030 * arousal
+        f0_register = 1.0
         softness = 0.25 + 0.08 * max(valence, 0.0) - 0.04 * max(dominance, 0.0)
         firmness = 0.15 + 0.16 * max(dominance, 0.0) + 0.04 * arousal
 
@@ -158,6 +173,7 @@ class VoiceProsodyPlanner:
                 pause += bias.pause * strength
                 energy += bias.energy * strength
                 pitch_range += bias.pitch_range * strength
+                f0_register += bias.f0_register * strength
                 softness += bias.softness * strength
                 firmness += bias.firmness * strength
                 reasons.append(f"VOICE_EXPRESSION_EMOTION_{emotion.value.upper()}")
@@ -167,6 +183,7 @@ class VoiceProsodyPlanner:
             pause_scale=_clamp(pause, 0.88, 1.16),
             energy_scale=_clamp(energy, 0.88, 1.06),
             pitch_range_scale=_clamp(pitch_range, 0.90, 1.08),
+            f0_register_scale=_clamp(f0_register, 0.97, 1.02),
             softness=_clamp(softness, 0.0, 1.0),
             firmness=_clamp(firmness, 0.0, 1.0),
             source_emotion=emotion,
@@ -185,8 +202,6 @@ class VoiceProsodyPlanner:
         try:
             return self.plan(mood, emotion=emotion, intensity=intensity, affect=affect)
         except Exception:
-            # Voice expression is optional. A failure here must never make Amora
-            # mute or corrupt her identity path.
             return VoiceExpressionPlan.neutral(
                 fallback=True,
                 reason="VOICE_EXPRESSION_FAILSAFE",
