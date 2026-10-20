@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from amora.emotion import MoodState
-from amora.voice.expression import VoiceProsodyPlanner
+from amora.voice_expression import VoiceProsodyPlanner
 
 from .models import SpeechStyle, UtteranceKind, VoiceExpressionStyle
 
