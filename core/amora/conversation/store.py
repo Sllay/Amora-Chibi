@@ -110,7 +110,7 @@ class ConversationStore:
         self,
         device_id: str,
         *,
-        lease_seconds: int = 90,
+        lease_seconds: int = 30,
         cognitive_turn_id: UUID | str | None = None,
     ) -> SpeechUtterance | None:
         """Reserve the next utterance, optionally only from one cognitive turn.
@@ -118,6 +118,8 @@ class ConversationStore:
         Same-turn filtering is used by Android look-ahead rendering. It prevents a
         prefetch worker from reserving an unrelated autonomous/new response merely
         because the current response happened to finish generating several segments.
+        The 30-second default lease is intentionally preserved so a crashed Android
+        client cannot strand a claimed utterance for minutes.
         """
         now = self.clock.now()
         expires = now + timedelta(seconds=max(5, min(180, int(lease_seconds))))
