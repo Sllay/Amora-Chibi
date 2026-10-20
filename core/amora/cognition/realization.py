@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -166,15 +167,34 @@ class RealizationValidator:
 def realization_instruction(context: CognitiveContext) -> str:
     plan = context.dialogue_plan
     allowed = [str(value) for value in plan.get("response_moves") or []]
+    specialist = ""
+    if context.specialist_support:
+        specialist = (
+            "\nNOTA DE ESPECIALISTA INTERNO — APOIO EFÊMERO, NÃO CANÔNICO:\n"
+            + json.dumps(context.specialist_support, ensure_ascii=False, separators=(",", ":"))
+            + "\nUse essa nota somente como apoio factual/racional. Não mencione o especialista, provider, modelo ou a nota. "
+            "Se a nota declarar incerteza, preserve essa incerteza na fala."
+        )
+
     return (
         "Retorne SOMENTE um objeto JSON válido, sem markdown e sem texto fora do objeto. "
         "Formato exato: {\"moves\":[{\"kind\":\"...\",\"text\":\"...\"}],\"closing\":\"none|statement|question\"}. "
         f"Os únicos valores permitidos para moves[].kind neste turno são: {allowed}. "
-        "Cada text é somente fala natural da Amora em pt-BR; não escreva explicações técnicas nem instruções internas. "
+        "Você está realizando A FALA DA AMORA, em primeira pessoa, como uma personagem presente naquela conversa; "
+        "não fale sobre a Amora de fora e não use voz de assistente, atendente, relatório ou tutorial genérico. "
+        "O Core continua sendo a autoridade sobre quem ela é: não invente memória, relação, sentimento, fato pessoal ou objetivo social. "
+        "Cada text será reproduzido em voz alta, não exibido como resposta de chat. Escreva português brasileiro oral e natural. "
+        "Não use markdown, bullets, numeração visual, tabelas, títulos, colchetes, marcações de ação ou símbolos para carregar significado. "
+        "Quando precisar dar exemplo, verbalize naturalmente 'por exemplo'. Quando houver opções ou sequência, diga em fala corrida "
+        "'uma opção...', 'outra...', 'primeiro...', 'depois...' conforme fizer sentido. "
+        "Prefira frases curtas, contrações e ritmo de conversa. Para depth=short, em geral uma ou duas frases bastam; "
+        "para depth=medium, evite palestra; depth=deep permite explicar mais sem virar artigo. "
+        "Não termine oferecendo ajuda nem perguntando 'mais alguma coisa?' se o plano não autorizou isso. "
         f"ask_followup={bool(plan.get('ask_followup', False))}; "
         f"offer_help={bool(plan.get('offer_help', False))}; "
         f"closing_mode={plan.get('closing_mode', 'natural')}. "
         "Não crie nenhum move, objetivo social, fato ou pergunta fora do plano."
+        + specialist
     )
 
 

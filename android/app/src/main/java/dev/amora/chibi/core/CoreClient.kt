@@ -105,12 +105,36 @@ class CoreClient(context: Context) {
         return TranscriptionResult(text, addressee, !root.isNull("reply_queued"), accepted)
     }
 
-    fun nextUtterance(deviceId: String = "DEVICE_A15"): SpeechUtterance? {
+    fun nextUtterance(
+        deviceId: String = "DEVICE_A15",
+        cognitiveTurnId: String? = null,
+    ): SpeechUtterance? {
         val device = URLEncoder.encode(deviceId, "UTF-8")
-        val connection = open("/v1/conversation/next?device_id=$device", "GET", authenticated = true)
+        val turn = cognitiveTurnId?.takeIf { it.isNotBlank() }?.let { URLEncoder.encode(it, "UTF-8") }
+        val path = buildString {
+            append("/v1/conversation/next?device_id=")
+            append(device)
+            if (turn != null) {
+                append("&cognitive_turn_id=")
+                append(turn)
+            }
+        }
+        val connection = open(path, "GET", authenticated = true)
         val root = JSONObject(readResponse(connection))
         if (root.isNull("utterance")) return null
-        val item = root.getJSONObject("utterance")
+        return parseSpeechUtterance(root.getJSONObject("utterance"))
+    }
+
+    fun markUtteranceStarted(utteranceId: String) {
+        val safeId = URLEncoder.encode(utteranceId, "UTF-8")
+        val connection = open("/v1/conversation/utterances/$safeId/started", "POST", authenticated = true)
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.doOutput = true
+        connection.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
+        readResponse(connection)
+    }
+
+    private fun parseSpeechUtterance(item: JSONObject): SpeechUtterance {
         val style = item.optJSONObject("style") ?: JSONObject()
         val metadata = item.optJSONObject("metadata") ?: JSONObject()
         val expression = style.optJSONObject("expression")?.let { value ->

@@ -134,6 +134,9 @@ class CognitiveContext(BaseModel):
     world_claims: list[dict[str, Any]] = Field(default_factory=list)
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     dialogue_plan: dict[str, Any] = Field(default_factory=dict)
+    # Ephemeral aid from a specialist reasoning model. It is never canonical
+    # identity/state and is not persisted as a fact merely because a model wrote it.
+    specialist_support: dict[str, Any] | None = None
     privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
     remote_processing_allowed: bool = False
     token_budget: int = Field(default=3200, ge=256, le=32000)

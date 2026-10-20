@@ -106,10 +106,25 @@ class ConversationStore:
             row = self._conn.execute("SELECT COUNT(*) FROM speech_utterances WHERE status = ?", (UtteranceStatus.SPOKEN.value,)).fetchone()
         return int(row[0]) if row else 0
 
-    def claim_next(self, device_id: str, *, lease_seconds: int = 30) -> SpeechUtterance | None:
+    def claim_next(
+        self,
+        device_id: str,
+        *,
+        lease_seconds: int = 30,
+        cognitive_turn_id: UUID | str | None = None,
+    ) -> SpeechUtterance | None:
+        """Reserve the next utterance, optionally only from one cognitive turn.
+
+        Same-turn filtering is used by Android look-ahead rendering. It prevents a
+        prefetch worker from reserving an unrelated autonomous/new response merely
+        because the current response happened to finish generating several segments.
+        The 30-second default lease is intentionally preserved so a crashed Android
+        client cannot strand a claimed utterance for minutes.
+        """
         now = self.clock.now()
-        expires = now + timedelta(seconds=max(5, min(120, int(lease_seconds))))
+        expires = now + timedelta(seconds=max(5, min(180, int(lease_seconds))))
         now_text = now.isoformat()
+        turn_filter = str(cognitive_turn_id) if cognitive_turn_id is not None else None
         with self._lock, self._conn:
             stale = self._conn.execute(
                 "SELECT id, utterance_json FROM speech_utterances WHERE status = ? AND claim_expires_at IS NOT NULL AND claim_expires_at <= ?",
@@ -122,18 +137,25 @@ class ConversationStore:
                 item.claim_expires_at = None
                 self._update_utterance(item)
 
-            row = self._conn.execute(
-                "SELECT id, utterance_json FROM speech_utterances WHERE device_id = ? AND status = ? ORDER BY priority DESC, created_at ASC LIMIT 1",
-                (device_id, UtteranceStatus.QUEUED.value),
-            ).fetchone()
-            if row is None:
+            rows = self._conn.execute(
+                "SELECT id, utterance_json FROM speech_utterances WHERE device_id = ? AND status = ? ORDER BY priority DESC, created_at ASC LIMIT ?",
+                (device_id, UtteranceStatus.QUEUED.value, 32 if turn_filter is not None else 1),
+            ).fetchall()
+            selected: SpeechUtterance | None = None
+            for row in rows:
+                candidate = SpeechUtterance.model_validate(json.loads(row["utterance_json"]))
+                if turn_filter is not None and str(candidate.metadata.get("cognitive_turn_id") or "") != turn_filter:
+                    continue
+                selected = candidate
+                break
+            if selected is None:
                 return None
-            item = SpeechUtterance.model_validate(json.loads(row["utterance_json"]))
-            item.status = UtteranceStatus.CLAIMED
-            item.claimed_at = now
-            item.claim_expires_at = expires
-            self._update_utterance(item)
-            return item
+
+            selected.status = UtteranceStatus.CLAIMED
+            selected.claimed_at = now
+            selected.claim_expires_at = expires
+            self._update_utterance(selected)
+            return selected
 
     def acknowledge(self, utterance_id: UUID | str, *, spoken: bool) -> SpeechUtterance | None:
         item = self.get_utterance(utterance_id)
@@ -148,8 +170,6 @@ class ConversationStore:
             item.spoken_at = self.clock.now()
             item.claim_expires_at = None
         else:
-            # A delivery failure is retryable. Human barge-in is NOT a failure and
-            # uses cancel() instead, so interrupted speech never reappears later.
             item.status = UtteranceStatus.QUEUED
             item.claimed_at = None
             item.claim_expires_at = None

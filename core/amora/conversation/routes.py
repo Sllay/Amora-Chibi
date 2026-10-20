@@ -39,12 +39,7 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
 
     @app.post("/v1/conversation/test-turn", dependencies=[Depends(require_auth)])
     async def technical_test_turn(request: TechnicalTestTurnRequest) -> dict[str, object]:
-        """Exercise dialogue/cognition/voice queue without persistent learning.
-
-        The turn is still journaled for diagnostics, but it is marked so future
-        dialogue history, reflection/memory consolidation, relationships and
-        persistent emotion do not learn from the technical probe.
-        """
+        """Exercise dialogue/cognition/voice queue without persistent learning."""
         decision, utterance = await core.conversation.observe_completed_utterance(
             request.text,
             speaker_id=request.speaker_id,
@@ -75,9 +70,23 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
         return {"decision": decision.model_dump(mode="json"), "utterance": None}
 
     @app.get("/v1/conversation/next", dependencies=[Depends(require_auth)])
-    def next_utterance(device_id: str = Query(default="DEVICE_A15", min_length=1, max_length=128)) -> dict[str, object]:
-        item = core.conversation.claim_next(device_id)
+    def next_utterance(
+        device_id: str = Query(default="DEVICE_A15", min_length=1, max_length=128),
+        cognitive_turn_id: str | None = Query(default=None, min_length=1, max_length=128),
+    ) -> dict[str, object]:
+        item = core.conversation.claim_next(device_id, cognitive_turn_id=cognitive_turn_id)
         return {"utterance": item.model_dump(mode="json") if item else None}
+
+    @app.post("/v1/conversation/utterances/{utterance_id}/started", dependencies=[Depends(require_auth)])
+    def utterance_started(utterance_id: str) -> dict[str, object]:
+        item = core.conversation.mark_utterance_speaking(utterance_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="utterance not found")
+        dashboard = console()
+        if dashboard is not None:
+            dashboard.set_module("android.tts", "Android TTS", "ON", "fala iniciada")
+            dashboard.set_activity("FALANDO", item.text[:120], ttl_seconds=2.0)
+        return {"utterance": item.model_dump(mode="json")}
 
     @app.post("/v1/conversation/utterances/{utterance_id}/ack", dependencies=[Depends(require_auth)])
     async def acknowledge_utterance(utterance_id: str, ack: SpeechAck) -> dict[str, object]:
@@ -91,11 +100,6 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
                 dashboard.set_activity("IDLE", "fala concluída no Android", ttl_seconds=1.5)
             return {"utterance": item.model_dump(mode="json")}
 
-        # A client-side TTS failure is not the same thing as a transient network
-        # claim failure. Re-queueing it forever makes the Android service bounce
-        # between "ouvindo" and "falando" while retrying the exact same utterance.
-        # Cancel the whole cognitive turn instead: the next human utterance can
-        # produce a fresh reply after the voice path has recovered.
         reason = (ack.reason or "tts_delivery_failed")[:96]
         item, cancelled = await core.conversation.cancel_utterance(
             utterance_id,
