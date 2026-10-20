@@ -59,8 +59,6 @@ class SpeechNormalizer:
         speech = _VISUAL_BRACKETS_RE.sub(" ", speech)
         speech = _EMOJI_RE.sub(" ", speech)
         speech = speech.replace("—", ", ").replace("–", ", ")
-        # A colon is visually useful but often produces an announcer-like pause in
-        # literal TTS. A comma preserves the relation without reading like a slide.
         speech = speech.replace(":", ",")
         speech = _SPACE_RE.sub(" ", speech).strip()
         speech = re.sub(r"\s+([,.!?;])", r"\1", speech)
@@ -132,15 +130,19 @@ class SpeechSegmenter:
     def _find_boundary(self, text: str) -> int | None:
         if len(text) < self.min_chars:
             return None
-        for index, char in enumerate(text, start=1):
+
+        # Never let far-away sentence punctuation defeat the neural hard ceiling.
+        # Search natural punctuation only inside the currently renderable window.
+        search_to = min(len(text), self.hard_max_chars)
+        for index, char in enumerate(text[:search_to], start=1):
             if index < self.min_chars:
                 continue
             if char in ".!?" and (index == len(text) or text[index:index + 1].isspace()):
                 return index
             if char in ";:" and index >= 28:
                 return index
+
         if len(text) >= self.soft_max_chars:
-            search_to = min(len(text), self.hard_max_chars)
             cut = text.rfind(",", self.min_chars, search_to)
             if cut >= self.min_chars:
                 return cut + 1
