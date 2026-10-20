@@ -24,8 +24,15 @@ import kotlin.math.roundToInt
  * Rendering and playback are deliberately separate. The Android delivery layer can
  * prepare segment N+1 while segment N is already playing, removing the multi-second
  * silence that existed when every segment was rendered only after the previous one
- * had fully finished. Supertonic generation also uses its callback as a real
- * cancellation gate so barge-in can stop expensive synthesis before playback.
+ * had fully finished.
+ *
+ * IMPORTANT: do not use sherpa-onnx's Kotlin/JNI generation callback on Android in
+ * this pinned build. Physical testing exposed a native process abort while the
+ * callback path was active. We therefore use generateWithConfig() and check the
+ * cancellation flag before/after the native generation boundary. Barge-in still
+ * stops AudioTrack immediately and prevents completed-but-cancelled synthesis from
+ * ever reaching playback; the currently-running native synthesis itself is allowed
+ * to unwind safely instead of trying to cancel through JNI.
  */
 class AmoraSupertonicVoiceEngine(
     context: Context,
@@ -105,7 +112,11 @@ class AmoraSupertonicVoiceEngine(
             publish(VoiceDiagnostics.STAGE_SYNTHESIZING, "Supertonic 60/40 • ${expression.label}")
             val synthesisStarted = System.nanoTime()
             val audio = try {
-                localEngine.generateWithConfigAndCallback(
+                // Android safety invariant: no Kotlin/JNI generation callback here.
+                // generateWithConfigAndCallback() caused a native process abort in
+                // the physical dev12 gate. Cancellation is observed immediately
+                // before and after this native boundary instead.
+                localEngine.generateWithConfig(
                     text = cleanText,
                     config = GenerationConfig(
                         silenceScale = expression.pauseScale,
@@ -114,7 +125,6 @@ class AmoraSupertonicVoiceEngine(
                         numSteps = NUM_STEPS,
                         extra = mapOf("lang" to "pt", "seed" to "7"),
                     ),
-                    callback = { _ -> if (stopRequested.get()) 0 else 1 },
                 )
             } catch (error: Throwable) {
                 if (stopRequested.get()) return@synchronized PrepareResult.Interrupted

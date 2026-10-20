@@ -82,7 +82,7 @@ jobs:
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: amora-chibi-dev12-responsive-hybrid-apk
+          name: amora-chibi-dev13-tts-crash-hotfix-apk
           path: |
             android/app/build/outputs/apk/debug/app-debug.apk
             android/app/build/outputs/apk/debug/SHA256.txt
