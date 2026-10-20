@@ -22,16 +22,26 @@ import java.util.ArrayDeque
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class AudioCaptureService : Service() {
     private val running = AtomicBoolean(false)
     private val speaking = AtomicBoolean(false)
+    // voiceActive covers both neural preparation and actual AudioTrack playback.
+    // Barge-in must work in both states; otherwise BK cannot cancel a slow render.
+    private val voiceActive = AtomicBoolean(false)
     private val voiceBusy = AtomicBoolean(false)
+    private val prefetchBusy = AtomicBoolean(false)
     private val resetSegmenter = AtomicBoolean(false)
+    private val prefetchedItem = AtomicReference<CoreClient.SpeechUtterance?>(null)
+
     private val networkExecutor = Executors.newSingleThreadExecutor()
     private val controlExecutor = Executors.newSingleThreadExecutor()
-    private val voiceExecutor = Executors.newSingleThreadScheduledExecutor()
+    private val voicePollExecutor = Executors.newSingleThreadScheduledExecutor()
+    private val voicePlaybackExecutor = Executors.newSingleThreadExecutor()
+    private val voicePrefetchExecutor = Executors.newSingleThreadExecutor()
     private val bargeIn = BargeInDetector()
+
     private var captureThread: Thread? = null
     private var recorder: AudioRecord? = null
     private var segmenter: SpeechSegmenter? = null
@@ -47,41 +57,69 @@ class AudioCaptureService : Service() {
         coreClient = CoreClient(this)
         voiceOutput = VoiceOutput(
             this,
-            onSpeakingChanged = { active ->
-                speaking.set(active)
+            onTurnActiveChanged = { active ->
+                voiceActive.set(active)
                 resetSegmenter.set(true)
                 if (active) bargeIn.speechStarted() else bargeIn.reset()
-                val prefix = if (active) "Amora está falando" else "Amora está ouvindo"
-                notifyVoiceState("$prefix · $voiceStatus")
+                notifyVoiceState(statusPrefix() + " · $voiceStatus")
+            },
+            onSpeakingChanged = { active ->
+                speaking.set(active)
+                notifyVoiceState(statusPrefix() + " · $voiceStatus")
+            },
+            onAudioStarted = { utteranceId ->
+                // A reserved/prefetched item becomes SPEAKING only when samples
+                // actually begin playback, keeping Core diagnostics truthful.
+                controlExecutor.execute {
+                    runCatching { coreClient.markUtteranceStarted(utteranceId) }
+                        .onFailure { error -> Log.w(TAG, "Falha ao marcar início de fala $utteranceId", error) }
+                }
+                voiceOutput?.currentUtterance()?.let(::schedulePrefetch)
             },
             onFinished = { utteranceId, outcome, spokenChars ->
-                val executor = when (outcome) {
-                    VoiceOutput.Outcome.INTERRUPTED,
-                    VoiceOutput.Outcome.PARTIAL -> controlExecutor
-                    else -> networkExecutor
-                }
-                executor.execute {
-                    try {
-                        when (outcome) {
-                            VoiceOutput.Outcome.SPOKEN -> coreClient.acknowledgeUtterance(utteranceId, true)
-                            VoiceOutput.Outcome.FAILED -> coreClient.cancelUtterance(utteranceId, "local_voice_failure", null)
-                            VoiceOutput.Outcome.INTERRUPTED -> coreClient.cancelUtterance(utteranceId, "barge_in", spokenChars)
-                            VoiceOutput.Outcome.PARTIAL -> coreClient.cancelUtterance(utteranceId, "tts_partial_failure", spokenChars)
+                if (outcome == VoiceOutput.Outcome.SPOKEN) {
+                    // Do not put localhost ACK latency between two spoken segments.
+                    // The next already-rendered segment may begin while ACK is sent.
+                    voiceBusy.set(false)
+                    kickVoicePoll()
+                    networkExecutor.execute {
+                        runCatching { coreClient.acknowledgeUtterance(utteranceId, true) }
+                            .onFailure { error -> Log.w(TAG, "Falha ao confirmar fala $utteranceId", error) }
+                    }
+                } else {
+                    // On interruption/failure, cancel the complete cognitive turn
+                    // before allowing another claim so old story segments cannot
+                    // resume after BK said "para".
+                    prefetchedItem.set(null)
+                    voiceOutput?.discardPrepared()
+                    val executor = when (outcome) {
+                        VoiceOutput.Outcome.INTERRUPTED,
+                        VoiceOutput.Outcome.PARTIAL -> controlExecutor
+                        else -> networkExecutor
+                    }
+                    executor.execute {
+                        try {
+                            when (outcome) {
+                                VoiceOutput.Outcome.FAILED -> coreClient.cancelUtterance(utteranceId, "local_voice_failure", null)
+                                VoiceOutput.Outcome.INTERRUPTED -> coreClient.cancelUtterance(utteranceId, "barge_in", spokenChars)
+                                VoiceOutput.Outcome.PARTIAL -> coreClient.cancelUtterance(utteranceId, "tts_partial_failure", spokenChars)
+                                VoiceOutput.Outcome.SPOKEN -> Unit
+                            }
+                        } catch (error: Throwable) {
+                            Log.w(TAG, "Falha ao finalizar fala $utteranceId outcome=$outcome", error)
+                        } finally {
+                            voiceBusy.set(false)
+                            kickVoicePoll()
                         }
-                    } catch (error: Throwable) {
-                        Log.w(TAG, "Falha ao finalizar fala $utteranceId outcome=$outcome", error)
-                    } finally {
-                        voiceBusy.set(false)
                     }
                 }
             },
             onVoiceStatusChanged = { state ->
                 voiceStatus = "${state.stage}: ${state.detail}".take(220)
-                val prefix = if (speaking.get()) "Amora está falando" else "Amora está ouvindo"
-                notifyVoiceState("$prefix · $voiceStatus")
+                notifyVoiceState(statusPrefix() + " · $voiceStatus")
             },
         )
-        voiceExecutor.scheduleWithFixedDelay(::pollVoice, 350, 450, TimeUnit.MILLISECONDS)
+        voicePollExecutor.scheduleWithFixedDelay(::pollVoice, 250, 250, TimeUnit.MILLISECONDS)
     }
 
     override fun onStartCommand(intent: android.content.Intent?, flags: Int, startId: Int): Int {
@@ -99,6 +137,8 @@ class AudioCaptureService : Service() {
     override fun onDestroy() {
         running.set(false)
         speaking.set(false)
+        voiceActive.set(false)
+        prefetchedItem.set(null)
         runCatching { voiceOutput?.stopCurrent() }
         runCatching { recorder?.stop() }
         recorder?.release()
@@ -107,7 +147,9 @@ class AudioCaptureService : Service() {
         captureThread = null
         segmenter?.close()
         segmenter = null
-        voiceExecutor.shutdownNow()
+        voicePollExecutor.shutdownNow()
+        voicePrefetchExecutor.shutdownNow()
+        voicePlaybackExecutor.shutdownNow()
         voiceOutput?.close()
         voiceOutput = null
         networkExecutor.shutdownNow()
@@ -115,19 +157,84 @@ class AudioCaptureService : Service() {
         super.onDestroy()
     }
 
+    private fun statusPrefix(): String = when {
+        speaking.get() -> "Amora está falando"
+        voiceActive.get() -> "Amora está preparando a fala"
+        else -> "Amora está ouvindo"
+    }
+
+    private fun kickVoicePoll() {
+        if (!running.get() || voicePollExecutor.isShutdown) return
+        runCatching { voicePollExecutor.execute(::pollVoice) }
+    }
+
     private fun pollVoice() {
         if (!running.get() || !coreClient.isPaired() || voiceBusy.get()) return
+
+        val prefetched = prefetchedItem.get()
+        if (prefetched != null && voiceOutput?.isPrepared(prefetched.id) == true) {
+            if (prefetchedItem.compareAndSet(prefetched, null)) startPlayback(prefetched)
+            return
+        }
+        if (prefetchBusy.get()) return
+
         val item = try { coreClient.nextUtterance() } catch (_: Throwable) { return } ?: return
+        startPlayback(item)
+    }
+
+    private fun startPlayback(item: CoreClient.SpeechUtterance) {
         if (!voiceBusy.compareAndSet(false, true)) return
-        val accepted = runCatching { voiceOutput?.speak(item) == true }
-            .getOrElse { error ->
-                Log.w(TAG, "Falha ao iniciar voz ${item.id}", error)
-                false
+        voicePlaybackExecutor.execute {
+            val accepted = runCatching { voiceOutput?.speak(item) == true }
+                .getOrElse { error ->
+                    Log.w(TAG, "Falha ao iniciar voz ${item.id}", error)
+                    false
+                }
+            if (!accepted) {
+                runCatching { coreClient.cancelUtterance(item.id, "voice_output_rejected", null) }
+                    .onFailure { error -> Log.w(TAG, "Falha ao cancelar fala rejeitada ${item.id}", error) }
+                voiceBusy.set(false)
+                kickVoicePoll()
             }
-        if (!accepted) {
-            runCatching { coreClient.cancelUtterance(item.id, "voice_output_rejected", null) }
-                .onFailure { error -> Log.w(TAG, "Falha ao cancelar fala rejeitada ${item.id}", error) }
-            voiceBusy.set(false)
+        }
+    }
+
+    private fun schedulePrefetch(current: CoreClient.SpeechUtterance) {
+        val turnId = current.cognitiveTurnId ?: return
+        if (!running.get() || prefetchedItem.get() != null) return
+        if (!prefetchBusy.compareAndSet(false, true)) return
+
+        voicePrefetchExecutor.execute {
+            var next: CoreClient.SpeechUtterance? = null
+            try {
+                next = coreClient.nextUtterance(cognitiveTurnId = turnId) ?: return@execute
+                // The Core filter is authoritative, but keep a local defense so a
+                // future server regression cannot pre-render a different turn.
+                if (next.cognitiveTurnId != turnId) {
+                    Log.w(TAG, "Prefetch rejeitado: turno ${next.cognitiveTurnId} != $turnId")
+                    return@execute
+                }
+                if (voiceOutput?.prefetch(next) == true) {
+                    prefetchedItem.set(next)
+                    Log.i(TAG, "Segmento ${next.id} pré-renderizado durante playback")
+                } else if (voiceActive.get()) {
+                    // A genuine prefetch failure while the current speech remains
+                    // active invalidates this response turn. Barge-in is handled by
+                    // the current utterance cancellation path instead.
+                    runCatching { coreClient.cancelUtterance(next.id, "local_voice_prefetch_failure", null) }
+                        .onFailure { error -> Log.w(TAG, "Falha ao cancelar prefetch ${next.id}", error) }
+                }
+            } catch (error: Throwable) {
+                Log.w(TAG, "Falha no prefetch do turno $turnId", error)
+                next?.let { item ->
+                    if (voiceActive.get()) {
+                        runCatching { coreClient.cancelUtterance(item.id, "local_voice_prefetch_failure", null) }
+                    }
+                }
+            } finally {
+                prefetchBusy.set(false)
+                kickVoicePoll()
+            }
         }
     }
 
@@ -175,6 +282,8 @@ class AudioCaptureService : Service() {
             runCatching { AutomaticGainControl.create(localRecorder.audioSessionId) }
                 .getOrNull()
                 ?.also { effect ->
+                    // VOICE_COMMUNICATION already receives device processing. AGC
+                    // stays off to avoid pumping wind/room noise into false speech.
                     effect.enabled = false
                     Log.i(TAG, "AutomaticGainControl ativo=${effect.enabled}")
                 }
@@ -210,21 +319,24 @@ class AudioCaptureService : Service() {
                     runCatching { localSegmenter.close() }
                     localSegmenter = SpeechSegmenterFactory.create(this)
                     segmenter = localSegmenter
-                    if (!speaking.get()) clearPreRoll()
+                    if (!voiceActive.get()) clearPreRoll()
                 }
 
                 val floats = FloatArray(count) { index -> shorts[index] / 32768F }
-                if (speaking.get()) {
+                if (voiceActive.get()) {
                     appendPreRoll(floats)
                     if (bargeIn.accept(floats)) {
-                        Log.i(TAG, "Barge-in detectado; Amora cede o turno")
+                        Log.i(TAG, "Barge-in detectado; cancelando preparo/playback e o restante do turno")
+                        prefetchedItem.set(null)
+                        voiceOutput?.discardPrepared()
                         voiceOutput?.stopCurrent()
+
                         runCatching { localSegmenter.close() }
                         localSegmenter = SpeechSegmenterFactory.create(this)
                         segmenter = localSegmenter
                         resetSegmenter.set(false)
 
-                        if (!speaking.get()) {
+                        if (!voiceActive.get()) {
                             val recovered = FloatArray(preRollSamples)
                             var offset = 0
                             for (chunk in bargeInPreRoll) {
@@ -241,7 +353,7 @@ class AudioCaptureService : Service() {
                 clearPreRoll()
                 for (segment in localSegmenter.accept(floats)) submitSegment(segment)
             }
-            if (!speaking.get()) {
+            if (!voiceActive.get()) {
                 for (segment in localSegmenter.flush()) submitSegment(segment)
             }
         } catch (error: Throwable) {
@@ -259,7 +371,7 @@ class AudioCaptureService : Service() {
     }
 
     private fun submitSegment(segment: FloatArray) {
-        if (!coreClient.isPaired() || speaking.get()) return
+        if (!coreClient.isPaired() || voiceActive.get()) return
         val wav = WavEncoder.pcm16(segment)
         networkExecutor.execute {
             runCatching { coreClient.transcribe(wav) }
@@ -299,7 +411,7 @@ class AudioCaptureService : Service() {
         const val ACTION_STOP = "dev.amora.chibi.action.STOP_LISTENING"
         private const val CHANNEL_ID = "amora_microphone"
         private const val NOTIFICATION_ID = 2001
-        private const val BARGE_IN_PREROLL_MS = 320
+        private const val BARGE_IN_PREROLL_MS = 420
         private const val TAG = "AmoraAudio"
     }
 }
