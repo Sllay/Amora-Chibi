@@ -6,30 +6,30 @@ import org.junit.Test
 
 class BargeInDetectorTest {
     @Test
-    fun ignoresResidualPlaybackThenAcceptsSustainedHumanEnergy() {
-        val detector = BargeInDetector(sampleRate = 16_000, graceMs = 180, sustainMs = 140)
+    fun ignoresResidualPlaybackThenAcceptsNormalCloseRangeSpeech() {
+        val detector = BargeInDetector(sampleRate = 16_000, graceMs = 120, sustainMs = 90)
         val start = 1_000_000_000L
         detector.speechStarted(start)
-        val residual = FloatArray(160) { 0.010F }
-        repeat(18) { index ->
+        val residual = FloatArray(160) { 0.011F }
+        repeat(12) { index ->
             assertFalse(detector.accept(residual, start + (index + 1) * 10_000_000L))
         }
-        val voice = FloatArray(160) { if (it % 2 == 0) 0.10F else -0.10F }
+        val voice = FloatArray(160) { if (it % 2 == 0) 0.035F else -0.035F }
         var triggered = false
-        repeat(18) { index ->
-            if (detector.accept(voice, start + 190_000_000L + index * 10_000_000L)) triggered = true
+        repeat(12) { index ->
+            if (detector.accept(voice, start + 130_000_000L + index * 10_000_000L)) triggered = true
         }
         assertTrue(triggered)
     }
 
     @Test
-    fun shortVoiceCommandCanTakeTheFloor() {
-        val detector = BargeInDetector(sampleRate = 16_000, graceMs = 0, sustainMs = 140)
+    fun shortQuietVoiceCommandCanTakeTheFloor() {
+        val detector = BargeInDetector(sampleRate = 16_000, graceMs = 0, sustainMs = 90)
         val start = 2_000_000_000L
         detector.speechStarted(start)
-        val voice = FloatArray(160) { if (it % 2 == 0) 0.065F else -0.065F }
+        val voice = FloatArray(160) { if (it % 2 == 0) 0.030F else -0.030F }
         var triggered = false
-        repeat(16) { index ->
+        repeat(11) { index ->
             if (detector.accept(voice, start + (index + 1) * 10_000_000L)) triggered = true
         }
         assertTrue(triggered)
@@ -37,7 +37,7 @@ class BargeInDetectorTest {
 
     @Test
     fun briefWindLikeSpikeDoesNotTakeTheFloor() {
-        val detector = BargeInDetector(sampleRate = 16_000, graceMs = 0, sustainMs = 140)
+        val detector = BargeInDetector(sampleRate = 16_000, graceMs = 0, sustainMs = 90)
         val start = 3_000_000_000L
         detector.speechStarted(start)
         val spike = FloatArray(160) { 0.20F }

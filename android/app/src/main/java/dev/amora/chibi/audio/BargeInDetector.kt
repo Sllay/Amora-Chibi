@@ -5,31 +5,31 @@ import kotlin.math.sqrt
 /**
  * Local barge-in gate used while an Amora voice turn is active (synthesis or playback).
  *
- * It expects echo-cancelled/noise-suppressed microphone PCM, learns the residual floor
- * briefly, then requires sustained human-like energy above that floor. This detector
- * is intentionally faster than the normal VAD so a short "para" can cancel synthesis
- * before the next TTS segment is ready.
+ * The microphone path already uses VOICE_COMMUNICATION + AEC + NS. This gate therefore
+ * treats a sustained rise above the residual playback floor as a human interruption.
+ * It is intentionally fast enough for short commands such as "para"/"não" while still
+ * requiring more than a single wind/contact spike.
  */
 class BargeInDetector(
     private val sampleRate: Int = 16_000,
-    private val graceMs: Int = 180,
-    private val sustainMs: Int = 140,
+    private val graceMs: Int = 120,
+    private val sustainMs: Int = 90,
 ) {
     private var speechStartedNanos = 0L
-    private var residualFloor = 0.009F
+    private var residualFloor = 0.007F
     private var aboveSamples = 0
     private var latched = false
 
     fun speechStarted(nowNanos: Long = System.nanoTime()) {
         speechStartedNanos = nowNanos
-        residualFloor = 0.009F
+        residualFloor = 0.007F
         aboveSamples = 0
         latched = false
     }
 
     fun reset() {
         speechStartedNanos = 0L
-        residualFloor = 0.009F
+        residualFloor = 0.007F
         aboveSamples = 0
         latched = false
     }
@@ -39,19 +39,23 @@ class BargeInDetector(
         val rms = rms(samples)
         val elapsedMs = (nowNanos - speechStartedNanos) / 1_000_000L
         if (elapsedMs < graceMs) {
-            residualFloor = (residualFloor * 0.84F + rms * 0.16F).coerceIn(0.0035F, 0.030F)
+            // Learn the AEC residual briefly, but do not let loud speaker leakage push
+            // the floor so high that BK has to shout over Amora to interrupt her.
+            residualFloor = (residualFloor * 0.90F + rms * 0.10F).coerceIn(0.0035F, 0.022F)
             return false
         }
 
-        // Physical A15 feedback showed the old 0.038 / 2.55x gate was too hard
-        // to cross for normal close-range speech. Keep a residual-adaptive floor,
-        // but permit short commands without making a single wind spike sufficient.
-        val threshold = maxOf(0.022F, residualFloor * 2.20F).coerceAtMost(0.085F)
+        // dev13 physical feedback: 0.022 / 2.20x still missed repeated close-range
+        // speech on the A15. With AEC/NS and AGC active we can use a lower, bounded
+        // adaptive threshold. 90 ms of sustained energy still rejects short spikes.
+        val threshold = maxOf(0.012F, residualFloor * 1.55F).coerceAtMost(0.045F)
         if (rms >= threshold) {
             aboveSamples += samples.size
         } else {
-            residualFloor = (residualFloor * 0.975F + rms * 0.025F).coerceIn(0.0035F, 0.030F)
-            aboveSamples = maxOf(0, aboveSamples - samples.size)
+            // Track room/playback residual slowly so speech itself does not raise the
+            // gate while the user is in the middle of an interruption.
+            residualFloor = (residualFloor * 0.990F + rms * 0.010F).coerceIn(0.0035F, 0.022F)
+            aboveSamples = maxOf(0, aboveSamples - samples.size / 2)
         }
 
         val required = sampleRate * sustainMs / 1000

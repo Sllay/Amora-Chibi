@@ -167,7 +167,7 @@ class AmoraSupertonicVoiceEngine(
             lastMetrics = metrics
             Log.i(
                 TAG,
-                "candidate emotion=%s synth=%.0fms native=%.0fms audio=%.2fs rtf=%.3f+%.3f=%.3f".format(
+                "candidate emotion=%s synth=%.0fms native=%.0fms audio=%.2fs rtf=%.3f+%.3f=%.3f steps=%d".format(
                     metrics.expressionLabel,
                     synthesisSeconds * 1000.0,
                     nativeSeconds * 1000.0,
@@ -175,11 +175,12 @@ class AmoraSupertonicVoiceEngine(
                     metrics.synthesisRtf,
                     metrics.nativeRtf,
                     metrics.totalRtf,
+                    NUM_STEPS,
                 ),
             )
             publish(
                 VoiceDiagnostics.STAGE_READY,
-                "segmento pronto • ${expression.label} • RTF ${"%.3f".format(metrics.totalRtf)}",
+                "segmento pronto • ${expression.label} • RTF ${"%.3f".format(metrics.totalRtf)} • $NUM_STEPS steps",
             )
             PrepareResult.Ready(
                 PreparedAudio(
@@ -381,7 +382,11 @@ class AmoraSupertonicVoiceEngine(
     companion object {
         const val MODEL_ID = "sherpa-onnx-supertonic-3-tts-int8-2026-05-11"
         const val AMORA_VOICE_BIN = "amora_voice.bin"
-        private const val NUM_STEPS = 8
+        // Supertonic documents 5-12 denoising steps as a normal quality/speed range.
+        // dev13 was 8 steps and measured above real time on the Galaxy A15. Five is
+        // the first physical candidate intended to bring synth+WORLD close to/below
+        // RTF 1.0 without changing FINAL_B, VoiceSignature or speaker identity.
+        private const val NUM_STEPS = 5
         private const val TAG = "AmoraVoiceCandidate"
         private const val PCM_CHUNK_SAMPLES = 4_096
         private const val PLAYBACK_GRACE_MS = 1_500L
