@@ -49,15 +49,23 @@ class VoiceOutput(
         if (!current.compareAndSet(null, item)) return false
         stopRequested.set(false)
 
-        // Core remains the owner of emotional state. Android only maps the V/A/D
-        // carried by the utterance into the frozen V2 expression contract.
-        val expression = runCatching {
-            AmoraVoiceExpressionPlanner.fromVad(
-                valence = item.valence,
-                arousal = item.arousal,
-                dominance = item.dominance,
+        // Core owns the expression plan. Android must not run a second emotion
+        // classifier from V/A/D because that can make the normal conversation
+        // diverge from the Voice Gate even though both use the same identity.
+        // Old servers that do not send the V2 contract fall back to NEUTRAL only.
+        val expression = item.expression?.let { value ->
+            AmoraVoiceExpression(
+                id = value.id,
+                rateScale = value.rateScale,
+                pauseScale = value.pauseScale,
+                energyScale = value.energyScale,
+                pitchRangeScale = value.pitchRangeScale,
+                f0RegisterScale = value.f0RegisterScale,
+                softness = value.softness,
+                firmness = value.firmness,
+                label = value.sourceEmotion?.uppercase() ?: if (value.fallback) "NEUTRA/FAILSAFE" else "CORE",
             )
-        }.getOrElse { AmoraVoiceExpression.NEUTRAL }
+        } ?: AmoraVoiceExpression.NEUTRAL
 
         val result = candidateVoice.play(
             text = item.text,
