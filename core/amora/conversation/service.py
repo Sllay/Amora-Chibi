@@ -307,9 +307,22 @@ class ConversationEngine:
         )
         return item
 
-    def claim_next(self, device_id: str = "DEVICE_A15") -> SpeechUtterance | None:
-        item = self.store.claim_next(device_id)
-        if item is not None and self.cognition is not None:
+    def claim_next(
+        self,
+        device_id: str = "DEVICE_A15",
+        *,
+        cognitive_turn_id: UUID | str | None = None,
+    ) -> SpeechUtterance | None:
+        # Claiming means the client reserved work, not that sound is already being
+        # emitted. This distinction lets Android pre-render N+1 without falsifying
+        # the Cognitive Journal's TTS_STARTED stage.
+        return self.store.claim_next(device_id, cognitive_turn_id=cognitive_turn_id)
+
+    def mark_utterance_speaking(self, utterance_id: UUID | str) -> SpeechUtterance | None:
+        item = self.store.get_utterance(utterance_id)
+        if item is None:
+            return None
+        if self.cognition is not None:
             segment_id = item.metadata.get("cognitive_segment_id")
             turn_id = item.metadata.get("cognitive_turn_id")
             if segment_id and turn_id:
