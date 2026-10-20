@@ -95,18 +95,16 @@ class SpeechNormalizer:
 
 @dataclass(slots=True)
 class SpeechSegmenter:
-    """Release stable spoken clauses for Android look-ahead rendering.
+    """Release short stable clauses so neural rendering can overlap playback.
 
-    FINAL_B still needs full-segment Supertonic + WORLD processing on-device. Very
-    tiny clauses were making Amora talk for roughly a second or two, stop, then wait
-    for the next render. The physical dev13 gate showed that this sounded much worse
-    than a slightly larger spoken unit. Keep chunks bounded, but coalesce tiny lead
-    sentences so each playback window gives N+1 enough time to render.
+    FINAL_B currently needs full-segment Supertonic + WORLD processing on Android.
+    Keeping speech chunks conversationally small lowers time-to-first-audio and lets
+    segment N+1 finish while N is playing without cutting text token-by-token.
     """
 
-    min_chars: int = 24
-    soft_max_chars: int = 72
-    hard_max_chars: int = 110
+    min_chars: int = 10
+    soft_max_chars: int = 64
+    hard_max_chars: int = 100
     _buffer: str = field(default="", init=False)
 
     def feed(self, delta: str) -> list[str]:
@@ -141,7 +139,7 @@ class SpeechSegmenter:
                 continue
             if char in ".!?" and (index == len(text) or text[index:index + 1].isspace()):
                 return index
-            if char in ";:" and index >= 32:
+            if char in ";:" and index >= 28:
                 return index
 
         if len(text) >= self.soft_max_chars:
