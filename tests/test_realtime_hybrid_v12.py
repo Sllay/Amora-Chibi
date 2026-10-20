@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 
@@ -24,6 +25,7 @@ def _context(
     specialist_support=None,
 ) -> CognitiveContext:
     return CognitiveContext(
+        turn_id=uuid4(),
         created_at=datetime.now(UTC),
         speaker_id="PERSON_BK",
         target_id="ENTITY_AMORA",
