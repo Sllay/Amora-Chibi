@@ -11,8 +11,8 @@ android {
         applicationId = "dev.amora.chibi"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "1.0.0-dev13-tts-crash-hotfix"
+        versionCode = 17
+        versionName = "1.0.0-dev14-barge-gap"
 
         ndk {
             // Galaxy A15 is the physical certification target for this dev gate.
