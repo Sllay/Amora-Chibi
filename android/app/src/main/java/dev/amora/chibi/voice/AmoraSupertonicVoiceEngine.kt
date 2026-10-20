@@ -21,8 +21,11 @@ import kotlin.math.roundToInt
  * custom Supertonic 60/40 style -> WORLD FINAL_B morphology ->
  * VoiceSignature V1 Soft -> Emotion/Prosody V2 -> AudioTrack.
  *
- * No old playback-rate pitch DSP is used. There is deliberately no hidden Faber
- * fallback: a failure must be visible during Galaxy A15 certification.
+ * Rendering and playback are deliberately separate. The Android delivery layer can
+ * prepare segment N+1 while segment N is already playing, removing the multi-second
+ * silence that existed when every segment was rendered only after the previous one
+ * had fully finished. Supertonic generation also uses its callback as a real
+ * cancellation gate so barge-in can stop expensive synthesis before playback.
  */
 class AmoraSupertonicVoiceEngine(
     context: Context,
@@ -42,8 +45,23 @@ class AmoraSupertonicVoiceEngine(
         val totalRtf: Double get() = synthesisRtf + nativeRtf
     }
 
+    data class PreparedAudio(
+        val samples: FloatArray,
+        val sampleRate: Int,
+        val volume: Float,
+        val metrics: Metrics,
+    )
+
+    sealed class PrepareResult {
+        data class Ready(val audio: PreparedAudio) : PrepareResult()
+        object Interrupted : PrepareResult()
+        object Unavailable : PrepareResult()
+        object Failed : PrepareResult()
+    }
+
     private val appContext = context.applicationContext
     private val engineLock = Any()
+    private val generationLock = Any()
     @Volatile private var engine: OfflineTts? = null
     @Volatile private var activeTrack: AudioTrack? = null
     @Volatile private var lastFailure: String? = null
@@ -61,113 +79,139 @@ class AmoraSupertonicVoiceEngine(
         false
     }
 
-    fun play(
+    fun prepareAudio(
         text: String,
         expression: AmoraVoiceExpression,
         volume: Float,
         stopRequested: AtomicBoolean,
-        onStarted: () -> Unit,
-    ): PlayResult {
+    ): PrepareResult {
         val cleanText = text.trim()
-        if (cleanText.isEmpty()) return PlayResult.FAILED
+        if (cleanText.isEmpty()) return PrepareResult.Failed
         if (!assetsAvailable()) {
             fail("assets Supertonic/Amora ausentes no APK")
-            return PlayResult.UNAVAILABLE
+            return PrepareResult.Unavailable
         }
+        if (stopRequested.get()) return PrepareResult.Interrupted
 
         val localEngine = try {
             ensureEngine()
         } catch (error: Throwable) {
             fail("engine candidata: ${describe(error)}", error)
-            return PlayResult.FAILED
+            return PrepareResult.Failed
         }
 
-        publish(VoiceDiagnostics.STAGE_SYNTHESIZING, "Supertonic 60/40 • ${expression.label}")
-        val synthesisStarted = System.nanoTime()
-        val audio = try {
-            localEngine.generateWithConfig(
-                text = cleanText,
-                config = GenerationConfig(
-                    silenceScale = expression.pauseScale,
-                    speed = expression.rateScale,
-                    sid = 0,
-                    numSteps = NUM_STEPS,
-                    extra = mapOf("lang" to "pt", "seed" to "7"),
+        return synchronized(generationLock) {
+            if (stopRequested.get()) return@synchronized PrepareResult.Interrupted
+            publish(VoiceDiagnostics.STAGE_SYNTHESIZING, "Supertonic 60/40 • ${expression.label}")
+            val synthesisStarted = System.nanoTime()
+            val audio = try {
+                localEngine.generateWithConfigAndCallback(
+                    text = cleanText,
+                    config = GenerationConfig(
+                        silenceScale = expression.pauseScale,
+                        speed = expression.rateScale,
+                        sid = 0,
+                        numSteps = NUM_STEPS,
+                        extra = mapOf("lang" to "pt", "seed" to "7"),
+                    ),
+                    callback = { _ -> if (stopRequested.get()) 0 else 1 },
+                )
+            } catch (error: Throwable) {
+                if (stopRequested.get()) return@synchronized PrepareResult.Interrupted
+                fail("Supertonic: ${describe(error)}", error)
+                return@synchronized PrepareResult.Failed
+            }
+            val synthesisSeconds = (System.nanoTime() - synthesisStarted) / 1_000_000_000.0
+            if (stopRequested.get()) return@synchronized PrepareResult.Interrupted
+            if (audio.samples.isEmpty() || audio.sampleRate <= 0) {
+                fail("Supertonic retornou áudio vazio")
+                return@synchronized PrepareResult.Failed
+            }
+
+            publish(VoiceDiagnostics.STAGE_SYNTHESIZING, "Aplicando FINAL_B + Signature V1 • ${expression.label}")
+            val nativeStarted = System.nanoTime()
+            val processed = try {
+                AmoraVoiceNative.process(
+                    samples = audio.samples,
+                    sampleRate = audio.sampleRate,
+                    pitchRangeScale = expression.pitchRangeScale,
+                    f0RegisterScale = expression.f0RegisterScale,
+                    energyScale = expression.energyScale,
+                    softness = expression.softness,
+                    firmness = expression.firmness,
+                )
+            } catch (error: Throwable) {
+                if (stopRequested.get()) return@synchronized PrepareResult.Interrupted
+                fail("WORLD JNI: ${describe(error)}", error)
+                return@synchronized PrepareResult.Failed
+            }
+            val nativeSeconds = (System.nanoTime() - nativeStarted) / 1_000_000_000.0
+            if (stopRequested.get()) return@synchronized PrepareResult.Interrupted
+            if (processed.isEmpty()) {
+                fail("WORLD JNI retornou áudio vazio; sem fallback oculto")
+                return@synchronized PrepareResult.Failed
+            }
+
+            val audioSeconds = processed.size.toDouble() / audio.sampleRate.toDouble()
+            val metrics = Metrics(expression.label, synthesisSeconds, nativeSeconds, audioSeconds)
+            lastMetrics = metrics
+            Log.i(
+                TAG,
+                "candidate emotion=%s synth=%.0fms native=%.0fms audio=%.2fs rtf=%.3f+%.3f=%.3f".format(
+                    metrics.expressionLabel,
+                    synthesisSeconds * 1000.0,
+                    nativeSeconds * 1000.0,
+                    audioSeconds,
+                    metrics.synthesisRtf,
+                    metrics.nativeRtf,
+                    metrics.totalRtf,
                 ),
             )
-        } catch (error: Throwable) {
-            fail("Supertonic: ${describe(error)}", error)
-            return PlayResult.FAILED
-        }
-        val synthesisSeconds = (System.nanoTime() - synthesisStarted) / 1_000_000_000.0
-        if (stopRequested.get()) return PlayResult.INTERRUPTED
-        if (audio.samples.isEmpty() || audio.sampleRate <= 0) {
-            fail("Supertonic retornou áudio vazio")
-            return PlayResult.FAILED
-        }
-
-        publish(VoiceDiagnostics.STAGE_SYNTHESIZING, "Aplicando FINAL_B + Signature V1 • ${expression.label}")
-        val nativeStarted = System.nanoTime()
-        val processed = try {
-            AmoraVoiceNative.process(
-                samples = audio.samples,
-                sampleRate = audio.sampleRate,
-                pitchRangeScale = expression.pitchRangeScale,
-                f0RegisterScale = expression.f0RegisterScale,
-                energyScale = expression.energyScale,
-                softness = expression.softness,
-                firmness = expression.firmness,
+            publish(
+                VoiceDiagnostics.STAGE_READY,
+                "segmento pronto • ${expression.label} • RTF ${"%.3f".format(metrics.totalRtf)}",
             )
-        } catch (error: Throwable) {
-            fail("WORLD JNI: ${describe(error)}", error)
-            return PlayResult.FAILED
+            PrepareResult.Ready(
+                PreparedAudio(
+                    samples = processed,
+                    sampleRate = audio.sampleRate,
+                    volume = volume.coerceIn(0f, 1f),
+                    metrics = metrics,
+                )
+            )
         }
-        val nativeSeconds = (System.nanoTime() - nativeStarted) / 1_000_000_000.0
+    }
+
+    fun playPrepared(
+        prepared: PreparedAudio,
+        stopRequested: AtomicBoolean,
+        onStarted: () -> Unit,
+    ): PlayResult {
         if (stopRequested.get()) return PlayResult.INTERRUPTED
-        if (processed.isEmpty()) {
-            fail("WORLD JNI retornou áudio vazio; sem fallback oculto")
-            return PlayResult.FAILED
-        }
-
-        val audioSeconds = processed.size.toDouble() / audio.sampleRate.toDouble()
-        lastMetrics = Metrics(expression.label, synthesisSeconds, nativeSeconds, audioSeconds)
-        val metrics = lastMetrics!!
-        Log.i(
-            TAG,
-            "candidate emotion=%s synth=%.0fms native=%.0fms audio=%.2fs rtf=%.3f+%.3f=%.3f".format(
-                metrics.expressionLabel,
-                synthesisSeconds * 1000.0,
-                nativeSeconds * 1000.0,
-                audioSeconds,
-                metrics.synthesisRtf,
-                metrics.nativeRtf,
-                metrics.totalRtf,
-            ),
-        )
-
+        val metrics = prepared.metrics
         var track: AudioTrack? = null
         return try {
-            track = createTrack(audio.sampleRate, volume)
+            track = createTrack(prepared.sampleRate, prepared.volume)
             activeTrack = track
             track.play()
             publish(
                 VoiceDiagnostics.STAGE_PLAYING,
-                "FINAL_B + Signature V1 + Emotion V2 • ${expression.label} • RTF ${"%.3f".format(metrics.totalRtf)}",
+                "FINAL_B + Signature V1 + Emotion V2 • ${metrics.expressionLabel} • RTF ${"%.3f".format(metrics.totalRtf)}",
             )
             onStarted()
-            val written = writeSamples(track, processed, stopRequested)
+            val written = writeSamples(track, prepared.samples, stopRequested)
             if (stopRequested.get()) PlayResult.INTERRUPTED
-            else if (written != processed.size) {
-                fail("AudioTrack escreveu $written de ${processed.size} amostras")
+            else if (written != prepared.samples.size) {
+                fail("AudioTrack escreveu $written de ${prepared.samples.size} amostras")
                 PlayResult.FAILED
             } else {
-                waitForPlayback(track, written, audio.sampleRate, stopRequested)
+                waitForPlayback(track, written, prepared.sampleRate, stopRequested)
                 if (stopRequested.get()) PlayResult.INTERRUPTED
                 else {
                     lastFailure = null
                     publish(
                         VoiceDiagnostics.STAGE_READY,
-                        "CANDIDATA AMORA OK • ${expression.label} • Galaxy A15 gate pendente",
+                        "CANDIDATA AMORA OK • ${metrics.expressionLabel} • Galaxy A15 gate pendente",
                     )
                     PlayResult.COMPLETED
                 }
@@ -184,6 +228,19 @@ class AmoraSupertonicVoiceEngine(
                 runCatching { local.release() }
             }
         }
+    }
+
+    fun play(
+        text: String,
+        expression: AmoraVoiceExpression,
+        volume: Float,
+        stopRequested: AtomicBoolean,
+        onStarted: () -> Unit,
+    ): PlayResult = when (val prepared = prepareAudio(text, expression, volume, stopRequested)) {
+        is PrepareResult.Ready -> playPrepared(prepared.audio, stopRequested, onStarted)
+        PrepareResult.Interrupted -> PlayResult.INTERRUPTED
+        PrepareResult.Unavailable -> PlayResult.UNAVAILABLE
+        PrepareResult.Failed -> PlayResult.FAILED
     }
 
     fun stop() {
