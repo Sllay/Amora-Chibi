@@ -5,13 +5,31 @@ plugins {
 android {
     namespace = "dev.amora.chibi"
     compileSdk = 36
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "dev.amora.chibi"
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "1.0.0-dev9-vocal-synth-dsp"
+        versionCode = 14
+        versionName = "1.0.0-dev11-amora-voice-contract-fix"
+
+        ndk {
+            // Galaxy A15 is the physical certification target for this dev gate.
+            abiFilters += "arm64-v8a"
+        }
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-O3")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildFeatures {

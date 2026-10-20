@@ -16,6 +16,20 @@ class CoreClient(context: Context) {
         val accepted: Boolean,
     )
 
+    data class VoiceExpression(
+        val id: String,
+        val rateScale: Float,
+        val pauseScale: Float,
+        val energyScale: Float,
+        val pitchRangeScale: Float,
+        val f0RegisterScale: Float,
+        val softness: Float,
+        val firmness: Float,
+        val sourceEmotion: String?,
+        val sourceIntensity: Float,
+        val fallback: Boolean,
+    )
+
     data class SpeechUtterance(
         val id: String,
         val text: String,
@@ -26,6 +40,7 @@ class CoreClient(context: Context) {
         val valence: Float,
         val arousal: Float,
         val dominance: Float,
+        val expression: VoiceExpression?,
         val remoteTtsAllowed: Boolean,
         val cognitiveTurnId: String?,
     )
@@ -98,6 +113,21 @@ class CoreClient(context: Context) {
         val item = root.getJSONObject("utterance")
         val style = item.optJSONObject("style") ?: JSONObject()
         val metadata = item.optJSONObject("metadata") ?: JSONObject()
+        val expression = style.optJSONObject("expression")?.let { value ->
+            VoiceExpression(
+                id = value.optString("id", "AMORA_VOICE_EXPRESSION_V2"),
+                rateScale = value.optDouble("rate_scale", 1.0).toFloat().coerceIn(0.90f, 1.08f),
+                pauseScale = value.optDouble("pause_scale", 1.0).toFloat().coerceIn(0.88f, 1.16f),
+                energyScale = value.optDouble("energy_scale", 1.0).toFloat().coerceIn(0.88f, 1.06f),
+                pitchRangeScale = value.optDouble("pitch_range_scale", 1.0).toFloat().coerceIn(0.90f, 1.08f),
+                f0RegisterScale = value.optDouble("f0_register_scale", 1.0).toFloat().coerceIn(0.97f, 1.02f),
+                softness = value.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f),
+                firmness = value.optDouble("firmness", 0.15).toFloat().coerceIn(0f, 1f),
+                sourceEmotion = value.optString("source_emotion").takeIf { it.isNotBlank() && it != "null" },
+                sourceIntensity = value.optDouble("source_intensity", 0.0).toFloat().coerceIn(0f, 1f),
+                fallback = value.optBoolean("fallback", false),
+            )
+        }
         return SpeechUtterance(
             id = item.getString("id"),
             text = item.getString("text"),
@@ -108,6 +138,7 @@ class CoreClient(context: Context) {
             valence = style.optDouble("valence", 0.0).toFloat(),
             arousal = style.optDouble("arousal", 0.0).toFloat(),
             dominance = style.optDouble("dominance", 0.0).toFloat(),
+            expression = expression,
             remoteTtsAllowed = metadata.optBoolean("remote_tts_allowed", false),
             cognitiveTurnId = metadata.optString("cognitive_turn_id").takeIf { it.isNotBlank() },
         )

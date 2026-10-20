@@ -59,6 +59,27 @@ class TurnDecision(BaseModel):
     deduplicated: bool = False
 
 
+class VoiceExpressionStyle(BaseModel):
+    """Transport copy of the provider-independent voice-expression contract.
+
+    Core owns this plan. Platform adapters consume these bounded values directly;
+    they must not infer a second emotional classification from V/A/D.
+    """
+
+    id: str = "AMORA_VOICE_EXPRESSION_V2"
+    rate_scale: float = Field(default=1.0, ge=0.90, le=1.08)
+    pause_scale: float = Field(default=1.0, ge=0.88, le=1.16)
+    energy_scale: float = Field(default=1.0, ge=0.88, le=1.06)
+    pitch_range_scale: float = Field(default=1.0, ge=0.90, le=1.08)
+    f0_register_scale: float = Field(default=1.0, ge=0.97, le=1.02)
+    softness: float = Field(default=0.25, ge=0.0, le=1.0)
+    firmness: float = Field(default=0.15, ge=0.0, le=1.0)
+    source_emotion: str | None = None
+    source_intensity: float = Field(default=0.0, ge=0.0, le=1.0)
+    fallback: bool = False
+    reason_codes: list[str] = Field(default_factory=list)
+
+
 class SpeechStyle(BaseModel):
     locale: str = "pt-BR"
     rate: float = Field(default=1.0, ge=0.5, le=2.0)
@@ -67,6 +88,7 @@ class SpeechStyle(BaseModel):
     valence: float = Field(default=0.0, ge=-1.0, le=1.0)
     arousal: float = Field(default=0.0, ge=-1.0, le=1.0)
     dominance: float = Field(default=0.0, ge=-1.0, le=1.0)
+    expression: VoiceExpressionStyle | None = None
 
 
 class SpeechUtterance(BaseModel):

@@ -1,22 +1,31 @@
 from __future__ import annotations
 
 from amora.emotion import MoodState
+from amora.voice_expression import VoiceProsodyPlanner
 
-from .models import SpeechStyle, UtteranceKind
+from .models import SpeechStyle, UtteranceKind, VoiceExpressionStyle
 
 
 class LocalSpeechComposer:
     """Cheap deterministic speech for reflexes and already-resolved intentions."""
 
+    def __init__(self) -> None:
+        self.voice_prosody = VoiceProsodyPlanner()
+
     def style_for_mood(self, mood: MoodState) -> SpeechStyle:
+        expression = self.voice_prosody.safe_plan(mood)
         return SpeechStyle(
             locale="pt-BR",
+            # Legacy fields stay available for old/non-candidate adapters, but the
+            # Android Amora candidate consumes `expression` directly so it never
+            # reclassifies emotion independently from Core.
             rate=max(0.82, min(1.18, 1.0 + mood.arousal * 0.12)),
             pitch=max(0.9, min(1.1, 1.0 + mood.valence * 0.05)),
             volume=1.0,
             valence=mood.valence,
             arousal=mood.arousal,
             dominance=mood.dominance,
+            expression=VoiceExpressionStyle.model_validate(expression.model_dump(mode="json")),
         )
 
     def semantic_text(self, action_kind: str, target_id: str | None) -> str:
