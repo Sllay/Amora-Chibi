@@ -11,17 +11,18 @@ class SherpaSpeechSegmenter(context: Context) : SpeechSegmenter {
         config = VadModelConfig(
             sileroVadModelConfig = SileroVadModelConfig(
                 model = "silero_vad.onnx",
-                // The physical A15 showed that 0.38 was permissive enough for a
-                // fan to become speech. Keep Silero near its normal operating
-                // threshold and recover phrase onset with a longer speech-history
-                // window instead of lowering the classifier threshold.
-                threshold = 0.50F,
-                // Natural pt-BR speech contains brief intra-sentence pauses.
-                minSilenceDuration = 0.55F,
-                // Sherpa's VAD keeps history around detected speech. A larger
-                // minimum speech window helps preserve the leading vowel in
-                // vocatives such as "Amora" while also rejecting tiny noise hits.
-                minSpeechDuration = 0.35F,
+                // A15 physical feedback: 0.38 admitted fan noise while 0.50 made
+                // normal close-range speech and short commands unnecessarily hard.
+                // 0.44 keeps margin from the noisy setting without demanding slow,
+                // over-articulated speech from BK.
+                threshold = 0.44F,
+                // End a turn sooner so the STT request starts promptly after BK
+                // stops talking, while retaining ordinary pt-BR micro-pauses.
+                minSilenceDuration = 0.42F,
+                // Permit short commands/vocatives ("para", "Amora", "não") to
+                // become real segments. Noise suppression + Silero confidence still
+                // provide the main rejection gate for steady room noise.
+                minSpeechDuration = 0.18F,
                 windowSize = 512,
                 maxSpeechDuration = 12.0F,
             ),
