@@ -84,8 +84,8 @@ def test_web_text_turn_uses_core_pipeline_and_defaults_to_test_isolation(tmp_pat
         body = response.json()
         assert body["test_mode"] is True
         assert body["observation"]["speaker_id"] == "PERSON_BK"
-        assert body["turn"]["speaker_id"] == "PERSON_BK"
-        assert body["turn"]["addressee_id"] == "ENTITY_AMORA"
+        assert body["observation"]["addressee"]["entity_id"] == "ENTITY_AMORA"
+        assert body["turn"]["state"] == "TAKE_TURN"
     finally:
         core.close()
 
@@ -105,7 +105,8 @@ def test_web_mic_can_request_same_test_isolation_through_shared_audio_contract(t
         assert body["test_mode"] is True
         assert body["transcript"]["text"] == "Amora, para um pouquinho."
         assert body["observation"]["speaker_id"] == "PERSON_BK"
-        assert body["turn"]["addressee_id"] == "ENTITY_AMORA"
+        assert body["observation"]["addressee"]["entity_id"] == "ENTITY_AMORA"
+        assert body["turn"]["state"] == "TAKE_TURN"
     finally:
         core.close()
 
