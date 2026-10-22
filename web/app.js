@@ -470,6 +470,7 @@ async function finishUserSpeech() {
       speaker_confidence: "0.80",
       privacy_scope: "PERSONAL",
       remote_processing_allowed: remoteToggle.checked ? "true" : "false",
+      test_mode: testToggle.checked ? "true" : "false",
     });
     const result = await api(`/v1/audio/transcribe?${params}`, {
       method: "POST",
