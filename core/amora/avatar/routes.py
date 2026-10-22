@@ -6,6 +6,8 @@ from typing import Callable
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.staticfiles import StaticFiles
 
+from amora.web.routes import register_web_routes
+
 from .models import AvatarProject
 
 
@@ -64,3 +66,8 @@ def register_avatar_routes(app: FastAPI, core: object, require_auth: Callable[..
     web_root = Path(__file__).resolve().parents[3] / "avatar"
     if web_root.is_dir():
         app.mount("/avatar", StaticFiles(directory=str(web_root), html=True), name="avatar")
+
+    # Browser surfaces share Core contracts but remain separate platform adapters.
+    # Keep the assembly near the existing static-surface hook until API composition
+    # is split into a dedicated platform registry.
+    register_web_routes(app, core, require_auth)
