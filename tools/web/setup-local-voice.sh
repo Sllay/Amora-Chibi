@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AMORA_HOME="${AMORA_HOME:-$HOME/.amora}"
+SHERPA_VERSION="1.13.8"
 MODEL_ID="sherpa-onnx-supertonic-3-tts-int8-2026-05-11"
 MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/${MODEL_ID}.tar.bz2"
 MODEL_DIR="$AMORA_HOME/models/$MODEL_ID"
@@ -11,6 +12,9 @@ WORLD_URL="https://github.com/mmorise/World/archive/${WORLD_COMMIT}.tar.gz"
 WORLD_DIR="$AMORA_HOME/vendor/world-$WORLD_COMMIT"
 LIB_DIR="$AMORA_HOME/lib"
 LIB_PATH="$LIB_DIR/libamora_voice_processor.so"
+CACHE_DIR="$AMORA_HOME/cache/web-local-voice"
+MODEL_ARCHIVE="$CACHE_DIR/${MODEL_ID}.tar.bz2"
+WORLD_ARCHIVE="$CACHE_DIR/world-${WORLD_COMMIT}.tar.gz"
 
 if [[ -z "${VIRTUAL_ENV:-}" ]]; then
   if [[ -f "$HOME/.venvs/amora/bin/activate" ]]; then
@@ -24,18 +28,52 @@ fi
 
 echo "[amora-voice] Repo: $REPO"
 echo "[amora-voice] Home: $AMORA_HOME"
+echo "[amora-voice] Cache: $CACHE_DIR"
 
 if command -v pkg >/dev/null 2>&1; then
   pkg install -y clang curl git bzip2 tar >/dev/null
 fi
 
-python -m pip install --upgrade "sherpa-onnx==1.13.8"
+mkdir -p "$MODEL_DIR" "$WORLD_DIR" "$LIB_DIR" "$CACHE_DIR"
+
+if python - "$SHERPA_VERSION" <<'PY'
+import sys
+from importlib.metadata import PackageNotFoundError, version
+
+wanted = sys.argv[1]
+try:
+    installed = version("sherpa-onnx")
+except PackageNotFoundError:
+    raise SystemExit(1)
+raise SystemExit(0 if installed == wanted else 1)
+PY
+then
+  echo "[amora-voice] sherpa-onnx $SHERPA_VERSION já instalado."
+else
+  echo "[amora-voice] Instalando sherpa-onnx $SHERPA_VERSION no venv..."
+  python -m pip install --upgrade "sherpa-onnx==$SHERPA_VERSION"
+fi
+
 python - <<'PY'
-import sherpa_onnx
-print(f"[amora-voice] sherpa-onnx {sherpa_onnx.__version__}")
+from importlib.metadata import version
+print(f"[amora-voice] sherpa-onnx {version('sherpa-onnx')}")
 PY
 
-mkdir -p "$MODEL_DIR" "$WORLD_DIR" "$LIB_DIR"
+download_cached() {
+  local url="$1"
+  local target="$2"
+  local label="$3"
+  if [[ -s "$target" ]]; then
+    echo "[amora-voice] Cache hit: $label"
+    return 0
+  fi
+  local partial="${target}.part"
+  echo "[amora-voice] Baixando $label..."
+  rm -f "$partial"
+  curl -fL --retry 3 --retry-delay 2 "$url" -o "$partial"
+  [[ -s "$partial" ]] || { echo "[amora-voice] download vazio: $label" >&2; exit 6; }
+  mv "$partial" "$target"
+}
 
 model_complete=true
 for file in duration_predictor.int8.onnx text_encoder.int8.onnx vector_estimator.int8.onnx vocoder.int8.onnx tts.json unicode_indexer.bin voice.bin; do
@@ -43,11 +81,10 @@ for file in duration_predictor.int8.onnx text_encoder.int8.onnx vector_estimator
 done
 
 if [[ "$model_complete" != true ]]; then
+  download_cached "$MODEL_URL" "$MODEL_ARCHIVE" "Supertonic 3 INT8"
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
-  echo "[amora-voice] Baixando Supertonic 3 INT8..."
-  curl -fL --retry 3 --retry-delay 2 "$MODEL_URL" -o "$work/model.tar.bz2"
-  tar -xjf "$work/model.tar.bz2" -C "$work"
+  tar -xjf "$MODEL_ARCHIVE" -C "$work"
   anchor="$(find "$work" -type f -name duration_predictor.int8.onnx -print -quit)"
   [[ -n "$anchor" ]] || { echo "[amora-voice] modelo baixado não contém duration_predictor.int8.onnx" >&2; exit 3; }
   source_root="$(dirname "$anchor")"
@@ -71,12 +108,11 @@ python "$REPO/android/tools/build_amora_voice_bin.py" \
   --secondary-speaker 4 \
   --primary-weight 0.60
 
-if [[ ! -f "$WORLD_DIR/src/dio.cpp" ]]; then
+if [[ ! -f "$WORLD_DIR/src/dio.cpp" || ! -f "$WORLD_DIR/.amora-world-commit" || "$(cat "$WORLD_DIR/.amora-world-commit" 2>/dev/null || true)" != "$WORLD_COMMIT" ]]; then
+  download_cached "$WORLD_URL" "$WORLD_ARCHIVE" "WORLD $WORLD_COMMIT"
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
-  echo "[amora-voice] Baixando WORLD fixado em $WORLD_COMMIT..."
-  curl -fL --retry 3 --retry-delay 2 "$WORLD_URL" -o "$work/world.tar.gz"
-  tar -xzf "$work/world.tar.gz" -C "$work"
+  tar -xzf "$WORLD_ARCHIVE" -C "$work"
   extracted="$(find "$work" -mindepth 1 -maxdepth 1 -type d -name 'World-*' -print -quit)"
   [[ -n "$extracted" && -f "$extracted/src/dio.cpp" ]] || { echo "[amora-voice] WORLD baixado está incompleto" >&2; exit 4; }
   rm -rf "$WORLD_DIR"
@@ -86,7 +122,7 @@ if [[ ! -f "$WORLD_DIR/src/dio.cpp" ]]; then
   rm -rf "$work"
   trap - EXIT
 else
-  echo "[amora-voice] WORLD já preparado."
+  echo "[amora-voice] WORLD $WORLD_COMMIT já preparado."
 fi
 
 echo "[amora-voice] Compilando FINAL_B + Signature V1 compartilhados..."
@@ -129,4 +165,5 @@ PY
 echo
 echo "[amora-voice] PRONTO"
 echo "[amora-voice] Supertonic 60/40 + FINAL_B + Signature V1 disponíveis no Core."
+echo "[amora-voice] Downloads reutilizáveis: $CACHE_DIR"
 echo "[amora-voice] Reinicie: amora serve --port 8765"

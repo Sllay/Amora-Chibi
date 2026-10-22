@@ -1,283 +1,366 @@
 # AMORA — Identidade Vocal Canônica
 
-**Status:** CANÔNICO / ESPECIFICAÇÃO DE ALVO  
-**Atualizado em:** 2026-10-17  
-**Runtime de produção atual:** sherpa-onnx + Piper/VITS Faber provisório  
-**Laboratório atual:** Supertonic 3 INT8 via sherpa-onnx + VoiceProfile/DSP bounded  
-**Alvo final:** `amora-voice-v1` como identidade vocal versionada = backend aprovado + speaker/base + VoiceSignature + prosódia bounded.
+**Status:** CANÔNICO / IDENTIDADE DE LABORATÓRIO CONGELADA / CERTIFICAÇÃO FÍSICA PENDENTE  
+**Atualizado em:** 2026-10-22  
+**Backend candidato:** sherpa-onnx + Supertonic 3 INT8  
+**Base aprovada de laboratório:** `AMORA_CHILD_FINAL_B_PLUS60`  
+**Assinatura aprovada de laboratório:** `AMORA_VOICE_SIGNATURE_V1_SOFT`
 
 ---
 
 ## 1. Princípio
 
-> A voz é parte da identidade contínua da Amora, mas a identidade vocal não deve ficar presa a um único checkpoint treinado.
+> A voz é parte da identidade contínua da Amora, mas o backend de TTS é capacidade substituível.
 
-O backend de TTS é capacidade substituível. A identidade percebida deve permanecer estável por meio de seleção de base, `VoiceSignature`, `VoiceProfile` e parâmetros de prosódia versionados.
+A identidade percebida deve permanecer estável por meio de uma composição versionada de:
 
-A voz normal deve priorizar execução local/offline e não depender de quota remota.
+```text
+TtsBackend
+↓
+speaker/style base
+↓
+VoiceSignature
+↓
+Emotion / Prosody bounded
+```
+
+A voz normal deve priorizar execução local/offline, pt-BR, custo sustentável e ausência de troca silenciosa de identidade.
+
+Gemini TTS não é caminho normal da voz da Amora. `window.speechSynthesis` não é transporte principal do laboratório Safari.
 
 ---
 
 ## 2. Perfil vocal alvo
 
-A voz canônica da Amora deve soar como:
+A voz normal da Amora deve permanecer:
 
 - feminina;
 - brasileira / pt-BR natural e inteligível;
-- jovem adulta;
-- doce sem infantilização;
-- madura o suficiente para não soar como anime/chibi exageradamente aguda;
-- ainda jovem, sem peso de voz muito madura/mais velha;
-- região base entre médio e médio-grave, com brilho/agudos naturais quando a expressão pedir;
-- dicção clara, mas não de narradora, locutora, assistente ou anúncio;
-- ritmo base moderado, ligeiramente vivo/brasileiro, sem falar acelerado por padrão;
-- energia presente, espontânea e conversacional, sem hiperatividade artificial;
-- microvariações naturais de ritmo, pausa e intensidade;
-- capaz de intimidade, brincadeira, firmeza, baixa energia e irritação sem perder a mesma identidade-base.
+- jovem;
+- doce sem infantilização exagerada;
+- reconhecível entre sessões;
+- conversacional, não locutora/assistente;
+- capaz de carinho, brincadeira, firmeza, baixa energia e irritação sem trocar de identidade-base;
+- expressiva por pequenas modulações de prosódia, não por troca de timbre.
 
 Não é objetivo imitar pessoa pública, pessoa real sem autorização ou voz cuja licença impeça o uso pretendido.
 
 ---
 
-## 3. Componentes da identidade vocal
+## 3. Backend e style aprovados para o laboratório atual
 
-A identidade canônica é composta por quatro camadas separadas:
-
-```text
-TtsBackend
-    ↓
-speaker/base aprovada
-    ↓
-VoiceSignature AMORA_CANONICAL
-    ↓
-Prosody Planner bounded
-```
-
-### 3.1 TtsBackend
-
-Responsável por produzir fala base inteligível. Pode ser substituído se outro backend local oferecer melhor pt-BR, licença e desempenho.
-
-O backend **não é sozinho a identidade da Amora**.
-
-### 3.2 Speaker/base
-
-Quando o backend possuir múltiplos speakers, um speaker-base deve ser pinado para a voz normal após benchmark físico. Não escolher speaker aleatoriamente entre sessões.
-
-### 3.3 VoiceSignature
-
-`VoiceSignature` é a camada determinística/versionada que transforma o PCM base para aproximá-lo da identidade vocal alvo.
-
-Transforms candidatos, apenas quando tecnicamente aprovados:
-
-- pitch delta pequeno;
-- formant/ressonância;
-- EQ/cor tonal;
-- de-essing;
-- compressão leve;
-- textura sintética discreta;
-- ganho/limiter;
-- outros transforms bounded e auditáveis.
-
-A ordem, intensidade e implementação desses transforms fazem parte da versão da assinatura.
-
-**Regra:** inteligibilidade pt-BR tem prioridade sobre efeito estilístico.
-
-### 3.4 Prosody Planner
-
-Humor/intenção podem alterar levemente rate, energia, pausas, firmeza, suavidade e timing, dentro de limites pequenos.
-
-Emoção não escolhe parâmetros crus diretamente; o `Prosody Planner` recebe estado interno + intenção + tipo de fala e produz uma configuração bounded.
-
----
-
-## 4. Identidade canônica vs fantasias
-
-A Amora pode possuir múltiplos `VoiceProfile`, mas apenas um é a voz normal canônica.
+Backend:
 
 ```text
-AMORA_CANONICAL  -> identidade normal persistente
-CHIBI            -> fantasia temporária
-SYNTH            -> fantasia temporária
-VIRTUAL_SINGER   -> fantasia/laboratório de sintetizador vocal
-MASC_JOKE        -> fantasia futura
-outros           -> experimentais
+sherpa-onnx-supertonic-3-tts-int8-2026-05-11
 ```
 
-Perfis temporários:
+Style base congelado:
 
-- devem ser ativados explicitamente;
-- não alteram self/memória/identidade da Amora;
-- não substituem silenciosamente a voz normal;
-- podem usar parâmetros mais exagerados porque são efeitos/fantasias assumidos.
+```text
+60% speaker 0
+40% speaker 4
+```
 
----
+O style misto é materializado em `amora_voice.bin` pelo script:
 
-## 5. Mapeamento emocional
+```text
+android/tools/build_amora_voice_bin.py
+```
 
-Exemplos conceituais, não fórmulas fixas:
-
-### Baixa energia / tédio
-
-- ritmo um pouco mais lento;
-- pausas maiores;
-- energia menor;
-- respostas possivelmente mais curtas pelo DialoguePlan;
-- sem monotonia robótica forçada.
-
-### Alegria / animação
-
-- energia e ritmo discretamente maiores;
-- pausas mais leves;
-- brilho natural;
-- sem acelerar até parecer síntese artificial.
-
-### Irritação / raiva
-
-- comportamento social fica mais firme antes da voz mudar;
-- wording pode ficar mais curto/direto conforme DialoguePlan;
-- prosódia pode ganhar firmeza/tensão leve;
-- não representar raiva simplesmente como pitch/volume altos.
-
-### Afeto / intimidade
-
-- ritmo levemente mais macio;
-- pausas naturais;
-- menor dureza;
-- sem infantilizar a voz.
+Não voltar a escolher speaker/style base por sessão ou por emoção.
 
 ---
 
-## 6. Backend e licença
+## 4. FINAL_B — base vocal congelada
+
+ADR-0010 congelou:
+
+```text
+AMORA_CHILD_FINAL_B_PLUS60
+```
+
+Parâmetros:
+
+- target F0 median: **284.8 Hz**;
+- max F0 ratio: **1.186x**;
+- pitch-range base: **1.048x**;
+- spectral warp:
+  - 0 Hz → 1.000x;
+  - 250 Hz → 1.000x;
+  - 700 Hz → 1.126x;
+  - 1500 Hz → 1.111x;
+  - 3000 Hz → 1.068x;
+  - 5000 Hz → 1.020x;
+  - 8000 Hz → 1.000x;
+- high-frequency shelf: **-2.36 dB**.
+
+A busca por idade/tamanho vocal base fica encerrada por padrão.
+
+Não reabrir F0, VTL/warp ou o mix 60/40 apenas porque outra camada ficou ruim.
+
+---
+
+## 5. VoiceSignature V1 Soft — assinatura congelada
+
+ADR-0011 aceitou:
+
+```text
+AMORA_VOICE_SIGNATURE_V1_SOFT
+```
+
+A assinatura preserva FINAL_B e adiciona apenas:
+
+- WORLD aperiodicity scale: **0.965x**;
+- harmonic drive: **1.30**;
+- harmonic wet: **0.05**;
+- RMS matching para preservar energia percebida.
+
+Continuam fora da assinatura normal:
+
+- pitch shift extra;
+- novo formant/VTL;
+- bitcrush;
+- sample-hold;
+- ring modulation.
+
+Invariante:
+
+```text
+identidade vocal = fixa
+expressão emocional = variável e bounded
+```
+
+---
+
+## 6. Emotion / Prosody V2
+
+O Core produz `AMORA_VOICE_EXPRESSION_V2` com parâmetros bounded.
+
+Faixas atuais do contrato:
+
+- rate: 0.90–1.08;
+- pause: 0.88–1.16;
+- energy: 0.88–1.06;
+- pitch range: 0.90–1.08;
+- F0 register: 0.97–1.02;
+- softness: 0.0–1.0;
+- firmness: 0.0–1.0.
+
+Emoção não pode:
+
+- trocar style/speaker;
+- reabrir FINAL_B;
+- reescrever a VoiceSignature;
+- transformar raiva em pitch/volume bruto sem controle;
+- degradar inteligibilidade como efeito estilístico;
+- escolher outro TTS silenciosamente se o worker falhar.
+
+Falha de expressão cai para neutro; falha de voz não altera a identidade para outro backend.
+
+---
+
+## 7. Implementação compartilhada Android ↔ Termux
+
+A implementação de FINAL_B + VoiceSignature + modulação bounded vive em:
+
+```text
+android/app/src/main/cpp/amora_voice_processor.cpp
+android/app/src/main/cpp/amora_voice_processor.h
+```
+
+Esse código é compartilhado de duas formas:
+
+```text
+Android
+  JNI wrapper
+    ↓
+amora_voice_processor.cpp
+
+Termux / Web Voice Worker
+  ctypes / C ABI
+    ↓
+libamora_voice_processor.so
+    ↓
+amora_voice_processor.cpp
+```
+
+Não manter uma segunda implementação Python “parecida” do DSP aprovado.
+
+O objetivo é que os dois transports usem a mesma matemática de identidade, mesmo que o player final seja diferente.
+
+---
+
+## 8. Caminho Web/Safari atual
+
+ADR-0013 tornou Safari a superfície primária de iteração rápida. ADR-0014 substituiu o TTS nativo do Safari pela própria voz local da Amora.
+
+Pipeline:
+
+```text
+Core
+→ SpeechUtterance validada
+→ AmoraLocalVoiceRenderer no Termux
+→ sherpa-onnx Supertonic 3
+→ amora_voice.bin 60/40
+→ shared WORLD FINAL_B
+→ VoiceSignature V1 Soft
+→ Emotion / Prosody V2 bounded
+→ WAV PCM16 mono
+→ Safari AudioContext / Web Audio
+```
+
+Responsabilidade do Safari:
+
+- cliente/UI;
+- microfone/VAD;
+- player;
+- pareamento;
+- cancelamento/barge-in local.
+
+Responsabilidade do Core/worker:
+
+- identidade vocal;
+- style;
+- prosódia bounded;
+- síntese;
+- DSP;
+- WAV;
+- estado de entrega.
+
+`WEB_SAFARI` e `DEVICE_A15` são destinos diferentes de fila.
+
+---
+
+## 9. Verdade de entrega
+
+Renderizar WAV não significa que a fala foi ouvida.
+
+Contrato:
+
+```text
+QUEUED
+→ CLAIMED
+→ render WAV
+→ player começa
+→ started
+→ player termina
+→ ACK spoken=true
+```
+
+Interrupção:
+
+```text
+barge-in / Parar fala / erro de voz
+→ abortar fetch
+→ parar player
+→ cancelar utterance/turno no Core
+→ liberar fila/interface
+```
+
+O texto visível da resposta não depende do sucesso do áudio.
+
+Falha de voz local deve ser explícita e fail-open para a interface; não pode prender todas as mensagens seguintes.
+
+---
+
+## 10. Setup Termux
+
+A preparação Web local vive em:
+
+```text
+tools/web/setup-local-voice.sh
+```
+
+Ela prepara:
+
+- `sherpa-onnx==1.13.8` no venv do Core;
+- Supertonic 3 INT8;
+- `amora_voice.bin` 60/40;
+- WORLD pinado;
+- `libamora_voice_processor.so`;
+- cache reutilizável em `~/.amora/cache/web-local-voice`.
+
+Modelos/runtime ficam sob `~/.amora`, fora do Git.
+
+A instalação pesada deve acontecer uma vez; iterações normais não devem reinstalar modelo nem exigir APK.
+
+---
+
+## 11. Perfis temporários
+
+A Amora pode possuir perfis/fantasias vocais no futuro, mas eles não substituem a voz normal silenciosamente.
+
+Exemplos históricos/experimentais:
+
+```text
+CHIBI
+SYNTH
+VIRTUAL_SINGER
+MASC_JOKE
+```
+
+Qualquer perfil temporário deve ser ativado explicitamente e não altera self/memória/identidade.
+
+---
+
+## 12. Provenance e licença
 
 Qualquer backend/speaker candidato precisa de provenance e licença compatíveis com o uso pretendido.
 
 Aceitável:
 
-- modelo local com licença permissiva/compatível;
-- voz/speaker incluídos no modelo com termos adequados;
+- modelo local com licença compatível;
+- voices/styles incluídos sob termos adequados;
 - material próprio com consentimento explícito;
-- modelo próprio treinado no futuro, caso volte a ser vantajoso e reproduzível.
+- modelo próprio futuro se houver vantagem comprovada.
 
-Não aceitável como base canônica:
+Não aceitável como base normal:
 
 - clone de pessoa pública sem autorização;
-- voz real/comercial cuja licença impeça uso/derivação necessários;
-- artefato de origem obscura;
-- provider remoto que mude de voz por quota como caminho normal.
-
-A provenance deve ficar registrada junto da versão do voice pack/manifesto da assinatura.
+- origem obscura;
+- provider remoto que muda voz por quota;
+- fallback silencioso que substitua a identidade acústica.
 
 ---
 
-## 7. Estratégia atual de implementação
+## 13. Gate físico
 
-Treinar/fine-tunar um checkpoint próprio **não é mais requisito da V1**. O ADR-0008 foi superseded pelo ADR-0009.
+A assinatura atual foi aprovada por BK como identidade de laboratório, mas CI não certifica a experiência física final.
 
-Fluxo atual:
+Ainda medir no hardware real:
 
-```text
-backend local pronto + rights-clear
-        ↓
-benchmark de speakers/base
-        ↓
-seleção física no Galaxy A15
-        ↓
-VoiceSignature determinística
-        ↓
-AMORA_CANONICAL
-        ↓
-Prosody Planner bounded
-        ↓
-PCM / AudioTrack
-```
-
-Treino próprio continua permitido como pesquisa futura se houver evidência clara de ganho e compute/dataset reproduzíveis.
-
----
-
-## 8. Voice Lab atual
-
-Existe um laboratório Android isolado usando **Supertonic 3 INT8 via sherpa-onnx**.
-
-Objetivo:
-
-- ouvir todos os speakers disponíveis;
-- comparar as mesmas frases pt-BR;
-- medir RTF/latência;
-- escolher uma base pela audição, não pelo nome;
-- testar presets temporários sem alterar produção;
-- explorar uma assinatura de sintetizador vocal deliberadamente artificial antes de congelar a voz-base.
-
-Presets atuais do laboratório:
-
-- `NATURAL`;
-- `AMORA_SOFT`;
-- `AMORA_SYNTH`;
-- `CHIBI`;
-- `VIRTUAL_SINGER`.
-
-Os perfis do laboratório são definidos em `config/voice_profiles.json`, validados pelo Core, sincronizados pelo Android com ETag/cache e permanecem `canonical=false`.
-
-A camada DSP experimental aceita apenas parâmetros bounded:
-
-- pitch por alteração da taxa de playback com compensação do speed de síntese;
-- drive;
-- quantização de bit-depth;
-- sample-hold;
-- mix digital;
-- ring modulation leve.
-
-Esses transforms existem para A/B no laboratório e **ainda não são a VoiceSignature final**. Formant tracking, EQ, de-essing, compressor/limiter e outros transforms mais sofisticados só entram depois que uma base física for escolhida e houver evidência de que melhoram a identidade sem prejudicar pt-BR.
-
-O `LocalVoiceEngine` de produção continua usando Faber até promoção explícita após teste físico.
-
----
-
-## 9. Gate físico
-
-A voz só pode ser promovida como `AMORA_CANONICAL` após teste real no Galaxy A15.
-
-Avaliar pelo menos:
-
-- pt-BR real e inteligível;
-- pronúncia de Amora/BK/gírias/frases difíceis;
-- consistência de speaker;
-- latência de primeira fala;
+- pt-BR/inteligibilidade no caminho final;
+- pronúncia de Amora/BK/gírias;
+- primeira latência;
 - RTF;
 - RAM/CPU;
 - temperatura;
-- estabilidade prolongada;
-- barge-in/playback;
-- funcionamento offline;
+- estabilidade longa;
+- barge-in real;
+- playback Safari/iPhone;
+- funcionamento offline do worker local;
 - ausência de chamadas TTS remotas;
-- qualidade da VoiceSignature;
-- diferença clara entre identidade canônica e fantasias temporárias.
+- consistência acústica entre Android e Termux quando comparável.
 
-CI não substitui esse gate.
-
----
-
-## 10. Portabilidade futura
-
-A `VoiceSignature` deve ser especificada de modo que possa ser reproduzida em mais de um cliente quando tecnicamente viável.
-
-Direção planejada:
+Até esse gate, a API Web deve continuar reportando:
 
 ```text
-Android TtsBackend ─┐
-                    ├─ VoiceSignature AMORA_CANONICAL
-Web/PWA TtsBackend ─┘
+canonical_voice=false
 ```
 
-O backend pode diferir por plataforma; o objetivo é preservar a mesma identidade percebida e parâmetros versionados, não obrigar todos os clientes a usar exatamente o mesmo runtime.
+Isso significa “certificação física/final pendente”, não “identidade vocal indefinida”.
 
 ---
 
-## 11. Estado atual
+## 14. Critério para revisitar FINAL_B / Signature
 
-- Faber masculino = voz técnica/provisória de produção que certificou o pipeline local.
-- Supertonic 3 INT8 = candidato de laboratório já integrado de forma isolada.
-- VoiceProfile sync = ativo para parâmetros leves; o Core não distribui os pesos do modelo.
-- DSP vocal-synth = experimental/bounded no Voice Lab; não canônico.
-- voz final = **ainda não escolhida**; depende do teste físico de BK.
-- próximo passo = testar speakers com `NATURAL` e `VIRTUAL_SINGER` no Galaxy A15, selecionar a melhor base e calibrar a VoiceSignature real.
+Não reabrir os parâmetros congelados sem evidência nova clara, como:
+
+- regressão física no Galaxy A15/Safari;
+- inteligibilidade inadequada em uso real;
+- artefato inevitável causado pelo próprio FINAL_B/Signature;
+- divergência comprovada entre runtimes;
+- backend local rights-clear claramente superior.
+
+Problema de transporte, fila, Web Audio, STT ou emoção deve ser corrigido na camada dona do problema, não alterando a identidade vocal por reflexo.
