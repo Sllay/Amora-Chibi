@@ -64,7 +64,7 @@ O bug inicial em que Safari buscava `WEB_SAFARI` mas o Core enfileirava em `DEVI
 
 ## 3. Voz Web local — integração atual
 
-PR #54 foi integrado ao `main` no commit:
+A implementação principal do Voice Worker Web foi integrada pelo PR #54 no commit:
 
 ```text
 5ea4bd7d40e85cf7380f50f0aad05b54605f0ade
@@ -83,6 +83,14 @@ O squash do `main` e o head original possuem a mesma árvore Git:
 ```
 
 Portanto a implementação da branch interrompida não ficou perdida; ela foi consolidada no `main`.
+
+O fechamento pós-merge foi integrado pelo PR #56 no commit:
+
+```text
+79a186df1e49d106bcb26a4bfb7ce429323900d8
+```
+
+Esse fechamento adicionou testes explícitos de ACK/cancel/fail-open, cache do setup Termux, observabilidade Web separada de Android e sincronização do canon/roadmap/handoff.
 
 ### Pipeline
 
@@ -238,7 +246,9 @@ A intenção é instalação pesada única. Depois disso, mudanças normais Web/
 
 ## 8. Evidência automatizada
 
-No head original `e3f85799831127adb42f643213ed6b3d9e2d8470` do PR #54:
+### Integração principal — PR #54
+
+No head original `e3f85799831127adb42f643213ed6b3d9e2d8470`:
 
 - Core tests: PASS em Python 3.11, 3.12, 3.13 e 3.14;
 - doctor smoke: PASS;
@@ -251,15 +261,33 @@ No head original `e3f85799831127adb42f643213ed6b3d9e2d8470` do PR #54:
 
 A implementação mergeada em `main` possui a mesma árvore Git desse head.
 
-Testes Web cobrem/serão mantidos para:
+### Fechamento pós-merge — PR #56
+
+Head testado:
+
+```text
+4dfa7044f5a6ff79bf4af6eec4f87df62870e8b0
+```
+
+Core CI run #937:
+
+- Python 3.11: PASS;
+- Python 3.12: PASS;
+- Python 3.13: PASS;
+- Python 3.14: PASS;
+- doctor/autonomy/actions/conversation/avatar/backup smokes: PASS.
+
+O workflow Android não rodou no PR #56 por `paths: android/**`; nenhum arquivo Android foi alterado no fechamento. O build Android relevante continua sendo o PASS do PR #54, que validou o DSP/JNI compartilhado.
+
+Testes Web agora cobrem:
 
 - rota WAV autenticada;
 - indisponibilidade do worker;
 - routing `WEB_SAFARI`;
 - `test_mode`;
 - ausência de `speechSynthesis` no cliente V2;
-- ACK após playback explícito;
-- cancelamento manual/barge-in;
+- ACK após confirmação explícita de playback;
+- cancelamento manual de utterance claimed;
 - recuperação após falha de voz sem prender a próxima mensagem.
 
 ---
@@ -323,13 +351,14 @@ Sem APK novo e sem reinstalar modelos a cada pequena alteração.
 Ordem atual:
 
 ```text
-1. fechar CI da regressão/ documentação do Voice Worker Web
-2. integrar o fechamento ao main
-3. rodar setup-local-voice.sh uma vez no Termux real
-4. testar voz física pelo Safari/iPhone
-5. coletar latência/RTF/barge-in/estabilidade
-6. corrigir somente bugs comprovados no gate físico, preservando FINAL_B/Signature
-7. continuar iteração da Amora pelo Safari
+1. git pull / sincronizar o main atual no Galaxy A15
+2. rodar setup-local-voice.sh uma vez no Termux real
+3. reiniciar o Core
+4. abrir/atualizar o Safari Lab pelo tunnel
+5. testar voz física, ACK, barge-in e manual stop
+6. coletar latência/RTF/estabilidade/RAM-CPU-temperatura
+7. corrigir somente bugs comprovados no gate físico, preservando FINAL_B/Signature
+8. continuar a iteração da Amora pelo Safari
 ```
 
 Não voltar para:
