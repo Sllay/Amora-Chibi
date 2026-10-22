@@ -2,7 +2,7 @@
 
 **Documento:** arquitetura técnica oficial da Amora  
 **Status:** CANÔNICO / ATUAL  
-**Atualizado em:** 2026-10-10  
+**Atualizado em:** 2026-10-22  
 **Regra de autoridade:** este arquivo descreve a arquitetura vigente. Histórico, tentativas rejeitadas e decisões substituídas vivem em `docs/decisions/` e no histórico Git.
 
 ---
@@ -11,9 +11,9 @@
 
 > **A Amora não é um modelo de linguagem.**
 
-Modelos remotos são capacidade cognitiva/linguística substituível. A identidade, relações, memória, emoções, objetivos, intenções, privacidade e fatos canônicos da Amora pertencem ao Core local.
+Modelos remotos são capacidade cognitiva/linguística substituível. A identidade, relações, memória, emoções, objetivos, intenções, privacidade e fatos canônicos da Amora pertencem ao Core.
 
-Trocar provider pode alterar fluência, criatividade, latência e profundidade, mas **não pode trocar quem a Amora é**.
+Trocar provider ou platform adapter pode alterar fluência, criatividade, latência, UI e capacidade de integração, mas **não pode trocar quem a Amora é**.
 
 ```text
 AMORA
@@ -30,7 +30,7 @@ AMORA
 ├── avatar / corpo
 └── Model Router
     ├── Groq
-    ├── Cloudflare Workers AI (planejado)
+    ├── Cloudflare Workers AI
     ├── OpenRouter (especialista / último recurso)
     ├── Gemini (tarefas específicas; não identidade)
     └── providers futuros
@@ -40,9 +40,18 @@ AMORA
 
 ## 2. Plataforma
 
-### 2.1 Host principal
+### 2.1 Host principal atual
 
-Host doméstico inicial: **Galaxy A15 5G**.
+Host doméstico atual: **Galaxy A15 5G**.
+
+O Core continua local no Termux. A superfície primária de iteração conversacional é Safari/Web; Android debug permanece referência/gate secundário até existir o cliente Android oficial final.
+
+```text
+Galaxy A15 / Termux
+└── Amora Core + estado canônico
+    ├── Web/Safari adapter -> laboratório principal
+    └── Android adapter    -> referência / integração nativa / gate secundário
+```
 
 ### 2.2 Core — Termux / Python
 
@@ -67,28 +76,63 @@ Responsável por:
 - plugins / actions;
 - privacy gates;
 - servidor HTTP;
+- fila e verdade de entrega de `SpeechUtterance`;
+- Voice Worker local Web;
 - observabilidade, backup e restore.
 
-### 2.3 Android — Kotlin
+### 2.3 Web/Safari — platform adapter
 
 Responsável por:
+
+- UI Web/PWA;
+- pareamento/autenticação com o Core;
+- captura de microfone via Web Audio;
+- VAD/barge-in local;
+- envio de WAV para o contrato de STT;
+- exibição de texto;
+- player Web Audio para WAV retornado pelo Core;
+- interrupção manual/local;
+- diagnóstico de latência/fila/voz.
+
+O navegador **não** é dono de:
+
+- identidade;
+- memória;
+- emoção;
+- semântica social;
+- fila canônica;
+- VoiceSignature;
+- escolha de provider;
+- verdade persistente de entrega.
+
+`window.speechSynthesis` não é o transporte principal da voz da Amora.
+
+### 2.4 Android — Kotlin
+
+Responsável, quando usado, por:
 
 - microfone;
 - captura e reprodução de áudio;
 - foreground services;
 - notificações;
-- UI;
+- UI nativa;
 - pareamento com o Core;
 - integração Android;
 - futura percepção de tela;
 - futura hospedagem do Avatar Engine;
-- engine de voz local no dispositivo.
+- engine/bridge de voz local no dispositivo.
+
+O APK debug atual não define a arquitetura do cliente Android oficial final.
+
+### 2.5 Identidades de plataforma
 
 Pessoa, dispositivo e sessão são identidades diferentes.
 
 ```text
-PERSON_BK != DEVICE_A15 != SESSION_X
+PERSON_BK != DEVICE_A15 != WEB_SAFARI != SESSION_X
 ```
+
+Fila de áudio deve respeitar `device_id`; um cliente Web não reivindica automaticamente trabalho destinado ao Android e vice-versa.
 
 ---
 
@@ -370,24 +414,15 @@ voz
 
 O modelo é **surface realization**, não identidade.
 
-### 11.2 Atos existentes e expansão planejada
+### 11.2 Atos existentes
 
-A V1 já possui atos como acknowledgement, self fact, disclosure, support request, answer question, continue topic, autonomous initiation e reflection.
+A V1 possui atos/semântica local para acknowledgement, self fact, disclosure, support request, answer question, continue topic, autonomous initiation, reflection e atos relacionais mais ricos como opinião, discordância, tease/complaint/boundary quando aplicável.
 
-O fechamento da V1 deve adicionar semântica local mais rica para impedir comportamento de atendimento genérico, incluindo candidatos como:
-
-- `EXPRESS_OPINION`;
-- `DISAGREE`;
-- `TEASE`;
-- `COMPLAIN`;
-- `RELATIONAL_REACTION`;
-- `SET_BOUNDARY`.
-
-O plano deverá carregar stance, relational attitude e closing mode quando necessário.
+O plano carrega stance, relational attitude e closing mode quando necessário.
 
 ### 11.3 Validação pós-geração
 
-Adicionar validação semântica estrutural sem depender de blacklist de frases. Exemplos:
+Validação semântica estrutural não depende de blacklist de frases. Exemplos:
 
 - `ask_followup=false` não pode virar encerramento obrigatório em pergunta;
 - `offer_help=false` não pode virar oferta de atendimento;
@@ -429,13 +464,15 @@ Perfis de task podem incluir:
 
 Cada provider deve possuir telemetria de qualidade, latência, quota, disponibilidade, custo e especialidade.
 
-### 13.1 Estratégia atual / planejada
+### 13.1 Malha atual
 
-- **Groq:** provider cognitivo principal atual e STT rápido quando aplicável;
-- **Cloudflare Workers AI:** planejado para compor a malha gratuita e failover;
-- **OpenRouter:** broker especialista / último recurso; não deve consumir cota em conversa casual por padrão;
-- **Gemini:** pode permanecer para tarefas específicas, mas não é requisito de identidade nem voz normal;
-- **OpenAI paga:** não é dependência operacional padrão; objetivo de custo continua R$ 0 sempre que praticável.
+- **Groq:** provider cognitivo principal enquanto saudável;
+- **Cloudflare Workers AI:** segundo eixo direto quando configurado e explicitamente confirmado zero-cost;
+- **Gemini:** fallback/tarefas específicas quando configurado; não é identidade nem voz Web normal;
+- **OpenRouter:** rota explicitamente gratuita como broker/especialista/último recurso;
+- **fallback local:** mantém o Core funcional em degradação.
+
+Nenhum adapter pode ativar billing silenciosamente.
 
 ### 13.2 Provider Certification e Cognitive Replay
 
@@ -459,41 +496,102 @@ Provider pode ser aprovado apenas para certas tarefas.
 
 ---
 
-## 14. Voz — identidade vocal local
+## 14. Voz — identidade local compartilhada
 
-### 14.1 Regra
+### 14.1 Invariante
 
-A voz é parte da continuidade percebida da Amora. Trocar de engine silenciosamente entre timbres muito diferentes quebra identidade.
-
-### 14.2 Caminho normal definido para fechamento da V1
+A voz é parte da continuidade percebida da Amora. Backend de TTS não é sozinho a identidade vocal.
 
 ```text
-VoiceIdentity canônica (pt-BR)
-        ↓
-Prosody Planner local
-        ↓
-Local Voice Engine
-sherpa-onnx + modelo Piper/VITS pt-BR provisório
-        ↓
-PCM local
-        ↓
-Android AudioTrack
+TtsBackend
+↓
+base/style aprovada
+↓
+VoiceSignature fixa
+↓
+Emotion / Prosody bounded
+↓
+PCM
 ```
 
-- locale obrigatório: `pt-BR`;
-- voz provisória deve ser pinada, não escolhida aleatoriamente;
-- modelo pode ser distribuído como Voice Pack versionado;
-- verificar SHA-256 antes de ativar pack;
-- download ocorre uma vez; síntese normal deve funcionar offline;
-- Android TTS nativo fica como **fallback de emergência/bootstrap**, não identidade normal;
-- Gemini TTS fica **fora do caminho normal** por quota e quebra de identidade vocal;
-- uma futura `amora-voice-v1` própria substitui o modelo provisório quando direitos, dataset e qualidade estiverem resolvidos.
+Detalhes e parâmetros vivem em `docs/canon/VOICE_IDENTITY.md`, ADR-0010 e ADR-0011.
 
-A implementação local precisa ser certificada fisicamente no Galaxy A15 antes de ser declarada concluída.
+### 14.2 Identidade aprovada de laboratório
 
-### 14.3 Prosódia
+Backend candidato atual:
 
-Humor/intenção podem alterar levemente rate, energia, pausas e timing, mas não trocar a identidade vocal.
+```text
+sherpa-onnx-supertonic-3-tts-int8-2026-05-11
+```
+
+Style:
+
+```text
+60% speaker 0 + 40% speaker 4
+```
+
+Base e assinatura congeladas:
+
+```text
+AMORA_CHILD_FINAL_B_PLUS60
+↓
+AMORA_VOICE_SIGNATURE_V1_SOFT
+```
+
+Emotion/Prosody V2 pode apenas modular expressão dentro de bounds; não reabre timbre/base.
+
+### 14.3 DSP compartilhado
+
+A implementação aprovada de FINAL_B + VoiceSignature + expressão bounded vive em:
+
+```text
+android/app/src/main/cpp/amora_voice_processor.cpp
+android/app/src/main/cpp/amora_voice_processor.h
+```
+
+Android chama essa implementação por JNI. O Voice Worker Termux compila o mesmo código como shared library e o carrega por C ABI/`ctypes`.
+
+Não manter duas implementações divergentes do DSP.
+
+### 14.4 Voice Worker Web/Safari
+
+Pipeline:
+
+```text
+SpeechUtterance validada
+↓
+AmoraLocalVoiceRenderer / Termux
+↓
+Supertonic 3 + amora_voice.bin
+↓
+shared FINAL_B + Signature V1 Soft
+↓
+Emotion/Prosody V2 bounded
+↓
+WAV PCM16 mono
+↓
+Safari Web Audio
+```
+
+Regras:
+
+- rota de áudio é autenticada;
+- AUTH/SECRET não viram áudio;
+- renderização não equivale a entrega;
+- texto pode aparecer mesmo se áudio falhar;
+- `started` ocorre quando playback começa;
+- ACK falado só ocorre quando playback termina;
+- barge-in/manual stop aborta fetch/player e cancela a utterance/turno;
+- falha de voz libera a interface/fila;
+- nenhuma falha troca silenciosamente para Gemini TTS ou Safari TTS.
+
+### 14.5 Android atual
+
+O caminho Android de produção existente pode continuar com Faber provisório enquanto a promoção nativa final não for concluída. O Android debug é referência/gate secundário; pequenas iterações de diálogo/Web não exigem novo APK.
+
+### 14.6 Certificação
+
+Identidade de laboratório aprovada não equivale a produto fisicamente certificado. Ainda medir voz, RTF/latência, barge-in, estabilidade, CPU/RAM/temperatura e equivalência percebida no hardware real.
 
 ---
 
@@ -542,7 +640,7 @@ health
 
 Falha de plugin não pode derrubar o Core.
 
-O runtime deve expor saúde operacional como `ON`, `OFF`, `WAIT` e `DEGRADED` sem codificar integrações específicas no console. Um futuro plugin `games.minecraft`, por exemplo, registra a própria saúde; o console apenas a exibe genericamente.
+O runtime deve expor saúde operacional como `ON`, `OFF`, `WAIT` e `DEGRADED` sem codificar integrações específicas no console.
 
 ---
 
@@ -556,7 +654,9 @@ Deve mostrar, quando disponível:
 - módulos/providers/plugins e saúde;
 - provider/model em uso;
 - quota/cooldown;
-- sessão Android;
+- sessão/plataforma ativa;
+- estado de `WEB_SAFARI` separado de `DEVICE_A15` quando aplicável;
+- estado do Voice Worker local e RTF;
 - erro recente resumido;
 - estados observáveis do Core como DialogueAct e intention.
 
@@ -615,49 +715,55 @@ Itens movidos para V1.1/V1.2 são **adiados, não cancelados**.
 
 ---
 
-## 20. Fechamento atual da V1 — quatro passos
+## 20. Fechamento atual da V1
 
-A V1 será fechada de forma sequencial:
+Estado sequencial atual:
 
-1. **Voz local estável:** sherpa-onnx/Piper pt-BR, VoiceIdentity fixa, sem Gemini TTS no caminho normal, certificação A15.
-2. **Identidade de diálogo:** atos/stance relacionais mais ricos, validator estrutural, correção de addressee continuity, replay comparativo de modelos.
-3. **Malha de providers gratuitos:** Groq + Cloudflare; OpenRouter como especialista/último recurso; quota/cooldown/failover certificados.
-4. **Voz canônica + certificação V1:** `amora-voice-v1` quando viável, conversa longa, barge-in, restart, backup/restore, quota, estabilidade e temperatura.
+1. **Voz local técnica:** sherpa-onnx/Piper pt-BR, pipeline local Android fisicamente comprovado — implementado.
+2. **Identidade de diálogo + Emotion loop:** semântica local, validator, test isolation, addressee continuity — implementado.
+3. **Malha de providers gratuitos:** Groq + Cloudflare + Gemini/OpenRouter guardados + fallback local — implementado.
+4. **Voz candidata + certificação:** FINAL_B + Signature V1 Soft aprovadas em laboratório e integradas ao Web Voice Worker; gate físico Web/Safari e certificação final ainda pendentes.
 
-Não iniciar o passo seguinte enquanto existir defeito estrutural aberto no anterior.
+ADR-0013 tornou Safari a superfície primária de iteração antes do fechamento físico completo porque o APK debug não deve dominar o ciclo de desenvolvimento.
 
 ---
 
 ## 21. Regras arquiteturais não negociáveis
 
 1. Provider nunca é identidade.
-2. Estado canônico vive fora do LLM.
-3. Memória ambígua não vira fato automaticamente.
-4. Speaker ID não é autenticação.
-5. Emoção preserva causa/alvo quando aplicável.
-6. Relações mudam lentamente.
-7. Traits mudam ainda mais lentamente.
-8. Silêncio é comportamento válido.
-9. Não usar LLM quando algoritmo local resolve.
-10. Não usar visão remota quando API/plugin/OCR local resolve.
-11. Privacidade controla fluxo de dados, não personalidade.
-12. Plugins são isolados.
-13. Ações relevantes verificam resultado.
-14. Providers/modelos novos são certificados.
-15. Entidades e aliases são canônicos.
-16. Perspectiva é resolvida antes de consolidar fatos quando possível.
-17. Amora continua funcional em modo degradado.
-18. Não depender de um free tier específico.
-19. Tempo usa TimeService/Scheduler.
-20. Pessoa, dispositivo e sessão são distintos.
-21. Secrets nunca entram no contexto cognitivo/provider.
-22. Disclosure e remote processing são decisões diferentes.
-23. Event Bus é idempotente/deduplicável.
-24. Persistência usa migrations e backup/restore verificável.
-25. Personalidade não pode depender exclusivamente de prompt.
-26. Provider realiza linguagem; Core detém semântica social sempre que possível.
-27. Voz normal deve manter identidade vocal consistente e pt-BR.
-28. Falha de provider ou quota não pode redefinir quem a Amora é.
+2. Platform adapter nunca é identidade.
+3. Estado canônico vive fora do LLM e fora do navegador.
+4. Memória ambígua não vira fato automaticamente.
+5. Speaker ID não é autenticação.
+6. Emoção preserva causa/alvo quando aplicável.
+7. Relações mudam lentamente.
+8. Traits mudam ainda mais lentamente.
+9. Silêncio é comportamento válido.
+10. Não usar LLM quando algoritmo local resolve.
+11. Não usar visão remota quando API/plugin/OCR local resolve.
+12. Privacidade controla fluxo de dados, não personalidade.
+13. Plugins são isolados.
+14. Ações relevantes verificam resultado.
+15. Providers/modelos novos são certificados.
+16. Entidades e aliases são canônicos.
+17. Perspectiva é resolvida antes de consolidar fatos quando possível.
+18. Amora continua funcional em modo degradado.
+19. Não depender de um free tier específico.
+20. Tempo usa TimeService/Scheduler.
+21. Pessoa, dispositivo e sessão são distintos.
+22. Secrets nunca entram no contexto cognitivo/provider.
+23. Disclosure e remote processing são decisões diferentes.
+24. Event Bus é idempotente/deduplicável.
+25. Persistência usa migrations e backup/restore verificável.
+26. Personalidade não pode depender exclusivamente de prompt.
+27. Provider realiza linguagem; Core detém semântica social sempre que possível.
+28. Voz normal deve manter identidade vocal consistente e pt-BR.
+29. Falha de provider ou quota não pode redefinir quem a Amora é.
+30. `WEB_SAFARI` e `DEVICE_A15` permanecem destinos distintos.
+31. Falha de áudio Web não pode bloquear o texto nem a interface inteira.
+32. Safari `speechSynthesis` e Gemini TTS não são fallback silencioso do Voice Worker local.
+33. FINAL_B/VoiceSignature congeladas não são retunadas para corrigir bug de transporte.
+34. CI não equivale a certificação física.
 
 ---
 
@@ -666,8 +772,10 @@ Não iniciar o passo seguinte enquanto existir defeito estrutural aberto no ante
 - `docs/canon/ARCHITECTURE.md`: arquitetura atual.
 - `docs/canon/GDD.md`: produto/comportamento atual.
 - `docs/canon/SKILL.md`: regras para desenvolver a Amora.
+- `docs/canon/VOICE_IDENTITY.md`: identidade e pipeline vocal atuais.
 - `docs/roadmap/VERSIONS.md`: origem, destino e status de features por versão.
 - `docs/decisions/`: por que decisões foram aceitas, rejeitadas ou substituídas.
+- `PROJECT_STATE.md`: checkpoint operacional atual.
 - documentos históricos e commits antigos não são especificação atual por padrão.
 
 Antes de restaurar um método antigo, consultar os ADRs e o histórico para saber por que ele foi abandonado.
