@@ -1,0 +1,12 @@
+{
+  "name": "Amora Web Lab",
+  "short_name": "Amora",
+  "description": "Cliente Web/PWA experimental da Amora para Safari/iPhone.",
+  "start_url": "/web/",
+  "scope": "/web/",
+  "display": "standalone",
+  "background_color": "#100d16",
+  "theme_color": "#17131f",
+  "lang": "pt-BR",
+  "orientation": "portrait-primary"
+}
