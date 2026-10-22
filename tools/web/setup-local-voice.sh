@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AMORA_HOME="${AMORA_HOME:-$HOME/.amora}"
+export AMORA_HOME
 MODEL_ID="sherpa-onnx-supertonic-3-tts-int8-2026-05-11"
 MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/${MODEL_ID}.tar.bz2"
 MODEL_DIR="$AMORA_HOME/models/$MODEL_ID"
