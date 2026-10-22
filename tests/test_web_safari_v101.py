@@ -7,7 +7,20 @@ from fastapi.testclient import TestClient
 
 from amora.api import create_api
 from amora.app import AmoraCore
+from amora.audio import Transcript
 from amora.time import FakeClock
+
+
+class _FakeStt:
+    async def transcribe(self, segment):
+        return Transcript(
+            text="Amora, para um pouquinho.",
+            provider="fake",
+            model="fake-stt",
+            language=segment.language,
+            confidence=0.94,
+            request_id="req-web-safari",
+        )
 
 
 def _clock() -> FakeClock:
@@ -77,6 +90,26 @@ def test_web_text_turn_uses_core_pipeline_and_defaults_to_test_isolation(tmp_pat
         core.close()
 
 
+def test_web_mic_can_request_same_test_isolation_through_shared_audio_contract(tmp_path: Path, monkeypatch) -> None:
+    core, client, headers = _client(tmp_path, monkeypatch)
+    try:
+        core.stt = _FakeStt()  # type: ignore[assignment]
+        response = client.post(
+            "/v1/audio/transcribe?language=pt&speaker_id=PERSON_BK&speaker_confidence=0.8&remote_processing_allowed=false&test_mode=true",
+            content=b"RIFFweb-lab-probe",
+            headers={**headers, "Content-Type": "audio/wav"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["accepted"] is True
+        assert body["test_mode"] is True
+        assert body["transcript"]["text"] == "Amora, para um pouquinho."
+        assert body["observation"]["speaker_id"] == "PERSON_BK"
+        assert body["turn"]["addressee_id"] == "ENTITY_AMORA"
+    finally:
+        core.close()
+
+
 def test_web_assets_do_not_enable_stale_service_worker_cache(tmp_path: Path, monkeypatch) -> None:
     core, client, _ = _client(tmp_path, monkeypatch)
     try:
@@ -85,5 +118,6 @@ def test_web_assets_do_not_enable_stale_service_worker_cache(tmp_path: Path, mon
         assert "serviceWorker.register" not in app.text
         assert "web_barge_in" in app.text
         assert "MAX_SPEECH_QUEUE = 3" in app.text
+        assert 'test_mode: testToggle.checked ? "true" : "false"' in app.text
     finally:
         core.close()
