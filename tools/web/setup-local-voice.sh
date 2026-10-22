@@ -38,12 +38,14 @@ mkdir -p "$MODEL_DIR" "$WORLD_DIR" "$LIB_DIR" "$CACHE_DIR"
 
 if python - "$SHERPA_VERSION" <<'PY'
 import sys
+from importlib.metadata import PackageNotFoundError, version
+
 wanted = sys.argv[1]
 try:
-    import sherpa_onnx
-except Exception:
+    installed = version("sherpa-onnx")
+except PackageNotFoundError:
     raise SystemExit(1)
-raise SystemExit(0 if getattr(sherpa_onnx, "__version__", "") == wanted else 1)
+raise SystemExit(0 if installed == wanted else 1)
 PY
 then
   echo "[amora-voice] sherpa-onnx $SHERPA_VERSION já instalado."
@@ -53,8 +55,8 @@ else
 fi
 
 python - <<'PY'
-import sherpa_onnx
-print(f"[amora-voice] sherpa-onnx {sherpa_onnx.__version__}")
+from importlib.metadata import version
+print(f"[amora-voice] sherpa-onnx {version('sherpa-onnx')}")
 PY
 
 download_cached() {
