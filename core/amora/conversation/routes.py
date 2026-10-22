@@ -33,6 +33,11 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
     def console():
         return getattr(app.state, "server_console", None)
 
+    def delivery_surface(item) -> tuple[str, str, str]:
+        if item.device_id == "WEB_SAFARI":
+            return "web.voice", "Web Voice", "Safari"
+        return "android.tts", "Android TTS", "Android"
+
     @app.get("/v1/conversation/state", dependencies=[Depends(require_auth)])
     def conversation_state() -> dict[str, object]:
         return core.conversation.state()
@@ -84,8 +89,9 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
             raise HTTPException(status_code=404, detail="utterance not found")
         dashboard = console()
         if dashboard is not None:
-            dashboard.set_module("android.tts", "Android TTS", "ON", "fala iniciada")
-            dashboard.set_activity("FALANDO", item.text[:120], ttl_seconds=2.0)
+            module_id, module_name, surface = delivery_surface(item)
+            dashboard.set_module(module_id, module_name, "ON", "fala iniciada")
+            dashboard.set_activity("FALANDO", f"{surface} • {item.text[:110]}", ttl_seconds=2.0)
         return {"utterance": item.model_dump(mode="json")}
 
     @app.post("/v1/conversation/utterances/{utterance_id}/ack", dependencies=[Depends(require_auth)])
@@ -96,8 +102,9 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
             if item is None:
                 raise HTTPException(status_code=404, detail="utterance not found")
             if dashboard is not None:
-                dashboard.set_module("android.tts", "Android TTS", "ON", "fala concluída")
-                dashboard.set_activity("IDLE", "fala concluída no Android", ttl_seconds=1.5)
+                module_id, module_name, surface = delivery_surface(item)
+                dashboard.set_module(module_id, module_name, "ON", "fala concluída")
+                dashboard.set_activity("IDLE", f"fala concluída no {surface}", ttl_seconds=1.5)
             return {"utterance": item.model_dump(mode="json")}
 
         reason = (ack.reason or "tts_delivery_failed")[:96]
@@ -109,9 +116,10 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
         if item is None:
             raise HTTPException(status_code=404, detail="utterance not found")
         if dashboard is not None:
-            dashboard.set_module("android.tts", "Android TTS", "DEGRADED", reason)
-            dashboard.set_activity("FALHA DE VOZ", "Android TTS não confirmou a fala", ttl_seconds=8.0)
-            dashboard.record_error("Android TTS", f"{reason}; {cancelled} fala(s) cancelada(s)")
+            module_id, module_name, surface = delivery_surface(item)
+            dashboard.set_module(module_id, module_name, "DEGRADED", reason)
+            dashboard.set_activity("FALHA DE VOZ", f"{surface} não confirmou a fala", ttl_seconds=8.0)
+            dashboard.record_error(module_name, f"{reason}; {cancelled} fala(s) cancelada(s)")
         return {
             "utterance": item.model_dump(mode="json"),
             "cancelled_utterances": cancelled,
