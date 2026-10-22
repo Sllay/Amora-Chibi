@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from amora.api import create_api
+from amora.app import AmoraCore
+from amora.time import FakeClock
+
+
+def _clock() -> FakeClock:
+    return FakeClock(datetime(2026, 10, 21, 12, 0, tzinfo=UTC))
+
+
+def _client(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=_clock())
+    client = TestClient(create_api(core))
+    token = core.secrets.get("LOCAL_API_TOKEN")
+    assert token
+    return core, client, {"Authorization": f"Bearer {token}"}
+
+
+def test_safari_lab_static_shell_and_manifest_are_served(tmp_path: Path, monkeypatch) -> None:
+    core, client, _ = _client(tmp_path, monkeypatch)
+    try:
+        page = client.get("/web/")
+        assert page.status_code == 200
+        assert "AMORA · SAFARI LAB" in page.text
+        assert "Parar fala" in page.text
+
+        manifest = client.get("/web/manifest.webmanifest")
+        assert manifest.status_code == 200
+        payload = manifest.json()
+        assert payload["short_name"] == "Amora"
+        assert payload["start_url"] == "/web/"
+        assert payload["display"] == "standalone"
+    finally:
+        core.close()
+
+
+def test_web_state_is_authenticated_and_labels_debug_voice_noncanonical(tmp_path: Path, monkeypatch) -> None:
+    core, client, headers = _client(tmp_path, monkeypatch)
+    try:
+        assert client.get("/v1/web/state").status_code == 401
+        response = client.get("/v1/web/state", headers=headers)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["surface"] == "AMORA_WEB_SAFARI_LAB_V1"
+        assert payload["status"] == "experimental"
+        assert payload["canonical_voice"] is False
+        assert payload["voice_transport"] == "browser_speech_synthesis_debug"
+    finally:
+        core.close()
+
+
+def test_web_text_turn_uses_core_pipeline_and_defaults_to_test_isolation(tmp_path: Path, monkeypatch) -> None:
+    core, client, headers = _client(tmp_path, monkeypatch)
+    try:
+        payload = {
+            "text": "Amora, oi.",
+            "remote_processing_allowed": False,
+            "test_mode": True,
+        }
+        assert client.post("/v1/web/utterance", json=payload).status_code == 401
+
+        response = client.post("/v1/web/utterance", json=payload, headers=headers)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["test_mode"] is True
+        assert body["observation"]["speaker_id"] == "PERSON_BK"
+        assert body["turn"]["speaker_id"] == "PERSON_BK"
+        assert body["turn"]["addressee_id"] == "ENTITY_AMORA"
+    finally:
+        core.close()
+
+
+def test_web_assets_do_not_enable_stale_service_worker_cache(tmp_path: Path, monkeypatch) -> None:
+    core, client, _ = _client(tmp_path, monkeypatch)
+    try:
+        app = client.get("/web/app.js")
+        assert app.status_code == 200
+        assert "serviceWorker.register" not in app.text
+        assert "web_barge_in" in app.text
+        assert "MAX_SPEECH_QUEUE = 3" in app.text
+    finally:
+        core.close()
