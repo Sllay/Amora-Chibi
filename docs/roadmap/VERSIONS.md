@@ -1,7 +1,7 @@
 # AMORA — Version Lineage / Roadmap Canônico
 
 **Status:** CANÔNICO  
-**Atualizado em:** 2026-10-16
+**Atualizado em:** 2026-10-22
 
 Este arquivo impede interpretar feature ausente da versão atual como “cancelada”. `MOVED` não significa cancelado.
 
@@ -96,7 +96,7 @@ Infraestrutura/experimentos antigos de avatar podem permanecer no repo, mas não
 
 ## 4. V1.0 — fechamento atual
 
-**Status:** `IN_PROGRESS — STEP 4 VOICE LAB / PHYSICAL SELECTION`
+**Status:** `IN_PROGRESS — VOICE IDENTITY LAB-APPROVED / PHYSICAL CERTIFICATION PENDING`
 
 Fundação atual inclui:
 
@@ -116,7 +116,9 @@ Fundação atual inclui:
 - test-state isolation;
 - provider mesh zero-cost fail-closed;
 - Android app/pareamento/foreground voice;
-- voice path sherpa-onnx fisicamente comprovado no Galaxy A15.
+- voice path sherpa-onnx fisicamente comprovado no Galaxy A15;
+- Safari/Web como superfície primária de iteração rápida, conforme ADR-0013;
+- Voice Worker local Web com identidade vocal aprovada de laboratório, conforme ADR-0014.
 
 ### V1 Step 1 — Local Voice
 
@@ -133,7 +135,7 @@ Entregue:
 - diagnóstico local;
 - Galaxy A15 reproduziu fisicamente Faber.
 
-Faber continua voz técnica provisória. Long-run barge-in/térmica/conversa permanecem no gate final V1.
+Faber continua voz técnica provisória no caminho Android de produção existente. Long-run barge-in/térmica/conversa permanecem no gate final V1.
 
 ### V1 Step 2 — Dialogue Identity + Emotion Integration
 
@@ -156,7 +158,7 @@ Entregue:
 
 PR #29 / merge `dfe50de9a9312f0e6a3f08cc482e9b4dc0aee1d4`.
 
-CI: Python 3.11–3.14 PASS, 211 pytest tests por matriz e smokes de doctor/autonomy/actions/conversation/avatar/backup PASS.
+CI: Python 3.11–3.14 PASS, 211 pytest tests por matriz e smokes de doctor/autonomy/actions/conversation/avatar/backup PASS naquele checkpoint.
 
 ### V1 Step 3 — Zero-Cost Provider Mesh
 
@@ -167,7 +169,7 @@ Entregue:
 - `docs/canon/PROVIDER_MESH.md`;
 - Groq primary;
 - Cloudflare Workers AI como segundo eixo direto;
-- Gemini fallback independente;
+- Gemini fallback independente para cognição compatível, não para identidade vocal normal;
 - OpenRouter free-route como specialist/last resort;
 - fallback local;
 - quota/cooldown/circuit breaker/failover preservados;
@@ -186,49 +188,61 @@ PR #30 foi integrado ao `main`; o provider mesh faz parte da fundação V1 atual
 
 ### V1 Step 4 — Canonical Voice + V1 Certification
 
-**Status:** `IN_PROGRESS / VOICE LAB MERGED / PHYSICAL SELECTION PENDING`
+**Status:** `IN_PROGRESS / FINAL_B + SIGNATURE V1 SOFT LAB-APPROVED / PHYSICAL GATE PENDING`
 
-Decisão atual segue `docs/canon/VOICE_IDENTITY.md` + ADR-0009.
+Decisões vigentes:
 
-O treino/fine-tuning próprio deixou de ser requisito da V1. A estratégia atual separa backend de TTS e identidade vocal:
+- ADR-0009: backend pronto + VoiceSignature substitui treino próprio como requisito V1;
+- ADR-0010: `AMORA_CHILD_FINAL_B_PLUS60` congelada como base aprovada de laboratório;
+- ADR-0011: `AMORA_VOICE_SIGNATURE_V1_SOFT` aceita como assinatura aprovada de laboratório;
+- ADR-0014: a mesma implementação FINAL_B + Signature é compartilhada entre Android JNI e o worker Termux/Web.
+
+Pipeline atual da candidata:
 
 ```text
-TtsBackend local
+Supertonic 3 INT8
 ↓
-speaker/base aprovada
+style 60% speaker 0 + 40% speaker 4
 ↓
-VoiceSignature AMORA_CANONICAL
+AMORA_CHILD_FINAL_B_PLUS60
 ↓
-Prosody Planner bounded
+AMORA_VOICE_SIGNATURE_V1_SOFT
 ↓
-PCM / AudioTrack
+Emotion / Prosody V2 bounded
+↓
+PCM
 ```
 
-Entregue nesta etapa até agora:
+A busca por idade/tamanho vocal base e a assinatura V1 Soft não devem ser reabertas sem evidência nova. Emoção/prosódia varia ao redor da identidade fixa, sem trocar timbre.
 
-- `Voice Lab` Android isolado do `LocalVoiceEngine` de produção;
-- Supertonic 3 INT8 via sherpa-onnx como primeiro candidato;
-- múltiplos speakers enumeráveis no aparelho;
-- presets `NATURAL`, `AMORA_SOFT`, `AMORA_SYNTH` e `CHIBI`;
-- frases fixas + texto livre;
-- playback local e RTF visível;
-- launcher separado para o laboratório;
-- produção continua no Faber até promoção explícita.
+Entregue nesta etapa:
 
-Merge do Voice Lab no `main`: `5cf93d5975f659adce9748f155dbd962a7140750`.
+- Voice Lab Android isolado;
+- Supertonic 3 INT8 via sherpa-onnx;
+- `amora_voice.bin` com style 60/40;
+- FINAL_B congelada;
+- VoiceSignature V1 Soft congelada;
+- Emotion/Prosody V2 bounded;
+- processador C++ compartilhado entre JNI Android e Termux;
+- Voice Worker local Web/Safari emitindo WAV PCM16;
+- Web Audio no Safari sem `speechSynthesis` como transporte principal;
+- entrega baseada em claim → render → started → playback real → ACK;
+- cancelamento de barge-in/manual stop;
+- falha de voz fail-open para texto/interface;
+- `WEB_SAFARI` separado de `DEVICE_A15`.
 
-Próximos gates:
+Gates restantes:
 
-1. testar Supertonic no Galaxy A15;
-2. avaliar português, speakers, latência/RTF, RAM/CPU/temperatura e estabilidade;
-3. selecionar a melhor base feminina/adequada;
-4. implementar/calibrar `VoiceSignature` real (pitch/formant/EQ/de-ess/dynamics/textura apenas quando aprovados);
-5. separar `AMORA_CANONICAL` de fantasias temporárias;
-6. promover o backend vencedor para produção;
-7. conversa longa, barge-in, provider failover, restart e backup/restore;
-8. fechamento documental V1.
+1. preparar o worker no Termux real;
+2. reproduzir a candidata pelo Safari/iPhone;
+3. medir primeira latência e RTF reais;
+4. validar barge-in/manual stop físicos;
+5. observar RAM/CPU/temperatura e estabilidade prolongada;
+6. confirmar inteligibilidade/qualidade acústica no caminho Web;
+7. conversa longa, provider failover, restart e backup/restore;
+8. fechar certificação/documentação V1.
 
-Treino próprio pode ser revisitado no futuro, mas não bloqueia a V1.
+CI não substitui esses gates físicos.
 
 ---
 
@@ -247,24 +261,44 @@ Evitar experimentos descartáveis que apenas demonstram algo já provado.
 
 ## 6. V1.0.1 — Web/PWA + portabilidade de plataforma
 
-**Status:** `PLANNED — IMEDIATAMENTE APÓS FECHAMENTO DA VOZ/V1`
+**Status:** `IN_PROGRESS — SAFARI PRIMARY ITERATION SURFACE / LOCAL VOICE WORKER MERGED`
 
-Objetivo: permitir uso diário no iPhone sem depender de APK/compilação Android para cada iteração.
+ADR-0013 antecipou esta frente antes do fechamento físico completo da voz Android porque o ciclo APK → instalar → testar estava dominando o tempo de iteração de um cliente debug descartável.
 
-Direção:
+Objetivo atual: usar o Safari como laboratório conversacional principal sem mover identidade/estado canônicos para o navegador.
 
-- cliente Web/PWA instalável pela Tela de Início do Safari;
-- UI web separada do Core;
-- `platform adapters` para áudio/storage/microfone/web em vez de duplicar lógica da Amora;
-- mesma identidade/estado canônico compartilhados entre Android e Web;
-- VoiceSignature especificada de forma portável quando tecnicamente viável;
-- frontend estático pode usar hosting como Render Static Site ou equivalente;
-- modelos/voice packs web podem ser baixados na primeira execução e armazenados localmente quando a plataforma suportar;
-- não tratar site/PWA como "APK rodando no navegador"; é outro cliente sobre contratos comuns.
+Implementado:
+
+- cliente Web/PWA servido sob `/web/`;
+- pareamento de 6 dígitos e autenticação reutilizando o Core;
+- chat por texto;
+- microfone por Web Audio;
+- WAV → STT pelo contrato já existente;
+- VAD e barge-in no navegador;
+- fila de até múltiplos segmentos;
+- diagnóstico de latência/fila/voz;
+- `test_mode=true` por padrão no laboratório;
+- Quick Tunnel HTTPS para desenvolvimento;
+- routing explícito `WEB_SAFARI`;
+- Voice Worker local Termux com Supertonic 60/40 + FINAL_B + Signature V1 Soft;
+- WAV PCM16 para Safari via `AudioContext`;
+- texto independente da disponibilidade do áudio;
+- ACK apenas depois de playback real;
+- cancelamento de fetch/playback/Core em interrupção;
+- ausência de fallback silencioso para Safari TTS ou Gemini TTS.
+
+Merge principal da voz Web: PR #54 / `5ea4bd7d40e85cf7380f50f0aad05b54605f0ade`.
+
+Próximo gate desta frente:
+
+- setup único do worker no Termux;
+- teste físico no Safari/iPhone;
+- confirmar voz, latência, fila e barge-in reais;
+- depois disso o ciclo de laboratório deve ser majoritariamente `git pull → reiniciar Core → atualizar Safari → testar`, sem novo APK para mudanças que não sejam Android-specific.
 
 ### Core remoto / disponibilidade contínua
 
-Depois do cliente PWA, avaliar separação entre frontend e Core persistente remoto de custo zero/baixo.
+Depois que o cliente PWA estiver estável, avaliar separação entre frontend e Core persistente remoto de custo zero/baixo.
 
 Candidatos arquiteturais incluem Cloudflare Workers/Durable Objects/D1 ou equivalentes, desde que passem gates de:
 
