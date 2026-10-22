@@ -49,14 +49,16 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None]) -
             source="web:text",
             privacy_scope=request.privacy_scope,
         )
-        metadata = None
+        metadata: dict[str, object] = {"speech_device_id": "WEB_SAFARI"}
         if request.test_mode:
-            metadata = {
-                "test_mode": True,
-                "memory_consolidation": False,
-                "relationship_learning": False,
-                "emotion_persistence": False,
-            }
+            metadata.update(
+                {
+                    "test_mode": True,
+                    "memory_consolidation": False,
+                    "relationship_learning": False,
+                    "emotion_persistence": False,
+                }
+            )
         try:
             turn, reply = await core.conversation.observe_completed_utterance(
                 request.text,

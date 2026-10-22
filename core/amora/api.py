@@ -221,6 +221,7 @@ def create_api(core: AmoraCore) -> FastAPI:
         privacy_scope: PrivacyScope = Query(default=PrivacyScope.PERSONAL),
         remote_processing_allowed: bool = Query(default=False),
         test_mode: bool = Query(default=False),
+        speech_device_id: str | None = Query(default=None, min_length=1, max_length=128),
     ) -> dict[str, object]:
         console = server_console(request)
         content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
@@ -262,10 +263,17 @@ def create_api(core: AmoraCore) -> FastAPI:
                     "test_mode": test_mode,
                 }
 
+            resolved_speech_device = speech_device_id or (
+                "WEB_SAFARI" if speaker_id == "PERSON_BK" else "DEVICE_A15"
+            )
             speaker = SpeakerResult(
                 speaker_id=speaker_id,
                 confidence=speaker_confidence,
-                reason_codes=["ANDROID_CLIENT_DECLARED_SPEAKER"],
+                reason_codes=[
+                    "WEB_CLIENT_DECLARED_SPEAKER"
+                    if resolved_speech_device == "WEB_SAFARI"
+                    else "ANDROID_CLIENT_DECLARED_SPEAKER"
+                ],
             )
             observation = await core.language_social.observe_transcript(
                 transcript,
@@ -276,14 +284,16 @@ def create_api(core: AmoraCore) -> FastAPI:
             )
             if console is not None:
                 console.set_activity("PENSANDO", "Core local → plano semântico → linguagem", ttl_seconds=60.0)
-            metadata = None
+            metadata: dict[str, object] = {"speech_device_id": resolved_speech_device}
             if test_mode:
-                metadata = {
-                    "test_mode": True,
-                    "memory_consolidation": False,
-                    "relationship_learning": False,
-                    "emotion_persistence": False,
-                }
+                metadata.update(
+                    {
+                        "test_mode": True,
+                        "memory_consolidation": False,
+                        "relationship_learning": False,
+                        "emotion_persistence": False,
+                    }
+                )
             try:
                 turn, reply = await core.conversation.observe_completed_utterance(
                     transcript.text,
@@ -300,7 +310,7 @@ def create_api(core: AmoraCore) -> FastAPI:
                 core.social.end_turn(speaker.speaker_id)
             if console is not None:
                 if reply is not None:
-                    console.set_activity("RESPONDENDO", "fala enfileirada", ttl_seconds=4.0)
+                    console.set_activity("RESPONDENDO", f"fala enfileirada → {resolved_speech_device}", ttl_seconds=4.0)
                 else:
                     console.set_activity("IDLE", "sem resposta vocal", ttl_seconds=1.5)
             return {
@@ -310,6 +320,7 @@ def create_api(core: AmoraCore) -> FastAPI:
                 "turn": turn.model_dump(mode="json"),
                 "reply_queued": reply.model_dump(mode="json") if reply else None,
                 "test_mode": test_mode,
+                "speech_device_id": resolved_speech_device,
             }
         except SttCredentialsError as exc:
             if console is not None:

@@ -124,6 +124,9 @@ class ConversationEngine:
         metadata: dict[str, object] | None = None,
     ) -> tuple[TurnDecision, SpeechUtterance | None]:
         turn_metadata = dict(metadata or {})
+        # Platform is transport, not identity. Callers may explicitly target a
+        # speech adapter; legacy/non-platform callers remain on Android by default.
+        speech_device_id = str(turn_metadata.get("speech_device_id") or "DEVICE_A15")
         direct = addressee_id == "ENTITY_AMORA"
         event_id = UUID(str(source_event_id)) if source_event_id else None
         signal = TurnSignal(
@@ -186,6 +189,7 @@ class ConversationEngine:
                     privacy_scope=privacy_scope,
                     source_event_id=event_id,
                     dedupe_key=f"speech:cognitive:{segment.turn_id}:{segment.ordinal}",
+                    device_id=speech_device_id,
                     metadata={
                         **_execution_metadata(turn_metadata),
                         "turn_state": decision.state.value,
@@ -222,6 +226,7 @@ class ConversationEngine:
             privacy_scope=privacy_scope,
             source_event_id=event_id,
             dedupe_key=f"speech:utterance:{event_id}" if event_id else None,
+            device_id=speech_device_id,
             metadata={
                 **_execution_metadata(turn_metadata),
                 "turn_state": decision.state.value,
@@ -266,6 +271,7 @@ class ConversationEngine:
         privacy_scope: PrivacyScope,
         source_event_id: UUID | None,
         dedupe_key: str | None,
+        device_id: str = "DEVICE_A15",
         metadata: dict[str, object] | None = None,
         style=None,
     ) -> SpeechUtterance | None:
@@ -283,6 +289,7 @@ class ConversationEngine:
             style=style or self.composer.style_for_mood(self.emotion.current_mood()),
             privacy_scope=privacy_scope,
             source_event_id=source_event_id,
+            device_id=device_id,
             created_at=self.clock.now(),
             dedupe_key=dedupe_key,
             metadata=metadata or {},
