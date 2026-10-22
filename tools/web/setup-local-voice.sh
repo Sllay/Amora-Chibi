@@ -111,19 +111,43 @@ clang++ -std=c++17 -O3 -DNDEBUG -fPIC -shared \
 
 [[ -s "$LIB_PATH" ]] || { echo "[amora-voice] biblioteca WORLD não foi gerada" >&2; exit 5; }
 
+echo "[amora-voice] Rodando smoke real: Supertonic -> FINAL_B -> Signature V1..."
 python - <<'PY'
-from amora.app import AmoraCore
+from types import SimpleNamespace
+
+from amora.settings import RuntimePaths
 from amora.voice.local_amora import AmoraLocalVoiceRenderer
 
-core = AmoraCore.bootstrap()
-try:
-    renderer = AmoraLocalVoiceRenderer(core.paths)
-    state = renderer.state()
-    print("[amora-voice] estado:", state)
-    if not state["configured"]:
-        raise SystemExit("[amora-voice] setup terminou, mas o renderer ainda não está configurado")
-finally:
-    core.close()
+paths = RuntimePaths.from_environment()
+paths.ensure()
+renderer = AmoraLocalVoiceRenderer(paths)
+state = renderer.state()
+print("[amora-voice] estado:", state)
+if not state["configured"]:
+    raise SystemExit("[amora-voice] setup terminou, mas o renderer ainda não está configurado")
+
+expression = SimpleNamespace(
+    rate_scale=1.0,
+    pause_scale=1.0,
+    pitch_range_scale=1.0,
+    f0_register_scale=1.0,
+    energy_scale=1.0,
+    softness=0.25,
+    firmness=0.15,
+)
+probe = SimpleNamespace(
+    text="Oi, BK.",
+    style=SimpleNamespace(expression=expression, rate=1.0, volume=1.0),
+)
+audio = renderer.render(probe)
+if not audio.wav_bytes.startswith(b"RIFF") or audio.wav_bytes[8:12] != b"WAVE":
+    raise SystemExit("[amora-voice] smoke retornou WAV inválido")
+if audio.sample_rate <= 0 or audio.duration_seconds <= 0:
+    raise SystemExit("[amora-voice] smoke retornou áudio vazio")
+print(
+    "[amora-voice] SMOKE OK • "
+    f"{audio.sample_rate} Hz • {audio.duration_seconds:.2f}s • RTF {audio.total_rtf:.3f}"
+)
 PY
 
 echo
