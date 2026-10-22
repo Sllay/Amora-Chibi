@@ -124,15 +124,9 @@ class ConversationEngine:
         metadata: dict[str, object] | None = None,
     ) -> tuple[TurnDecision, SpeechUtterance | None]:
         turn_metadata = dict(metadata or {})
-        # V1 platform routing invariant: Safari Lab speaks as canonical PERSON_BK,
-        # while the Android capture client uses its session speaker id. Keep the
-        # legacy Android default for every other caller, and allow explicit
-        # metadata to override this compatibility mapping as platform adapters
-        # become first-class session targets.
-        speech_device_id = str(
-            turn_metadata.get("speech_device_id")
-            or ("WEB_SAFARI" if speaker_id == "PERSON_BK" else "DEVICE_A15")
-        )
+        # Platform is transport, not identity. Callers may explicitly target a
+        # speech adapter; legacy/non-platform callers remain on Android by default.
+        speech_device_id = str(turn_metadata.get("speech_device_id") or "DEVICE_A15")
         direct = addressee_id == "ENTITY_AMORA"
         event_id = UUID(str(source_event_id)) if source_event_id else None
         signal = TurnSignal(
