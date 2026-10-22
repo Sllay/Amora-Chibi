@@ -43,7 +43,7 @@
         <div class="conversation-head">
           <div>
             <div class="eyebrow">CONVERSA</div>
-            <div id="voiceLabel" class="subtle">voz temporária do Safari · não canônica</div>
+            <div id="voiceLabel" class="subtle">Amora local · verificando Voice Worker</div>
           </div>
           <button id="stopVoice" class="danger ghost" type="button">Parar fala</button>
         </div>
@@ -74,16 +74,18 @@
         <dl>
           <div><dt>Core</dt><dd id="diagCore">—</dd></div>
           <div><dt>Entrada → resposta</dt><dd id="diagTurn">—</dd></div>
+          <div><dt>Voz</dt><dd id="diagVoice">verificando…</dd></div>
+          <div><dt>RTF voz local</dt><dd id="diagRtf">—</dd></div>
           <div><dt>Último gap</dt><dd id="diagGap">—</dd></div>
           <div><dt>Fila de voz</dt><dd id="diagQueue">0</dd></div>
           <div><dt>Microfone</dt><dd id="diagMic">off</dd></div>
         </dl>
-        <p class="notice">Esta V1 usa a voz do próprio Safari apenas como transporte rápido para testar diálogo, timing e interrupção. FINAL_B + VoiceSignature continuam sendo a voz canônica e serão ligadas ao Voice Worker depois.</p>
+        <p class="notice">O Safari não sintetiza mais a voz. O Core/Termux renderiza Supertonic 60/40 → FINAL_B → VoiceSignature V1 Soft → Emotion V2 e envia WAV ao navegador. A identidade vocal de laboratório foi aprovada; certificação física/final continua sendo um gate separado.</p>
         <button id="forgetPairing" class="ghost" type="button">Esquecer pareamento deste navegador</button>
       </aside>
     </section>
   </main>
 
-  <script type="module" src="./app.js"></script>
+  <script type="module" src="./app-v2.js"></script>
 </body>
 </html>
