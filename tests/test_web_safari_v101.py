@@ -41,6 +41,24 @@ def _client(tmp_path: Path, monkeypatch):
     return core, client, {"Authorization": f"Bearer {token}"}
 
 
+def _enqueue_web(core: AmoraCore, text: str, dedupe_key: str):
+    item = asyncio.run(
+        core.conversation.enqueue_text(
+            text,
+            target_id="PERSON_BK",
+            kind=UtteranceKind.DIALOGUE,
+            priority=70,
+            privacy_scope=PrivacyScope.PERSONAL,
+            source_event_id=None,
+            dedupe_key=dedupe_key,
+            metadata={"speech_device_id": "WEB_SAFARI"},
+            device_id="WEB_SAFARI",
+        )
+    )
+    assert item is not None
+    return item
+
+
 def test_safari_lab_static_shell_and_manifest_are_served(tmp_path: Path, monkeypatch) -> None:
     core, client, _ = _client(tmp_path, monkeypatch)
     try:
@@ -128,20 +146,7 @@ def test_web_mic_can_request_same_test_isolation_through_shared_audio_contract(t
 def test_web_local_voice_route_returns_wav_without_falsifying_delivery(tmp_path: Path, monkeypatch) -> None:
     core, client, headers = _client(tmp_path, monkeypatch)
     try:
-        item = asyncio.run(
-            core.conversation.enqueue_text(
-                "Oi, BK.",
-                target_id="PERSON_BK",
-                kind=UtteranceKind.DIALOGUE,
-                priority=70,
-                privacy_scope=PrivacyScope.PERSONAL,
-                source_event_id=None,
-                dedupe_key="web-local-voice-route",
-                metadata={"speech_device_id": "WEB_SAFARI"},
-                device_id="WEB_SAFARI",
-            )
-        )
-        assert item is not None
+        item = _enqueue_web(core, "Oi, BK.", "web-local-voice-route")
         claimed = core.conversation.claim_next("WEB_SAFARI")
         assert claimed is not None
 
@@ -172,36 +177,97 @@ def test_web_local_voice_route_returns_wav_without_falsifying_delivery(tmp_path:
         core.close()
 
 
-def test_web_local_voice_route_fails_open_with_actionable_503(tmp_path: Path, monkeypatch) -> None:
+def test_web_delivery_ack_is_only_recorded_after_explicit_playback_ack(tmp_path: Path, monkeypatch) -> None:
     core, client, headers = _client(tmp_path, monkeypatch)
     try:
-        item = asyncio.run(
-            core.conversation.enqueue_text(
-                "Teste.",
-                target_id="PERSON_BK",
-                kind=UtteranceKind.DIALOGUE,
-                priority=70,
-                privacy_scope=PrivacyScope.PERSONAL,
-                source_event_id=None,
-                dedupe_key="web-local-voice-unavailable",
-                device_id="WEB_SAFARI",
-            )
+        item = _enqueue_web(core, "ACK só depois do áudio.", "web-delivery-ack")
+        claim = client.get("/v1/conversation/next?device_id=WEB_SAFARI", headers=headers)
+        assert claim.status_code == 200
+        assert claim.json()["utterance"]["id"] == str(item.id)
+        assert claim.json()["utterance"]["status"] == "claimed"
+
+        started = client.post(f"/v1/conversation/utterances/{item.id}/started", json={}, headers=headers)
+        assert started.status_code == 200
+        assert started.json()["utterance"]["status"] == "claimed"
+        before_ack = core.conversation.store.get_utterance(item.id)
+        assert before_ack is not None
+        assert before_ack.status.value == "claimed"
+
+        ack = client.post(
+            f"/v1/conversation/utterances/{item.id}/ack",
+            json={"spoken": True},
+            headers=headers,
         )
-        assert item is not None
+        assert ack.status_code == 200
+        assert ack.json()["utterance"]["status"] == "spoken"
+        after_ack = core.conversation.store.get_utterance(item.id)
+        assert after_ack is not None
+        assert after_ack.status.value == "spoken"
+    finally:
+        core.close()
+
+
+def test_web_manual_cancel_marks_claimed_utterance_cancelled(tmp_path: Path, monkeypatch) -> None:
+    core, client, headers = _client(tmp_path, monkeypatch)
+    try:
+        item = _enqueue_web(core, "Essa fala será interrompida.", "web-manual-cancel")
+        claim = client.get("/v1/conversation/next?device_id=WEB_SAFARI", headers=headers)
+        assert claim.status_code == 200
+        assert claim.json()["utterance"]["id"] == str(item.id)
+
+        cancelled = client.post(
+            f"/v1/conversation/utterances/{item.id}/cancel",
+            json={"reason": "web_manual_stop"},
+            headers=headers,
+        )
+        assert cancelled.status_code == 200
+        body = cancelled.json()
+        assert body["utterance"]["status"] == "cancelled"
+        assert body["cancelled_utterances"] >= 1
+
+        stored = core.conversation.store.get_utterance(item.id)
+        assert stored is not None
+        assert stored.status.value == "cancelled"
+    finally:
+        core.close()
+
+
+def test_web_local_voice_failure_cancels_cleanly_and_next_message_can_continue(tmp_path: Path, monkeypatch) -> None:
+    core, client, headers = _client(tmp_path, monkeypatch)
+    try:
+        first = _enqueue_web(core, "Primeira fala.", "web-local-voice-unavailable")
+        claim = client.get("/v1/conversation/next?device_id=WEB_SAFARI", headers=headers)
+        assert claim.status_code == 200
+        assert claim.json()["utterance"]["id"] == str(first.id)
+
         renderer = client.app.state.web_local_voice
 
         def fail(_):
             raise LocalVoiceUnavailable("sherpa-onnx não está instalado no venv do Core")
 
         monkeypatch.setattr(renderer, "render", fail)
-        response = client.get(f"/v1/web/voice/utterances/{item.id}/audio", headers=headers)
+        response = client.get(f"/v1/web/voice/utterances/{first.id}/audio", headers=headers)
         assert response.status_code == 503
         assert "sherpa-onnx" in response.json()["detail"]
+
+        cancelled = client.post(
+            f"/v1/conversation/utterances/{first.id}/cancel",
+            json={"reason": "web_local_voice_error"},
+            headers=headers,
+        )
+        assert cancelled.status_code == 200
+        assert cancelled.json()["utterance"]["status"] == "cancelled"
+
+        second = _enqueue_web(core, "Segunda fala continua.", "web-after-local-voice-failure")
+        next_response = client.get("/v1/conversation/next?device_id=WEB_SAFARI", headers=headers)
+        assert next_response.status_code == 200
+        assert next_response.json()["utterance"]["id"] == str(second.id)
+        assert next_response.json()["utterance"]["status"] == "claimed"
     finally:
         core.close()
 
 
-def test_web_v2_has_no_safari_speech_synthesis_dependency(tmp_path: Path, monkeypatch) -> None:
+def test_web_v2_has_no_safari_speech_synthesis_dependency_and_preserves_delivery_contract(tmp_path: Path, monkeypatch) -> None:
     core, client, _ = _client(tmp_path, monkeypatch)
     try:
         app = client.get("/web/app-v2.js")
@@ -211,8 +277,16 @@ def test_web_v2_has_no_safari_speech_synthesis_dependency(tmp_path: Path, monkey
         assert "SpeechSynthesisUtterance" not in app.text
         assert "/v1/web/voice/utterances/" in app.text
         assert "decodeAudioData" in app.text
+        assert "source.onended" in app.text
+        assert "finishPlayedRecord(record)" in app.text
+        assert "/ack" in app.text
+        assert "/cancel" in app.text
+        assert "failVoiceTransport" in app.text
+        assert "web_local_voice_error" in app.text
         assert "web_barge_in" in app.text
+        assert "web_manual_stop" in app.text
         assert "MAX_SPEECH_QUEUE = 3" in app.text
+        assert 'device_id: "WEB_SAFARI"' in app.text
         assert 'speech_device_id: "WEB_SAFARI"' in app.text
     finally:
         core.close()
