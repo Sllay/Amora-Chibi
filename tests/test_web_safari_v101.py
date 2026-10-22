@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from amora.api import create_api
 from amora.app import AmoraCore
 from amora.audio import Transcript
-from amora.time import FakeClock
+from amora.time import SimulatedClock
 
 
 class _FakeStt:
@@ -23,8 +23,8 @@ class _FakeStt:
         )
 
 
-def _clock() -> FakeClock:
-    return FakeClock(datetime(2026, 10, 21, 12, 0, tzinfo=UTC))
+def _clock() -> SimulatedClock:
+    return SimulatedClock(datetime(2026, 10, 21, 12, 0, tzinfo=UTC))
 
 
 def _client(tmp_path: Path, monkeypatch):
