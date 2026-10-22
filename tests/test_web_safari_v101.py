@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,7 +9,10 @@ from fastapi.testclient import TestClient
 from amora.api import create_api
 from amora.app import AmoraCore
 from amora.audio import Transcript
+from amora.conversation import UtteranceKind
+from amora.events import PrivacyScope
 from amora.time import SimulatedClock
+from amora.voice.local_amora import LocalVoiceAudio, LocalVoiceUnavailable
 
 
 class _FakeStt:
@@ -30,7 +34,8 @@ def _clock() -> SimulatedClock:
 def _client(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=_clock())
-    client = TestClient(create_api(core))
+    app = create_api(core)
+    client = TestClient(app)
     token = core.secrets.get("LOCAL_API_TOKEN")
     assert token
     return core, client, {"Authorization": f"Bearer {token}"}
@@ -43,6 +48,8 @@ def test_safari_lab_static_shell_and_manifest_are_served(tmp_path: Path, monkeyp
         assert page.status_code == 200
         assert "AMORA · SAFARI LAB" in page.text
         assert "Parar fala" in page.text
+        assert "app-v2.js" in page.text
+        assert "Safari não sintetiza mais a voz" in page.text
 
         manifest = client.get("/web/manifest.webmanifest")
         assert manifest.status_code == 200
@@ -54,22 +61,25 @@ def test_safari_lab_static_shell_and_manifest_are_served(tmp_path: Path, monkeyp
         core.close()
 
 
-def test_web_state_is_authenticated_and_labels_debug_voice_noncanonical(tmp_path: Path, monkeypatch) -> None:
+def test_web_state_is_authenticated_and_exposes_local_amora_voice_worker(tmp_path: Path, monkeypatch) -> None:
     core, client, headers = _client(tmp_path, monkeypatch)
     try:
         assert client.get("/v1/web/state").status_code == 401
         response = client.get("/v1/web/state", headers=headers)
         assert response.status_code == 200
         payload = response.json()
-        assert payload["surface"] == "AMORA_WEB_SAFARI_LAB_V1"
+        assert payload["surface"] == "AMORA_WEB_SAFARI_LAB_V2"
         assert payload["status"] == "experimental"
         assert payload["canonical_voice"] is False
-        assert payload["voice_transport"] == "browser_speech_synthesis_debug"
+        assert payload["voice_transport"] == "amora_local_supertonic_world"
+        assert payload["voice_candidate"] == "AMORA_VOICE_SIGNATURE_V1_SOFT"
+        assert payload["local_voice"]["provider"] == "amora_local_supertonic_world"
+        assert payload["local_voice"]["num_steps"] == 5
     finally:
         core.close()
 
 
-def test_web_text_turn_uses_core_pipeline_and_defaults_to_test_isolation(tmp_path: Path, monkeypatch) -> None:
+def test_web_text_turn_uses_core_pipeline_and_routes_reply_to_safari(tmp_path: Path, monkeypatch) -> None:
     core, client, headers = _client(tmp_path, monkeypatch)
     try:
         payload = {
@@ -86,6 +96,8 @@ def test_web_text_turn_uses_core_pipeline_and_defaults_to_test_isolation(tmp_pat
         assert body["observation"]["speaker_id"] == "PERSON_BK"
         assert body["observation"]["addressee"]["entity_id"] == "ENTITY_AMORA"
         assert body["turn"]["state"] == "TAKE_TURN"
+        assert body["reply_queued"] is not None
+        assert body["reply_queued"]["device_id"] == "WEB_SAFARI"
     finally:
         core.close()
 
@@ -95,7 +107,7 @@ def test_web_mic_can_request_same_test_isolation_through_shared_audio_contract(t
     try:
         core.stt = _FakeStt()  # type: ignore[assignment]
         response = client.post(
-            "/v1/audio/transcribe?language=pt&speaker_id=PERSON_BK&speaker_confidence=0.8&remote_processing_allowed=false&test_mode=true",
+            "/v1/audio/transcribe?language=pt&speaker_id=PERSON_BK&speaker_confidence=0.8&speech_device_id=WEB_SAFARI&remote_processing_allowed=false&test_mode=true",
             content=b"RIFFweb-lab-probe",
             headers={**headers, "Content-Type": "audio/wav"},
         )
@@ -107,18 +119,100 @@ def test_web_mic_can_request_same_test_isolation_through_shared_audio_contract(t
         assert body["observation"]["speaker_id"] == "PERSON_BK"
         assert body["observation"]["addressee"]["entity_id"] == "ENTITY_AMORA"
         assert body["turn"]["state"] == "TAKE_TURN"
+        assert body["reply_queued"] is not None
+        assert body["reply_queued"]["device_id"] == "WEB_SAFARI"
     finally:
         core.close()
 
 
-def test_web_assets_do_not_enable_stale_service_worker_cache(tmp_path: Path, monkeypatch) -> None:
+def test_web_local_voice_route_returns_wav_without_falsifying_delivery(tmp_path: Path, monkeypatch) -> None:
+    core, client, headers = _client(tmp_path, monkeypatch)
+    try:
+        item = asyncio.run(
+            core.conversation.enqueue_text(
+                "Oi, BK.",
+                target_id="PERSON_BK",
+                kind=UtteranceKind.DIALOGUE,
+                priority=70,
+                privacy_scope=PrivacyScope.PERSONAL,
+                source_event_id=None,
+                dedupe_key="web-local-voice-route",
+                metadata={"speech_device_id": "WEB_SAFARI"},
+                device_id="WEB_SAFARI",
+            )
+        )
+        assert item is not None
+        claimed = core.conversation.claim_next("WEB_SAFARI")
+        assert claimed is not None
+
+        renderer = client.app.state.web_local_voice
+        monkeypatch.setattr(
+            renderer,
+            "render",
+            lambda utterance: LocalVoiceAudio(
+                wav_bytes=b"RIFFfake-wav",
+                sample_rate=24_000,
+                sample_count=48_000,
+                synthesis_seconds=0.4,
+                world_seconds=0.2,
+            ),
+        )
+        response = client.get(f"/v1/web/voice/utterances/{item.id}/audio", headers=headers)
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("audio/wav")
+        assert response.headers["x-amora-tts-provider"] == "amora-local"
+        assert response.headers["x-amora-voice"] == "AMORA_VOICE_SIGNATURE_V1_SOFT"
+        assert response.headers["x-amora-rtf"] == "0.300000"
+        assert response.content == b"RIFFfake-wav"
+
+        unchanged = core.conversation.store.get_utterance(item.id)
+        assert unchanged is not None
+        assert unchanged.status.value == "claimed"
+    finally:
+        core.close()
+
+
+def test_web_local_voice_route_fails_open_with_actionable_503(tmp_path: Path, monkeypatch) -> None:
+    core, client, headers = _client(tmp_path, monkeypatch)
+    try:
+        item = asyncio.run(
+            core.conversation.enqueue_text(
+                "Teste.",
+                target_id="PERSON_BK",
+                kind=UtteranceKind.DIALOGUE,
+                priority=70,
+                privacy_scope=PrivacyScope.PERSONAL,
+                source_event_id=None,
+                dedupe_key="web-local-voice-unavailable",
+                device_id="WEB_SAFARI",
+            )
+        )
+        assert item is not None
+        renderer = client.app.state.web_local_voice
+
+        def fail(_):
+            raise LocalVoiceUnavailable("sherpa-onnx não está instalado no venv do Core")
+
+        monkeypatch.setattr(renderer, "render", fail)
+        response = client.get(f"/v1/web/voice/utterances/{item.id}/audio", headers=headers)
+        assert response.status_code == 503
+        assert "sherpa-onnx" in response.json()["detail"]
+    finally:
+        core.close()
+
+
+def test_web_v2_has_no_safari_speech_synthesis_dependency(tmp_path: Path, monkeypatch) -> None:
     core, client, _ = _client(tmp_path, monkeypatch)
     try:
-        app = client.get("/web/app.js")
+        app = client.get("/web/app-v2.js")
         assert app.status_code == 200
         assert "serviceWorker.register" not in app.text
+        assert "speechSynthesis" not in app.text
+        assert "SpeechSynthesisUtterance" not in app.text
+        assert "/v1/web/voice/utterances/" in app.text
+        assert "decodeAudioData" in app.text
         assert "web_barge_in" in app.text
         assert "MAX_SPEECH_QUEUE = 3" in app.text
-        assert 'test_mode: testToggle.checked ? "true" : "false"' in app.text
+        assert 'speech_device_id: "WEB_SAFARI"' in app.text
     finally:
         core.close()
