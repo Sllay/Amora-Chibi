@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#17131f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Amora" />
+  <meta name="format-detection" content="telephone=no" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="stylesheet" href="./styles.css" />
+  <title>Amora Web Lab</title>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">AMORA · SAFARI LAB</div>
+        <h1>Amora</h1>
+      </div>
+      <div class="status-wrap">
+        <span id="coreDot" class="dot"></span>
+        <span id="coreStatus">conectando</span>
+      </div>
+    </header>
+
+    <section id="pairPanel" class="card pair-card hidden">
+      <div>
+        <div class="eyebrow">PAREAMENTO</div>
+        <h2>Conectar ao Core</h2>
+        <p>No Termux, rode <code>amora pair</code> e digite aqui o código de 6 dígitos.</p>
+      </div>
+      <form id="pairForm" class="pair-form">
+        <input id="pairCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" aria-label="Código de pareamento" />
+        <button type="submit">Parear</button>
+      </form>
+      <p id="pairError" class="error"></p>
+    </section>
+
+    <section id="appPanel" class="app-grid hidden">
+      <section class="conversation card">
+        <div class="conversation-head">
+          <div>
+            <div class="eyebrow">CONVERSA</div>
+            <div id="voiceLabel" class="subtle">voz temporária do Safari · não canônica</div>
+          </div>
+          <button id="stopVoice" class="danger ghost" type="button">Parar fala</button>
+        </div>
+
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="textForm" class="composer">
+          <textarea id="textInput" rows="1" placeholder="Fala com a Amora…" aria-label="Mensagem"></textarea>
+          <button type="submit" class="send">Enviar</button>
+        </form>
+
+        <div class="mic-row">
+          <button id="micButton" class="mic" type="button">
+            <span id="micIcon">●</span>
+            <span id="micLabel">Ativar microfone</span>
+          </button>
+          <div id="micState" class="subtle">microfone desligado</div>
+        </div>
+      </section>
+
+      <aside class="card diagnostics">
+        <div class="eyebrow">LAB</div>
+        <h2>Diagnóstico</h2>
+        <div class="toggle-row">
+          <label><input id="remoteToggle" type="checkbox" checked /> cognição remota</label>
+          <label><input id="testToggle" type="checkbox" checked /> modo teste</label>
+        </div>
+        <dl>
+          <div><dt>Core</dt><dd id="diagCore">—</dd></div>
+          <div><dt>Entrada → resposta</dt><dd id="diagTurn">—</dd></div>
+          <div><dt>Último gap</dt><dd id="diagGap">—</dd></div>
+          <div><dt>Fila de voz</dt><dd id="diagQueue">0</dd></div>
+          <div><dt>Microfone</dt><dd id="diagMic">off</dd></div>
+        </dl>
+        <p class="notice">Esta V1 usa a voz do próprio Safari apenas como transporte rápido para testar diálogo, timing e interrupção. FINAL_B + VoiceSignature continuam sendo a voz canônica e serão ligadas ao Voice Worker depois.</p>
+        <button id="forgetPairing" class="ghost" type="button">Esquecer pareamento deste navegador</button>
+      </aside>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

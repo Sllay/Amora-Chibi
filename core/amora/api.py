@@ -220,6 +220,7 @@ def create_api(core: AmoraCore) -> FastAPI:
         session_id: str | None = Query(default=None, max_length=128),
         privacy_scope: PrivacyScope = Query(default=PrivacyScope.PERSONAL),
         remote_processing_allowed: bool = Query(default=False),
+        test_mode: bool = Query(default=False),
     ) -> dict[str, object]:
         console = server_console(request)
         content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
@@ -258,6 +259,7 @@ def create_api(core: AmoraCore) -> FastAPI:
                     "observation": None,
                     "turn": None,
                     "reply_queued": None,
+                    "test_mode": test_mode,
                 }
 
             speaker = SpeakerResult(
@@ -274,6 +276,14 @@ def create_api(core: AmoraCore) -> FastAPI:
             )
             if console is not None:
                 console.set_activity("PENSANDO", "Core local → plano semântico → linguagem", ttl_seconds=60.0)
+            metadata = None
+            if test_mode:
+                metadata = {
+                    "test_mode": True,
+                    "memory_consolidation": False,
+                    "relationship_learning": False,
+                    "emotion_persistence": False,
+                }
             try:
                 turn, reply = await core.conversation.observe_completed_utterance(
                     transcript.text,
@@ -284,6 +294,7 @@ def create_api(core: AmoraCore) -> FastAPI:
                     remote_processing_allowed=remote_processing_allowed,
                     session_id=session_id,
                     stt_confidence=transcript.confidence,
+                    metadata=metadata,
                 )
             finally:
                 core.social.end_turn(speaker.speaker_id)
@@ -298,6 +309,7 @@ def create_api(core: AmoraCore) -> FastAPI:
                 "observation": observation.model_dump(mode="json"),
                 "turn": turn.model_dump(mode="json"),
                 "reply_queued": reply.model_dump(mode="json") if reply else None,
+                "test_mode": test_mode,
             }
         except SttCredentialsError as exc:
             if console is not None:
