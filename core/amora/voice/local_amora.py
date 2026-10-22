@@ -81,7 +81,7 @@ class _WorldProcessor:
                 ctypes.POINTER(ctypes.c_float),
                 ctypes.c_size_t,
             ]
-            fn.restype = ctypes.c_int
+            fn.restype = ctypes.c_size_t
             self._lib = lib
             return lib
 
