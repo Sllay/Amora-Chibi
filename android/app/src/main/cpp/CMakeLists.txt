@@ -25,6 +25,11 @@ add_library(world STATIC
 target_include_directories(world PUBLIC "${WORLD_ROOT}/src")
 set_target_properties(world PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_library(amora_voice_native SHARED amora_voice_jni.cpp)
-target_include_directories(amora_voice_native PRIVATE "${WORLD_ROOT}/src")
+add_library(
+    amora_voice_native
+    SHARED
+    amora_voice_jni.cpp
+    amora_voice_processor.cpp
+)
+target_include_directories(amora_voice_native PRIVATE "${WORLD_ROOT}/src" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(amora_voice_native PRIVATE world log)
