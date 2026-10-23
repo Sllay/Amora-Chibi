@@ -26,12 +26,13 @@ from amora.language import ACIRCompiler, LanguageSocialPipeline, PerspectiveReso
 from amora.memory import MemoryService, MemoryStore
 from amora.models import ModelRouter
 from amora.observability import configure_logging
+from amora.operations import OperationMonitor
 from amora.pairing import PairingManager
 from amora.secrets import SecretStore
 from amora.settings import RuntimePaths, ServerSettings
 from amora.social import AddresseeEngine, SocialSceneTracker
 from amora.storage import AmoraDatabase
-from amora.storage.backend import StorageBackend, backend_from_environment
+from amora.storage.backend import StorageBackend, BootstrapBackend, backend_from_environment
 from amora.storage.migrations_v101 import LATEST_SCHEMA_VERSION
 from amora.time import Clock, Scheduler, SystemClock
 from amora.world import (
@@ -49,6 +50,7 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 @dataclass(slots=True)
 class AmoraCore:
+    operations: OperationMonitor
     paths: RuntimePaths
     clock: Clock
     events: AsyncEventBus
@@ -83,12 +85,23 @@ class AmoraCore:
 
     @classmethod
     def bootstrap(cls, *, clock: Clock | None = None, storage: StorageBackend | None = None) -> "AmoraCore":
-        storage = storage or backend_from_environment()
+        tracked = BootstrapBackend(storage or backend_from_environment())
+        try:
+            core = cls._bootstrap(clock=clock, storage=tracked)
+        except BaseException:
+            tracked.finish(failed=True)
+            raise
+        tracked.finish()
+        return core
+
+    @classmethod
+    def _bootstrap(cls, *, clock, storage):
         ServerSettings.from_environment().validate_persistence(remote=storage.capabilities.remote)
         paths = RuntimePaths.from_environment()
         paths.ensure()
         configure_logging(paths.logs)
         active_clock = clock or SystemClock()
+        operations = OperationMonitor(active_clock)
         secrets = SecretStore(paths.secrets)
         secrets.ensure_token("LOCAL_API_TOKEN")
         database = AmoraDatabase(paths.database, backend=storage)
@@ -209,7 +222,9 @@ class AmoraCore:
             events,
             semantic_sink=conversation.handle_semantic_event,
         )
+        actions.bus.operations = operations
         return cls(
+            operations=operations,
             paths=paths,
             clock=active_clock,
             events=events,

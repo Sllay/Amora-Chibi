@@ -2,8 +2,8 @@
 
 ADR-0015 define a direção. Imagem: `docker build -t amora-core .`.
 A imagem não inclui modelos TTS, banco, vault, tokens ou arquivos de runtime.
-`deploy/python.lock` fixa as dependências validadas; o Python base deve ser
-pinado por digest no pipeline de publicação escolhido. Não publicar imagem
+`deploy/python.lock` fixa as dependências validadas; o Python base está
+pinado por digest e o build backend setuptools/wheel por versão. Não publicar imagem
 com CA/proxy de desenvolvimento incorporados.
 
 Modo local: `AMORA_HOME=/caminho/runtime amora serve`; bind padrão 127.0.0.1.
@@ -117,3 +117,27 @@ SDK/decorators foram conferidos no pacote oficial Modal 1.6.2; implantação
 remota não executada. Bundle real, warm/cold latency, acústica, Safari físico,
 licença e monitoramento continuam gates. Tickets de download direto são futuros;
 não foram adicionados para preservar a integração conservadora via Core.
+
+## Living Console / Dev MCP foundations
+
+`GET /v1/operations/state` exige o mesmo Bearer de administração. Schema
+`amora.operations.v1` projeta intenção atual, DialogueAct validado, estágio de
+tarefa, provider/model, quota/cooldown, módulos, fala, jobs, latência e IDs.
+Nunca retorna contexto completo, texto de conversa, memória, relações, argumentos
+ou resultados textuais de tools, secrets ou chain-of-thought. Resultados de ações
+são estados/códigos operacionais; o resultado técnico completo permanece nos
+stores/journal e logs existentes autenticados, separado da visão resumida.
+
+Erros se agrupam por módulo+código em fingerprint estável, com contagem e
+primeira/última ocorrência. Cada request recebe X-Correlation-ID; IDs de calls/
+plan/turn são preservados onde disponíveis. ActionBus registra requested,
+running e succeeded/failed/denied/timed_out. Jobs são apenas snapshot do scheduler
+existente; nenhuma nova política autônoma é ativada. Estado agregado é bounded
+e local ao processo; após restart, reconstruir detalhes duráveis via stores.
+Não há servidor Dev MCP nem console remoto ativo nesta etapa: esta API é a
+fundação consumível futura, sem novos poderes administrativos.
+
+WebSocket de eventos continua autenticado e agora exclui SECRET além de AUTH;
+disconnect sem novos eventos libera subscription/tasks. Continua sendo stream
+bounded sem replay durável. Pareamento usa lock de arquivo/thread Linux para
+consumo único entre CLI/threads; ainda não é pareamento distribuído.

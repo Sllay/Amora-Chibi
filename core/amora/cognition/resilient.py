@@ -86,6 +86,11 @@ class CognitiveEngine(HardenedCognitiveEngine):
                 await response_task
             return self._interrupted_plan(request, started=started)
         finally:
+            # External request cancellation/shutdown must also join the child.
+            if not response_task.done():
+                response_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await response_task
             cancel_task.cancel()
             with suppress(asyncio.CancelledError):
                 await cancel_task

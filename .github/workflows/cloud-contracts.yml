@@ -1,0 +1,16 @@
+name: Cloud container contracts
+on:
+  pull_request:
+    paths: ['core/**', 'web/**', 'avatar/**', 'deploy/**', 'Dockerfile', 'tools/cloud/**', 'pyproject.toml', '.github/workflows/cloud-contracts.yml']
+  push:
+    branches: [main, 'feat/**', 'fix/**']
+    paths: ['core/**', 'web/**', 'avatar/**', 'deploy/**', 'Dockerfile', 'tools/cloud/**', 'pyproject.toml', '.github/workflows/cloud-contracts.yml']
+permissions:
+  contents: read
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t amora-core:test .
+      - run: python3 tools/cloud/smoke-container.py amora-core:test

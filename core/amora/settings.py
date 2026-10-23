@@ -72,14 +72,14 @@ class ServerSettings:
                    os.getenv("AMORA_DURABLE_FILESYSTEM", "false").lower() == "true")
 
     def validate_persistence(self, *, remote: bool) -> None:
+        asset_backend = os.getenv("AMORA_ASSET_STORAGE", "files")
+        if asset_backend not in {"files", "database"}:
+            raise ValueError("AMORA_ASSET_STORAGE must be files or database")
         if self.mode != "cloud":
             return
         if not os.getenv("AMORA_SECRET_LOCAL_API_TOKEN", "").strip():
             raise ValueError("cloud requires an injected AMORA_SECRET_LOCAL_API_TOKEN")
         if not remote and not self.durable_filesystem:
             raise ValueError("cloud SQLite requires AMORA_DURABLE_FILESYSTEM=true and a durable volume")
-        asset_backend = os.getenv("AMORA_ASSET_STORAGE", "files")
-        if asset_backend not in {"files", "database"}:
-            raise ValueError("AMORA_ASSET_STORAGE must be files or database")
         if remote and not self.durable_filesystem and asset_backend != "database":
             raise ValueError("remote SQL alone does not persist avatar assets; select AMORA_ASSET_STORAGE=database or a durable filesystem")

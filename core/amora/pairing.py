@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
+import threading
+from contextlib import contextmanager
 import hmac
 import json
 import secrets
@@ -36,13 +39,35 @@ class PairingManager:
             raise ValueError("ttl_seconds must be positive")
         if max_attempts <= 0:
             raise ValueError("max_attempts must be positive")
+        self._thread_lock = threading.RLock()
         self.path = path
         self.clock = clock
         self.ttl_seconds = ttl_seconds
         self.max_attempts = max_attempts
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
+    @contextmanager
+    def _exclusive(self):
+        with self._thread_lock, self.path.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
     def issue(self) -> PairingCode:
+        with self._exclusive():
+            return self._issue()
+
+    def redeem(self, code: str) -> bool:
+        with self._exclusive():
+            return self._redeem(code)
+
+    def invalidate(self) -> None:
+        with self._exclusive():
+            self._invalidate()
+
+    def _issue(self) -> PairingCode:
         code = f"{secrets.randbelow(1_000_000):06d}"
         salt = secrets.token_hex(16)
         expires_at = self.clock.now() + timedelta(seconds=self.ttl_seconds)
@@ -56,7 +81,7 @@ class PairingManager:
         )
         return PairingCode(code=code, expires_at=expires_at)
 
-    def redeem(self, code: str) -> bool:
+    def _redeem(self, code: str) -> bool:
         record = self._read()
         if record is None:
             return False
@@ -67,27 +92,27 @@ class PairingManager:
             salt = str(record["salt"])
             expected = str(record["digest"])
         except (KeyError, TypeError, ValueError):
-            self.invalidate()
+            self._invalidate()
             return False
 
         if self.clock.now() >= expires_at or attempts >= self.max_attempts:
-            self.invalidate()
+            self._invalidate()
             return False
 
         supplied = self._digest(salt, code.strip())
         if hmac.compare_digest(supplied, expected):
-            self.invalidate()
+            self._invalidate()
             return True
 
         attempts += 1
         if attempts >= self.max_attempts:
-            self.invalidate()
+            self._invalidate()
         else:
             record["attempts"] = attempts
             self._write(record)
         return False
 
-    def invalidate(self) -> None:
+    def _invalidate(self) -> None:
         try:
             self.path.unlink()
         except FileNotFoundError:
@@ -99,7 +124,7 @@ class PairingManager:
         except FileNotFoundError:
             return None
         except (json.JSONDecodeError, OSError):
-            self.invalidate()
+            self._invalidate()
             return None
 
     def _write(self, payload: dict[str, object]) -> None:

@@ -3,7 +3,7 @@ import hmac
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from .contract import VoiceRenderRequest
-from .local_amora import LocalVoiceUnavailable, MODEL_ID, VOICE_ID
+from .local_amora import MODEL_ID, VOICE_ID
 from .remote import validate_wav
 
 

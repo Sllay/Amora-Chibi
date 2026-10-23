@@ -6,6 +6,7 @@ import logging
 import sys
 from dataclasses import asdict
 from uuid import uuid4
+from time import perf_counter
 
 from fastapi.responses import JSONResponse
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
@@ -126,12 +127,22 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
     @app.middleware("http")
     async def server_console_middleware(request: Request, call_next):
         console = server_console(request)
+        correlation_id = str(uuid4())
+        request.state.correlation_id = correlation_id
+        started = perf_counter()
         try:
             response = await call_next(request)
         except Exception as exc:
+            core.operations.error("api", "REQUEST_FAILED", correlation_id=correlation_id)
+            logging.getLogger("amora.api").error("request_failed", extra={
+                "error_code": "REQUEST_FAILED", "exception_type": type(exc).__name__,
+                "correlation_id": correlation_id, "latency_ms": (perf_counter()-started)*1000})
             if console is not None:
                 console.record_error("api", f"{request.method} {request.url.path}: {type(exc).__name__}: {exc}")
             raise
+        response.headers["X-Correlation-ID"] = correlation_id
+        if response.status_code >= 500:
+            core.operations.error("api", "HTTP_"+str(response.status_code), correlation_id=correlation_id)
         if console is not None:
             if response.status_code >= 500 and not request.url.path.startswith("/v1/voice/"):
                 console.record_error("api", f"{request.method} {request.url.path} → HTTP {response.status_code}")
@@ -166,6 +177,11 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         report = core.readiness() if app.state.accepting else {"status": "not_ready", "error_code": "DRAINING"}
         return JSONResponse(report, status_code=200 if report["status"] == "ready" else 503,
                             headers={"Cache-Control": "no-store"})
+
+    @app.get("/v1/operations/state", dependencies=[Depends(require_auth)])
+    def operations_state():
+        from amora.operations import operational_snapshot
+        return operational_snapshot(core, getattr(app.state, "web_local_voice", None))
 
     @app.post("/v1/pairing/redeem")
     def redeem_pairing(request: PairingRedeemRequest) -> dict[str, str]:
@@ -393,13 +409,29 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             queue.put_nowait(event)
 
         await core.events.subscribe("*", receive_event)
+        receive_task = asyncio.create_task(websocket.receive())
+        queued_task = None
         try:
             while True:
-                event = await queue.get()
-                await websocket.send_json(event.model_dump(mode="json"))
+                queued_task = asyncio.create_task(queue.get())
+                done, _ = await asyncio.wait({receive_task, queued_task}, return_when=asyncio.FIRST_COMPLETED)
+                if receive_task in done:
+                    message = receive_task.result()
+                    if message["type"] == "websocket.disconnect":
+                        break
+                    receive_task = asyncio.create_task(websocket.receive())
+                if queued_task in done:
+                    await websocket.send_json(queued_task.result().model_dump(mode="json"))
+                else:
+                    queued_task.cancel()
+                    await asyncio.gather(queued_task, return_exceptions=True)
         except WebSocketDisconnect:
             pass
         finally:
+            tasks = [task for task in (receive_task, queued_task) if task is not None]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             await core.events.unsubscribe("*", receive_event)
 
     return app

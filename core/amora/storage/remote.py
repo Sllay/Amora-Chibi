@@ -3,6 +3,7 @@
 Protocol: https://github.com/tursodatabase/libsql/blob/main/docs/HTTP_V2_SPEC.md
 No SDK-specific assumptions escape this module. No retry of ambiguous writes.
 """
+
 from __future__ import annotations
 
 import base64
@@ -33,7 +34,7 @@ class Result:
         return item
 
     def fetchall(self):
-        rows = self._rows[self._index:]
+        rows = self._rows[self._index :]
         self._index = len(self._rows)
         return rows
 
@@ -92,12 +93,12 @@ def statements(script):
     pending = ""
     for char in script:
         pending += char
-        if char == ';' and sqlite3.complete_statement(pending):
+        if char == ";" and sqlite3.complete_statement(pending):
             if pending.strip():
                 yield pending
             pending = ""
     if pending.strip():
-        if not sqlite3.complete_statement(pending + ';'):
+        if not sqlite3.complete_statement(pending + ";"):
             raise ValueError("incomplete SQL script")
         yield pending
 
@@ -106,14 +107,24 @@ class LibSQLBackend:
     capabilities = StorageCapabilities("libsql", False, True, remote=True)
 
     def __init__(self, url: str, token: str, *, transport=None, timeout=15.0):
-        if url.startswith('libsql://'):
-            url = 'https://' + url[len('libsql://'):]
+        if url.startswith("libsql://"):
+            url = "https://" + url[len("libsql://") :]
         parsed = urlparse(url)
-        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {'', '/'}:
-            raise ValueError('libSQL requires an HTTPS origin without credentials or path')
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+        ):
+            raise ValueError(
+                "libSQL requires an HTTPS origin without credentials or path"
+            )
         if not token:
-            raise ValueError('libSQL auth token is required')
-        self.url, self._token = url.rstrip('/'), token
+            raise ValueError("libSQL auth token is required")
+        self.url, self._token = url.rstrip("/"), token
         self.transport, self.timeout = transport, timeout
 
     def connect(self, path: Path):
@@ -126,31 +137,58 @@ class LibSQLBackend:
         Unknown virtual modules fail explicitly. No credential or local cache export.
         """
         destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_suffix(destination.suffix + '.partial')
+        temporary = destination.with_suffix(destination.suffix + ".partial")
         temporary.unlink(missing_ok=True)
         target = sqlite3.connect(temporary)
         try:
-            target.execute('PRAGMA foreign_keys=OFF')
+            target.execute("PRAGMA foreign_keys=OFF")
             with connection:
-                schema = connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY rowid").fetchall()
-                tables = [r for r in schema if r['type'] == 'table' and not r['name'].startswith('sqlite_')]
+                schema = connection.execute(
+                    "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY rowid"
+                ).fetchall()
+                tables = [
+                    r
+                    for r in schema
+                    if r["type"] == "table" and not r["name"].startswith("sqlite_")
+                ]
                 for row in tables:
-                    name, sql = row['name'], row['sql']
-                    if name.startswith('memory_fts_'):
+                    name, sql = row["name"], row["sql"]
+                    if name.startswith("memory_fts_"):
                         continue
-                    if 'VIRTUAL TABLE' in sql.upper() and name != 'memory_fts':
-                        raise ValueError('unsupported virtual table in snapshot')
+                    if "VIRTUAL TABLE" in sql.upper() and name != "memory_fts":
+                        raise ValueError("unsupported virtual table in snapshot")
                     target.execute(sql)
                     quoted = '"' + name.replace('"', '""') + '"'
-                    rows = connection.execute('SELECT * FROM ' + quoted).fetchall()
+                    rows = connection.execute("SELECT * FROM " + quoted).fetchall()
                     if rows:
-                        target.executemany('INSERT INTO '+quoted+' VALUES ('+','.join('?' for _ in rows[0])+')', [tuple(r.values) for r in rows])
+                        target.executemany(
+                            "INSERT INTO "
+                            + quoted
+                            + " VALUES ("
+                            + ",".join("?" for _ in rows[0])
+                            + ")",
+                            [tuple(r.values) for r in rows],
+                        )
+                if any(row["name"] == "sqlite_sequence" for row in schema):
+                    sequence = connection.execute(
+                        "SELECT name,seq FROM sqlite_sequence"
+                    ).fetchall()
+                    target.execute("DELETE FROM sqlite_sequence")
+                    target.executemany(
+                        "INSERT INTO sqlite_sequence(name,seq) VALUES (?,?)",
+                        [(r[0], r[1]) for r in sequence],
+                    )
                 for row in schema:
-                    if row['type'] in {'index', 'trigger', 'view'} and not row['tbl_name'].startswith('memory_fts_'):
-                        target.execute(row['sql'])
+                    if row["type"] in {"index", "trigger", "view"} and not row[
+                        "tbl_name"
+                    ].startswith("memory_fts_"):
+                        target.execute(row["sql"])
             target.commit()
-            if target.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or target.execute('PRAGMA foreign_key_check').fetchone() is not None:
-                raise ValueError('snapshot integrity failed')
+            if (
+                target.execute("PRAGMA integrity_check").fetchone()[0] != "ok"
+                or target.execute("PRAGMA foreign_key_check").fetchone() is not None
+            ):
+                raise ValueError("snapshot integrity failed")
             target.close()
             temporary.replace(destination)
             return destination
@@ -163,7 +201,9 @@ class LibSQLBackend:
 class RemoteConnection:
     def __init__(self, backend):
         self.backend = backend
-        self.client = httpx.Client(timeout=backend.timeout, transport=backend.transport, follow_redirects=False)
+        self.client = httpx.Client(
+            timeout=backend.timeout, transport=backend.transport, follow_redirects=False
+        )
         self._baton = None
         self._transaction = False
         self._closed = False
@@ -171,56 +211,90 @@ class RemoteConnection:
 
     def _pipeline(self, requests):
         if self._closed or self._broken:
-            raise StorageUnavailable('SQL_CONNECTION_CLOSED')
+            raise StorageUnavailable("SQL_CONNECTION_CLOSED")
         try:
-            initialize = self._baton is None and requests[0]['type'] != 'close'
+            initialize = self._baton is None and requests[0]["type"] != "close"
             if initialize:
-                requests = [{'type': 'execute', 'stmt': {'sql': 'PRAGMA foreign_keys=ON', 'args': [], 'want_rows': False}}] + requests
-            response = self.client.post(self.backend.url + '/v2/pipeline',
-                headers={'Authorization': 'Bearer '+self.backend._token},
-                json={'baton': self._baton, 'requests': requests})
+                requests = [
+                    {
+                        "type": "execute",
+                        "stmt": {
+                            "sql": "PRAGMA foreign_keys=ON",
+                            "args": [],
+                            "want_rows": False,
+                        },
+                    }
+                ] + requests
+            response = self.client.post(
+                self.backend.url + "/v2/pipeline",
+                headers={"Authorization": "Bearer " + self.backend._token},
+                json={"baton": self._baton, "requests": requests},
+            )
             response.raise_for_status()
             data = response.json()
-            self._baton = data['baton']
+            self._baton = data["baton"]
+            if (
+                self._transaction
+                and self._baton is None
+                and not any(r["type"] == "close" for r in requests)
+            ):
+                raise StorageUnavailable("SQL_TRANSACTION_STREAM_LOST")
             # base_url may change routing, but never forward credentials to a new origin.
-            base = data.get('base_url')
-            if base and base.rstrip('/') != self.backend.url:
-                raise StorageUnavailable('SQL_ROUTING_ORIGIN_CHANGED')
-            results = data['results']
+            base = data.get("base_url")
+            if base and base.rstrip("/") != self.backend.url:
+                raise StorageUnavailable("SQL_ROUTING_ORIGIN_CHANGED")
+            results = data["results"]
             if len(results) != len(requests):
-                raise StorageUnavailable('SQL_INVALID_RESPONSE')
+                raise StorageUnavailable("SQL_INVALID_RESPONSE")
         except Exception as exc:
             self._broken = True
             self._baton = None
-            raise StorageUnavailable('SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN') from exc
+            raise StorageUnavailable("SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN") from exc
         if initialize:
-            if results[0]['type'] != 'ok':
+            if results[0]["type"] != "ok":
                 self._broken = True
-                raise StorageUnavailable('SQL_FOREIGN_KEYS_UNAVAILABLE')
+                raise StorageUnavailable("SQL_FOREIGN_KEYS_UNAVAILABLE")
             results = results[1:]
         return results
 
     def execute(self, sql, parameters=()):
         if isinstance(parameters, dict):
-            raise TypeError('named parameters are not used by Amora stores')
-        requests = [{'type': 'execute', 'stmt': {'sql': sql, 'args': [_encode(v) for v in parameters], 'want_rows': True}}]
+            raise TypeError("named parameters are not used by Amora stores")
+        requests = [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": sql,
+                    "args": [_encode(v) for v in parameters],
+                    "want_rows": True,
+                },
+            }
+        ]
         if not self._transaction:
-            requests.append({'type': 'close'})
+            requests.append({"type": "close"})
         results = self._pipeline(requests)
         first = results[0]
-        if first['type'] == 'error':
-            code = first['error'].get('code', 'SQL_ERROR')
+        if first["type"] == "error":
+            code = first["error"].get("code", "SQL_ERROR")
             # Messages may contain SQL values; expose only machine codes.
-            error = sqlite3.IntegrityError if code in {'SQLITE_CONSTRAINT_UNIQUE','SQLITE_CONSTRAINT_PRIMARYKEY'} else sqlite3.DatabaseError
-            if code.startswith('SQLITE_CONSTRAINT'):
+            error = (
+                sqlite3.IntegrityError
+                if code in {"SQLITE_CONSTRAINT_UNIQUE", "SQLITE_CONSTRAINT_PRIMARYKEY"}
+                else sqlite3.DatabaseError
+            )
+            if code.startswith("SQLITE_CONSTRAINT"):
                 raise error(code)
-            if code == 'SQLITE_ERROR':
-                message = first['error'].get('message', '')
-                if 'no such module: fts5' in message:
-                    raise sqlite3.OperationalError('FTS5_UNSUPPORTED')
+            if code == "SQLITE_ERROR":
+                message = first["error"].get("message", "")
+                if "no such module: fts5" in message:
+                    raise sqlite3.OperationalError("FTS5_UNSUPPORTED")
             raise StorageUnavailable(code)
-        result = first['response']['result']
-        return Result([c['name'] for c in result['cols']], [[_decode(v) for v in row] for row in result['rows']], result.get('affected_row_count', 0))
+        result = first["response"]["result"]
+        return Result(
+            [c["name"] for c in result["cols"]],
+            [[_decode(v) for v in row] for row in result["rows"]],
+            result.get("affected_row_count", 0),
+        )
 
     def executemany(self, sql, values):
         for value in values:
@@ -229,22 +303,22 @@ class RemoteConnection:
     def executescript(self, script):
         # Migrations supply explicit BEGIN/COMMIT and rollback on failure.
         for sql in statements(script):
-            normalized = sql.strip().rstrip(';').upper()
-            if normalized.startswith('BEGIN'):
+            normalized = sql.strip().rstrip(";").upper()
+            if normalized.startswith("BEGIN"):
                 self.__enter__()
-            elif normalized == 'COMMIT':
+            elif normalized == "COMMIT":
                 self.__exit__(None, None, None)
-            elif normalized == 'ROLLBACK':
+            elif normalized == "ROLLBACK":
                 self.__exit__(RuntimeError, None, None)
             else:
                 self.execute(sql)
 
     def __enter__(self):
         if self._transaction:
-            raise RuntimeError('nested transactions are not supported')
+            raise RuntimeError("nested transactions are not supported")
         self._transaction = True
         try:
-            self.execute('BEGIN IMMEDIATE')
+            self.execute("BEGIN IMMEDIATE")
         except BaseException:
             self.close()
             raise
@@ -254,10 +328,10 @@ class RemoteConnection:
         try:
             if self._transaction and not self._broken:
                 try:
-                    self.execute('COMMIT' if kind is None else 'ROLLBACK')
+                    self.execute("COMMIT" if kind is None else "ROLLBACK")
                 finally:
                     if self._baton is not None:
-                        self._pipeline([{'type': 'close'}])
+                        self._pipeline([{"type": "close"}])
         finally:
             self._transaction = False
             self._baton = None
@@ -265,7 +339,7 @@ class RemoteConnection:
     def close(self):
         try:
             if not self._closed and not self._broken and self._baton is not None:
-                self._pipeline([{'type': 'close'}])
+                self._pipeline([{"type": "close"}])
         finally:
             self._closed = True
             self.client.close()

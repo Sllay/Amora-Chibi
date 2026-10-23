@@ -405,3 +405,20 @@ worker indisponível, áudio inválido/identidade errada, ACK e cancelamento.
 Bundle vocal nativo real e deploy/certificação Modal não foram executados;
 preparação exige archive+SHA revisados e WORLD no commit congelado. Instruções
 em CLOUD_OPERATIONS.md. Tickets de áudio direto ficam explicitamente futuros.
+
+Etapa 5: /v1/operations/state autenticado, schema amora.operations.v1,
+projeção sem texto/contexto privado, lifecycle de ações e erros bounded agrupados
+por fingerprint+contagem. Jobs continuam opt-in; Dev MCP/Living Console recebem
+fundação, não um servidor novo. Request correlation IDs e latência disponíveis.
+Corrigidos também task cognitiva órfã por cancel externo, cleanup de bootstrap
+incompleto, consumo concorrente do pairing e subscription WebSocket ociosa;
+SECRET não é mais transmitido no stream. Snapshot remoto preserva high-water
+marks AUTOINCREMENT e recusa perda de baton em transação. Gates de serviços
+remotos/bundle real/custos/acústica permanecem abertos.
+
+Validação final local: 304 pytest PASS, 5 testes Node Avatar PASS, pip check sem
+inconsistências, Docker final com base por digest e build tools pinados PASS.
+Smoke automático valida non-root, endpoints, autenticação, texto, fila persistente,
+restart e SIGTERM; workflow cloud-contracts.yml reproduz esse gate na CI.
+Avisos existentes de Pydantic/Starlette permanecem (5), sem testes pulados.
+Relatórios para revisão por etapa em `docs/engineering/reviews/`.

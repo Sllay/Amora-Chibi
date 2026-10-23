@@ -128,6 +128,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
         try:
             audio = await asyncio.to_thread(local_voice.render, item)
         except LocalVoiceUnavailable as exc:
+            core.operations.error("voice", "VOICE_RENDER_FAILED", correlation_id=utterance_id)
             if dashboard is not None:
                 dashboard.set_module("amora.local_voice", "Amora Voz Local", "OFF", str(exc)[:120])
                 dashboard.record_error("Amora Voz Local", str(exc))
