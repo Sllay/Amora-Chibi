@@ -395,3 +395,13 @@ ACK/cancel fora da transação, IntegrityError mascarado como dedupe e FTS que
 mascarava falhas operacionais. 285 testes passaram, incluindo contratos de
 memória/world/emoção/autonomia/ações/Web sobre adapter remoto mockado. Nenhuma
 conta Turso/Koyeb foi utilizada; latência/quotas/dados grandes são gates de staging.
+
+Etapa 4: VoiceRenderRequest mínimo versionado, RemoteVoiceBackend HTTPS,
+worker ASGI independente e template Modal. Reusa o renderer Supertonic e o DSP
+C++ existentes; não altera nenhum parâmetro vocal. Core valida WAV/identidade,
+falhas de voz preservam texto e resultado após cancelamento é rejeitado.
+Sete testes novos cobrem serviço autenticado, payload mínimo/bounds, sucesso,
+worker indisponível, áudio inválido/identidade errada, ACK e cancelamento.
+Bundle vocal nativo real e deploy/certificação Modal não foram executados;
+preparação exige archive+SHA revisados e WORLD no commit congelado. Instruções
+em CLOUD_OPERATIONS.md. Tickets de áudio direto ficam explicitamente futuros.

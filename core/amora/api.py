@@ -79,12 +79,18 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
                 if console is not None:
                     console.close()
             finally:
-                if own_core:
-                    core.close()
+                try:
+                    backend = getattr(app.state, "web_local_voice", None)
+                    if hasattr(backend, "close"):
+                        backend.close()
+                finally:
+                    if own_core:
+                        core.close()
 
     app = FastAPI(title="Amora Core API", version=__version__, lifespan=lifespan)
     app.state.accepting = True
     app.state.server_console = None
+    app.state.voice_backend = voice
 
     def expected_token() -> str:
         value = core.secrets.get("LOCAL_API_TOKEN")

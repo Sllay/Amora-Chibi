@@ -47,8 +47,8 @@ def serve(port: int | None = None, host: str | None = None) -> int:
 
     core = AmoraCore.bootstrap()
     settings = ServerSettings.from_environment()
-    app = create_api(core, own_core=True)
     try:
+        app = create_api(core, own_core=True)
         uvicorn.run(app, host=host or settings.host, port=port or settings.port, log_config=None, timeout_graceful_shutdown=30)
     finally:
         core.close()
