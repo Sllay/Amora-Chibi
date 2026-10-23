@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from amora import __version__
@@ -28,7 +28,7 @@ from amora.models import ModelRouter
 from amora.observability import configure_logging
 from amora.pairing import PairingManager
 from amora.secrets import SecretStore
-from amora.settings import RuntimePaths
+from amora.settings import RuntimePaths, ServerSettings
 from amora.social import AddresseeEngine, SocialSceneTracker
 from amora.storage import AmoraDatabase
 from amora.storage.backend import SQLiteBackend, StorageBackend
@@ -78,15 +78,18 @@ class AmoraCore:
     vad: EnergyVad
     stt: GroqWhisperSTT
 
+    _closed: bool = field(default=False, init=False)
+
     @classmethod
     def bootstrap(cls, *, clock: Clock | None = None, storage: StorageBackend | None = None) -> "AmoraCore":
+        storage = storage or SQLiteBackend()
+        ServerSettings.from_environment().validate_persistence(remote=storage.capabilities.remote)
         paths = RuntimePaths.from_environment()
         paths.ensure()
         configure_logging(paths.logs)
         active_clock = clock or SystemClock()
         secrets = SecretStore(paths.secrets)
         secrets.ensure_token("LOCAL_API_TOKEN")
-        storage = storage or SQLiteBackend()
         database = AmoraDatabase(paths.database, backend=storage)
         database.migrate()
         identities = database.load_registry()
@@ -331,16 +334,33 @@ class AmoraCore:
             raise
         return destination
 
+    def readiness(self) -> dict[str, object]:
+        if self._closed:
+            return {"status": "not_ready", "error_code": "CORE_CLOSED"}
+        try:
+            if not self.secrets.get("LOCAL_API_TOKEN"):
+                return {"status": "not_ready", "error_code": "AUTH_NOT_CONFIGURED"}
+            if self.database.schema_version() != 10:
+                return {"status": "not_ready", "error_code": "SCHEMA_NOT_CURRENT"}
+            with self.database._lock, self.database._conn:
+                self.database._conn.execute("UPDATE schema_migrations SET version=version WHERE version=10")
+            return {"status": "ready", "storage": self.database.backend.capabilities.name}
+        except Exception:
+            return {"status": "not_ready", "error_code": "STORAGE_UNAVAILABLE"}
+
     def close(self) -> None:
-        self.actions.close()
-        self.avatar.close()
-        self.conversation.close()
-        self.cognition.close()
-        self.autonomy.close()
-        self.emotion.close()
-        self.world_store.close()
-        self.memory.close()
-        self.database.close()
+        if self._closed:
+            return
+        self._closed = True
+        errors = []
+        for resource in (self.actions, self.avatar, self.conversation, self.cognition,
+                         self.autonomy, self.emotion, self.world_store, self.memory, self.database):
+            try:
+                resource.close()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise ExceptionGroup("Core shutdown failed", errors)
 
 
 def _env_true(name: str) -> bool:

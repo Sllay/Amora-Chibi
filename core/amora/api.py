@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hmac
+from contextlib import asynccontextmanager
 import logging
 import sys
 from dataclasses import asdict
 from uuid import uuid4
 
+from fastapi.responses import JSONResponse
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
 
@@ -59,13 +61,29 @@ class ObserveTextRequest(BaseModel):
     dedupe_key: str | None = None
 
 
-def create_api(core: AmoraCore) -> FastAPI:
+def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAPI:
     # High-frequency request polling and successful provider requests remain in
     # structured diagnostics, not in the human terminal surface.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    app = FastAPI(title="Amora Core API", version=__version__)
+    @asynccontextmanager
+    async def lifespan(app):
+        app.state.accepting = True
+        try:
+            yield
+        finally:
+            app.state.accepting = False
+            console = getattr(app.state, "server_console", None)
+            try:
+                if console is not None:
+                    console.close()
+            finally:
+                if own_core:
+                    core.close()
+
+    app = FastAPI(title="Amora Core API", version=__version__, lifespan=lifespan)
+    app.state.accepting = True
     app.state.server_console = None
 
     def expected_token() -> str:
@@ -114,18 +132,6 @@ def create_api(core: AmoraCore) -> FastAPI:
             console.heartbeat(core)
         return response
 
-    # FastAPI 0.143 removed the legacy app.add_event_handler surface used by
-    # older releases. The dashboard only owns terminal/logging presentation and
-    # does not hold canonical state, so process teardown is sufficient. On older
-    # FastAPI versions, close it cleanly when the compatibility hook exists.
-    add_event_handler = getattr(app, "add_event_handler", None)
-    if callable(add_event_handler):
-        def close_server_console() -> None:
-            console = getattr(app.state, "server_console", None)
-            if console is not None:
-                console.close()
-        add_event_handler("shutdown", close_server_console)
-
     register_memory_routes(app, core, require_auth)
     register_world_routes(app, core, require_auth)
     register_emotion_routes(app, core, require_auth)
@@ -137,12 +143,23 @@ def create_api(core: AmoraCore) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, object]:
-        report = core.health_report()
-        return {
-            "status": report["status"],
-            "version": report["version"],
-            "database_integrity": report["database_integrity"],
-        }
+        try:
+            integrity = core.database.integrity_check() if not core._closed else "closed"
+        except Exception:
+            integrity = "unavailable"
+        return JSONResponse({"status": "ok" if integrity == "ok" else "degraded",
+                             "version": __version__, "database_integrity": integrity},
+                            status_code=200 if integrity == "ok" else 503)
+
+    @app.get("/live")
+    def live():
+        return {"status": "alive"}
+
+    @app.get("/ready")
+    def ready():
+        report = core.readiness() if app.state.accepting else {"status": "not_ready", "error_code": "DRAINING"}
+        return JSONResponse(report, status_code=200 if report["status"] == "ready" else 503,
+                            headers={"Cache-Control": "no-store"})
 
     @app.post("/v1/pairing/redeem")
     def redeem_pairing(request: PairingRedeemRequest) -> dict[str, str]:
@@ -360,7 +377,7 @@ def create_api(core: AmoraCore) -> FastAPI:
         queue: asyncio.Queue[AmoraEvent] = asyncio.Queue(maxsize=128)
 
         async def receive_event(event: AmoraEvent) -> None:
-            if event.privacy_scope == PrivacyScope.AUTH:
+            if event.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
                 return
             if queue.full():
                 try:

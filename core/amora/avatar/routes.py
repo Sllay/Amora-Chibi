@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from typing import Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
@@ -63,7 +64,7 @@ def register_avatar_routes(app: FastAPI, core: object, require_auth: Callable[..
     def delete_avatar_asset(asset_id: str) -> dict[str, bool]:
         return {"deleted": avatar.store.delete_asset(asset_id)}
 
-    web_root = Path(__file__).resolve().parents[3] / "avatar"
+    web_root = Path(os.environ.get("AMORA_AVATAR_ROOT", str(Path(__file__).resolve().parents[3] / "avatar")))
     if web_root.is_dir():
         app.mount("/avatar", StaticFiles(directory=str(web_root), html=True), name="avatar")
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -58,6 +60,15 @@ def configure_logging(log_dir: Path, *, level: int = logging.INFO) -> None:
     file_handler.setFormatter(JsonFormatter())
     file_handler._amora_file = True  # type: ignore[attr-defined]
     root.addHandler(file_handler)
+
+    if os.getenv("AMORA_MODE") == "cloud":
+        stdout = logging.StreamHandler(sys.stdout)
+        stdout.setLevel(level)
+        stdout.setFormatter(JsonFormatter())
+        stdout._amora_console = True
+        root.addHandler(stdout)
+        setattr(root, "_amora_configured", True)
+        return
 
     stderr = logging.StreamHandler()
     stderr.setLevel(logging.WARNING)

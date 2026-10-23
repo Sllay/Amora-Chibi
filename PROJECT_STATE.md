@@ -379,3 +379,10 @@ certificação acústica continua pendente e parâmetros congelados não mudam.
 Etapa 1: auditoria em `docs/engineering/CLOUD_MIGRATION_AUDIT.md`, injeção
 StorageBackend nos nove stores e contrato VoiceBackend, mantendo defaults
 locais e queries/migrations. Testar interfaces antes da etapa cloud.
+
+Etapa 2: Core/Web Linux possui host/port por ambiente/CLI, /live, /ready,
+health com HTTP 503 em falha, lifespan e close idempotente, logs JSON stdout
+cloud, Dockerfile e lock de dependências. Cloud falha fechado para token
+não injetado ou SQLite sem volume durável declarado. Voz continua opcional.
+Operação em `docs/engineering/CLOUD_OPERATIONS.md`. CI remoto e deploy Koyeb
+não equivalem aos testes locais e continuam pendentes.

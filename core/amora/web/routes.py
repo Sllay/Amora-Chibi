@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import os
 from typing import Callable
 from uuid import UUID
 
@@ -142,7 +143,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             },
         )
 
-    web_root = Path(__file__).resolve().parents[3] / "web"
+    web_root = Path(os.environ.get("AMORA_WEB_ROOT", str(Path(__file__).resolve().parents[3] / "web")))
     if not web_root.is_dir():
         return
 

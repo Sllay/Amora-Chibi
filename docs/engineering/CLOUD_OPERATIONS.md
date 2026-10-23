@@ -1,0 +1,45 @@
+# Core/Web Linux — operação e gates
+
+ADR-0015 define a direção. Imagem: `docker build -t amora-core .`.
+A imagem não inclui modelos TTS, banco, vault, tokens ou arquivos de runtime.
+`deploy/python.lock` fixa as dependências validadas; o Python base deve ser
+pinado por digest no pipeline de publicação escolhido. Não publicar imagem
+com CA/proxy de desenvolvimento incorporados.
+
+Modo local: `AMORA_HOME=/caminho/runtime amora serve`; bind padrão 127.0.0.1.
+Modo cloud: `AMORA_MODE=cloud`, `AMORA_HOST=0.0.0.0`, `PORT=8765` (ou porta
+injetada pelo host). `--host/--port` também são aceitos.
+
+Exigir `AMORA_SECRET_LOCAL_API_TOKEN` estável, fornecido por secrets do host;
+não imprimir o valor. Providers usam AMORA_SECRET_GROQ_API_KEY etc. Não colocar
+secrets no Dockerfile, build args, imagem, Git ou URL. Sem providers, texto local
+continua funcional. Expor TLS via ingress; não abrir porta de banco/worker ao usuário.
+
+SQLite cloud requer volume em AMORA_HOME e declaração
+`AMORA_DURABLE_FILESYSTEM=true`. Uma variável não cria um volume: configurá-lo
+no host e testar restart/restore. O modo cloud recusa SQLite efêmero. SQL remoto
+sozinho também não resolve assets binários. Nunca escalar horizontalmente antes
+de distribuir coordenação social, jobs e pareamento.
+
+Uma réplica, um processo, sem Uvicorn --workers. `/live` verifica processo;
+`/ready` verifica schema e escrita transacional; `/health` verifica integridade
+do banco e retorna 503 em falha. Voz é capability opcional, não gate de readiness
+do chat. Endpoints administrativos continuam Bearer-authenticated. Pairing CLI
+precisa executar na mesma máquina/volume; não expor emissão de código publicamente.
+
+SIGTERM usa graceful shutdown Uvicorn (30s), lifespan fecha console/stores;
+chamadas nativas em thread não garantem preempção. Scheduler continua opt-in,
+sem ativar nova autonomia. Logs cloud em stdout JSON e arquivo rotativo local;
+coletar stdout no host para retenção durável. Cache/modelos não são memória.
+
+Koyeb é alvo de configuração, não dependência em código. Configurar porta,
+health check `/ready`, secrets, volume quando necessário e escala mínima/máxima
+conforme orçamento aprovado por BK. Nenhuma conta, billing ou deploy é criado
+por estes arquivos. Certificação remota continua pendente.
+
+Build validado neste ambiente com proxy de sessão: `--add-host proxy:<IP do
+proxy>`, build args HTTP_PROXY/HTTPS_PROXY herdados e BuildKit
+`--secret id=proxy_ca,src=/etc/ssl/certs/ca-certificates.crt`. A CA é montada
+somente no RUN; não fica na imagem. Não desabilitar TLS. O nome/IP pertence
+ao ambiente de build, não à configuração portátil. Container non-root passou
+/ready, shells Web/Avatar, SIGTERM exit 0 e restart com volume Docker.
