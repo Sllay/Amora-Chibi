@@ -4,6 +4,7 @@ import io
 import math
 import wave
 from urllib.parse import urlparse
+from amora.security import validate_remote_origin
 import httpx
 
 from amora.events import PrivacyScope
@@ -30,6 +31,7 @@ def validate_wav(body):
 
 class RemoteVoiceBackend:
     def __init__(self, url, token, *, transport=None, timeout=20.):
+        url=validate_remote_origin(url)
         parsed=urlparse(url)
         if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {'','/'}:
             raise ValueError('Voice backend requires an HTTPS origin')

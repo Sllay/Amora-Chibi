@@ -23,7 +23,8 @@ const zoomLabel = document.querySelector('#zoomLabel');
 const toastEl = document.querySelector('#toast');
 const assetInput = /** @type {HTMLInputElement} */ (document.querySelector('#assetInput'));
 
-let token = localStorage.getItem('amora.avatar.token') || '';
+localStorage.removeItem('amora.avatar.token');
+let token = sessionStorage.getItem('amora.avatar.token') || '';
 let project = null;
 let assets = new Map();
 let selectedPartId = null;
@@ -73,7 +74,7 @@ async function api(path, options = {}) {
   if (token) headers.set('Authorization', `Bearer ${token}`);
   const response = await fetch(path, { ...options, headers });
   if (response.status === 401) {
-    token = ''; localStorage.removeItem('amora.avatar.token'); showPair(); throw new Error('pairing required');
+    token = ''; sessionStorage.removeItem('amora.avatar.token'); showPair(); throw new Error('pairing required');
   }
   if (!response.ok) {
     let detail = `${response.status}`;
@@ -91,9 +92,9 @@ pairBtn?.addEventListener('click', async () => {
   const code = pairCode.value.trim();
   if (!/^\d{6}$/.test(code)) return toast('Código precisa ter 6 dígitos');
   try {
-    const response = await fetch('/v1/pairing/redeem', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code}) });
+    const response = await fetch('/v1/pairing/redeem', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code,client:"avatar"}) });
     if (!response.ok) throw new Error('Código inválido ou expirado');
-    const data = await response.json(); token = data.token; localStorage.setItem('amora.avatar.token', token);
+    const data = await response.json(); token = data.token; sessionStorage.setItem('amora.avatar.token', token);
     hidePair(); pairCode.value = ''; await bootstrap();
   } catch (error) { toast(error.message || 'Falha ao parear'); }
 });

@@ -11,6 +11,9 @@ from time import perf_counter
 from fastapi.responses import JSONResponse
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
+from typing import Literal
+from fastapi.exceptions import RequestValidationError
+from amora.security import SecurityMiddleware, SecuritySettings, token_role, issue_browser_token, token_equal
 
 from amora import __version__
 from amora.actions.routes import register_action_routes
@@ -38,7 +41,8 @@ class SessionCreateRequest(BaseModel):
 
 
 class PairingRedeemRequest(BaseModel):
-    code: str = Field(pattern=r"^\d{6}$")
+    code: str = Field(pattern=r"^[0-9]{6}$")
+    client: Literal["web", "avatar"] = "web"
 
 
 class AddresseeInferRequest(BaseModel):
@@ -88,7 +92,10 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
                     if own_core:
                         core.close()
 
-    app = FastAPI(title="Amora Core API", version=__version__, lifespan=lifespan)
+    settings = SecuritySettings.from_environment()
+    if settings.cloud and len((core.secrets.get("LOCAL_API_TOKEN") or "").encode()) < 32:
+        raise ValueError("cloud admin token must contain at least 32 bytes")
+    app = FastAPI(title="Amora Core API", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.accepting = True
     app.state.server_console = None
     app.state.voice_backend = voice
@@ -99,19 +106,21 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             raise RuntimeError("LOCAL_API_TOKEN is missing")
         return value
 
-    def require_auth(authorization: str | None = Header(default=None)) -> None:
+    def require_auth(request: Request, authorization: str | None = Header(default=None)) -> None:
+        if getattr(request.state, "security_role", None) in {"admin", "web", "avatar"}:
+            return
         prefix = "Bearer "
         if authorization is None or not authorization.startswith(prefix):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="authentication required")
         supplied = authorization[len(prefix):]
-        if not hmac.compare_digest(supplied, expected_token()):
+        if not token_equal(supplied, expected_token()):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
     def server_console(request: Request | None = None) -> ServerConsole | None:
         existing = getattr(app.state, "server_console", None)
         if existing is not None:
             return existing
-        if not bool(getattr(sys.stderr, "isatty", lambda: False)()):
+        if settings.cloud or not bool(getattr(sys.stderr, "isatty", lambda: False)()):
             return None
         host = request.url.hostname if request is not None else "127.0.0.1"
         port = request.url.port if request is not None and request.url.port is not None else 8765
@@ -165,7 +174,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         except Exception:
             integrity = "unavailable"
         return JSONResponse({"status": "ok" if integrity == "ok" else "degraded",
-                             "version": __version__, "database_integrity": integrity},
+                             **({} if settings.cloud else {"version": __version__, "database_integrity": integrity})},
                             status_code=200 if integrity == "ok" else 503)
 
     @app.get("/live")
@@ -175,6 +184,8 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
     @app.get("/ready")
     def ready():
         report = core.readiness() if app.state.accepting else {"status": "not_ready", "error_code": "DRAINING"}
+        if settings.cloud:
+            report = {"status": report["status"]}
         return JSONResponse(report, status_code=200 if report["status"] == "ready" else 503,
                             headers={"Cache-Control": "no-store"})
 
@@ -187,7 +198,8 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
     def redeem_pairing(request: PairingRedeemRequest) -> dict[str, str]:
         if not core.pairing.redeem(request.code):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired pairing code")
-        return {"token": expected_token(), "token_type": "Bearer"}
+        token = issue_browser_token(expected_token(), core.clock, request.client) if settings.cloud else expected_token()
+        return {"token": token, "token_type": "Bearer"}
 
     @app.get("/v1/state", dependencies=[Depends(require_auth)])
     def state_view() -> dict[str, object]:
@@ -419,7 +431,8 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
                     message = receive_task.result()
                     if message["type"] == "websocket.disconnect":
                         break
-                    receive_task = asyncio.create_task(websocket.receive())
+                    await websocket.close(code=1008)
+                    break  # server-to-client stream has no inbound command protocol
                 if queued_task in done:
                     await websocket.send_json(queued_task.result().model_dump(mode="json"))
                 else:
@@ -431,7 +444,53 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             tasks = [task for task in (receive_task, queued_task) if task is not None]
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            await core.events.unsubscribe("*", receive_event)
+            import anyio
+            with anyio.CancelScope(shield=True):
+                await asyncio.gather(*tasks, return_exceptions=True)
+                await core.events.unsubscribe("*", receive_event)
 
+    def browser_access(role, scope):
+        from urllib.parse import parse_qs
+        path = scope["path"]
+        method = scope["method"]
+        import re
+        if role == "avatar":
+            fixed = {"/v1/avatar/state": {"GET"}, "/v1/avatar/project": {"GET", "PUT"},
+                     "/v1/avatar/assets": {"GET"}}
+            if method in fixed.get(path, set()):
+                return True
+            return bool(re.fullmatch(r"/v1/avatar/assets/[A-Za-z0-9_.-]{1,96}", path)) and method in {"GET", "PUT", "DELETE"}
+        if path == "/v1/web/state":
+            return method == "GET"
+        if path == "/v1/web/utterance":
+            return method == "POST"
+        query = parse_qs(scope.get("query_string", b"").decode("utf-8", "replace"))
+        if path == "/v1/audio/transcribe":
+            return method == "POST" and query.get("speech_device_id") == ["WEB_SAFARI"]
+        if path == "/v1/conversation/next":
+            return method == "GET" and query.get("device_id") == ["WEB_SAFARI"]
+        match = re.fullmatch(r"/v1/(web/voice|conversation)/utterances/([0-9a-fA-F-]{36})/(audio|started|ack|cancel)", path)
+        if match:
+            prefix, utterance_id, action = match.groups()
+            if not ((prefix == "web/voice" and action == "audio" and method == "GET") or
+                    (prefix == "conversation" and action in {"started", "ack", "cancel"} and method == "POST")):
+                return False
+            try:
+                item = core.conversation.store.get_utterance(utterance_id)
+                return item is not None and item.device_id == "WEB_SAFARI"
+            except ValueError:
+                return False
+        return False
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request, exc):
+        return JSONResponse({"detail": "invalid request"}, status_code=422)
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request, exc):
+        return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    app.add_middleware(SecurityMiddleware, settings=settings, clock=core.clock,
+                       authenticate=lambda supplied: token_role(supplied, expected_token(), core.clock),
+                       web_access=browser_access)
     return app

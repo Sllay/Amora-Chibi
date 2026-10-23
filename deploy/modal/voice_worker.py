@@ -10,10 +10,10 @@ from amora.voice.bundle import verify_bundle
 verify_bundle(BUNDLE)
 
 image=(modal.Image.debian_slim(python_version='3.12')
-    .pip_install('fastapi==0.161.1','pydantic==2.14.0b2','httpx==0.28.1','sherpa-onnx==1.13.8')
+    .pip_install_from_requirements(str(ROOT/'deploy/voice-worker.lock'))
     .add_local_dir(str(ROOT/'core'),'/opt/amora/core',copy=True,ignore=['**/__pycache__/**','**/*.egg-info/**'])
     .add_local_dir(str(BUNDLE),'/opt/amora/voice',copy=True)
-    .env({'PYTHONPATH':'/opt/amora/core','AMORA_HOME':'/opt/amora/voice'}))
+    .env({'PYTHONPATH':'/opt/amora/core','AMORA_HOME':'/opt/amora/voice','AMORA_MODE':'cloud'}))
 app=modal.App('amora-voice-worker')
 
 @app.function(image=image,cpu=2,memory=2048,timeout=120,max_containers=1,

@@ -148,7 +148,7 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
             "response_format": {"type": "json_object"},
         }
         timeout = httpx.Timeout(self.timeout_seconds, connect=15.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             response = await client.post(
                 self.API_URL,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -296,7 +296,7 @@ class GeminiCognitiveProvider:
         last_input: int | None = None
         last_output: int | None = None
         finish_reason: str | None = None
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             async with client.stream(
                 "POST",
                 url,
@@ -349,7 +349,7 @@ class GeminiCognitiveProvider:
             raise ProviderError("GEMINI_API_KEY is not configured")
         url = f"{self.API_ROOT}/{self.model}:generateContent"
         timeout = httpx.Timeout(self.timeout_seconds, connect=15.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             response = await client.post(
                 url,
                 headers={"x-goog-api-key": key, "Content-Type": "application/json"},

@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
+from amora.security import validate_remote_origin
 from .backend import StorageCapabilities
 
 
@@ -109,6 +110,7 @@ class LibSQLBackend:
     def __init__(self, url: str, token: str, *, transport=None, timeout=15.0):
         if url.startswith("libsql://"):
             url = "https://" + url[len("libsql://") :]
+        url = validate_remote_origin(url)
         parsed = urlparse(url)
         if (
             parsed.scheme != "https"

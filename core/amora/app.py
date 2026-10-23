@@ -102,6 +102,9 @@ class AmoraCore:
         configure_logging(paths.logs)
         active_clock = clock or SystemClock()
         operations = OperationMonitor(active_clock)
+        from amora.observability import remember_secret
+        remember_secret(os.getenv("AMORA_VOICE_SERVICE_TOKEN"))
+        remember_secret(os.getenv("AMORA_SECRET_LIBSQL_AUTH_TOKEN"))
         secrets = SecretStore(paths.secrets)
         secrets.ensure_token("LOCAL_API_TOKEN")
         database = AmoraDatabase(paths.database, backend=storage)

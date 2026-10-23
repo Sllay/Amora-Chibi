@@ -1,0 +1,26 @@
+{
+  "checkout": [
+    "v5",
+    "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
+  ],
+  "setup-node": [
+    "v5",
+    "a0853c24544627f65ddf259abe73b1d18a591444"
+  ],
+  "setup-python": [
+    "v6",
+    "ece7cb06caefa5fff74198d8649806c4678c61a1"
+  ],
+  "upload-artifact": [
+    "v6",
+    "b7c566a772e6b6bfb58ed0dc250532a479d7789f"
+  ],
+  "setup-java": [
+    "v5",
+    "b6effb05e454b25005698d916606bdc6ffcbf961"
+  ],
+  "gradle/actions/setup-gradle": [
+    "v5",
+    "0723195856401067f7a2779048b490ace7a47d7c"
+  ]
+}

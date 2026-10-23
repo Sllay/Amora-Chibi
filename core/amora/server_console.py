@@ -136,6 +136,8 @@ class ServerConsole:
         self.set_activity(source, message)
 
     def record_error(self, source: str, message: str) -> None:
+        from amora.observability import redact
+        message = redact(message)
         source = self._one_line(source)[:28] or "runtime"
         message = self._one_line(message)[:180] or "erro sem mensagem"
         with self._lock:
@@ -286,4 +288,5 @@ class ServerConsole:
 
     @staticmethod
     def _one_line(value: object) -> str:
-        return " ".join(str(value or "").replace("\x00", "").split())
+        from amora.observability import redact
+        return " ".join(redact(str(value or "")).replace("\x00", "").split())

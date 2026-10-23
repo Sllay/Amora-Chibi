@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import secrets as secrets_module
+from amora.observability import remember_secret
 from pathlib import Path
 
 _SECRET_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
@@ -38,15 +39,19 @@ class SecretStore:
         normalized = self.normalize_name(name)
         env = os.environ.get(f"{self.env_prefix}{normalized}")
         if env is not None:
+            remember_secret(env)
             return env
         path = self._path(normalized)
         if not path.is_file():
             return None
-        return path.read_text(encoding="utf-8")
+        value = path.read_text(encoding="utf-8")
+        remember_secret(value)
+        return value
 
     def set(self, name: str, value: str) -> None:
         if not isinstance(value, str) or not value:
             raise ValueError("secret value must be a non-empty string")
+        remember_secret(value)
         path = self._path(name)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(value, encoding="utf-8")

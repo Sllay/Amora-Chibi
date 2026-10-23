@@ -83,3 +83,5 @@ class ServerSettings:
             raise ValueError("cloud SQLite requires AMORA_DURABLE_FILESYSTEM=true and a durable volume")
         if remote and not self.durable_filesystem and asset_backend != "database":
             raise ValueError("remote SQL alone does not persist avatar assets; select AMORA_ASSET_STORAGE=database or a durable filesystem")
+        if len(os.environ["AMORA_SECRET_LOCAL_API_TOKEN"].encode()) < 32:
+            raise ValueError("cloud admin token must contain at least 32 bytes")

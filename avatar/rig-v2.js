@@ -200,7 +200,7 @@ AvatarRenderer.prototype.render = function(now) {
 async function saveV2() {
   const renderer=v2.renderer;const p=project();if(!renderer||!p||runtimeMode)return;
   clearTimeout(v2.saveTimer);p.schema_version=Math.max(2,Number(p.schema_version)||1);
-  const token=localStorage.getItem('amora.avatar.token')||'';
+  const token=sessionStorage.getItem('amora.avatar.token')||'';
   try {
     const response=await fetch('/v1/avatar/project',{method:'PUT',headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify(p)});
     if(!response.ok){let detail=String(response.status);try{detail=(await response.json()).detail||detail;}catch(_){}throw new Error(detail);}

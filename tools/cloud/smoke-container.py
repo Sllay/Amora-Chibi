@@ -44,10 +44,15 @@ try:
         name,
         "--network",
         "none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
+        "-e", "AMORA_PUBLIC_ORIGINS=https://amora.example",
         "-e",
         "AMORA_DURABLE_FILESYSTEM=true",
         "-e",
-        "AMORA_SECRET_LOCAL_API_TOKEN=isolated-container-test-only",
+        "AMORA_SECRET_LOCAL_API_TOKEN=isolated-container-security-test-only-token",
         "-v",
         volume + ":/var/lib/amora",
         image,
@@ -61,6 +66,17 @@ try:
         "-c",
         """
 import json,os,urllib.request,urllib.error
+from pathlib import Path
+status=Path('/proc/self/status').read_text()
+assert 'CapEff:\t0000000000000000' in status
+assert 'NoNewPrivs:\t1' in status
+try:
+    Path('/home/amora/security-smoke-write').write_text('unexpected')
+except OSError as error:
+    import errno
+    assert error.errno == errno.EROFS
+else:
+    raise AssertionError('image filesystem is writable')
 origin='http://127.0.0.1:8765'
 for path in ['/health','/web/','/avatar/']:
     assert urllib.request.urlopen(origin+path).status==200

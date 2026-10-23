@@ -49,6 +49,16 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
         else:
             raise ValueError("AMORA_VOICE_BACKEND must be local or remote")
     app.state.web_local_voice = local_voice
+    import threading
+    render_slot = threading.BoundedSemaphore(1)
+
+    def render_bounded(item):
+        if not render_slot.acquire(blocking=False):
+            raise LocalVoiceUnavailable("VOICE_BUSY")
+        try:
+            return local_voice.render(item)
+        finally:
+            render_slot.release()
 
     def voice_state_remote():
         return local_voice.state().get("provider") == "amora_remote_supertonic_world"
@@ -69,7 +79,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             "voice_candidate": VOICE_ID,
             "voice_candidate_available": voice_state["available"],
             "local_voice": voice_state,
-            "core": core.health_report(),
+            "core": core.readiness() if os.getenv("AMORA_MODE") == "cloud" else core.health_report(),
         }
 
     @app.post("/v1/web/utterance", dependencies=auth)
@@ -126,7 +136,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
         if dashboard is not None:
             dashboard.set_activity("SINTETIZANDO", "Amora local • Supertonic → FINAL_B", ttl_seconds=60.0)
         try:
-            audio = await asyncio.to_thread(local_voice.render, item)
+            audio = await asyncio.to_thread(render_bounded, item)
         except LocalVoiceUnavailable as exc:
             core.operations.error("voice", "VOICE_RENDER_FAILED", correlation_id=utterance_id)
             if dashboard is not None:

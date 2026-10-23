@@ -5,6 +5,8 @@ import asyncio
 import getpass
 import json
 import mimetypes
+import os
+from amora.security import trusted_proxy_ips
 from amora.settings import ServerSettings
 from pathlib import Path
 
@@ -49,7 +51,7 @@ def serve(port: int | None = None, host: str | None = None) -> int:
     settings = ServerSettings.from_environment()
     try:
         app = create_api(core, own_core=True)
-        uvicorn.run(app, host=host or settings.host, port=port or settings.port, log_config=None, timeout_graceful_shutdown=30)
+        uvicorn.run(app, host=host or settings.host, port=port or settings.port, log_config=None, timeout_graceful_shutdown=30, proxy_headers=bool(os.getenv("AMORA_TRUSTED_PROXY_IPS")), forwarded_allow_ips=trusted_proxy_ips(), timeout_keep_alive=5, ws_max_size=16384, ws_ping_interval=20, ws_ping_timeout=20, server_header=False)
     finally:
         core.close()
     return 0

@@ -116,7 +116,7 @@ class GeminiStreamingTTS:
             },
         }
         timeout = httpx.Timeout(self.timeout_seconds, connect=15.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             async with client.stream(
                 "POST",
                 url,

@@ -764,3 +764,13 @@ ADR-0013 tornou Safari a superfície primária de iteração antes do fechamento
 - documentos históricos e commits antigos não são especificação atual por padrão.
 
 Antes de restaurar um método antigo, consultar os ADRs e o histórico para saber por que ele foi abandonado.
+
+### Segurança da superfície pública — ADR-0016
+
+Cloud usa admin separado de credenciais web/avatar assinadas e expirantes;
+pareamento público nunca entrega admin. Bearer é explícito, origins/hosts são
+configurados, proxies não são confiáveis implicitamente e operações/stream de
+eventos continuam administrativos. Limites ASGI e de borda protegem recursos;
+semântica, identidade, memória e voz não mudam. Scans e controles de execução não
+certificam um deploy: os gates e achados atuais estão em
+`docs/engineering/security/PREDEPLOY.md`.

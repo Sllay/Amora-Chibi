@@ -4,10 +4,33 @@ import json
 import logging
 import os
 import sys
+import re
+from threading import RLock
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
+
+
+_SECRET_VALUES: set[str] = set()
+_SECRET_LOCK = RLock()
+
+
+def remember_secret(value: str | None) -> None:
+    if value and len(value) >= 4:
+        with _SECRET_LOCK:
+            _SECRET_VALUES.add(value)
+
+
+def redact(text: str) -> str:
+    with _SECRET_LOCK:
+        values = tuple(_SECRET_VALUES)
+    for value in sorted(values, key=len, reverse=True):
+        text = text.replace(json.dumps(value, ensure_ascii=False)[1:-1], "[REDACTED]")
+        text = text.replace(value, "[REDACTED]")
+    text = re.sub(r"(?i)(Bearer\s+)[^\s\"']+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)([?&](?:key|api_key|token|access_token)=)[^&\s\"']+", r"\1[REDACTED]", text)
+    return text
 
 
 _STANDARD = set(logging.LogRecord(None, 0, "", 0, "", (), None).__dict__)
@@ -30,13 +53,13 @@ class JsonFormatter(logging.Formatter):
                     payload[key] = repr(value)
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        return redact(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
 
 class CompactConsoleFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
-        return f"[{timestamp}] {record.levelname:<7} {record.name}: {record.getMessage()}"
+        return redact(f"[{timestamp}] {record.levelname:<7} {record.name}: {record.getMessage()}")
 
 
 def configure_logging(log_dir: Path, *, level: int = logging.INFO) -> None:

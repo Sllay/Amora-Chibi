@@ -422,3 +422,21 @@ Smoke automático valida non-root, endpoints, autenticação, texto, fila persis
 restart e SIGTERM; workflow cloud-contracts.yml reproduz esse gate na CI.
 Avisos existentes de Pydantic/Starlette permanecem (5), sem testes pulados.
 Relatórios para revisão por etapa em `docs/engineering/reviews/`.
+
+## Security pass pré-deploy — 2026-10-23
+
+ADR-0016 e `docs/engineering/security/PREDEPLOY.md` registram a nova fronteira:
+cloud pairing com token web/avatar 12h, admin separado, auth ASGI global,
+origins/hosts explícitos, proxies sem confiança implícita, limites de body/rate/
+timeout, WebSocket administrativo com origem validada e headers CSP/security.
+Bearer do browser passa a sessionStorage; logs redigem secrets observados.
+Node CI 22.23.4 testado por distribuição oficial verificada; actions Node 24
+pinadas. Runtime Docker non-root/read-only sem pip/setuptools/wheel.
+
+Scans: Core lock (23) e worker lock (17) sem vulnerabilidades conhecidas ou skips.
+Runtime Python sem CVEs reportados após remover tooling. **Deploy bloqueado:**
+Debian mantém 44 ocorrências HIGH/oito CVEs sem FixedVersion; nenhuma exclusão.
+CI security-predeploy deve bloquear HIGH/CRITICAL. 347 testes Python e cinco
+Avatar passaram localmente; cloud providers/ingress/egress, bundle real e Safari
+físico continuam gates. Inventário de 69 operações HTTP e evidências versionadas
+na pasta de segurança. Não tratar preparação como aprovação de publicação.

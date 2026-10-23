@@ -135,7 +135,7 @@ class GroqCognitiveProvider:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         started = perf_counter()
         timeout = httpx.Timeout(self.timeout_seconds, connect=15.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             async with client.stream("POST", self.API_URL, headers=headers, json=payload) as response:
                 remaining_requests = _int_header(response.headers.get("x-ratelimit-remaining-requests"))
                 remaining_tokens = _int_header(response.headers.get("x-ratelimit-remaining-tokens"))

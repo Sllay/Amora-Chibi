@@ -141,3 +141,22 @@ WebSocket de eventos continua autenticado e agora exclui SECRET além de AUTH;
 disconnect sem novos eventos libera subscription/tasks. Continua sendo stream
 bounded sem replay durável. Pareamento usa lock de arquivo/thread Linux para
 consumo único entre CLI/threads; ainda não é pareamento distribuído.
+
+## Overrides obrigatórios após o security pass (ADR-0016)
+
+Cloud requer `AMORA_PUBLIC_ORIGINS=https://seu-host-publico` e admin aleatório de
+pelo menos 32 bytes. `AMORA_TRUSTED_PROXY_IPS` deve listar somente peers reais do
+ingress; omitido desliga confiança em forwarded headers. Nada de wildcard ou /0.
+Também declarar a origem de tunnels no desenvolvimento local quando usada.
+Browser recebe credencial com escopo/12h, guarda em sessionStorage e precisa
+reparear após expirar/rotacionar admin. Não expor /operations ao token do browser.
+
+Executar container com `--read-only --cap-drop=ALL --security-opt=no-new-privileges`
+e tmpfs /tmp; somente AMORA_HOME gravável (volume para SQLite, tmpfs apropriado
+para libSQL+assets SQL). Builder e runtime agora são separados; runtime não contém
+pip/setuptools/wheel. Worker remoto usa lock transitivo e slot de render próprio.
+
+**Não publicar ainda:** consultar `docs/engineering/security/PREDEPLOY.md`, pois o
+gate Trivy ainda encontra oito CVEs HIGH do Debian (44 ocorrências), sem versões
+corrigidas indicadas. Não ignorar unfixed para obter CI verde. Provar política de
+egress/DNS, TLS, proxy peers e rate limits de borda na implantação real.
