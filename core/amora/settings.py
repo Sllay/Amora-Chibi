@@ -78,6 +78,8 @@ class ServerSettings:
             raise ValueError("cloud requires an injected AMORA_SECRET_LOCAL_API_TOKEN")
         if not remote and not self.durable_filesystem:
             raise ValueError("cloud SQLite requires AMORA_DURABLE_FILESYSTEM=true and a durable volume")
-        if remote and not self.durable_filesystem:
-            # Removed only when an independently durable asset backend is selected.
-            raise ValueError("remote SQL alone does not persist avatar assets; configure a durable filesystem")
+        asset_backend = os.getenv("AMORA_ASSET_STORAGE", "files")
+        if asset_backend not in {"files", "database"}:
+            raise ValueError("AMORA_ASSET_STORAGE must be files or database")
+        if remote and not self.durable_filesystem and asset_backend != "database":
+            raise ValueError("remote SQL alone does not persist avatar assets; select AMORA_ASSET_STORAGE=database or a durable filesystem")

@@ -61,8 +61,11 @@ class MemoryStore:
                     """
                 )
             return True
-        except sqlite3.OperationalError:
-            return False
+        except sqlite3.OperationalError as exc:
+            # Connectivity, permission and disk errors must never disable retrieval silently.
+            if str(exc) == "FTS5_UNSUPPORTED" or "no such module: fts5" in str(exc):
+                return False
+            raise
 
     def count(self, *, include_archived: bool = False) -> int:
         sql = "SELECT COUNT(*) FROM memory_records"

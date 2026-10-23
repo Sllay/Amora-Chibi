@@ -43,3 +43,41 @@ proxy>`, build args HTTP_PROXY/HTTPS_PROXY herdados e BuildKit
 somente no RUN; não fica na imagem. Não desabilitar TLS. O nome/IP pertence
 ao ambiente de build, não à configuração portátil. Container non-root passou
 /ready, shells Web/Avatar, SIGTERM exit 0 e restart com volume Docker.
+
+## Storage remoto e assets
+
+Configuração: `AMORA_STORAGE_BACKEND=libsql`, `AMORA_LIBSQL_URL=libsql://host`
+(ou HTTPS origin), `AMORA_SECRET_LIBSQL_AUTH_TOKEN` injetado e
+`AMORA_ASSET_STORAGE=database`. Sem volume, esta combinação é obrigatória.
+SQLite continua default; não há fallback silencioso quando libSQL falha.
+Backend remoto implementa Hrana HTTP v2 stateful (`/v2/pipeline`, baton),
+BEGIN IMMEDIATE, constraints e mapeamento de tipos incluindo BLOB. URLs com
+credenciais/query e redirects cross-origin são recusados. Writes/commit com
+resultado ambíguo não são repetidos automaticamente. Reinicie o Core após
+falha de transporte que invalide a conexão; readiness acusa indisponibilidade.
+
+Migration 11 é aditiva: `avatar_asset_blobs`. Não move arquivos automaticamente.
+Para migrar estado existente: parar escritores, criar `amora backup`, preservar
+.db e .avatar.zip fora do host, configurar destino remoto **vazio**, executar
+`.venv/bin/python tools/cloud/restore-storage.py snapshot.db --empty-destination`
+e validar o novo Core antes de apontar clientes. Import verifica integridade,
+constraints, SHA dos assets e recusa destino não vazio; schema 10 é atualizado
+na transação de import. Conservar origem/backup para rollback; não apagar dados.
+
+`amora backup` remoto faz snapshot lógico consistente sob transação, cria SQLite
+portátil, recria FTS sem copiar shadow tables e emite sidecar de assets. Testado
+com mock Hrana + SQLite real, não conta Turso. Export não é streaming: medir
+volume, timeout e duração do lock de escrita antes de mover base grande.
+Sprites SQL são adequados a objetos pequenos; respeitar limite de payload do
+serviço e orçamento. Um BlobStore futuro pode usar object storage. Nunca
+considerar cache efêmero como backup; copiar snapshot/sidecar para destino
+externo com política de retenção definida por BK.
+
+SQL remoto síncrono preserva interfaces existentes; latência por query e bloqueio
+de endpoints async são riscos medidos em staging antes de uso contínuo.
+Semântica de dedupe não é exactly-once dos handlers. Scheduler e pairing seguem
+locais à única réplica. Não ativar múltiplas réplicas com estes limites.
+
+Referência de protocolo auditada: repositório oficial tursodatabase/libsql,
+`docs/HTTP_V2_SPEC.md`, consultado em 2026-10-23. O SDK HTTP Python legado não
+oferece transações; por isso não foi usado como substituição DBAPI stateless.

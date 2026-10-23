@@ -386,3 +386,12 @@ cloud, Dockerfile e lock de dependências. Cloud falha fechado para token
 não injetado ou SQLite sem volume durável declarado. Voz continua opcional.
 Operação em `docs/engineering/CLOUD_OPERATIONS.md`. CI remoto e deploy Koyeb
 não equivalem aos testes locais e continuam pendentes.
+
+Etapa 3: LibSQLBackend Hrana HTTP v2 com transações stateful, tipos, constraints,
+FTS, backup SQLite portátil e restore explícito para destino vazio. Migration 11
+adiciona blobs de Avatar; AMORA_ASSET_STORAGE=database permite compute efêmero
+com SQL remoto. SQLite local permanece default. Corrigidos claim concorrente,
+ACK/cancel fora da transação, IntegrityError mascarado como dedupe e FTS que
+mascarava falhas operacionais. 285 testes passaram, incluindo contratos de
+memória/world/emoção/autonomia/ações/Web sobre adapter remoto mockado. Nenhuma
+conta Turso/Koyeb foi utilizada; latência/quotas/dados grandes são gates de staging.

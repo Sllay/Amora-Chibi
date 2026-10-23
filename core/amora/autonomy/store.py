@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
-from amora.storage.backend import SQLiteBackend, StorageBackend
+from amora.storage.backend import SQLiteBackend, StorageBackend, is_duplicate_error
 from amora.time import Clock
 
 from .models import (
@@ -89,7 +89,9 @@ class AutonomyStore:
                         item.created_at.isoformat(), item.dedupe_key,
                     ),
                 )
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
+                if not is_duplicate_error(exc):
+                    raise
                 return False
         return True
 
@@ -170,7 +172,9 @@ class AutonomyStore:
                         decision.created_at.isoformat(), decision.dedupe_key,
                     ),
                 )
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
+                if not is_duplicate_error(exc):
+                    raise
                 return False
         return True
 

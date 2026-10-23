@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from amora.storage.backend import SQLiteBackend, StorageBackend
+from amora.storage.backend import SQLiteBackend, StorageBackend, is_duplicate_error
 from amora.time import Clock
 
 from .models import ActionPlan, PlanExecutionResult, PlanStatus, ToolExecutionResult
@@ -45,7 +45,9 @@ class ActionStore:
                         plan.created_at.isoformat(), plan.updated_at.isoformat(), plan.dedupe_key,
                     ),
                 )
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
+                if not is_duplicate_error(exc):
+                    raise
                 return False
         return True
 
@@ -126,7 +128,9 @@ class ActionStore:
                     """,
                     (str(run_id), str(result.plan.id), status, payload, now.isoformat(), now.isoformat(), dedupe_key),
                 )
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
+                if not is_duplicate_error(exc):
+                    raise
                 return False
         return True
 

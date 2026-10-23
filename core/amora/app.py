@@ -31,7 +31,8 @@ from amora.secrets import SecretStore
 from amora.settings import RuntimePaths, ServerSettings
 from amora.social import AddresseeEngine, SocialSceneTracker
 from amora.storage import AmoraDatabase
-from amora.storage.backend import SQLiteBackend, StorageBackend
+from amora.storage.backend import StorageBackend, backend_from_environment
+from amora.storage.migrations_v101 import LATEST_SCHEMA_VERSION
 from amora.time import Clock, Scheduler, SystemClock
 from amora.world import (
     PerspectiveConsolidator,
@@ -82,7 +83,7 @@ class AmoraCore:
 
     @classmethod
     def bootstrap(cls, *, clock: Clock | None = None, storage: StorageBackend | None = None) -> "AmoraCore":
-        storage = storage or SQLiteBackend()
+        storage = storage or backend_from_environment()
         ServerSettings.from_environment().validate_persistence(remote=storage.capabilities.remote)
         paths = RuntimePaths.from_environment()
         paths.ensure()
@@ -340,10 +341,10 @@ class AmoraCore:
         try:
             if not self.secrets.get("LOCAL_API_TOKEN"):
                 return {"status": "not_ready", "error_code": "AUTH_NOT_CONFIGURED"}
-            if self.database.schema_version() != 10:
+            if self.database.schema_version() != LATEST_SCHEMA_VERSION:
                 return {"status": "not_ready", "error_code": "SCHEMA_NOT_CURRENT"}
             with self.database._lock, self.database._conn:
-                self.database._conn.execute("UPDATE schema_migrations SET version=version WHERE version=10")
+                self.database._conn.execute("UPDATE schema_migrations SET version=version WHERE version=(SELECT MAX(version) FROM schema_migrations)")
             return {"status": "ready", "storage": self.database.backend.capabilities.name}
         except Exception:
             return {"status": "not_ready", "error_code": "STORAGE_UNAVAILABLE"}
