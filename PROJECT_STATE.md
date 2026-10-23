@@ -367,3 +367,15 @@ Não voltar para:
 - Gemini TTS como fallback oculto;
 - APK-per-small-test;
 - retuning de FINAL_B/VoiceSignature sem evidência nova.
+
+## Migração de infraestrutura — 2026-10-23
+
+Decisão nova de BK: Core/Web → container (Koyeb candidato), persistência →
+SQLite ou libSQL remoto (Turso candidato), voz → worker independente (Modal
+candidato); A15 será futuramente Living Console. ADR-0015 registra a direção.
+A seção de próximo trabalho local acima é histórico operacional anterior;
+certificação acústica continua pendente e parâmetros congelados não mudam.
+
+Etapa 1: auditoria em `docs/engineering/CLOUD_MIGRATION_AUDIT.md`, injeção
+StorageBackend nos nove stores e contrato VoiceBackend, mantendo defaults
+locais e queries/migrations. Testar interfaces antes da etapa cloud.

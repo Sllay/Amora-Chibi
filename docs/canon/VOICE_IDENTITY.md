@@ -1,5 +1,13 @@
 # AMORA — Identidade Vocal Canônica
 
+
+> Atualização de infraestrutura (2026-10-23, ADR-0015): Core/Web serão
+> preparados para host Linux remoto e a mesma voz congelada para worker
+> independente. Koyeb/Turso/Modal são candidatos substituíveis. Descrições
+> Termux/local abaixo registram o caminho implementado anterior, preservado
+> para desenvolvimento. Esta decisão muda localização de compute/storage,
+> não identidade, semântica, consentimento, custo ou parâmetros da voz.
+
 **Status:** CANÔNICO / IDENTIDADE DE LABORATÓRIO CONGELADA / CERTIFICAÇÃO FÍSICA PENDENTE  
 **Atualizado em:** 2026-10-22  
 **Backend candidato:** sherpa-onnx + Supertonic 3 INT8  

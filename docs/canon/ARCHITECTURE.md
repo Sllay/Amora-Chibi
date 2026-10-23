@@ -40,45 +40,30 @@ AMORA
 
 ## 2. Plataforma
 
-### 2.1 Host principal atual
+### 2.1 Host e fronteiras de infraestrutura — ADR-0015
 
-Host doméstico atual: **Galaxy A15 5G**.
+Direção aceita em 2026-10-23: Core + Web/PWA em container Linux normal
+(Koyeb candidato); estado em SQLite local ou backend remoto libSQL (Turso
+candidato); TTS em Voice Worker independente (Modal candidato). Hosts são
+substituíveis. Galaxy A15/Termux deixa de ser host principal e será futuramente
+Living Console/controlador remoto. Safari permanece superfície conversacional.
 
-O Core continua local no Termux. A superfície primária de iteração conversacional é Safari/Web; Android debug permanece referência/gate secundário até existir o cliente Android oficial final.
+Preparação incremental não equivale a deploy/certificação nesses serviços.
+Estado canônico permanece no Core. SQLite local continua suportado para
+uso offline, desenvolvimento e testes. Uma réplica até eliminar estado de
+coordenação em memória e pareamento local. Backup/restore é gate de promoção.
 
-```text
-Galaxy A15 / Termux
-└── Amora Core + estado canônico
-    ├── Web/Safari adapter -> laboratório principal
-    └── Android adapter    -> referência / integração nativa / gate secundário
-```
+### 2.2 Core — Python portátil
 
-### 2.2 Core — Termux / Python
+Preserva Cognitive Kernel, Event Bus, migrations, TimeService/Scheduler,
+identidade/sessões, memória, relações, World Model, emoção, autonomia,
+diálogo, Context Compiler, Model Router, quotas/failover, plugins/actions,
+privacy gates, API, fila/ACK/cancel, observabilidade e backup/restore.
 
-Responsável por:
-
-- Cognitive Kernel;
-- Event Bus;
-- SQLite + migrations;
-- TimeService / Scheduler;
-- Entity Registry;
-- Relationship Graph;
-- Social Scene;
-- Perspective Resolver;
-- memória;
-- World Model;
-- Emotion Engine;
-- drives / autonomia;
-- Dialogue Orchestrator;
-- Context Compiler;
-- Model Router;
-- quota / cooldown / failover;
-- plugins / actions;
-- privacy gates;
-- servidor HTTP;
-- fila e verdade de entrega de `SpeechUtterance`;
-- Voice Worker local Web;
-- observabilidade, backup e restore.
+StorageBackend e VoiceBackend são fronteiras de infraestrutura. Não
+substituem o domínio. Worker não recebe banco, memória, relações, histórico,
+AUTH do usuário ou secrets cognitivos. Identidade vocal e DSP compartilhado
+continuam congelados; local e remoto executam o mesmo pipeline aprovado.
 
 ### 2.3 Web/Safari — platform adapter
 

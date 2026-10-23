@@ -10,6 +10,7 @@ from typing import Iterable
 from uuid import UUID
 
 from amora.identity import EntityRegistry
+from amora.storage.backend import SQLiteBackend, StorageBackend
 from amora.time import Clock
 
 from .models import MemoryHit, MemoryKind, MemoryProvenance, MemoryQuery, MemoryRecord, ProvenanceKind
@@ -33,17 +34,13 @@ def _jaccard(a: str, b: str) -> float:
 class MemoryStore:
     """SQLite-backed long-term memory store with hybrid local retrieval."""
 
-    def __init__(self, path: Path, clock: Clock, identities: EntityRegistry) -> None:
+    def __init__(self, path: Path, clock: Clock, identities: EntityRegistry, *, backend: StorageBackend | None = None) -> None:
         self.path = path
         self.clock = clock
         self.identities = identities
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._lock:
-            self._conn.execute("PRAGMA foreign_keys = ON")
-            self._conn.execute("PRAGMA journal_mode = WAL")
-            self._conn.execute("PRAGMA synchronous = NORMAL")
+        self.backend = backend or SQLiteBackend()
+        self._conn = self.backend.connect(path)
         self.fts_enabled = self._ensure_fts()
 
     def close(self) -> None:

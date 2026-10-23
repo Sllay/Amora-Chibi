@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from amora.events import PrivacyScope
+from amora.voice.backend import VoiceBackend
 from amora.voice.local_amora import AmoraLocalVoiceRenderer, LocalVoiceUnavailable, MODEL_ID, NUM_STEPS, VOICE_ID
 
 
@@ -23,7 +24,7 @@ class WebTextTurnRequest(BaseModel):
     test_mode: bool = True
 
 
-def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None]) -> None:
+def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *, voice: VoiceBackend | None = None) -> None:
     """Register the Safari/Web platform adapter without duplicating Core logic.
 
     The web client reuses the same language/social, conversation, STT and speech
@@ -33,7 +34,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None]) -
     """
 
     auth = [Depends(require_auth)]
-    local_voice = AmoraLocalVoiceRenderer(core.paths)
+    local_voice = voice or AmoraLocalVoiceRenderer(core.paths)
     app.state.web_local_voice = local_voice
 
     def console():

@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import UUID
 
 from amora.events import PrivacyScope
+from amora.storage.backend import SQLiteBackend, StorageBackend
 from amora.time import Clock
 
 from .models import CognitiveJournalEntry, ConversationMessage, MessageSource, MessageStatus, SpeechSegment
@@ -19,16 +20,12 @@ class CognitiveStore:
     still prove that a stage occurred without turning observability into a secret log.
     """
 
-    def __init__(self, database_path: Path, clock: Clock) -> None:
+    def __init__(self, database_path: Path, clock: Clock, *, backend: StorageBackend | None = None) -> None:
         self.database_path = database_path
         self.clock = clock
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(database_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._lock:
-            self._conn.execute("PRAGMA foreign_keys = ON")
-            self._conn.execute("PRAGMA journal_mode = WAL")
-            self._conn.execute("PRAGMA synchronous = NORMAL")
+        self.backend = backend or SQLiteBackend()
+        self._conn = self.backend.connect(database_path)
 
     def close(self) -> None:
         with self._lock:

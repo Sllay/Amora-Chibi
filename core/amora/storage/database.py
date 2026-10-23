@@ -10,6 +10,7 @@ from amora.events import AmoraEvent
 from amora.identity.models import Entity, EntityRegistry, EntityType, Relationship, normalize_alias
 from amora.identity.session import DeviceIdentity, DeviceTrust, PrivacyContext, SessionIdentity
 
+from .backend import SQLiteBackend, StorageBackend
 from .migrations import MIGRATIONS
 from .migrations_v06 import MIGRATION_V06
 from .migrations_v07 import MIGRATION_V07
@@ -19,16 +20,12 @@ from .migrations_v10 import MIGRATION_V10
 
 
 class AmoraDatabase:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, backend: StorageBackend | None = None) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._lock:
-            self._conn.execute("PRAGMA foreign_keys = ON")
-            self._conn.execute("PRAGMA journal_mode = WAL")
-            self._conn.execute("PRAGMA synchronous = NORMAL")
+        self.backend = backend or SQLiteBackend()
+        self._conn = self.backend.connect(self.path)
 
     def close(self) -> None:
         with self._lock:
@@ -141,14 +138,8 @@ class AmoraDatabase:
             return str(row[0]) if row else "unknown"
 
     def backup_to(self, destination: Path) -> Path:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        target = sqlite3.connect(destination)
-        try:
-            with self._lock:
-                self._conn.backup(target)
-        finally:
-            target.close()
-        return destination
+        with self._lock:
+            return self.backend.backup(self._conn, destination)
 
     @staticmethod
     def restore_backup(source: Path, destination: Path) -> Path:

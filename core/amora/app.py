@@ -31,6 +31,7 @@ from amora.secrets import SecretStore
 from amora.settings import RuntimePaths
 from amora.social import AddresseeEngine, SocialSceneTracker
 from amora.storage import AmoraDatabase
+from amora.storage.backend import SQLiteBackend, StorageBackend
 from amora.time import Clock, Scheduler, SystemClock
 from amora.world import (
     PerspectiveConsolidator,
@@ -78,14 +79,15 @@ class AmoraCore:
     stt: GroqWhisperSTT
 
     @classmethod
-    def bootstrap(cls, *, clock: Clock | None = None) -> "AmoraCore":
+    def bootstrap(cls, *, clock: Clock | None = None, storage: StorageBackend | None = None) -> "AmoraCore":
         paths = RuntimePaths.from_environment()
         paths.ensure()
         configure_logging(paths.logs)
         active_clock = clock or SystemClock()
         secrets = SecretStore(paths.secrets)
         secrets.ensure_token("LOCAL_API_TOKEN")
-        database = AmoraDatabase(paths.database)
+        storage = storage or SQLiteBackend()
+        database = AmoraDatabase(paths.database, backend=storage)
         database.migrate()
         identities = database.load_registry()
         if identities is None:
@@ -109,8 +111,8 @@ class AmoraCore:
         social = SocialSceneTracker()
         addressee = AddresseeEngine(identities)
         perspective = PerspectiveResolver(identities)
-        memory = MemoryService(MemoryStore(paths.database, active_clock, identities), active_clock)
-        world_store = WorldStore(paths.database, active_clock)
+        memory = MemoryService(MemoryStore(paths.database, active_clock, identities, backend=storage), active_clock)
+        world_store = WorldStore(paths.database, active_clock, backend=storage)
         world = WorldModelService(world_store, active_clock)
         self_model = SelfModelService(world_store, active_clock)
         self_model.ensure_core_identity()
@@ -123,13 +125,13 @@ class AmoraCore:
         relationships.seed_registry_relationships()
         perspective_consolidator = PerspectiveConsolidator(world)
         emotion = EmotionEngine(
-            EmotionStore(paths.database, active_clock),
+            EmotionStore(paths.database, active_clock, backend=storage),
             active_clock,
             identities,
             events,
         )
         autonomy = AutonomyEngine(
-            AutonomyStore(paths.database, active_clock),
+            AutonomyStore(paths.database, active_clock, backend=storage),
             active_clock,
             identities,
             emotion,
@@ -137,7 +139,7 @@ class AmoraCore:
             events,
         )
         models = ModelRouter()
-        cognitive_store = CognitiveStore(paths.database, active_clock)
+        cognitive_store = CognitiveStore(paths.database, active_clock, backend=storage)
         cognition = CognitiveEngine(
             cognitive_store,
             ContextCompiler(
@@ -179,7 +181,7 @@ class AmoraCore:
 
         events.subscribe_bootstrap("cognition.action_suggested", autonomy.handle_cognitive_suggestion)
         conversation = ConversationEngine(
-            ConversationStore(paths.database, active_clock),
+            ConversationStore(paths.database, active_clock, backend=storage),
             active_clock,
             social,
             emotion,
@@ -187,7 +189,7 @@ class AmoraCore:
             cognition=cognition,
         )
         avatar = AvatarEngine(
-            AvatarStore(paths.database, paths.avatar_assets, active_clock),
+            AvatarStore(paths.database, paths.avatar_assets, active_clock, backend=storage),
             active_clock,
             emotion,
             conversation,
@@ -196,7 +198,7 @@ class AmoraCore:
         events.subscribe_bootstrap("action.semantic_request", conversation.handle_semantic_event)
         events.subscribe_bootstrap("action.semantic_request", avatar.handle_semantic_event)
         actions = ActionEngine(
-            ActionStore(paths.database, active_clock),
+            ActionStore(paths.database, active_clock, backend=storage),
             active_clock,
             autonomy,
             emotion,
