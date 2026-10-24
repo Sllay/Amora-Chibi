@@ -1,0 +1,117 @@
+{
+  "python": "3.12.15",
+  "platform": "Linux-6.18.55-x86_64-with",
+  "libc": [
+    "",
+    ""
+  ],
+  "soabi": "cpython-312-x86_64-linux-musl",
+  "uid": 10001,
+  "gid": 10001,
+  "privileges": {
+    "CapEff": "0000000000000000",
+    "CapPrm": "0000000000000000",
+    "CapBnd": "0000000000000000",
+    "NoNewPrivs": "1",
+    "Seccomp": "2"
+  },
+  "namespaces": {
+    "net": "net:[4026532215]",
+    "uts": "uts:[4026532207]",
+    "ipc": "ipc:[4026532208]",
+    "pid": "pid:[4026532209]",
+    "pid_for_children": "pid:[4026532209]",
+    "user": "user:[4026531837]",
+    "mnt": "mnt:[4026532206]",
+    "cgroup": "cgroup:[4026532214]"
+  },
+  "uid_map": "         0          0 4294967295\n",
+  "tools": {
+    "mount": "/bin/mount",
+    "umount": "/bin/umount",
+    "nsenter": "/usr/bin/nsenter",
+    "login": "/bin/login",
+    "perl": null,
+    "infocmp": null,
+    "tic": null,
+    "getfacl": null,
+    "setfacl": null,
+    "systemd-homed": null,
+    "gcc": null,
+    "g++": null,
+    "cc": null,
+    "make": null
+  },
+  "setid_files": {},
+  "file_capabilities": {},
+  "fstab": "/dev/cdrom\t/media/cdrom\tiso9660\tnoauto,ro 0 0\n/dev/usbdisk\t/media/usb\tvfat\tnoauto,ro 0 0\n",
+  "homed_files": [],
+  "archive_tar_files": [],
+  "component_libraries": {
+    "libmount": [],
+    "libblkid": [],
+    "libuuid": [
+      "/usr/lib/libuuid.so.1.3.0"
+    ],
+    "libacl": [],
+    "libsystemd": [],
+    "libudev": [],
+    "libncursesw": [
+      "/usr/lib/libncursesw.so.6.6"
+    ],
+    "libtinfo": []
+  },
+  "extensions": {
+    "_sqlite3": {
+      "path": "/usr/local/lib/python3.12/lib-dynload/_sqlite3.cpython-312-x86_64-linux-musl.so",
+      "import": "PASS",
+      "ldd_with_libpython_preloaded": {
+        "exit_code": 0,
+        "stdout": "\t/lib/ld-musl-x86_64.so.1 (0x7f303be41000)\n\t/usr/local/lib/libpython3.12.so => /usr/local/lib/libpython3.12.so (0x7f303b72f000)\n\tlibsqlite3.so.0 => /usr/lib/libsqlite3.so.0 (0x7f303b59e000)\n\tlibc.musl-x86_64.so.1 => /lib/ld-musl-x86_64.so.1 (0x7f303be41000)\n",
+        "stderr": ""
+      }
+    },
+    "_ssl": {
+      "path": "/usr/local/lib/python3.12/lib-dynload/_ssl.cpython-312-x86_64-linux-musl.so",
+      "import": "PASS",
+      "ldd_with_libpython_preloaded": {
+        "exit_code": 0,
+        "stdout": "\t/lib/ld-musl-x86_64.so.1 (0x7fdb947e4000)\n\t/usr/local/lib/libpython3.12.so => /usr/local/lib/libpython3.12.so (0x7fdb940be000)\n\tlibssl.so.3 => /usr/lib/libssl.so.3 (0x7fdb93fef000)\n\tlibcrypto.so.3 => /usr/lib/libcrypto.so.3 (0x7fdb93b28000)\n\tlibc.musl-x86_64.so.1 => /lib/ld-musl-x86_64.so.1 (0x7fdb947e4000)\n",
+        "stderr": ""
+      }
+    },
+    "_uuid": {
+      "path": "/usr/local/lib/python3.12/lib-dynload/_uuid.cpython-312-x86_64-linux-musl.so",
+      "import": "PASS",
+      "ldd_with_libpython_preloaded": {
+        "exit_code": 0,
+        "stdout": "\t/lib/ld-musl-x86_64.so.1 (0x7f7981e8b000)\n\t/usr/local/lib/libpython3.12.so => /usr/local/lib/libpython3.12.so (0x7f7981796000)\n\tlibuuid.so.1 => /usr/lib/libuuid.so.1 (0x7f798178d000)\n\tlibc.musl-x86_64.so.1 => /lib/ld-musl-x86_64.so.1 (0x7f7981e8b000)\n",
+        "stderr": ""
+      }
+    },
+    "_curses": {
+      "path": "/usr/local/lib/python3.12/lib-dynload/_curses.cpython-312-x86_64-linux-musl.so",
+      "import": "PASS",
+      "ldd_with_libpython_preloaded": {
+        "exit_code": 0,
+        "stdout": "\t/lib/ld-musl-x86_64.so.1 (0x7fd5f3d6e000)\n\t/usr/local/lib/libpython3.12.so => /usr/local/lib/libpython3.12.so (0x7fd5f365b000)\n\tlibncursesw.so.6 => /usr/lib/libncursesw.so.6 (0x7fd5f3606000)\n\tlibc.musl-x86_64.so.1 => /lib/ld-musl-x86_64.so.1 (0x7fd5f3d6e000)\n",
+        "stderr": ""
+      }
+    },
+    "pydantic_core._pydantic_core": {
+      "path": "/opt/venv/lib/python3.12/site-packages/pydantic_core/_pydantic_core.cpython-312-x86_64-linux-musl.so",
+      "import": "PASS",
+      "ldd_with_libpython_preloaded": {
+        "exit_code": 0,
+        "stdout": "\t/lib/ld-musl-x86_64.so.1 (0x7fab96bbf000)\n\t/usr/local/lib/libpython3.12.so => /usr/local/lib/libpython3.12.so (0x7fab95fab000)\n\tlibgcc_s-f685abf1.so.1 => /opt/venv/lib/python3.12/site-packages/pydantic_core/../pydantic_core.libs/libgcc_s-f685abf1.so.1 (0x7fab95f8b000)\n\tlibc.so => /lib/ld-musl-x86_64.so.1 (0x7fab96bbf000)\n",
+        "stderr": ""
+      }
+    }
+  },
+  "packages": {
+    "exit_code": 0,
+    "stdout": ".python-rundeps-20261021.230421 - virtual meta package\nalpine-baselayout-3.7.2-r1 - Alpine base dir structure and init scripts\nalpine-baselayout-data-3.7.2-r1 - Alpine base dir structure and init scripts\nalpine-keys-2.6-r0 - Public keys for Alpine Linux packages\nalpine-release-3.24.3-r0 - Alpine release data\napk-tools-3.0.8-r0 - Alpine Package Keeper - package manager for alpine\nbusybox-1.37.0-r31 - Size optimized toolbox of many common UNIX utilities\nbusybox-binsh-1.37.0-r31 - busybox ash /bin/sh\nca-certificates-20261020-r0 - Common CA certificates PEM files from Mozilla\nca-certificates-bundle-20261020-r0 - Pre generated bundle of Mozilla certificates\ngdbm-1.26-r0 - GNU dbm is a set of database routines that use extensible hashing\nkeyutils-libs-1.6.3-r4 - Key utilities library\nkrb5-conf-1.0-r2 - Shared krb5.conf for both MIT krb5 and heimdal\nkrb5-libs-1.22.2-r1 - The shared libraries used by Kerberos 5\nlibapk-3.0.8-r0 - Alpine Package Keeper - package manager for alpine\nlibbz2-1.0.8-r6 - Shared library for bz2\nlibcom_err-1.47.4-r0 - Common error description library\nlibcrypto3-3.5.9-r0 - Crypto library from openssl\nlibffi-3.5.2-r1 - portable, high level programming interface to various calling conventions.\nlibintl-1.0-r0 - GNU gettext runtime library\nlibncursesw-6.6_p20260516-r0 - Console display library (libncursesw)\nlibnsl-2.0.1-r2 - Public client interface for NIS(YP) and NIS+ in a IPv6 ready version\nlibpanelw-6.6_p20260516-r0 - Console display library (libpanelw)\nlibssl3-3.5.9-r0 - SSL shared libraries\nlibtirpc-1.3.5-r1 - Transport Independent RPC library (SunRPC replacement)\nlibtirpc-conf-1.3.5-r1 - Configuration files for TI-RPC\nlibuuid-2.42.3-r1 - DCE compatible Universally Unique Identifier library\nlibverto-0.3.2-r2 - Main loop abstraction library\nmusl-1.2.6-r3 - the musl c library (libc) implementation\nmusl-utils-1.2.6-r3 - the musl c library (libc) implementation\nncurses-terminfo-base-6.6_p20260516-r0 - Descriptions of common terminals\nreadline-8.3.3-r1 - GNU readline library\nscanelf-1.3.9-r1 - Scan ELF binaries for stuff\nsqlite-libs-3.53.4-r0 - C library that implements an SQL database engine (libraries)\nssl_client-1.37.0-r31 - External ssl_client for busybox wget\ntzdata-2026e-r0 - Timezone data\nxz-libs-5.8.4-r0 - Library and CLI tools for XZ and LZMA compressed files (libraries)\nzlib-1.3.2-r1 - A compression/decompression Library\n",
+    "stderr": "WARNING: fetching https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/APKINDEX.tar.gz: HTTP: unrecognized server error\nWARNING: fetching https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/APKINDEX.tar.gz: HTTP: unrecognized server error\n"
+  },
+  "image": "sha256:2c94048f2574cee2f25a5630a13b6080256952b95c23189b4bdd590bdb14efc7"
+}

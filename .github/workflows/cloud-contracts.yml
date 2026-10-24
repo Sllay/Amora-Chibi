@@ -1,10 +1,10 @@
 name: Cloud container contracts
 on:
   pull_request:
-    paths: ['core/**', 'web/**', 'avatar/**', 'deploy/**', 'Dockerfile', 'tools/cloud/**', 'pyproject.toml', '.github/workflows/cloud-contracts.yml']
+    paths: ['core/**', 'config/**', 'web/**', 'avatar/**', 'deploy/**', 'Dockerfile', 'tools/cloud/**', 'pyproject.toml', '.github/workflows/cloud-contracts.yml']
   push:
     branches: [main, 'feat/**', 'fix/**']
-    paths: ['core/**', 'web/**', 'avatar/**', 'deploy/**', 'Dockerfile', 'tools/cloud/**', 'pyproject.toml', '.github/workflows/cloud-contracts.yml']
+    paths: ['core/**', 'config/**', 'web/**', 'avatar/**', 'deploy/**', 'Dockerfile', 'tools/cloud/**', 'pyproject.toml', '.github/workflows/cloud-contracts.yml']
 permissions:
   contents: read
 jobs:
@@ -14,3 +14,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24 runtime
       - run: docker build -t amora-core:test .
       - run: python3 tools/cloud/smoke-container.py amora-core:test
+      - name: Build test-only layer over the runtime under review
+        run: docker build --build-arg RUNTIME_IMAGE=amora-core:test -f deploy/containers/Dockerfile.validation -t amora-validation:test .
+      - name: Check runtime dependencies without adding pip to runtime
+        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges amora-validation:test /testenv/bin/python -m pip --python /opt/venv/bin/python check
+      - name: Full Python regressions on the runtime libc, non-root and read-only
+        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,size=256m amora-validation:test

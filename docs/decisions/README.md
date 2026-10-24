@@ -58,6 +58,7 @@ Superseded by: ADR-NNNN / none
 
 ## Índice
 
+- `ADR-0017-core-runtime-base.md` — base Core/Web Alpine validada sobre musl; gate HIGH/CRITICAL preservado, staging separado.
 - `ADR-0001-document-authority-and-versioning.md` — canon no GitHub + ADR + roadmap; documentos antigos não são especificação atual.
 - `ADR-0002-local-voice-as-normal-path.md` — voz normal local pt-BR; Gemini TTS removido do caminho normal.
 - `ADR-0003-local-dialogue-semantic-authority.md` — Core decide semântica social; provider realiza linguagem.

@@ -1,6 +1,11 @@
 # Core/Web Linux — operação e gates
 
 ADR-0015 define a direção. Imagem: `docker build -t amora-core .`.
+ADR-0017 seleciona Python 3.12.15 Alpine 3.24 por digest após regressões sobre
+musl; [comparação de runtime](security/RUNTIME_BASE_DECISION.md). Dependências
+exigem wheels binários. Não copiar venv/ELF glibc para essa imagem. Executar
+read-only, com cap-drop ALL e no-new-privileges; USER sozinho não impõe esses
+controles ao host. Confirmar suporte/efeito real do perfil antes de staging.
 A imagem não inclui modelos TTS, banco, vault, tokens ou arquivos de runtime.
 `deploy/python.lock` fixa as dependências validadas; o Python base está
 pinado por digest e o build backend setuptools/wheel por versão. Não publicar imagem

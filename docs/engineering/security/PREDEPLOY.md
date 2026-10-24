@@ -1,5 +1,10 @@
 # Security pass pré-deploy — 2026-10-23
 
+Atualização 2026-10-24: o bloqueio da imagem foi resolvido na etapa de runtime
+com base oficial Alpine validada; ver [decisão e evidências](RUNTIME_BASE_DECISION.md)
+e ADR-0017. O resultado abaixo descreve o snapshot Debian do commit eb03eb8.
+PASS do runtime não aprova deploy: staging continua um gate separado.
+
 **Resultado: NÃO APROVADO PARA DEPLOY.** Controles de aplicação e container foram
 implementados e testados; restam 44 ocorrências HIGH do Debian, relativas a oito
 CVEs, sem FixedVersion no banco consultado. Não houve exceção/VEX/ignore de CVE.

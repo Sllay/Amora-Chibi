@@ -440,3 +440,32 @@ CI security-predeploy deve bloquear HIGH/CRITICAL. 347 testes Python e cinco
 Avatar passaram localmente; cloud providers/ingress/egress, bundle real e Safari
 físico continuam gates. Inventário de 69 operações HTTP e evidências versionadas
 na pasta de segurança. Não tratar preparação como aprovação de publicação.
+
+## Runtime/container security — 2026-10-24
+
+Continuação de feat/security-predeploy / eb03eb8. ADR-0017 e
+`docs/engineering/security/RUNTIME_BASE_DECISION.md` analisam individualmente
+as oito CVEs e explicam 44 findings por cinco pacotes-fonte. Posição Debian
+obtida no espelho do Tracker, com revisão registrada; domínio direto bloqueado
+pelo proxy, sem contorno. Não houve VEX, ignore list ou redução do gate.
+
+**PASS do gate local de runtime:** Python oficial 3.12.15-alpine3.24 por digest,
+após variante experimental separada; imagem final ~69,7 MB versus 139,2 MB Debian.
+Trivy 0.76.0: zero findings em todas as severidades; HIGH/CRITICAL incluindo
+unfixed retorna 0 na nova imagem e 1 na Debian original (controle negativo).
+Wheels musllinux disponíveis; nenhum compilador/build tool adicionado. Pipeline
+vocal e contratos Core/worker/providers/storage não foram alterados.
+
+347 testes Python passaram em cada base e novamente na imagem canônica final;
+cinco testes Avatar Node 22.23.4 PASS; pip check PASS. Smoke valida UID 10001,
+read-only, capabilities zeradas, NNP, health/readiness sem dados privados,
+Web/auth/pairing com escopo e proteção contra replay, texto sem voz, SQLite,
+restart/SIGTERM e catálogo instalado. Corrigido bug de packaging: catálogo JSON
+existente omitido da imagem causava 500; bytes e parâmetros preservados.
+CI cloud-contracts agora executa suíte completa na libc da imagem e verifica
+dependências do runtime sem reinstalar pip no estágio de produção.
+
+Somente Linux amd64 foi executado; multiarch/wheels arm64 verificados como
+disponibilidade, sem certificação. DNS/ABI musl em host real, limites de execução,
+CI remoto, ingress/egress e serviços remotos continuam gates. Nenhum deploy.
+Próximo passo: revisão/CI e gate de staging separado.
