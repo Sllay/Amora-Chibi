@@ -52,13 +52,17 @@ libpython preloaded, reproduzindo a resolução de símbolos Python do interpret
 ldd isolado sobre uma extensão reporta símbolos Py* ausentes, mesmo quando o
 import funciona. Não se confundiu esse diagnóstico com incompatibilidade ABI.
 
-O perfil ensaiado usa rede Docker isolada, namespaces privados padrão, filesystem
+O perfil ensaiado usa rede Docker isolada, namespaces PID/mount/net/UTS/IPC/cgroup
+distintos dos do executor externo, filesystem
 read-only, tmpfs limitado, volume exclusivo de estado, UID/GID 10001,
 `--cap-drop ALL` e `--security-opt no-new-privileges`. Foram observados
 CapEff/CapPrm/CapBnd zerados, NoNewPrivs=1 e seccomp ativo. Não há file capabilities
 nos diretórios de executáveis auditados. **USER no Dockerfile não impõe esses
 controles de execução ao host.** Não presumir que Koyeb os reproduza sem verificar.
 Também não usar non-root, sozinho, como justificativa de não afetado.
+O user namespace é compartilhado com o executor: uid_map é identidade
+`0 0 4294967295`, sem userns-remap. Não há isolamento adicional de UIDs do host;
+PID/mount privados, NNP, seccomp e capabilities zeradas não equivalem a userns.
 
 ## Por que oito CVEs viram 44 findings
 
@@ -101,7 +105,7 @@ por essas classificações; não se criou VEX para tornar seu gate verde.
   mountpoint ou opções. Estado gravável não vira script/helper executado.
 - **Privilégios:** suid está realmente presente no Debian; UID 10001 sozinho
   não bastaria. No perfil ensaiado, no-new-privileges impede ganho por suid,
-  CAP_SYS_ADMIN ausente e não há namespaces/mounts do host compartilhados.
+  CAP_SYS_ADMIN ausente e os namespaces PID/mount não são os do executor externo.
 - **Debian:** trixie `no-dsa`, “Minor issue”; corrigida em 2.42.3-1 na linha
   principal, sem FixedVersion para a versão trixie no scan.
 - **Classificação: MITIGATED_BUT_PRESENT.** Reavaliar se houver mount/helper,

@@ -228,5 +228,16 @@
     },
     "catalog_sha256": "9407b6edefe4047a282d72c91d98d4f0708c1c7efc394b79919094ce17a12058"
   },
-  "benchmark_notes": "Sequential smoke runs; base already local, owned new volumes; polling 0.5s; RSS PID1 after smoke; other validation work on host. Alpine benchmark preceded catalog directory mode repair; final canonical smoke includes catalog route verification. Build times include network via session proxy; Debian rebuild used same original source commit. No architectural CPU emulation tests."
+  "benchmark_notes": "Sequential smoke runs; base already local, owned new volumes; polling 0.5s; RSS PID1 after smoke; other validation work on host. Alpine benchmark preceded catalog directory mode repair; final canonical smoke includes catalog route verification. Build times include network via session proxy; Debian rebuild used same original source commit. No architectural CPU emulation tests.",
+  "namespace_comparison_to_outer_executor": {
+    "net": "distinct",
+    "uts": "distinct",
+    "ipc": "distinct",
+    "pid": "distinct",
+    "pid_for_children": "distinct",
+    "user": "shared",
+    "mnt": "distinct",
+    "cgroup": "distinct"
+  },
+  "user_namespace_note": "No userns-remap; identity uid_map. Do not claim user-namespace isolation."
 }
