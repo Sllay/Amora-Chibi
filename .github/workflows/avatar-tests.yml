@@ -4,10 +4,14 @@ on:
   push:
     paths:
       - 'avatar/**'
+      - 'web/**'
+      - 'tests/web_browser.test.mjs'
       - '.github/workflows/avatar-tests.yml'
   pull_request:
     paths:
       - 'avatar/**'
+      - 'web/**'
+      - 'tests/web_browser.test.mjs'
       - '.github/workflows/avatar-tests.yml'
 
 jobs:
@@ -28,3 +32,5 @@ jobs:
           node --check avatar/sw.js
       - name: Test Avatar Engine
         run: npm --prefix avatar test
+      - name: Test Safari queue diagnostics and text without voice
+        run: node --test tests/web_browser.test.mjs
