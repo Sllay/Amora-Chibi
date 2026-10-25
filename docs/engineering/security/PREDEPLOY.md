@@ -1,5 +1,9 @@
 # Security pass pré-deploy — 2026-10-23
 
+Política Web atual: ADR-0018 substitui TTL 12h/sessionStorage deste snapshot
+por credencial Web v2 durável, sempre limitada, e localStorage. Avatar conserva
+v1/12h. Não muda escopos administrativos nem os outros gates de segurança.
+
 Atualização 2026-10-24: o bloqueio da imagem foi resolvido na etapa de runtime
 com base oficial Alpine validada; ver [decisão e evidências](RUNTIME_BASE_DECISION.md)
 e ADR-0017. O resultado abaixo descreve o snapshot Debian do commit eb03eb8.

@@ -3,6 +3,11 @@
 Base: `main` / `c5b8c4de59a75f34ed4a2272e5448e1c4a5819c9`.
 Branch: `fix/cloud-web-runtime`. Não houve deploy pelo agente.
 
+Atualização posterior: staging confirmou a operação put_journal, mas a heurística
+de mensagem deste patch não resolveu o Turso real. A solução por SQL, com target
+Web privado e persistência do navegador, está em
+[STAGING_JOURNAL_WEB_UX.md](STAGING_JOURNAL_WEB_UX.md) / ADR-0018.
+
 ## Evidência e limite da conclusão
 
 BK relata bootstrap/restart e probes saudáveis no Northflank, mas erros por
