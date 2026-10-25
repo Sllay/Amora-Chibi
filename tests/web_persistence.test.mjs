@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
+import { app } from './helpers/web-app.mjs';
 import { BrowserState, HISTORY_KEY, PAIRING_KEY, isWebCredential } from '../web/browser-state.mjs';
 
 function storage() {
@@ -103,43 +102,6 @@ test('unavailable browser storage does not crash history; pairing save reports f
   assert.doesNotThrow(() => state.clearHistory());
 });
 
-// Execute the actual app with a minimal DOM and transport: reload/clear/forget
-// must be wired, not just properties of the persistence helper.
-const source = readFileSync(new URL('../web/app-v2.js', import.meta.url), 'utf8');
-const html = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
-class Element {
-  constructor() {
-    this.children = []; this.textContent = ''; this.value = ''; this.style = {}; this.listeners = {};
-    const classes = new Set();
-    this.classList = { add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name), toggle: (name, flag) => flag ? classes.add(name) : classes.delete(name) };
-  }
-  appendChild(node) { this.children.push(node); }
-  replaceChildren() { this.children = []; }
-  addEventListener(name, handler) { this.listeners[name] = handler; }
-}
-async function app(local, options = {}) {
-  const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(match => [match[1], new Element()]));
-  const calls = [];
-  const fetch = async (path, request = {}) => {
-    calls.push({ path, request });
-    if (path === '/health') return new Response(JSON.stringify({ status: 'ok' }));
-    if (path === '/v1/pairing/redeem') return Response.json({ token, token_type: 'Bearer' });
-    if (path === '/v1/web/state') return Response.json({ voice_transport: 'amora_remote_supertonic_world', local_voice: {} }, { status: options.authStatus || 200 });
-    if (path.startsWith('/v1/conversation/next')) return Response.json({ utterance: null });
-    if (path.endsWith('/audio')) return Response.json({ detail: 'VOICE_WORKER_UNAVAILABLE' }, { status: 503 });
-    if (path.endsWith('/cancel')) return Response.json({});
-    throw new Error(`Unexpected request ${path}`);
-  };
-  const window = { addEventListener() {}, AudioContext: class { constructor() { this.state = 'running'; } } };
-  const context = vm.createContext({ BrowserState, browserStorage: name => name === 'localStorage' ? local : storage(), window,
-    document: { getElementById: id => nodes.get(id), createElement: () => new Element(), addEventListener() {} },
-    fetch, Headers, URL, AbortController, performance, setTimeout, clearTimeout, setInterval() {}, requestAnimationFrame: fn => fn(),
-  });
-  vm.runInContext(source.replace(/^import .*;\n/m, '').replaceAll('import.meta.url', '"https://amora.example/web/app-v2.js"'), context);
-  await new Promise(resolve => setImmediate(resolve));
-  return { context, nodes, calls, messages: () => nodes.get('messages').children.map(node => ({ role: node.className.split(' ')[1], text: node.textContent })) };
-}
-
 test('actual app pairs once, reopens with history, and forget/clear actions are independent', async () => {
   const local = storage(); const first = await app(local);
   first.nodes.get('pairCode').value = '123456';
@@ -163,6 +125,8 @@ test('actual app pairs once, reopens with history, and forget/clear actions are 
   local.setItem(PAIRING_KEY, token);
   const again = await app(local);
   again.nodes.get('clearConversation').listeners.click();
+  assert.equal(again.nodes.get('clearDialog').open, true);
+  again.nodes.get('confirmClear').listeners.click();
   assert.equal(local.getItem(PAIRING_KEY), token);
   assert.equal(local.getItem(HISTORY_KEY), null);
   assert.equal(again.nodes.get('messages').children.length, 0);

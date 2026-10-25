@@ -46,12 +46,14 @@
             <div id="voiceLabel" class="subtle">Amora · verificando backend de voz</div>
           </div>
           <div class="conversation-actions">
+            <button id="muteVoice" class="ghost" type="button" aria-pressed="false">Voz da Amora: ligada</button>
             <button id="clearConversation" class="ghost" type="button">Limpar conversa</button>
             <button id="stopVoice" class="danger ghost" type="button">Parar fala</button>
           </div>
         </div>
 
         <div id="messages" class="messages" aria-live="polite"></div>
+        <p id="chatNotice" class="subtle" role="status" aria-live="polite"></p>
 
         <form id="textForm" class="composer">
           <textarea id="textInput" rows="1" placeholder="Fala com a Amora…" aria-label="Mensagem"></textarea>
@@ -88,6 +90,15 @@
       </aside>
     </section>
   </main>
+
+  <dialog id="clearDialog" aria-labelledby="clearTitle" aria-describedby="clearDescription">
+    <h2 id="clearTitle">Limpar conversa</h2>
+    <p id="clearDescription">Limpar as mensagens deste navegador? Isso não apaga a memória da Amora.</p>
+    <form method="dialog">
+      <button id="cancelClear" class="ghost" type="button" autofocus>Cancelar</button>
+      <button id="confirmClear" class="danger" type="button">Limpar conversa</button>
+    </form>
+  </dialog>
 
   <script type="module" src="./app-v2.js"></script>
 </body>
