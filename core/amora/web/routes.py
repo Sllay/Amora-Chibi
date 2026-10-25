@@ -90,9 +90,13 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             speaker_id=request.speaker_id,
             session_id=request.session_id,
             source="web:text",
+            explicit_addressee_id="ENTITY_AMORA",
             privacy_scope=request.privacy_scope,
         )
-        metadata: dict[str, object] = {"speech_device_id": "WEB_SAFARI"}
+        metadata: dict[str, object] = {
+            "speech_device_id": "WEB_SAFARI",
+            "explicit_surface_target": "ENTITY_AMORA",
+        }
         if request.test_mode:
             metadata.update(
                 {
@@ -102,20 +106,17 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
                     "emotion_persistence": False,
                 }
             )
-        try:
-            http_request.state.pipeline_stage = "conversation"
-            turn, reply = await core.conversation.observe_completed_utterance(
-                request.text,
-                speaker_id=request.speaker_id,
-                addressee_id=observation.addressee.entity_id,
-                source_event_id=observation.event_id,
-                privacy_scope=request.privacy_scope,
-                remote_processing_allowed=request.remote_processing_allowed,
-                session_id=request.session_id,
-                metadata=metadata,
-            )
-        finally:
-            core.social.end_turn(request.speaker_id)
+        http_request.state.pipeline_stage = "conversation"
+        turn, reply = await core.conversation.observe_completed_utterance(
+            request.text,
+            speaker_id=request.speaker_id,
+            addressee_id=observation.addressee.entity_id,
+            source_event_id=observation.event_id,
+            privacy_scope=request.privacy_scope,
+            remote_processing_allowed=request.remote_processing_allowed,
+            session_id=request.session_id,
+            metadata=metadata,
+        )
 
         return {
             "observation": observation.model_dump(mode="json"),

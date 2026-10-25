@@ -153,8 +153,15 @@ Cloud requer `AMORA_PUBLIC_ORIGINS=https://seu-host-publico` e admin aleatório 
 pelo menos 32 bytes. `AMORA_TRUSTED_PROXY_IPS` deve listar somente peers reais do
 ingress; omitido desliga confiança em forwarded headers. Nada de wildcard ou /0.
 Também declarar a origem de tunnels no desenvolvimento local quando usada.
-Browser recebe credencial com escopo/12h, guarda em sessionStorage e precisa
-reparear após expirar/rotacionar admin. Não expor /operations ao token do browser.
+ADR-0018: Web recebe credencial v2 durável e limitada a WEB_SAFARI, persistida
+no localStorage; nunca recebe admin, inclusive no modo local. Avatar conserva
+v1/12h. Rotação do admin revoga as credenciais derivadas; esta missão não executa
+rotação nem adiciona revogação individual. Não expor /operations ao browser.
+Credenciais Web legadas não são migradas: parear uma vez no upgrade. Depois,
+reload/reopen e restart com chave estável mantêm o acesso. Histórico visual local
+é independente, limitado a 50 user + 50 amora, sem replay/Memory. Limpar conversa
+mantém pairing; esquecer pairing mantém o histórico. Conferir o gate físico em
+`docs/engineering/reviews/STAGING_JOURNAL_WEB_UX.md` antes de encerrar o incidente.
 
 Executar container com `--read-only --cap-drop=ALL --security-opt=no-new-privileges`
 e tmpfs /tmp; somente AMORA_HOME gravável (volume para SQLite, tmpfs apropriado

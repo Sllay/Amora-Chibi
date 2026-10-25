@@ -1,13 +1,14 @@
+import { BrowserState, browserStorage } from "./browser-state.mjs";
+
 const $ = (id) => document.getElementById(id);
-const TOKEN_KEY = "amora.web.token.v1";
+const browserStore = new BrowserState(browserStorage("localStorage"), browserStorage("sessionStorage"));
 const REMOTE_KEY = "amora.web.remote.v1";
 const TEST_KEY = "amora.web.test.v1";
 const MAX_SPEECH_QUEUE = 3;
 const VOICE_FETCH_TIMEOUT_MS = 90000;
 
-localStorage.removeItem(TOKEN_KEY); // discard legacy persistent bearer
 const state = {
-  token: sessionStorage.getItem(TOKEN_KEY) || "",
+  token: browserStore.pairing(),
   fillBusy: false,
   queueError: "",
   speechQueue: [],
@@ -39,10 +40,10 @@ const pairPanel = $("pairPanel");
 const appPanel = $("appPanel");
 const remoteToggle = $("remoteToggle");
 const testToggle = $("testToggle");
-remoteToggle.checked = localStorage.getItem(REMOTE_KEY) !== "0";
-testToggle.checked = localStorage.getItem(TEST_KEY) !== "0";
-remoteToggle.addEventListener("change", () => localStorage.setItem(REMOTE_KEY, remoteToggle.checked ? "1" : "0"));
-testToggle.addEventListener("change", () => localStorage.setItem(TEST_KEY, testToggle.checked ? "1" : "0"));
+remoteToggle.checked = browserStore.get(REMOTE_KEY) !== "0";
+testToggle.checked = browserStore.get(TEST_KEY) !== "0";
+remoteToggle.addEventListener("change", () => browserStore.set(REMOTE_KEY, remoteToggle.checked ? "1" : "0"));
+testToggle.addEventListener("change", () => browserStore.set(TEST_KEY, testToggle.checked ? "1" : "0"));
 
 function setCoreStatus(text, mode = "") {
   $("coreStatus").textContent = text;
@@ -65,8 +66,7 @@ function updateQueueDiag() {
   $("stopVoice").disabled = state.speechQueue.length === 0 && !state.activeRecord;
 }
 
-function addMessage(role, text) {
-  if (!text?.trim()) return;
+function renderMessage(role, text) {
   const node = document.createElement("div");
   node.className = `message ${role}`;
   node.textContent = text.trim();
@@ -75,6 +75,26 @@ function addMessage(role, text) {
     $("messages").scrollTop = $("messages").scrollHeight;
   });
 }
+
+function addMessage(role, text, id = undefined, privacyScope = null) {
+  if (typeof text !== "string" || !text.trim()) return;
+  if (browserStore.hasMessage(role, id)) return;
+  browserStore.appendMessage(role, text, id, privacyScope);
+  renderMessage(role, text);
+}
+
+let historyRestored = false;
+function restoreConversation() {
+  if (historyRestored) return;
+  historyRestored = true;
+  for (const item of browserStore.messages) renderMessage(item.role, item.text);
+}
+
+$("clearConversation").addEventListener("click", () => {
+  browserStore.clearHistory();
+  $("messages").replaceChildren();
+});
+restoreConversation();
 
 async function api(path, options = {}, authenticated = true) {
   const headers = new Headers(options.headers || {});
@@ -138,7 +158,7 @@ async function validatePairing() {
     return true;
   } catch (error) {
     if (error.status === 401) {
-      sessionStorage.removeItem(TOKEN_KEY);
+      browserStore.forgetPairing();
       state.token = "";
     }
     return false;
@@ -169,10 +189,12 @@ async function unlockPlayback() {
 async function showCorrectSurface() {
   const ok = await health();
   const paired = ok && await validatePairing();
-  pairPanel.classList.toggle("hidden", paired);
-  appPanel.classList.toggle("hidden", !paired);
+  // A transient outage is not revocation: keep the saved pairing and chat.
+  const hasCredential = Boolean(state.token);
+  pairPanel.classList.toggle("hidden", hasCredential);
+  appPanel.classList.toggle("hidden", !hasCredential);
   if (paired) {
-    addMessage("system", "Safari Lab conectado. A voz agora é renderizada pelo Core local; modo teste fica ligado por padrão.");
+    addMessage("system", "Safari Lab conectado. Texto pronto para conversar; modo teste fica ligado por padrão.");
     fillSpeechQueue();
   }
 }
@@ -191,8 +213,7 @@ $("pairForm").addEventListener("submit", async (event) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
     }, false);
-    state.token = data.token;
-    sessionStorage.setItem(TOKEN_KEY, state.token);
+    state.token = browserStore.savePairing(data.token);
     $("pairCode").value = "";
     await unlockPlayback();
     await showCorrectSurface();
@@ -202,10 +223,13 @@ $("pairForm").addEventListener("submit", async (event) => {
 });
 
 $("forgetPairing").addEventListener("click", async () => {
-  await interruptVoice("web_unpair");
-  sessionStorage.removeItem(TOKEN_KEY);
+  browserStore.forgetPairing();
+  const stopping = interruptVoice("web_unpair");
   state.token = "";
-  location.reload();
+  pairPanel.classList.remove("hidden");
+  appPanel.classList.add("hidden");
+  await disableMicrophone();
+  await stopping;
 });
 
 async function submitText(text) {
@@ -264,7 +288,7 @@ async function claimNext(turnId = null) {
 }
 
 function queueLocalSpeech(item) {
-  addMessage("amora", item.text);
+  addMessage("amora", item.text, item.id, item.privacy_scope);
   const record = {
     item,
     epoch: state.speechEpoch,
@@ -388,7 +412,7 @@ async function fillSpeechQueue() {
   } catch (error) {
     if (error.status === 401) {
       state.token = "";
-      sessionStorage.removeItem(TOKEN_KEY);
+      browserStore.forgetPairing();
       pairPanel.classList.remove("hidden");
       appPanel.classList.add("hidden");
     } else {

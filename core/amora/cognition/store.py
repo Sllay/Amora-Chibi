@@ -134,21 +134,19 @@ class CognitiveStore:
             str(entry.correlation_id) if entry.correlation_id else None, entry.error_code,
             json.dumps(metadata, ensure_ascii=False, separators=(",", ":")), entry.dedupe_key,
         )
-        with self._lock:
-            try:
-                with self._conn:
-                    self._conn.execute(
-                        """INSERT INTO cognitive_journal(
-                            id, turn_id, stage, timestamp, source, summary, reason_codes_json, payload_json,
-                            privacy_scope, provider, model, duration_ms, correlation_id, error_code, metadata_json, dedupe_key
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        values,
-                    )
-            except sqlite3.IntegrityError as exc:
-                if not is_duplicate_error(exc):
-                    raise
-                return False
-        return True
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """INSERT INTO cognitive_journal(
+                    id, turn_id, stage, timestamp, source, summary, reason_codes_json, payload_json,
+                    privacy_scope, provider, model, duration_ms, correlation_id, error_code, metadata_json, dedupe_key
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(dedupe_key) DO NOTHING""",
+                values,
+            )
+            if cursor.rowcount not in {0, 1}:
+                raise sqlite3.DatabaseError("SQL_UNEXPECTED_ROWCOUNT")
+        # Do not report an inserted/no-op result until COMMIT succeeded.
+        return cursor.rowcount == 1
 
     def journal_for_turn(self, turn_id: UUID | str) -> list[CognitiveJournalEntry]:
         with self._lock:

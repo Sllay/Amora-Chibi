@@ -273,14 +273,6 @@ class RemoteConnection:
             first = results[0]
             if first["type"] == "error":
                 code = first["error"].get("code", "SQL_ERROR")
-                # Hrana may expose only SQLite's primary constraint code. Use
-                # the fixed diagnostic prefix solely to identify uniqueness;
-                # never retain/log the suffix (table/column names or values).
-                message = first["error"].get("message", "")
-                if code == "SQLITE_CONSTRAINT" and message.startswith(
-                    "UNIQUE constraint failed:"
-                ):
-                    code = "SQLITE_CONSTRAINT_UNIQUE"
                 # Messages may contain SQL values; expose only machine codes.
                 error = (
                     sqlite3.IntegrityError
@@ -303,10 +295,13 @@ class RemoteConnection:
             if first["type"] != "ok" or first["response"]["type"] != "execute":
                 raise StorageUnavailable("SQL_INVALID_RESPONSE")
             result = first["response"]["result"]
+            rowcount = result.get("affected_row_count")
+            if type(rowcount) is not int or rowcount < 0:
+                raise StorageUnavailable("SQL_INVALID_RESPONSE")
             result = Result(
                 [c["name"] for c in result["cols"]],
                 [[_decode(v) for v in row] for row in result["rows"]],
-                result.get("affected_row_count", 0),
+                rowcount,
             )
         except BaseException:
             if self._transaction and self._baton is None:

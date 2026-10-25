@@ -559,10 +559,10 @@ def test_constraint_classification_never_treats_foreign_key_or_not_null_as_dedup
         )
         with connection:
             connection.execute("INSERT INTO child(value) VALUES ('duplicate')")
-        with pytest.raises(sqlite3.IntegrityError) as unique:
+        with pytest.raises(sqlite3.DatabaseError) as unique:
             with connection:
                 connection.execute("INSERT INTO child(value) VALUES ('duplicate')")
-        assert is_duplicate_error(unique.value)
+        assert is_duplicate_error(unique.value) is (not primary)
         for sql in [
             "INSERT INTO child(value) VALUES (NULL)",
             "INSERT INTO child VALUES ('foreign', 99)",

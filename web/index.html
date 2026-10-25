@@ -29,7 +29,7 @@
       <div>
         <div class="eyebrow">PAREAMENTO</div>
         <h2>Conectar ao Core</h2>
-        <p>No Termux, rode <code>amora pair</code> e digite aqui o código de 6 dígitos.</p>
+        <p>No console do mesmo pod do Core, rode <code>amora pair</code> e digite aqui o código de 6 dígitos.</p>
       </div>
       <form id="pairForm" class="pair-form">
         <input id="pairCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" aria-label="Código de pareamento" />
@@ -43,9 +43,12 @@
         <div class="conversation-head">
           <div>
             <div class="eyebrow">CONVERSA</div>
-            <div id="voiceLabel" class="subtle">Amora local · verificando Voice Worker</div>
+            <div id="voiceLabel" class="subtle">Amora · verificando backend de voz</div>
           </div>
-          <button id="stopVoice" class="danger ghost" type="button">Parar fala</button>
+          <div class="conversation-actions">
+            <button id="clearConversation" class="ghost" type="button">Limpar conversa</button>
+            <button id="stopVoice" class="danger ghost" type="button">Parar fala</button>
+          </div>
         </div>
 
         <div id="messages" class="messages" aria-live="polite"></div>
@@ -75,12 +78,12 @@
           <div><dt>Core</dt><dd id="diagCore">—</dd></div>
           <div><dt>Entrada → resposta</dt><dd id="diagTurn">—</dd></div>
           <div><dt>Voz</dt><dd id="diagVoice">verificando…</dd></div>
-          <div><dt>RTF voz local</dt><dd id="diagRtf">—</dd></div>
+          <div><dt>RTF voz</dt><dd id="diagRtf">—</dd></div>
           <div><dt>Último gap</dt><dd id="diagGap">—</dd></div>
           <div><dt>Fila de voz</dt><dd id="diagQueue">0</dd></div>
           <div><dt>Microfone</dt><dd id="diagMic">off</dd></div>
         </dl>
-        <p class="notice">O Safari não sintetiza mais a voz. O Core/Termux renderiza Supertonic 60/40 → FINAL_B → VoiceSignature V1 Soft → Emotion V2 e envia WAV ao navegador. A identidade vocal de laboratório foi aprovada; certificação física/final continua sendo um gate separado.</p>
+        <p class="notice">O Safari não sintetiza mais a voz. O Core encaminha a renderização ao backend configurado — worker remoto no ambiente cloud — com Supertonic 60/40 → FINAL_B → VoiceSignature V1 Soft → Emotion V2 e envia WAV ao navegador. A identidade vocal de laboratório foi aprovada; certificação física/final continua sendo um gate separado.</p>
         <button id="forgetPairing" class="ghost" type="button">Esquecer pareamento deste navegador</button>
       </aside>
     </section>

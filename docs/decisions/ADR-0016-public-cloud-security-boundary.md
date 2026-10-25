@@ -2,6 +2,10 @@
 
 Status: ACCEPTED. Data: 2026-10-23. Refina ADR-0015.
 
+Atualização 2026-10-25: ADR-0018 substitui somente a política Web de TTL 12h e
+sessionStorage por credencial Web v2 durável e localStorage limitado. Escopos,
+segregação administrativa e demais gates abaixo permanecem. Avatar mantém v1.
+
 ## Contexto e evidência
 
 O fluxo local entregava o mesmo bearer administrativo ao browser após pareamento.

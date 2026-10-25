@@ -522,3 +522,36 @@ preservadas. Detalhes, arquivos e gate real em
 `docs/engineering/reviews/CLOUD_WEB_INCIDENT.md`. Encerramento exige validar a
 revisão aprovada em Northflank/Turso/Safari real; áudio/config do worker remoto
 não foram certificados aqui. Branch runtime antiga não foi removida.
+
+## Staging: journal SQL e Web 1:1/persistente — 2026-10-25
+
+Base main / 3683ea2; branch nova `fix/staging-journal-web-ux`. BK confirmou o
+DatabaseError SQLITE_CONSTRAINT em CognitiveStore.put_journal, correlação
+f638ecd5-1f5d-4c8e-99a4-53f3dd926038. O parser do texto de erro não funcionou
+no Turso. Foi removido: journal usa ON CONFLICT(dedupe_key) DO NOTHING, retorna
+1/0 por rowcount somente depois de COMMIT e não captura outras constraints como
+dedupe. Adapter exige affected_row_count válido. Sem schema/migration ou retry.
+
+Web texto e STT explicitamente WEB_SAFARI passam target ENTITY_AMORA com razão
+EXPLICIT_SURFACE_TARGET, sem reescrever texto ou relaxar AddresseeEngine. O
+privado não ocupa/limpa floor ambiente nem abre sua janela de continuidade;
+regressões cobrem Web seguido de A15 e floor prévio dirigido a terceiros.
+
+ADR-0018 autoriza Web bearer v2 durável, limitado a WEB_SAFARI, no localStorage;
+admin nunca é retornado ao Web, mesmo local. Avatar v1/12h permanece. Credenciais
+legadas potencialmente admin não são migradas; novo pairing único no upgrade.
+Revogação global por rotação da chave continua; esquecer só remove cópia local.
+Histórico visual local separado e versionado mantém no máximo 50 user + 50 amora,
+em ordem, sem system/diagnóstico ou metadados/credenciais internos. Restauração
+não é replay nem Memory; clear conversa e forget pairing são independentes.
+Texto continua antes do TTS e persiste após 503/timeout, sem fallback vocal.
+
+Gates locais: Core 397 PASS (5 avisos existentes); específicos 112 PASS;
+Node 22.23.4 Avatar/Web 28 PASS; container Alpine com módulo .mjs, texto sem
+vocativo, pairing, cap-drop/NNP/read-only, restart/SIGTERM PASS. CI/PR e resultados
+finais devem ser reportados pela revisão. Nada de persona, canon emocional,
+Provider Mesh, voz, schema, secrets, recursos Northflank ou branch protection
+foi modificado. **Incidente ainda aberto até o checklist real Northflank/Safari**:
+sem credenciais staging no ambiente e sem novo deploy pelo agente. Worker TTS
+real permanece gate separado. Detalhes em
+`docs/engineering/reviews/STAGING_JOURNAL_WEB_UX.md`.

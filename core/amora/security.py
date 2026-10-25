@@ -80,12 +80,22 @@ def token_equal(first: str, second: str) -> bool:
 
 
 def issue_browser_token(secret: str, clock, role="web") -> str:
-    payload = f"{role}:{int(clock.now().timestamp()) + 43200}:{secrets.token_hex(16)}"
+    if role == "web":
+        version = "v2"
+        payload = f"web:{secrets.token_hex(16)}"
+    elif role == "avatar":
+        version = "v1"
+        payload = (
+            f"avatar:{int(clock.now().timestamp()) + 43200}:{secrets.token_hex(16)}"
+        )
+    else:
+        raise ValueError("unsupported browser role")
     encoded = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    prefix = f"browser.{version}."
     signature = hmac.new(
-        secret.encode(), ("browser.v1." + encoded).encode(), hashlib.sha256
+        secret.encode(), (prefix + encoded).encode(), hashlib.sha256
     ).hexdigest()
-    return "browser.v1." + encoded + "." + signature
+    return prefix + encoded + "." + signature
 
 
 def token_role(token: str, secret: str, clock) -> str | None:
@@ -93,23 +103,29 @@ def token_role(token: str, secret: str, clock) -> str | None:
         return "admin"
     try:
         prefix, version, payload, signature = token.split(".")
-        if (prefix, version) != ("browser", "v1") or len(payload) > 256:
+        if prefix != "browser" or version not in {"v1", "v2"} or len(payload) > 256:
             return None
         expected = hmac.new(
-            secret.encode(), ("browser.v1." + payload).encode(), hashlib.sha256
+            secret.encode(), (f"browser.{version}." + payload).encode(), hashlib.sha256
         ).hexdigest()
         if not token_equal(expected, signature):
             return None
-        role, expiry, nonce = (
+        fields = (
             base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
             .decode()
             .split(":")
         )
-        if (
-            role not in {"web", "avatar"}
-            or not re.fullmatch("[a-f0-9]{32}", nonce)
-            or int(expiry) <= clock.now().timestamp()
-        ):
+        if version == "v2":
+            # Durable, client-scoped Web credential. Rotation of the signing
+            # admin secret revokes it; it never gains administrative access.
+            role, nonce = fields
+            if role != "web":
+                return None
+        else:
+            role, expiry, nonce = fields
+            if role not in {"web", "avatar"} or int(expiry) <= clock.now().timestamp():
+                return None
+        if not re.fullmatch("[a-f0-9]{32}", nonce):
             return None
         return role
     except (ValueError, UnicodeError):

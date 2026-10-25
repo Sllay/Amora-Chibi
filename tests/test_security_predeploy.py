@@ -52,7 +52,7 @@ def test_every_documented_private_endpoint_requires_auth_before_parsing(cloud):
     assert client.get("/docs").status_code == 401
 
 
-def test_cloud_pairing_returns_expiring_scoped_credential(cloud):
+def test_cloud_pairing_returns_durable_web_scoped_credential(cloud):
     core, client, headers = cloud
     response = client.post(
         "/v1/pairing/redeem", json={"code": core.pairing.issue().code}
@@ -81,8 +81,10 @@ def test_cloud_pairing_returns_expiring_scoped_credential(cloud):
         ).status_code
         == 200
     )
-    core.clock.advance(timedelta(hours=12, seconds=1))
-    assert client.get("/v1/web/state", headers=browser).status_code == 401
+    core.clock.advance(timedelta(days=365))
+    assert client.get("/v1/web/state", headers=browser).status_code == 200
+    assert client.get("/v1/operations/state", headers=browser).status_code == 403
+    assert token_role(token, "rotated-admin-secret", core.clock) is None
     assert (
         token_role(token + "x", core.secrets.get("LOCAL_API_TOKEN"), core.clock) is None
     )
@@ -521,3 +523,60 @@ async def test_concurrency_slots_cover_slow_uploads_and_release_on_rejection():
     await gate(oversized, forbidden_receive, send)
     assert responses[-1] == 413
     assert gate.expensive_running == gate.bodies_running == 0
+
+
+def test_avatar_credentials_still_expire_and_web_cannot_be_retagged(cloud):
+    import base64
+    import hashlib
+    import hmac
+    from amora.security import issue_browser_token
+
+    core, client, _ = cloud
+    secret = core.secrets.get("LOCAL_API_TOKEN")
+    avatar = issue_browser_token(secret, core.clock, "avatar")
+    core.clock.advance(timedelta(hours=12, seconds=1))
+    assert token_role(avatar, secret, core.clock) is None
+    # Even a correctly signed v2 payload cannot grant admin/Avatar privileges.
+    for role in ["admin", "avatar"]:
+        payload = (
+            base64.urlsafe_b64encode((role + ":" + "a" * 32).encode())
+            .decode()
+            .rstrip("=")
+        )
+        signature = hmac.new(
+            secret.encode(), ("browser.v2." + payload).encode(), hashlib.sha256
+        ).hexdigest()
+        assert (
+            token_role("browser.v2." + payload + "." + signature, secret, core.clock)
+            is None
+        )
+
+
+def test_durable_web_credential_survives_core_restart_without_gaining_admin(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path))
+    first = AmoraCore.bootstrap()
+    try:
+        with TestClient(create_api(first)) as client:
+            token = client.post(
+                "/v1/pairing/redeem", json={"code": first.pairing.issue().code}
+            ).json()["token"]
+    finally:
+        first.close()
+    again = AmoraCore.bootstrap()
+    try:
+        with TestClient(create_api(again)) as client:
+            headers = {"Authorization": "Bearer " + token}
+            assert client.get("/v1/web/state", headers=headers).status_code == 200
+            assert (
+                client.get("/v1/operations/state", headers=headers).status_code == 403
+            )
+            assert (
+                client.get(
+                    "/v1/conversation/next?device_id=DEVICE_A15", headers=headers
+                ).status_code
+                == 403
+            )
+    finally:
+        again.close()
