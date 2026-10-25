@@ -48,3 +48,33 @@ def test_pairing_redeem_is_single_use_across_instances(tmp_path):
     with ThreadPoolExecutor(2) as pool:
         results=list(pool.map(redeem,[first,second]))
     assert sum(results)==1
+
+
+def test_cli_pair_never_bootstraps_core_and_redeems_on_running_core(tmp_path, monkeypatch, capsys):
+    import re
+    import sys
+    from amora.app import AmoraCore
+    from amora.__main__ import main
+    from amora.api import create_api
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path))
+    core = AmoraCore.bootstrap()
+    def forbidden(*args, **kwargs):
+        raise AssertionError("pair must not bootstrap Core or open storage")
+    monkeypatch.setattr(AmoraCore, "bootstrap", forbidden)
+    monkeypatch.setattr("amora.storage.AmoraDatabase.__init__", forbidden)
+    monkeypatch.setenv("AMORA_MODE", "cloud")
+    monkeypatch.setenv("AMORA_PUBLIC_ORIGINS", "https://amora.example")
+    monkeypatch.setattr(sys, "argv", ["amora", "pair"])
+    try:
+        assert main() == 0
+        output = capsys.readouterr().out
+        code = re.search(r"Código de pareamento: (\d{6})", output).group(1)
+        assert "Uso único; máximo de 5 tentativas." in output
+        assert (tmp_path / "cache/pairing.json").stat().st_mode & 0o777 == 0o600
+        with TestClient(create_api(core), base_url="https://amora.example") as client:
+            assert client.post("/v1/pairing/redeem", json={"code": code}).status_code == 200
+            assert client.post("/v1/pairing/redeem", json={"code": code}).status_code == 401
+    finally:
+        core.close()

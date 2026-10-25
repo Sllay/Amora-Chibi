@@ -9,6 +9,7 @@ localStorage.removeItem(TOKEN_KEY); // discard legacy persistent bearer
 const state = {
   token: sessionStorage.getItem(TOKEN_KEY) || "",
   fillBusy: false,
+  queueError: "",
   speechQueue: [],
   activeRecord: null,
   activeSource: null,
@@ -60,7 +61,7 @@ function setVoiceStatus(text) {
 }
 
 function updateQueueDiag() {
-  $("diagQueue").textContent = String(state.speechQueue.length);
+  $("diagQueue").textContent = state.queueError || String(state.speechQueue.length);
   $("stopVoice").disabled = state.speechQueue.length === 0 && !state.activeRecord;
 }
 
@@ -127,13 +128,13 @@ async function validatePairing() {
   try {
     const data = await api("/v1/web/state");
     const local = data.local_voice || {};
-    if (local.available) {
-      $("voiceLabel").textContent = "Amora local · FINAL_B + Signature V1";
-      setVoiceStatus(`pronta · ${local.num_steps || 5} steps`);
-    } else {
-      $("voiceLabel").textContent = "Amora local · setup necessário";
-      setVoiceStatus("indisponível · rode setup-local-voice.sh");
-    }
+    const remote = data.voice_transport === "amora_remote_supertonic_world";
+    $("voiceLabel").textContent = remote
+      ? "Amora · worker remoto Supertonic"
+      : "Amora · backend local Supertonic";
+    setVoiceStatus(local.available ? "disponível" : remote
+      ? (local.last_error || "worker remoto configurado · áudio ainda não validado")
+      : "backend local indisponível · verifique configuração de voz");
     return true;
   } catch (error) {
     if (error.status === 401) {
@@ -298,9 +299,10 @@ async function prepareLocalSpeech(record) {
     setVoiceStatus("áudio pronto");
     pumpPlayback();
   } catch (error) {
-    if (record.interrupted || record.epoch !== state.speechEpoch || error?.name === "AbortError") return;
+    if (record.interrupted || record.epoch !== state.speechEpoch) return;
     record.status = "failed";
-    await failVoiceTransport(record, error);
+    await failVoiceTransport(record, error?.name === "AbortError"
+      ? new Error("tempo limite do worker de voz") : error);
   } finally {
     clearTimeout(timer);
   }
@@ -309,9 +311,9 @@ async function prepareLocalSpeech(record) {
 async function failVoiceTransport(record, error) {
   if (!state.voiceErrorShown) {
     state.voiceErrorShown = true;
-    addMessage("system", `Voz local indisponível: ${error.message}. Rode tools/web/setup-local-voice.sh no Termux e reinicie o Core.`);
+    addMessage("system", `Voz indisponível: ${error.message}. Texto preservado; verifique o backend/worker configurado.`);
   }
-  setVoiceStatus("erro na voz local");
+  setVoiceStatus("voz indisponível · texto preservado");
   await interruptVoice("web_local_voice_error", record.item);
 }
 
@@ -378,6 +380,8 @@ async function fillSpeechQueue() {
       const last = state.speechQueue.at(-1)?.item || state.activeRecord?.item;
       const sameTurn = cognitiveTurnId(last);
       const item = await claimNext(sameTurn);
+      state.queueError = "";
+      updateQueueDiag();
       if (!item) break;
       queueLocalSpeech(item);
     }
@@ -387,6 +391,11 @@ async function fillSpeechQueue() {
       sessionStorage.removeItem(TOKEN_KEY);
       pairPanel.classList.remove("hidden");
       appPanel.classList.add("hidden");
+    } else {
+      const diagnostic = `fila/resposta indisponível: ${error.status ? `HTTP ${error.status}` : "falha de conexão"}`;
+      if (state.queueError !== diagnostic) addMessage("system", diagnostic);
+      state.queueError = diagnostic;
+      updateQueueDiag();
     }
   } finally {
     state.fillBusy = false;

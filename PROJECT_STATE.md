@@ -492,3 +492,33 @@ Somente adapter, testes e documentação alterados; schema/migrations, domínio,
 providers, segurança/tokens, seleção de storage, contratos públicos e voz intactos.
 Nenhum novo deploy executado. Próximo passo: CI/revisão e repetir startup e
 restart no staging Northflank → Turso real para confirmar o efeito operacional.
+
+## Incidente Web/Safari cloud — 2026-10-25
+
+Base canônica agora main / c5b8c4d (merge PR #59); correções em branch nova
+`fix/cloud-web-runtime`. Sem novo deploy pelo agente. Boot/probes/restart de
+staging relatados saudáveis por BK, mas texto/STT retornam DatabaseError por
+request. Sem credenciais de staging neste ambiente; **incidente real aberto**.
+
+Reprodução forte: Hrana com SQL/transações reais e códigos primários de constraint
+falha no segundo INSERT idempotente em cognitive_journal.dedupe_key:
+SQLITE_CONSTRAINT vira DatabaseError em vez de dedupe. Normalização conservadora
+do prefixo UNIQUE corrige texto e STT/conversation, sem aceitar FK/NOT NULL como
+sucesso. O mock antigo devolvia sempre o código estendido UNIQUE. Confirmação de
+que esta é a mesma causa real ainda depende do traceback/código de staging.
+
+`amora pair` usa somente paths/clock/PairingManager, sem bootstrap/storage.
+Logs REQUEST_FAILED passam a identificar method/path template, stage,
+correlation_id, latency e código seguro/store/operação, sem corpo/SQL/secrets.
+Safari app-v2 exibe erro de claim em vez de escondê-lo; timeout de voz deixa
+erro explícito e libera a fila; texto não depende do TTS
+e UI distingue worker remoto de backend local. Sem fallback secreto ou mudança
+de voz, schema, providers, tokens, regras de branch ou configuração Northflank.
+
+Gates locais: 108 específicos PASS; remote storage 26 PASS; Core completo
+366 PASS (5 avisos existentes); Node 22.23.4 Avatar+Web 10 PASS. Regressões de baton,
+COMMIT ambíguo sem retry, constraints, STT/WAV, browser token, ACK/cancel e restart
+preservadas. Detalhes, arquivos e gate real em
+`docs/engineering/reviews/CLOUD_WEB_INCIDENT.md`. Encerramento exige validar a
+revisão aprovada em Northflank/Turso/Safari real; áudio/config do worker remoto
+não foram certificados aqui. Branch runtime antiga não foi removida.
