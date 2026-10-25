@@ -235,12 +235,6 @@ class RemoteConnection:
             response.raise_for_status()
             data = response.json()
             self._baton = data["baton"]
-            if (
-                self._transaction
-                and self._baton is None
-                and not any(r["type"] == "close" for r in requests)
-            ):
-                raise StorageUnavailable("SQL_TRANSACTION_STREAM_LOST")
             # base_url may change routing, but never forward credentials to a new origin.
             base = data.get("base_url")
             if base and base.rstrip("/") != self.backend.url:
@@ -275,28 +269,48 @@ class RemoteConnection:
         if not self._transaction:
             requests.append({"type": "close"})
         results = self._pipeline(requests)
-        first = results[0]
-        if first["type"] == "error":
-            code = first["error"].get("code", "SQL_ERROR")
-            # Messages may contain SQL values; expose only machine codes.
-            error = (
-                sqlite3.IntegrityError
-                if code in {"SQLITE_CONSTRAINT_UNIQUE", "SQLITE_CONSTRAINT_PRIMARYKEY"}
-                else sqlite3.DatabaseError
+        try:
+            first = results[0]
+            if first["type"] == "error":
+                code = first["error"].get("code", "SQL_ERROR")
+                # Messages may contain SQL values; expose only machine codes.
+                error = (
+                    sqlite3.IntegrityError
+                    if code
+                    in {"SQLITE_CONSTRAINT_UNIQUE", "SQLITE_CONSTRAINT_PRIMARYKEY"}
+                    else sqlite3.DatabaseError
+                )
+                if code.startswith("SQLITE_CONSTRAINT"):
+                    raise error(code)
+                if code == "SQLITE_ERROR":
+                    message = first["error"].get("message", "")
+                    if "no such module: fts5" in message:
+                        raise sqlite3.OperationalError("FTS5_UNSUPPORTED")
+                raise StorageUnavailable(code)
+            if first["type"] != "ok" or first["response"]["type"] != "execute":
+                raise StorageUnavailable("SQL_INVALID_RESPONSE")
+            result = first["response"]["result"]
+            result = Result(
+                [c["name"] for c in result["cols"]],
+                [[_decode(v) for v in row] for row in result["rows"]],
+                result.get("affected_row_count", 0),
             )
-            if code.startswith("SQLITE_CONSTRAINT"):
-                raise error(code)
-            if code == "SQLITE_ERROR":
-                message = first["error"].get("message", "")
-                if "no such module: fts5" in message:
-                    raise sqlite3.OperationalError("FTS5_UNSUPPORTED")
-            raise StorageUnavailable(code)
-        result = first["response"]["result"]
-        return Result(
-            [c["name"] for c in result["cols"]],
-            [[_decode(v) for v in row] for row in result["rows"]],
-            result.get("affected_row_count", 0),
-        )
+        except BaseException:
+            if self._transaction and self._baton is None:
+                self._broken = True
+            raise
+        # A successful terminator no longer needs a stateful stream. Validate
+        # only after processing its SQL result, so errors never become success.
+        if (
+            self._transaction
+            and self._baton is None
+            and sql.strip().rstrip(";").strip().upper() not in {"COMMIT", "ROLLBACK"}
+        ):
+            self._broken = True
+            raise StorageUnavailable(
+                "SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN"
+            ) from StorageUnavailable("SQL_TRANSACTION_STREAM_LOST")
+        return result
 
     def executemany(self, sql, values):
         for value in values:

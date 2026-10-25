@@ -20,10 +20,12 @@ from fastapi.testclient import TestClient
 
 
 class HranaSQLite:
-    def __init__(self, path):
+    def __init__(self, path, *, close_after_transaction=True):
+        self.close_after_transaction = close_after_transaction
         self.path, self.streams = path, {}
         self.fail = False
         self.calls = []
+        self.closed_transaction_streams = 0
 
     def __call__(self, request):
         if self.fail:
@@ -74,6 +76,22 @@ class HranaSQLite:
                         "error": {"code": exc.sqlite_errorname, "message": str(exc)},
                     }
                 )
+        if (
+            baton is not None
+            and self.close_after_transaction
+            and not connection.in_transaction
+            and any(
+                operation["type"] == "execute"
+                and operation["stmt"]["sql"].strip().rstrip(";").strip().upper()
+                in {"COMMIT", "ROLLBACK"}
+                and result["type"] == "ok"
+                for operation, result in zip(body["requests"], results)
+            )
+        ):
+            connection.close()
+            del self.streams[baton]
+            baton = None
+            self.closed_transaction_streams += 1
         return httpx.Response(
             200, json={"baton": baton, "base_url": None, "results": results}
         )
@@ -92,6 +110,7 @@ def test_remote_migration_constraints_rollback_and_restart(remote, tmp_path):
     backend, server = remote
     db = AmoraDatabase(tmp_path / "unused.db", backend=backend)
     assert db.migrate() == 11
+    assert server.closed_transaction_streams > 0
     assert db.migrate() == 0
     event = AmoraEvent(event_type="probe", source="test", dedupe_key="persistent")
     assert db.append_event(event)
@@ -314,3 +333,201 @@ def test_transaction_cannot_silently_continue_after_lost_baton(tmp_path):
                 pytest.fail("lost transaction stream must be rejected before writes")
     finally:
         connection.close()
+
+
+@pytest.mark.parametrize("close_after_transaction", [True, False])
+def test_commit_accepts_closed_or_retained_stream(tmp_path, close_after_transaction):
+    server = HranaSQLite(
+        tmp_path / "server.db", close_after_transaction=close_after_transaction
+    )
+    replies = []
+
+    def transport(request):
+        response = server(request)
+        replies.append((json.loads(request.content), response.json()))
+        return response
+
+    backend = LibSQLBackend(
+        "https://database.example",
+        "test-only",
+        transport=httpx.MockTransport(transport),
+    )
+    connection = backend.connect(tmp_path / "unused")
+    try:
+        with connection:
+            connection.execute("CREATE TABLE probe(value TEXT)")
+            connection.execute("INSERT INTO probe VALUES (?)", ("persisted",))
+        commit_request, commit_response = next(
+            (body, reply)
+            for body, reply in replies
+            if any(op.get("stmt", {}).get("sql") == "COMMIT" for op in body["requests"])
+        )
+        assert [op["type"] for op in commit_request["requests"]] == ["execute"]
+        assert (commit_response["baton"] is None) == close_after_transaction
+        assert not connection._broken
+    finally:
+        connection.close()
+    again = backend.connect(tmp_path / "unused")
+    try:
+        assert again.execute("SELECT value FROM probe").fetchone()[0] == "persisted"
+    finally:
+        again.close()
+    assert not server.streams
+
+
+def test_statement_error_rolls_back_with_null_baton(remote, tmp_path):
+    backend, server = remote
+    connection = backend.connect(tmp_path / "unused")
+    try:
+        connection.execute("CREATE TABLE probe(value TEXT UNIQUE)")
+        with pytest.raises(sqlite3.IntegrityError, match="SQLITE_CONSTRAINT_UNIQUE"):
+            with connection:
+                connection.execute("INSERT INTO probe VALUES ('duplicate')")
+                connection.execute("INSERT INTO probe VALUES ('duplicate')")
+        assert server.calls[-1] == "ROLLBACK"
+        assert server.closed_transaction_streams == 1
+        assert not server.streams
+        assert not connection._broken
+        assert connection.execute("SELECT COUNT(*) FROM probe").fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("sql", ["SELECT 1", "CREATE TABLE probe(value TEXT)"])
+def test_baton_lost_during_statement_invalidates_transaction(remote, tmp_path, sql):
+    backend, server = remote
+
+    def transport(request):
+        response = server(request)
+        if any(
+            op.get("stmt", {}).get("sql") == sql
+            for op in json.loads(request.content)["requests"]
+        ):
+            payload = response.json()
+            baton = payload["baton"]
+            server.streams.pop(baton).close()
+            payload["baton"] = None
+            return httpx.Response(200, json=payload)
+        return response
+
+    backend.transport = httpx.MockTransport(transport)
+    connection = backend.connect(tmp_path / "unused")
+    try:
+        with pytest.raises(
+            StorageUnavailable, match="SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN"
+        ) as caught:
+            with connection:
+                connection.execute(sql)
+        assert str(caught.value.__cause__) == "SQL_TRANSACTION_STREAM_LOST"
+        assert connection._broken
+        assert "COMMIT" not in server.calls
+        with pytest.raises(StorageUnavailable, match="SQL_CONNECTION_CLOSED"):
+            connection.execute("SELECT 1")
+    finally:
+        connection.close()
+    assert not server.streams
+
+
+@pytest.mark.parametrize("failure", ["http", "timeout"])
+def test_commit_transport_failure_is_unknown_and_never_retried(
+    remote, tmp_path, failure
+):
+    backend, server = remote
+    commits = []
+
+    def transport(request):
+        body = json.loads(request.content)
+        is_commit = any(
+            op.get("stmt", {}).get("sql") == "COMMIT" for op in body["requests"]
+        )
+        response = server(request)  # Commit may succeed before its response is lost.
+        if is_commit:
+            commits.append(body)
+            if failure == "timeout":
+                raise httpx.ReadTimeout("response lost", request=request)
+            return httpx.Response(503)
+        return response
+
+    backend.transport = httpx.MockTransport(transport)
+    connection = backend.connect(tmp_path / "unused")
+    try:
+        with pytest.raises(
+            StorageUnavailable, match="^SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN$"
+        ):
+            with connection:
+                connection.execute("CREATE TABLE probe(value TEXT)")
+        assert len(commits) == 1
+        assert connection._broken
+        with pytest.raises(StorageUnavailable, match="SQL_CONNECTION_CLOSED"):
+            connection.execute("SELECT 1")
+    finally:
+        connection.close()
+    assert not server.streams
+
+
+@pytest.mark.parametrize("terminator", ["COMMIT", "ROLLBACK"])
+def test_terminator_sql_error_with_null_baton_is_not_success(
+    remote, tmp_path, terminator
+):
+    backend, server = remote
+
+    def transport(request):
+        body = json.loads(request.content)
+        if any(op.get("stmt", {}).get("sql") == terminator for op in body["requests"]):
+            server.streams.pop(body["baton"]).close()
+            return httpx.Response(
+                200,
+                json={
+                    "baton": None,
+                    "results": [
+                        {
+                            "type": "error",
+                            "error": {
+                                "code": "SQLITE_BUSY",
+                                "message": "private SQL values",
+                            },
+                        }
+                    ],
+                },
+            )
+        return server(request)
+
+    backend.transport = httpx.MockTransport(transport)
+    connection = backend.connect(tmp_path / "unused")
+    try:
+        with pytest.raises(StorageUnavailable, match="^SQLITE_BUSY$"):
+            with connection:
+                connection.execute("CREATE TABLE probe(value TEXT)")
+                if terminator == "ROLLBACK":
+                    raise ValueError("trigger rollback")
+        assert connection._broken
+    finally:
+        connection.close()
+    assert not server.streams
+
+
+def test_null_baton_does_not_hide_malformed_terminator_result(remote, tmp_path):
+    backend, server = remote
+
+    def transport(request):
+        response = server(request)
+        if any(
+            op.get("stmt", {}).get("sql") == "COMMIT"
+            for op in json.loads(request.content)["requests"]
+        ):
+            payload = response.json()
+            assert payload["baton"] is None
+            payload["results"][0]["response"]["type"] = "close"
+            return httpx.Response(200, json=payload)
+        return response
+
+    backend.transport = httpx.MockTransport(transport)
+    connection = backend.connect(tmp_path / "unused")
+    try:
+        with pytest.raises(StorageUnavailable, match="^SQL_INVALID_RESPONSE$"):
+            with connection:
+                connection.execute("CREATE TABLE probe(value TEXT)")
+        assert connection._broken
+    finally:
+        connection.close()
+    assert not server.streams

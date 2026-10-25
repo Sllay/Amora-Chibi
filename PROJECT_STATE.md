@@ -469,3 +469,26 @@ Somente Linux amd64 foi executado; multiarch/wheels arm64 verificados como
 disponibilidade, sem certificação. DNS/ABI musl em host real, limites de execução,
 CI remoto, ingress/egress e serviços remotos continuam gates. Nenhum deploy.
 Próximo passo: revisão/CI e gate de staging separado.
+
+## Hrana HTTP — fechamento transacional real — 2026-10-25
+
+Na branch `feat/runtime-base-security`, continuação de `4ee10fc`. Primeiro
+deploy real Northflank → Turso, relatado por BK, revelou falso
+SQL_TRANSACTION_STREAM_LOST/SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN: HTTP 200 e
+COMMIT válido podiam terminar com baton=null. O mock anterior sempre mantinha
+baton até close, por isso não reproduzia o comportamento real do servidor.
+
+Adapter agora processa o resultado SQL antes de validar o stream: apenas
+COMMIT/ROLLBACK explícitos bem-sucedidos permitem fechamento transacional sem
+close; BEGIN e statements intermediários sem baton continuam fail-closed.
+Erros SQL dos terminadores são propagados; HTTP/transport failure continua
+OUTCOME_UNKNOWN, conexão inválida e nenhuma repetição automática de COMMIT.
+Mock passa a fechar após terminador sem estado transacional restante, com
+regressões de migrations completas, schema persistido/restart e falhas.
+
+24 testes de storage remoto PASS; suíte Core completa: 357 PASS, 5 avisos
+existentes, sem skips. Detalhes em `docs/engineering/reviews/03.md`.
+Somente adapter, testes e documentação alterados; schema/migrations, domínio,
+providers, segurança/tokens, seleção de storage, contratos públicos e voz intactos.
+Nenhum novo deploy executado. Próximo passo: CI/revisão e repetir startup e
+restart no staging Northflank → Turso real para confirmar o efeito operacional.
