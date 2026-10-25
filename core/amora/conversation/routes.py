@@ -19,6 +19,7 @@ class TurnSignalRequest(BaseModel):
 class CancelSpeechRequest(BaseModel):
     reason: str = Field(default="barge_in", min_length=1, max_length=96)
     spoken_chars: int | None = Field(default=None, ge=0, le=12000)
+    speech_only: bool = False
 
 
 class TechnicalTestTurnRequest(BaseModel):
@@ -132,6 +133,7 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
             utterance_id,
             reason=request.reason,
             spoken_chars=request.spoken_chars,
+            speech_only=request.speech_only,
         )
         if item is None:
             raise HTTPException(status_code=404, detail="utterance not found")

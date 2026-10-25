@@ -62,6 +62,26 @@ class ConversationStore:
     def enqueue(self, item: SpeechUtterance) -> bool:
         payload = json.dumps(item.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"))
         with self._lock, self._conn:
+            # A voice-only stop may race the producer of later segments. Persist
+            # its turn marker on cancelled deliveries, so restart cannot revive
+            # new voice work from that turn. No cognitive generation is cancelled.
+            turn_id = item.metadata.get("cognitive_turn_id")
+            if turn_id:
+                prior = self._conn.execute(
+                    "SELECT utterance_json FROM speech_utterances WHERE device_id = ? AND status = ? AND dedupe_key LIKE ?",
+                    (item.device_id, UtteranceStatus.CANCELLED.value, f"speech:cognitive:{turn_id}:%"),
+                ).fetchall()
+                for row in prior:
+                    previous = json.loads(row["utterance_json"])
+                    metadata = previous.get("metadata", {})
+                    if metadata.get("voice_cancelled_turn") == str(turn_id):
+                        item.status = UtteranceStatus.CANCELLED
+                        item.metadata.update({
+                            "voice_cancelled_turn": str(turn_id),
+                            "cancel_reason": metadata.get("cancel_reason", "voice_cancelled"),
+                        })
+                        payload = json.dumps(item.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"))
+                        break
             try:
                 self._conn.execute(
                     """INSERT INTO speech_utterances(
@@ -194,7 +214,7 @@ class ConversationStore:
             self._update_utterance(item)
             return item
 
-    def cancel_cognitive_turn(self, turn_id: UUID | str, *, reason: str = "barge_in") -> int:
+    def cancel_cognitive_turn(self, turn_id: UUID | str, *, reason: str = "barge_in", speech_only: bool = False) -> int:
         turn = str(turn_id)
         cancelled = 0
         with self._lock, self._conn:
@@ -210,6 +230,8 @@ class ConversationStore:
                 item.claim_expires_at = None
                 item.metadata["cancel_reason"] = reason[:96]
                 item.metadata["cancelled_at"] = self.clock.now().isoformat()
+                if speech_only:
+                    item.metadata["voice_cancelled_turn"] = turn
                 self._update_utterance(item)
                 cancelled += 1
         return cancelled

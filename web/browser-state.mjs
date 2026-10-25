@@ -1,6 +1,7 @@
 // Visual state belongs to this browser, not to Core memory or the cognitive DB.
 export const PAIRING_KEY = 'amora.web.pairing.v2';
 export const HISTORY_KEY = 'amora.web.history.v1';
+export const VOICE_MUTED_KEY = 'amora.web.voice-muted.v1';
 const LEGACY_TOKEN_KEY = 'amora.web.token.v1';
 const MAX_ROLE_MESSAGES = 50;
 const MAX_MESSAGES = 100;
@@ -93,6 +94,10 @@ export class BrowserState {
   forgetPairing() {
     this.remove(PAIRING_KEY);
   }
+
+  voiceMuted() { return this.get(VOICE_MUTED_KEY) === '1'; }
+
+  setVoiceMuted(muted) { this.set(VOICE_MUTED_KEY, muted ? '1' : '0'); }
 
   loadHistory() {
     const raw = this.get(HISTORY_KEY);

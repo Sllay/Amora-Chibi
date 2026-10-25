@@ -18,7 +18,7 @@ from .providers_structured import GeminiCognitiveProvider, GroqCognitiveProvider
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
 from .structured_runtime import CognitiveEngine
 from .replay import CognitiveReplayResult
-from .speech import SpeechNormalizer, SpeechRender, SpeechSegmenter
+from .speech import SpeechCue, SpeechNormalizer, SpeechPlan, SpeechRender, SpeechSegmenter
 from .store_v1 import CognitiveStore
 
 __all__ = [
@@ -48,6 +48,8 @@ __all__ = [
     "ProviderError",
     "ProviderPrivacyGate",
     "SpeechNormalizer",
+    "SpeechCue",
+    "SpeechPlan",
     "SpeechRender",
     "SpeechSegment",
     "SpeechSegmenter",

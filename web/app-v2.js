@@ -1,4 +1,5 @@
 import { BrowserState, browserStorage } from "./browser-state.mjs";
+import { WavPlayer } from "./audio-player.mjs";
 
 const $ = (id) => document.getElementById(id);
 const browserStore = new BrowserState(browserStorage("localStorage"), browserStorage("sessionStorage"));
@@ -14,7 +15,14 @@ const state = {
   speechQueue: [],
   activeRecord: null,
   activeSource: null,
+  preparingRecord: null,
   speechEpoch: 0,
+  voiceMuted: browserStore.voiceMuted(),
+  claimed: new Map(),
+  suppressedTurns: new Set(),
+  pendingCancels: new Map(),
+  cancelling: new Set(),
+  displayedTurns: new Set(browserStore.messages.filter(item => item.role === "amora").map(item => item.id).filter(Boolean)),
   lastSpeechEndAt: 0,
   lastTurnStartedAt: 0,
   playbackContext: null,
@@ -35,6 +43,7 @@ const state = {
   silenceMs: 0,
   sendingAudio: false,
 };
+const voicePlayer = new WavPlayer(getPlaybackContext);
 
 const pairPanel = $("pairPanel");
 const appPanel = $("appPanel");
@@ -69,8 +78,15 @@ function updateQueueDiag() {
 function renderMessage(role, text) {
   const node = document.createElement("div");
   node.className = `message ${role}`;
-  node.textContent = text.trim();
+  node.textContent = text;
   $("messages").appendChild(node);
+  // Apply the same turn limits to the live DOM as to persistent history.
+  const counts = { user: 0, amora: 0 };
+  for (const child of [...$("messages").children].reverse()) {
+    const role = child.className.split(" ")[1];
+    counts[role] = (counts[role] || 0) + 1;
+    if (counts[role] > 50) child.remove();
+  }
   requestAnimationFrame(() => {
     $("messages").scrollTop = $("messages").scrollHeight;
   });
@@ -78,6 +94,11 @@ function renderMessage(role, text) {
 
 function addMessage(role, text, id = undefined, privacyScope = null) {
   if (typeof text !== "string" || !text.trim()) return;
+  if (role === "system") {
+    $("chatNotice").textContent = text;
+    return;
+  }
+  if (!["user", "amora"].includes(role)) return;
   if (browserStore.hasMessage(role, id)) return;
   browserStore.appendMessage(role, text, id, privacyScope);
   renderMessage(role, text);
@@ -90,11 +111,29 @@ function restoreConversation() {
   for (const item of browserStore.messages) renderMessage(item.role, item.text);
 }
 
-$("clearConversation").addEventListener("click", () => {
+$("clearConversation").addEventListener("click", () => $("clearDialog").showModal());
+$("cancelClear").addEventListener("click", () => $("clearDialog").close());
+$("confirmClear").addEventListener("click", () => {
   browserStore.clearHistory();
   $("messages").replaceChildren();
+  $("clearDialog").close();
 });
 restoreConversation();
+
+function updateMuteControl() {
+  $("muteVoice").textContent = `Voz da Amora: ${state.voiceMuted ? "mutada" : "ligada"}`;
+  $("muteVoice").setAttribute("aria-pressed", String(state.voiceMuted));
+  if (state.voiceMuted) setVoiceStatus("mutada · texto ativo");
+}
+$("muteVoice").addEventListener("click", async () => {
+  state.voiceMuted = !state.voiceMuted;
+  browserStore.setVoiceMuted(state.voiceMuted);
+  updateMuteControl();
+  if (state.voiceMuted) await interruptVoice("web_muted", null, true);
+  else await unlockPlayback();
+  await fillSpeechQueue();
+});
+updateMuteControl();
 
 async function api(path, options = {}, authenticated = true) {
   const headers = new Headers(options.headers || {});
@@ -155,6 +194,7 @@ async function validatePairing() {
     setVoiceStatus(local.available ? "disponível" : remote
       ? (local.last_error || "worker remoto configurado · áudio ainda não validado")
       : "backend local indisponível · verifique configuração de voz");
+    if (state.voiceMuted) setVoiceStatus("mutada · texto ativo");
     return true;
   } catch (error) {
     if (error.status === 401) {
@@ -174,6 +214,7 @@ function getPlaybackContext() {
 }
 
 async function unlockPlayback() {
+  if (state.voiceMuted) return false;
   const context = getPlaybackContext();
   if (context.state === "suspended") {
     try { await context.resume(); } catch (_) {}
@@ -224,7 +265,7 @@ $("pairForm").addEventListener("submit", async (event) => {
 
 $("forgetPairing").addEventListener("click", async () => {
   browserStore.forgetPairing();
-  const stopping = interruptVoice("web_unpair");
+  const stopping = interruptVoice("web_unpair", null, true);
   state.token = "";
   pairPanel.classList.remove("hidden");
   appPanel.classList.add("hidden");
@@ -237,7 +278,7 @@ async function submitText(text) {
   if (!clean) return;
   await unlockPlayback();
   if (state.activeRecord || state.speechQueue.length) {
-    await interruptVoice("web_text_barge_in");
+    await interruptVoice("web_text_barge_in", null, false);
   }
   state.lastTurnStartedAt = performance.now();
   addMessage("user", clean);
@@ -287,34 +328,56 @@ async function claimNext(turnId = null) {
   return data.utterance || null;
 }
 
-function queueLocalSpeech(item) {
-  addMessage("amora", item.text, item.id, item.privacy_scope);
+function queueLocalSpeech(item, claimEpoch = state.speechEpoch) {
+  // A response's literal display text belongs to its turn, never to its TTS ID.
+  const displayId = cognitiveTurnId(item) || item.id;
+  if (!state.displayedTurns.has(displayId)) {
+    addMessage("amora", item.display_text ?? item.text, displayId, item.privacy_scope);
+    state.displayedTurns.add(displayId);
+    while (state.displayedTurns.size > 512) state.displayedTurns.delete(state.displayedTurns.values().next().value);
+  }
+  if (state.claimed.has(item.id)) return;
+  state.claimed.set(item.id, item);
+  if (state.voiceMuted || claimEpoch !== state.speechEpoch
+      || state.suppressedTurns.has(cognitiveTurnId(item)) || !item.text.trim()) {
+    cancelVoiceItem(item, state.voiceMuted ? "web_muted" : "web_voice_suppressed");
+    return;
+  }
   const record = {
     item,
     epoch: state.speechEpoch,
-    status: "preparing",
+    status: "queued",
     audioBuffer: null,
     controller: new AbortController(),
     interrupted: false,
   };
   state.speechQueue.push(record);
   updateQueueDiag();
+  pumpPreparation();
+}
+
+function pumpPreparation() {
+  if (state.voiceMuted || state.preparingRecord) return;
+  const record = state.speechQueue.find(item => item.status === "queued" && item.epoch === state.speechEpoch);
+  if (!record) return;
+  state.preparingRecord = record;
+  record.status = "preparing";
   prepareLocalSpeech(record);
 }
 
 async function prepareLocalSpeech(record) {
   const timer = setTimeout(() => record.controller.abort("voice_timeout"), VOICE_FETCH_TIMEOUT_MS);
   try {
-    setVoiceStatus("sintetizando Amora local…");
+    setVoiceStatus("preparando voz da Amora…");
     const response = await apiBinary(
       `/v1/web/voice/utterances/${encodeURIComponent(record.item.id)}/audio`,
       { signal: record.controller.signal },
     );
     if (record.epoch !== state.speechEpoch || record.interrupted) return;
     const rtf = response.headers.get("x-amora-rtf");
-    const bytes = await response.arrayBuffer();
-    const context = getPlaybackContext();
-    record.audioBuffer = await context.decodeAudioData(bytes.slice(0));
+    record.audioBuffer = await voicePlayer.prepare(response,
+      () => record.epoch === state.speechEpoch && !record.interrupted && !state.voiceMuted);
+    if (record.epoch !== state.speechEpoch || record.interrupted || state.voiceMuted) return;
     record.status = "ready";
     if (rtf) {
       const value = Number(rtf);
@@ -329,6 +392,8 @@ async function prepareLocalSpeech(record) {
       ? new Error("tempo limite do worker de voz") : error);
   } finally {
     clearTimeout(timer);
+    if (state.preparingRecord === record) state.preparingRecord = null;
+    pumpPreparation();
   }
 }
 
@@ -338,11 +403,11 @@ async function failVoiceTransport(record, error) {
     addMessage("system", `Voz indisponível: ${error.message}. Texto preservado; verifique o backend/worker configurado.`);
   }
   setVoiceStatus("voz indisponível · texto preservado");
-  await interruptVoice("web_local_voice_error", record.item);
+  await interruptVoice("web_local_voice_error", record.item, true);
 }
 
 function pumpPlayback() {
-  if (state.activeRecord || state.userSpeaking) return;
+  if (state.voiceMuted || state.activeRecord || state.userSpeaking) return;
   const record = state.speechQueue[0];
   if (!record || record.epoch !== state.speechEpoch || record.status !== "ready") return;
   const context = getPlaybackContext();
@@ -351,29 +416,23 @@ function pumpPlayback() {
     return;
   }
 
-  const source = context.createBufferSource();
-  source.buffer = record.audioBuffer;
-  source.connect(context.destination);
   record.status = "playing";
   state.activeRecord = record;
-  state.activeSource = source;
   if (state.lastSpeechEndAt) {
     $("diagGap").textContent = `${Math.round(performance.now() - state.lastSpeechEndAt)} ms`;
   }
   updateQueueDiag();
-  setVoiceStatus("falando · Amora local");
+  setVoiceStatus("falando · Amora");
 
-  source.onended = () => {
+  state.activeSource = voicePlayer.play(record.audioBuffer, () => {
     if (record.interrupted || record.epoch !== state.speechEpoch) return;
     finishPlayedRecord(record);
-  };
-
-  source.start();
+  });
   api(`/v1/conversation/utterances/${encodeURIComponent(record.item.id)}/started`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
-  }).catch(() => {});
+  }).catch(() => setVoiceStatus("falha ao confirmar início da fala"));
 }
 
 function finishPlayedRecord(record) {
@@ -390,7 +449,8 @@ function finishPlayedRecord(record) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ spoken: true }),
-  }).catch(() => {});
+  }).then(() => state.claimed.delete(record.item.id))
+    .catch(() => setVoiceStatus("falha ao confirmar entrega da fala"));
 
   pumpPlayback();
   fillSpeechQueue();
@@ -399,15 +459,20 @@ function finishPlayedRecord(record) {
 async function fillSpeechQueue() {
   if (!state.token || state.fillBusy || state.userSpeaking) return;
   state.fillBusy = true;
+  const claimEpoch = state.speechEpoch;
   try {
-    while (state.speechQueue.length < MAX_SPEECH_QUEUE) {
+    // Bound draining when muted while still settling remote leases normally.
+    let claims = 0;
+    while (state.speechQueue.length < MAX_SPEECH_QUEUE && claims++ < 12) {
       const last = state.speechQueue.at(-1)?.item || state.activeRecord?.item;
       const sameTurn = cognitiveTurnId(last);
       const item = await claimNext(sameTurn);
+      if (state.queueError && $("chatNotice").textContent === state.queueError) $("chatNotice").textContent = "";
       state.queueError = "";
       updateQueueDiag();
       if (!item) break;
-      queueLocalSpeech(item);
+      queueLocalSpeech(item, claimEpoch);
+      if (claimEpoch !== state.speechEpoch) break;
     }
   } catch (error) {
     if (error.status === 401) {
@@ -426,33 +491,56 @@ async function fillSpeechQueue() {
   }
 }
 
-async function interruptVoice(reason = "web_barge_in", explicitTarget = null) {
-  const target = explicitTarget || state.activeRecord?.item || state.speechQueue[0]?.item || null;
+function suppressTurn(item) {
+  const turn = cognitiveTurnId(item);
+  if (!turn) return;
+  state.suppressedTurns.add(turn);
+  while (state.suppressedTurns.size > 512) state.suppressedTurns.delete(state.suppressedTurns.values().next().value);
+}
+
+async function cancelVoiceItem(item, reason, speechOnly = true) {
+  suppressTurn(item);
+  if (!state.token || state.cancelling.has(item.id)) return;
+  // Keep failed cancellations for the next poll; never silently lose a lease.
+  state.pendingCancels.set(item.id, { item, reason, speechOnly });
+  state.cancelling.add(item.id);
+  try {
+    await api(`/v1/conversation/utterances/${encodeURIComponent(item.id)}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason, speech_only: speechOnly }),
+      keepalive: true,
+    });
+    state.pendingCancels.delete(item.id);
+    state.claimed.delete(item.id);
+  } catch (error) {
+    setVoiceStatus(`cancelamento vocal pendente: ${error.status ? `HTTP ${error.status}` : "falha de conexão"}`);
+  } finally {
+    state.cancelling.delete(item.id);
+  }
+}
+
+async function interruptVoice(reason = "web_barge_in", explicitTarget = null, speechOnly = false) {
+  const targets = new Map(state.claimed);
+  if (explicitTarget) targets.set(explicitTarget.id, explicitTarget);
   state.speechEpoch += 1;
   for (const record of state.speechQueue) {
     record.interrupted = true;
     try { record.controller?.abort(reason); } catch (_) {}
   }
   if (state.activeRecord) state.activeRecord.interrupted = true;
-  try { state.activeSource?.stop?.(); } catch (_) {}
+  voicePlayer.stop();
   state.activeSource = null;
   state.activeRecord = null;
+  state.preparingRecord = null;
   state.speechQueue = [];
   state.lastSpeechEndAt = performance.now();
   updateQueueDiag();
-  if (!target || !state.token) return;
-  try {
-    await api(`/v1/conversation/utterances/${encodeURIComponent(target.id)}/cancel`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason }),
-    });
-  } catch (_) {}
+  await Promise.all([...targets.values()].map(item => cancelVoiceItem(item, reason, speechOnly)));
 }
 
 $("stopVoice").addEventListener("click", async () => {
-  await unlockPlayback();
-  await interruptVoice("web_manual_stop");
+  await interruptVoice("web_manual_stop", null, true);
 });
 
 function rms(samples) {
@@ -479,7 +567,7 @@ function beginUserSpeech() {
   setMicStatus("falando…");
   $("micButton").classList.add("live");
   if (state.activeRecord || state.speechQueue.length) {
-    interruptVoice("web_barge_in");
+    interruptVoice("web_barge_in", null, false);
   }
 }
 
@@ -691,13 +779,8 @@ $("micButton").addEventListener("click", async () => {
 });
 
 window.addEventListener("pagehide", () => {
-  state.speechEpoch += 1;
-  for (const record of state.speechQueue) {
-    record.interrupted = true;
-    try { record.controller?.abort("pagehide"); } catch (_) {}
-  }
-  try { state.activeSource?.stop?.(); } catch (_) {}
-  state.mediaStream?.getTracks?.().forEach((track) => track.stop());
+  interruptVoice("web_pagehide", null, true);
+  disableMicrophone();
 });
 
 document.addEventListener("visibilitychange", async () => {
@@ -714,6 +797,7 @@ document.addEventListener("visibilitychange", async () => {
 
 setInterval(() => {
   if (!document.hidden) {
+    for (const { item, reason, speechOnly } of state.pendingCancels.values()) cancelVoiceItem(item, reason, speechOnly);
     health();
     fillSpeechQueue();
     pumpPlayback();

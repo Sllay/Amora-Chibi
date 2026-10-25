@@ -290,6 +290,10 @@ class ConversationEngine(BaseConversationEngine):
                     "cognitive_turn_id": str(segment.turn_id),
                     "cognitive_segment_id": str(segment.id),
                     "cognitive_ordinal": segment.ordinal,
+                    "display_text": segment.metadata.get("display_text", segment.display_text),
+                    "cues": segment.metadata.get("cues", []),
+                    "unsupported_cues": segment.metadata.get("unsupported_cues", []),
+                    "unsupported_markers": segment.metadata.get("unsupported_markers", []),
                     "nonverbal_cues": segment.metadata.get("nonverbal_cues", []),
                     "remote_tts_allowed": True,
                     "autonomous": True,
@@ -298,6 +302,8 @@ class ConversationEngine(BaseConversationEngine):
             )
             if first_utterance is None and item is not None:
                 first_utterance = item
+            if item is not None and item.status.value == "cancelled":
+                self.cognition.cancel_speech_delivery(segment.turn_id, reason="voice_delivery_suppressed")
 
         fallback = self.composer.semantic_text(action_kind, target_id)
         plan = await self.cognition.respond(request, on_segment=queue_segment, fallback_text=fallback)
@@ -310,6 +316,7 @@ class ConversationEngine(BaseConversationEngine):
         *,
         reason: str = "barge_in",
         spoken_chars: int | None = None,
+        speech_only: bool = False,
     ) -> tuple[SpeechUtterance | None, int]:
         current = self.store.get_utterance(utterance_id)
         if current is None:
@@ -317,14 +324,17 @@ class ConversationEngine(BaseConversationEngine):
         turn_raw = current.metadata.get("cognitive_turn_id")
         cancelled = 0
         if turn_raw:
-            cancelled = self.store.cancel_cognitive_turn(str(turn_raw), reason=reason)
+            cancelled = self.store.cancel_cognitive_turn(str(turn_raw), reason=reason, speech_only=speech_only)
             if self.cognition is not None:
-                self.cognition.interrupt_turn(
-                    str(turn_raw),
-                    reason=reason,
-                    active_segment_id=current.metadata.get("cognitive_segment_id"),
-                    spoken_chars=spoken_chars,
-                )
+                if speech_only:
+                    self.cognition.cancel_speech_delivery(str(turn_raw), reason=reason)
+                else:
+                    self.cognition.interrupt_turn(
+                        str(turn_raw),
+                        reason=reason,
+                        active_segment_id=current.metadata.get("cognitive_segment_id"),
+                        spoken_chars=spoken_chars,
+                    )
             item = self.store.get_utterance(utterance_id)
         else:
             item = self.store.cancel(utterance_id, reason=reason)
@@ -344,6 +354,7 @@ class ConversationEngine(BaseConversationEngine):
                         "cancelled_utterances": cancelled,
                         "spoken_progress_known": spoken_chars is not None,
                         "spoken_chars": spoken_chars,
+                        "speech_only": speech_only,
                     },
                     privacy_scope=item.privacy_scope,
                     causation_id=item.source_event_id,

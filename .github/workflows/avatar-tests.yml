@@ -6,12 +6,14 @@ on:
       - 'avatar/**'
       - 'web/**'
       - 'tests/web_*.test.mjs'
+      - 'tests/helpers/**'
       - '.github/workflows/avatar-tests.yml'
   pull_request:
     paths:
       - 'avatar/**'
       - 'web/**'
       - 'tests/web_*.test.mjs'
+      - 'tests/helpers/**'
       - '.github/workflows/avatar-tests.yml'
 
 jobs:
@@ -30,6 +32,9 @@ jobs:
           node --check avatar/app.js
           node --check avatar/rig-v2.js
           node --check avatar/sw.js
+          node --check web/app-v2.js
+          node --check web/audio-player.mjs
+          node --check web/browser-state.mjs
       - name: Test Avatar Engine
         run: npm --prefix avatar test
       - name: Test Safari queue diagnostics and text without voice

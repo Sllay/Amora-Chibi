@@ -205,7 +205,7 @@ class CognitiveEngine(HardenedCognitiveEngine):
                                 descriptor.model,
                                 on_segment,
                             )
-                            if speech:
+                            if speech is not None:
                                 emitted.append(speech)
                                 ordinal += 1
                     input_tokens = delta.input_tokens if delta.input_tokens is not None else input_tokens
@@ -224,7 +224,7 @@ class CognitiveEngine(HardenedCognitiveEngine):
                         descriptor.model,
                         on_segment,
                     )
-                    if speech:
+                    if speech is not None:
                         emitted.append(speech)
                         ordinal += 1
 

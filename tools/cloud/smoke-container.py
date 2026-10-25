@@ -94,6 +94,8 @@ else:
 assert json.load(urllib.request.urlopen(origin+'/health')) == {'status': 'ok'}
 module=urllib.request.urlopen(origin+'/web/browser-state.mjs')
 assert module.status==200 and 'javascript' in module.headers['Content-Type']
+player=urllib.request.urlopen(origin+'/web/audio-player.mjs')
+assert player.status==200 and 'javascript' in player.headers['Content-Type']
 request=urllib.request.Request(origin+'/v1/web/utterance',data=json.dumps({'text':'oi'}).encode(),headers={'Authorization':'Bearer '+os.environ['AMORA_SECRET_LOCAL_API_TOKEN'],'Content-Type':'application/json'})
 assert json.load(urllib.request.urlopen(request))['reply_queued']['device_id']=='WEB_SAFARI'
 request=urllib.request.Request(origin+'/v1/voice/profiles',headers={'Authorization':'Bearer '+os.environ['AMORA_SECRET_LOCAL_API_TOKEN']})

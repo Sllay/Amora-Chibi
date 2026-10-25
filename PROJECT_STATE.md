@@ -1,6 +1,6 @@
 # PROJECT_STATE — Amora-Chibi
 
-**Última atualização:** 2026-10-22  
+**Última atualização:** 2026-10-25
 **Objetivo:** permitir continuidade segura entre chats/agentes sem depender do histórico integral da conversa.
 
 Este arquivo é um **snapshot operacional**. Para regras atuais, leia primeiro `docs/canon/*`, `docs/roadmap/VERSIONS.md` e ADRs relevantes.
@@ -555,3 +555,34 @@ foi modificado. **Incidente ainda aberto até o checklist real Northflank/Safari
 sem credenciais staging no ambiente e sem novo deploy pelo agente. Worker TTS
 real permanece gate separado. Detalhes em
 `docs/engineering/reviews/STAGING_JOURNAL_WEB_UX.md`.
+
+## Chat por turno e controles vocais Web — 2026-10-25
+
+Base main c82e76b (PR #61), branch nova `fix/chat-turns-voice-controls`.
+ADR-0019 separa DisplayText/SpeechPlan: cada segmento de fala entrega snapshot
+literal do turno; Safari usa cognitive_turn_id para uma única bolha/histórico.
+Pruning mantém 50 user + 50 turnos Amora, também no DOM; diagnóstico é status
+separado. Risadas/emojis geram cues neutras; todas explicitamente unsupported
+no Supertonic atual. Marcadores sem semântica implementada são preservados como
+unsupported_markers. Sem retuning, novo TTS/modelo ou alteração dos providers.
+
+Clear abre confirmação acessível e só confirmação limpa histórico local.
+Mute é preferência local persistente: texto/fila continuam sem pedir áudio ou
+criar contexto de playback. Stop aborta todos os controllers, para fonte, avança
+epoch, cancela todos os claims e impede retorno tardio do mesmo turno. Cancel
+speech_only finaliza só delivery, não tarefa cognitiva; input/barge-in mantém
+contrato anterior. Corrigidos ACK tardio sobre cancelado e lifecycle no pagehide.
+Preparação WAV serial respeita o slot único do Core, mantendo look-ahead de três.
+
+VoiceBackend.render permanece; protocolo streaming opcional descreve sessão,
+chunks PCM, sequência/formato/final e cleanup. Nenhum backend/endpoint streaming
+ativado. WavPlayer isola download/decode completo; PcmStreamPlayer recebe samples
+incrementais com buffer bounded, backpressure, underrun e stop testáveis.
+Nenhuma mudança SQL de schema, seleção de storage, tokens, secrets ou infra.
+
+Core: 418 PASS (cinco avisos existentes), também dentro da imagem Alpine/musl;
+regressões específicas 120 PASS; Avatar/Web Node 22.23.4: 50 PASS, sem skips.
+Container smoke restrito e pip check PASS. CI/PR e SHA finais reportados no handoff.
+Validação física Safari/Northflank/worker real continua gate separado; nenhum
+deploy realizado nesta missão. Detalhes/arquivos/checklist em
+`docs/engineering/reviews/CHAT_TURN_VOICE_CONTROLS.md`.

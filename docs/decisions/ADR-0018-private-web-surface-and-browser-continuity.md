@@ -1,6 +1,8 @@
 # ADR-0018 — Superfície Web 1:1 e continuidade no navegador
 
 Status: ACCEPTED por solicitação explícita de BK em 2026-10-25.
+Refinamento de apresentação: ADR-0019 passa a contar turnos cognitivos da Amora,
+em vez de utterances, e exige confirmação de limpeza; pairing/escopo não mudam.
 Refina ADR-0016 apenas para credencial Web/persistência local; preserva seus
 outros controles. Não muda GDD, AddresseeEngine, memória ou identidade vocal.
 

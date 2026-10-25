@@ -276,8 +276,13 @@ def test_web_v2_has_no_safari_speech_synthesis_dependency_and_preserves_delivery
         assert "speechSynthesis" not in app.text
         assert "SpeechSynthesisUtterance" not in app.text
         assert "/v1/web/voice/utterances/" in app.text
-        assert "decodeAudioData" in app.text
-        assert "source.onended" in app.text
+        assert "voicePlayer.prepare(response" in app.text
+        player = client.get("/web/audio-player.mjs")
+        assert player.status_code == 200
+        assert "decodeAudioData" in player.text
+        assert "source.onended" in player.text
+        assert "class PcmStreamPlayer" in player.text
+        assert "class WavPlayer" in player.text
         assert "finishPlayedRecord(record)" in app.text
         assert "/ack" in app.text
         assert "/cancel" in app.text
