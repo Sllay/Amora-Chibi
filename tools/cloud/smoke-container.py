@@ -92,7 +92,9 @@ except urllib.error.HTTPError as error:
 else:
     raise AssertionError('private state exposed')
 assert json.load(urllib.request.urlopen(origin+'/health')) == {'status': 'ok'}
-request=urllib.request.Request(origin+'/v1/web/utterance',data=json.dumps({'text':'Amora, oi.'}).encode(),headers={'Authorization':'Bearer '+os.environ['AMORA_SECRET_LOCAL_API_TOKEN'],'Content-Type':'application/json'})
+module=urllib.request.urlopen(origin+'/web/browser-state.mjs')
+assert module.status==200 and 'javascript' in module.headers['Content-Type']
+request=urllib.request.Request(origin+'/v1/web/utterance',data=json.dumps({'text':'oi'}).encode(),headers={'Authorization':'Bearer '+os.environ['AMORA_SECRET_LOCAL_API_TOKEN'],'Content-Type':'application/json'})
 assert json.load(urllib.request.urlopen(request))['reply_queued']['device_id']=='WEB_SAFARI'
 request=urllib.request.Request(origin+'/v1/voice/profiles',headers={'Authorization':'Bearer '+os.environ['AMORA_SECRET_LOCAL_API_TOKEN']})
 assert urllib.request.urlopen(request).status==200

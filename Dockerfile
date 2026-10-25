@@ -31,6 +31,8 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --chmod=0444 config/voice_profiles.json /opt/venv/lib/python3.12/config/voice_profiles.json
 RUN chmod 0755 /opt/venv/lib/python3.12/config
 COPY web ./web
+# Static modules must be readable by the non-root runtime even from a private checkout.
+RUN chmod -R a+rX /opt/amora/web
 COPY avatar ./avatar
 USER 10001:10001
 EXPOSE 8765

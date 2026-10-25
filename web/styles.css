@@ -87,3 +87,5 @@ dd { margin: 0; text-align: right; font-size: 12px; font-variant-numeric: tabula
 @media (display-mode: standalone) {
   .shell { padding-top: calc(env(safe-area-inset-top) + 12px); }
 }
+
+.conversation-actions { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: flex-end; }

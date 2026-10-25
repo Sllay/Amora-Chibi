@@ -17,7 +17,7 @@ function browser() {
     $: id => { if (!elements.has(id)) elements.set(id, { textContent: '', classList: { add() {}, remove() {} } }); return elements.get(id); },
     addMessage: (role, text) => messages.push({ role, text }),
     cognitiveTurnId: item => item?.metadata?.cognitive_turn_id || null,
-    sessionStorage: { removeItem() {} }, TOKEN_KEY: 'test', pairPanel: { classList: { remove() {} } }, appPanel: { classList: { add() {} } },
+    browserStore: { forgetPairing() {} }, pairPanel: { classList: { remove() {} } }, appPanel: { classList: { add() {} } },
   });
   vm.runInContext(section('function setVoiceStatus(', 'function addMessage('), context);
   vm.runInContext(section('async function fillSpeechQueue()', '$("stopVoice").addEventListener'), context);
