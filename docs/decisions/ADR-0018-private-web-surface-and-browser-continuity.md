@@ -19,6 +19,11 @@ Texto da caixa Web e áudio explicitamente identificado como WEB_SAFARI usam
 EXPLICIT_SURFACE_TARGET persistida no evento. Isso expressa intenção da
 superfície, sem prefixar/reescrever texto ou relaxar inferência de áudio ambiente.
 Speaker conhecido, sozinho, não habilita o override. A15 continua conservador.
+Um target privado não ocupa/limpa o floor físico compartilhado nem estabelece
+ou consome a janela de continuidade ambiente. A metadata de transporte
+explicit_surface_target permite ao Core preservar essa fronteira: conversar
+com Amora pela Web não autoriza resposta a um “oi gente” posterior no A15,
+nem interrompe um floor ambiente já dirigido a terceiros.
 
 ## Pareamento persistente e threat model
 

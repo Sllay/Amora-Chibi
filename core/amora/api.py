@@ -345,6 +345,8 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             if console is not None:
                 console.set_activity("PENSANDO", "Core local → plano semântico → linguagem", ttl_seconds=60.0)
             metadata: dict[str, object] = {"speech_device_id": resolved_speech_device}
+            if speech_device_id == "WEB_SAFARI":
+                metadata["explicit_surface_target"] = "ENTITY_AMORA"
             if test_mode:
                 metadata.update(
                     {
@@ -368,7 +370,8 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
                     metadata=metadata,
                 )
             finally:
-                core.social.end_turn(speaker.speaker_id)
+                if speech_device_id != "WEB_SAFARI":
+                    core.social.end_turn(speaker.speaker_id)
             if console is not None:
                 if reply is not None:
                     console.set_activity("RESPONDENDO", f"fala enfileirada → {resolved_speech_device}", ttl_seconds=4.0)

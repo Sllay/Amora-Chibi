@@ -113,3 +113,51 @@ def test_ambient_and_third_party_inference_does_not_inherit_web_override(safari)
     result = core.addressee.infer("ChatGPT, responde por favor", speaker_id="PERSON_BK")
     assert result.entity_id == "ENTITY_CHATGPT"
     assert "EXPLICIT_SURFACE_TARGET" not in result.reason_codes
+
+
+def test_private_web_turn_does_not_open_an_ambient_a15_reply_window(safari):
+    core, _, _, client, browser_headers = safari
+    response = client.post(
+        "/v1/web/utterance",
+        json={"text": "oi", "test_mode": True},
+        headers=browser_headers,
+    )
+    assert response.status_code == 200
+    core.secrets.set("GROQ_API_KEY", "test-stt-only")
+    core.stt = GroqWhisperSTT(
+        core.secrets,
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"text": "oi gente"})
+        ),
+    )
+    headers = {
+        "Authorization": "Bearer " + core.secrets.get("LOCAL_API_TOKEN"),
+        "Content-Type": "audio/wav",
+    }
+    ambient = client.post(
+        "/v1/audio/transcribe?speaker_id=PERSON_BK&speech_device_id=DEVICE_A15&test_mode=true",
+        headers=headers,
+        content=wav_bytes(),
+    )
+    assert ambient.status_code == 200
+    assert ambient.json()["observation"]["addressee"]["entity_id"] is None
+    assert ambient.json()["turn"]["signal"]["addressee_id"] is None
+    assert ambient.json()["reply_queued"] is None
+
+
+def test_private_surface_does_not_steal_or_clear_existing_ambient_floor(safari):
+    core, _, _, client, headers = safari
+    core.social.begin_turn("PERSON_BK", addressee_id="ENTITY_CHATGPT", confidence=1.0)
+    observed_floor = []
+
+    async def during_observation(event):
+        observed_floor.append(core.social.scene.active_addressee)
+
+    core.events.subscribe_bootstrap("language.utterance.observed", during_observation)
+    response = client.post(
+        "/v1/web/utterance", json={"text": "oi", "test_mode": True}, headers=headers
+    )
+    assert response.status_code == 200
+    assert response.json()["observation"]["addressee"]["entity_id"] == "ENTITY_AMORA"
+    assert observed_floor == ["ENTITY_CHATGPT"]
+    assert core.social.scene.active_addressee == "ENTITY_CHATGPT"

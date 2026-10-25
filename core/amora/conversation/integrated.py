@@ -51,10 +51,17 @@ class ConversationEngine(BaseConversationEngine):
         metadata: dict[str, object] | None = None,
     ) -> tuple[TurnDecision, SpeechUtterance | None]:
         turn_metadata = dict(metadata or {})
-        addressee_id, continuity_inferred = self._resolve_conversational_addressee(
-            speaker_id=speaker_id,
-            addressee_id=addressee_id,
-        )
+        if (
+            addressee_id is not None
+            and turn_metadata.get("explicit_surface_target") == addressee_id
+        ):
+            # A Web 1:1 target must not establish/consume an ambient A15 window.
+            continuity_inferred = False
+        else:
+            addressee_id, continuity_inferred = self._resolve_conversational_addressee(
+                speaker_id=speaker_id,
+                addressee_id=addressee_id,
+            )
         turn_metadata["addressee_inferred_by_continuity"] = continuity_inferred
         self._last_turn_test_mode = bool(turn_metadata.get("test_mode", False))
 

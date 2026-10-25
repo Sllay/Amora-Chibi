@@ -73,11 +73,13 @@ class LanguageSocialPipeline:
             speaker_confidence,
             result.confidence if result.entity_id else speaker_confidence,
         )
-        self.social.begin_turn(
-            speaker_id,
-            addressee_id=result.entity_id,
-            confidence=scene_confidence,
-        )
+        # A private surface has its own target, not the physical/ambient floor.
+        if explicit_addressee_id is None:
+            self.social.begin_turn(
+                speaker_id,
+                addressee_id=result.entity_id,
+                confidence=scene_confidence,
+            )
 
         is_auth = privacy_scope == PrivacyScope.AUTH
         payload: dict[str, object] = {
