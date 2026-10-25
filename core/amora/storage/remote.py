@@ -7,14 +7,19 @@ No SDK-specific assumptions escape this module. No retry of ambiguous writes.
 from __future__ import annotations
 
 import base64
+import logging
 import sqlite3
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import httpx
 from amora.security import validate_remote_origin
 from .backend import StorageCapabilities
+
+logger = logging.getLogger(__name__)
 
 
 class StorageUnavailable(sqlite3.OperationalError):
@@ -203,17 +208,69 @@ class LibSQLBackend:
 class RemoteConnection:
     def __init__(self, backend):
         self.backend = backend
-        self.client = httpx.Client(
-            timeout=backend.timeout, transport=backend.transport, follow_redirects=False
-        )
+        self.client = self._new_client()
         self._baton = None
         self._transaction = False
         self._closed = False
         self._broken = False
+        self._previous_error = None
+        self._recovering_from = None
+        self._connection_id = str(uuid4())
+        self._generation = 0
+
+    def _new_client(self):
+        return httpx.Client(
+            timeout=self.backend.timeout,
+            transport=self.backend.transport,
+            follow_redirects=False,
+        )
+
+    def _log_fields(self):
+        return {
+            "backend": "libsql",
+            "connection_id": self._connection_id,
+            "generation": self._generation,
+        }
+
+    def _poison(self, code, *, exception_type=None):
+        self._broken = True
+        self._baton = None
+        self._previous_error = code
+        logger.warning(
+            "storage_connection_poisoned",
+            extra={
+                **self._log_fields(),
+                "error_code": code,
+                "exception_type": exception_type,
+            },
+        )
+
+    def _ensure_ready(self):
+        if self._closed or (self._broken and self._transaction):
+            raise StorageUnavailable("SQL_CONNECTION_CLOSED")
+        if not self._broken:
+            return
+        # This is entry to a *new* operation, after the failed context unwound.
+        # Never retain/replay the failed SQL, arguments, baton or HTTP pool.
+        self._baton = None
+        try:
+            self.client.close()
+        except Exception:
+            logger.warning(
+                "storage_client_disposal_failed",
+                extra={**self._log_fields(), "error_code": "SQL_CLIENT_CLOSE_FAILED"},
+            )
+        try:
+            client = self._new_client()
+        except Exception as exc:
+            raise StorageUnavailable("SQL_CONNECTION_RECOVERY_FAILED") from exc
+        self.client = client
+        self._recovering_from = self._previous_error
+        self._generation += 1
+        self._broken = False
 
     def _pipeline(self, requests):
-        if self._closed or self._broken:
-            raise StorageUnavailable("SQL_CONNECTION_CLOSED")
+        self._ensure_ready()
         try:
             initialize = self._baton is None and requests[0]["type"] != "close"
             if initialize:
@@ -243,12 +300,14 @@ class RemoteConnection:
             if len(results) != len(requests):
                 raise StorageUnavailable("SQL_INVALID_RESPONSE")
         except Exception as exc:
-            self._broken = True
-            self._baton = None
+            self._poison(
+                "SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN",
+                exception_type=type(exc).__name__,
+            )
             raise StorageUnavailable("SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN") from exc
         if initialize:
             if results[0]["type"] != "ok":
-                self._broken = True
+                self._poison("SQL_FOREIGN_KEYS_UNAVAILABLE")
                 raise StorageUnavailable("SQL_FOREIGN_KEYS_UNAVAILABLE")
             results = results[1:]
         return results
@@ -305,7 +364,7 @@ class RemoteConnection:
             )
         except BaseException:
             if self._transaction and self._baton is None:
-                self._broken = True
+                self._poison("SQL_TRANSACTION_STREAM_LOST")
             raise
         # A successful terminator no longer needs a stateful stream. Validate
         # only after processing its SQL result, so errors never become success.
@@ -314,10 +373,18 @@ class RemoteConnection:
             and self._baton is None
             and sql.strip().rstrip(";").strip().upper() not in {"COMMIT", "ROLLBACK"}
         ):
-            self._broken = True
+            self._poison("SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN")
             raise StorageUnavailable(
                 "SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN"
             ) from StorageUnavailable("SQL_TRANSACTION_STREAM_LOST")
+        if self._recovering_from is not None:
+            # Client construction is not recovery: bootstrap, SQL result and
+            # transaction continuity must all have passed validation.
+            logger.info(
+                "storage_connection_recovered",
+                extra={**self._log_fields(), "previous_error": self._recovering_from},
+            )
+            self._recovering_from = None
         return result
 
     def executemany(self, sql, values):
@@ -326,31 +393,48 @@ class RemoteConnection:
 
     def executescript(self, script):
         # Migrations supply explicit BEGIN/COMMIT and rollback on failure.
-        for sql in statements(script):
-            normalized = sql.strip().rstrip(";").upper()
-            if normalized.startswith("BEGIN"):
-                self.__enter__()
-            elif normalized == "COMMIT":
-                self.__exit__(None, None, None)
-            elif normalized == "ROLLBACK":
-                self.__exit__(RuntimeError, None, None)
-            else:
-                self.execute(sql)
+        owns_transaction = False
+        try:
+            for sql in statements(script):
+                normalized = sql.strip().rstrip(";").upper()
+                if normalized.startswith("BEGIN"):
+                    self.__enter__()
+                    owns_transaction = True
+                elif normalized == "COMMIT":
+                    self.__exit__(None, None, None)
+                    owns_transaction = False
+                elif normalized == "ROLLBACK":
+                    self.__exit__(RuntimeError, None, None)
+                    owns_transaction = False
+                else:
+                    self.execute(sql)
+        except BaseException:
+            if owns_transaction and self._transaction:
+                self.__exit__(*sys.exc_info())
+            raise
 
     def __enter__(self):
         if self._transaction:
             raise RuntimeError("nested transactions are not supported")
+        self._ensure_ready()
         self._transaction = True
         try:
             self.execute("BEGIN IMMEDIATE")
         except BaseException:
-            self.close()
+            try:
+                if not self._broken and self._baton is not None:
+                    self._pipeline([{"type": "close"}])
+            finally:
+                self._transaction = False
+                self._baton = None
             raise
         return self
 
     def __exit__(self, kind, value, traceback):
         try:
-            if self._transaction and not self._broken:
+            if self._transaction and self._broken and kind is None:
+                raise StorageUnavailable("SQL_CONNECTION_CLOSED")
+            if self._transaction and not self._broken and not self._closed:
                 try:
                     self.execute("COMMIT" if kind is None else "ROLLBACK")
                 finally:
