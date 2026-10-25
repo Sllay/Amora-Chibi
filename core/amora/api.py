@@ -204,7 +204,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
     def redeem_pairing(request: PairingRedeemRequest) -> dict[str, str]:
         if not core.pairing.redeem(request.code):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired pairing code")
-        token = issue_browser_token(expected_token(), core.clock, request.client) if settings.cloud else expected_token()
+        token = issue_browser_token(expected_token(), core.clock, request.client) if settings.cloud or request.client == "web" else expected_token()
         return {"token": token, "token_type": "Bearer"}
 
     @app.get("/v1/state", dependencies=[Depends(require_auth)])
