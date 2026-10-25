@@ -196,6 +196,10 @@ class ConversationEngine:
                         "cognitive_turn_id": str(segment.turn_id),
                         "cognitive_segment_id": str(segment.id),
                         "cognitive_ordinal": segment.ordinal,
+                        "display_text": segment.metadata.get("display_text", segment.display_text),
+                        "cues": segment.metadata.get("cues", []),
+                        "unsupported_cues": segment.metadata.get("unsupported_cues", []),
+                        "unsupported_markers": segment.metadata.get("unsupported_markers", []),
                         "nonverbal_cues": segment.metadata.get("nonverbal_cues", []),
                         "remote_tts_allowed": remote_tts_allowed,
                     },
@@ -203,6 +207,8 @@ class ConversationEngine:
                 )
                 if first_utterance is None and item is not None:
                     first_utterance = item
+                if item is not None and item.status.value == "cancelled":
+                    self.cognition.cancel_speech_delivery(segment.turn_id, reason="voice_delivery_suppressed")
 
             fallback = self.composer.fallback_dialogue(text, speaker_id=speaker_id)
             plan = await self.cognition.respond(cognitive_request, on_segment=queue_segment, fallback_text=fallback)
@@ -283,6 +289,7 @@ class ConversationEngine:
                 return existing
         item = SpeechUtterance(
             text=text,
+            display_text=str((metadata or {}).get("display_text", text)),
             target_id=target_id,
             kind=kind,
             priority=priority,
@@ -323,12 +330,24 @@ class ConversationEngine:
         # Claiming means the client reserved work, not that sound is already being
         # emitted. This distinction lets Android pre-render N+1 without falsifying
         # the Cognitive Journal's TTS_STARTED stage.
-        return self.store.claim_next(device_id, cognitive_turn_id=cognitive_turn_id)
+        item = self.store.claim_next(device_id, cognitive_turn_id=cognitive_turn_id)
+        # Pre-upgrade utterances have only segment text in their JSON. Reconstruct
+        # one display snapshot from stored *display* fragments, never speech_text.
+        if item is not None and item.display_text is None:
+            turn = item.metadata.get("cognitive_turn_id")
+            if turn and self.cognition is not None:
+                segments = self.cognition.store.list_segments(str(turn))
+                item.display_text = " ".join(segment.display_text for segment in segments) or item.text
+            else:
+                item.display_text = item.text
+        return item
 
     def mark_utterance_speaking(self, utterance_id: UUID | str) -> SpeechUtterance | None:
         item = self.store.get_utterance(utterance_id)
         if item is None:
             return None
+        if item.status.value in {"cancelled", "spoken"}:
+            return item
         if self.cognition is not None:
             segment_id = item.metadata.get("cognitive_segment_id")
             turn_id = item.metadata.get("cognitive_turn_id")
@@ -340,6 +359,8 @@ class ConversationEngine:
         item = self.store.acknowledge(utterance_id, spoken=ack.spoken)
         if item is None:
             return None
+        if item.status.value == "cancelled":
+            return item
         if self.cognition is not None:
             segment_id = item.metadata.get("cognitive_segment_id")
             turn_id = item.metadata.get("cognitive_turn_id")

@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 
 from amora.events import PrivacyScope
+from .speech import SpeechPlan
 
 
 class MessageSource(StrEnum):
@@ -160,6 +161,7 @@ class CognitiveResponsePlan(BaseModel):
     display_text: str
     speech_text: str
     speech_segments: list[str] = Field(default_factory=list)
+    speech_plan: SpeechPlan | None = None
     provider: str | None = None
     model: str | None = None
     fallback_used: bool = False

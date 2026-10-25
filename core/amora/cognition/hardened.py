@@ -326,10 +326,18 @@ class CognitiveEngine(BaseCognitiveEngine):
         if turn_id is not None:
             self._maybe_finish_turn(turn_id, reason_codes=["DELIVERY_SETTLED"])
 
+    def cancel_speech_delivery(self, turn_id: UUID | str, *, reason: str) -> int:
+        count = super().cancel_speech_delivery(turn_id, reason=reason)
+        self._maybe_finish_turn(turn_id, reason_codes=["VOICE_DELIVERY_CANCELLED", reason.upper()])
+        return count
+
     def is_turn_cancelled(self, turn_id: UUID | str) -> bool:
         return str(turn_id) in self._cancelled_turns
 
     def _finish_plan(self, request: CognitiveRequest, plan: CognitiveResponsePlan) -> None:
+        plan.speech_plan = self.normalizer.compile(
+            plan.display_text, turn_id=request.turn_id, privacy_scope=request.privacy_scope,
+        )
         self._journal(
             request,
             JournalStage.RESPONSE_PLANNED,

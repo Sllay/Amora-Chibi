@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from amora.events import PrivacyScope
 
@@ -93,7 +93,9 @@ class SpeechStyle(BaseModel):
 
 class SpeechUtterance(BaseModel):
     id: UUID = Field(default_factory=uuid4)
-    text: str = Field(min_length=1, max_length=800)
+    # Empty speech is valid for a display-only response (for example "😂").
+    text: str = Field(max_length=800)
+    display_text: str | None = None
     target_id: str | None = None
     kind: UtteranceKind = UtteranceKind.SEMANTIC
     priority: int = Field(default=50, ge=0, le=100)
@@ -108,6 +110,14 @@ class SpeechUtterance(BaseModel):
     spoken_at: datetime | None = None
     dedupe_key: str | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def speech_or_web_display(self) -> SpeechUtterance:
+        if not self.text.strip() and not (
+            self.device_id == "WEB_SAFARI" and self.display_text and self.display_text.strip()
+        ):
+            raise ValueError("empty speech requires a Web display message")
+        return self
 
 
 class SpeechAck(BaseModel):

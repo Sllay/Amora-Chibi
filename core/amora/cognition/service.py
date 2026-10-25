@@ -174,7 +174,7 @@ class CognitiveEngine:
                     display_parts.append(delta.text)
                     for raw_segment in segmenter.feed(delta.text):
                         speech = await self._emit_segment(request, raw_segment, ordinal, descriptor.name, descriptor.model, on_segment)
-                        if speech:
+                        if speech is not None:
                             emitted.append(speech)
                             ordinal += 1
                 input_tokens = delta.input_tokens if delta.input_tokens is not None else input_tokens
@@ -186,7 +186,7 @@ class CognitiveEngine:
 
             for raw_segment in segmenter.flush():
                 speech = await self._emit_segment(request, raw_segment, ordinal, descriptor.name, descriptor.model, on_segment)
-                if speech:
+                if speech is not None:
                     emitted.append(speech)
                     ordinal += 1
 
@@ -283,12 +283,14 @@ class CognitiveEngine:
         reason_codes: list[str],
         started: float,
     ) -> CognitiveResponsePlan:
+        # Presentation is the complete authorized text, before vocal segmentation.
+        request = request.model_copy(update={"metadata": {**request.metadata, "response_display_text": text}})
         segmenter = SpeechSegmenter()
         emitted: list[str] = []
         ordinal = len(self.store.list_segments(request.turn_id))
         for raw in [*segmenter.feed(text), *segmenter.flush()]:
             speech = await self._emit_segment(request, raw, ordinal, None, None, on_segment, source=MessageSource.LOCAL_FALLBACK)
-            if speech:
+            if speech is not None:
                 emitted.append(speech)
                 ordinal += 1
         normalized = self.normalizer.normalize(text)
@@ -317,15 +319,30 @@ class CognitiveEngine:
         source: MessageSource = MessageSource.COGNITIVE,
     ) -> str | None:
         rendered = self.normalizer.normalize(raw_text)
-        if not rendered.speech_text:
+        if not rendered.display_text.strip():
             return None
+        if not rendered.speech_text:
+            complete = request.metadata.get("response_display_text")
+            if (request.metadata.get("speech_device_id") != "WEB_SAFARI"
+                    or (isinstance(complete, str) and self.normalizer.normalize(complete).speech_text)):
+                # Preserve the ambient/Android delivery contract. A cue-only
+                # fragment within a speakable turn is carried by the full plan,
+                # rather than cancelling that turn's later spoken segments.
+                return None
         segment = SpeechSegment(
             turn_id=request.turn_id,
             ordinal=ordinal,
             display_text=rendered.display_text,
             speech_text=rendered.speech_text,
             queued_at=self.clock.now(),
-            metadata={"nonverbal_cues": list(rendered.nonverbal_cues), "privacy_scope": request.privacy_scope.value},
+            metadata={
+                "nonverbal_cues": list(rendered.nonverbal_cues),
+                "cues": [cue.value for cue in rendered.cues],
+                "unsupported_cues": [cue.value for cue in rendered.cues],
+                "unsupported_markers": list(rendered.unsupported_markers),
+                "display_text": request.metadata.get("response_display_text", rendered.display_text),
+                "privacy_scope": request.privacy_scope.value,
+            },
         )
         message = ConversationMessage(
             turn_id=request.turn_id,
@@ -386,6 +403,13 @@ class CognitiveEngine:
                 )
 
     def interrupt_turn(self, turn_id: UUID | str, *, reason: str = "barge_in") -> int:
+        return self._cancel_delivery_segments(turn_id, reason=reason, stage=JournalStage.BARGE_IN)
+
+    def cancel_speech_delivery(self, turn_id: UUID | str, *, reason: str) -> int:
+        """Settle voice work without cancelling the response/provider task."""
+        return self._cancel_delivery_segments(turn_id, reason=reason, stage=JournalStage.TTS_FINISHED)
+
+    def _cancel_delivery_segments(self, turn_id: UUID | str, *, reason: str, stage: JournalStage) -> int:
         count = 0
         privacy_scope = PrivacyScope.PERSONAL
         for segment in self.store.list_segments(turn_id):
@@ -402,9 +426,9 @@ class CognitiveEngine:
         self.store.put_journal(
             CognitiveJournalEntry(
                 turn_id=UUID(str(turn_id)),
-                stage=JournalStage.BARGE_IN,
+                stage=stage,
                 timestamp=self.clock.now(),
-                summary="speech interrupted by new floor holder",
+                summary="speech delivery cancelled",
                 reason_codes=[reason.upper()],
                 payload={"segments_interrupted": count},
                 privacy_scope=privacy_scope,
@@ -450,6 +474,9 @@ class CognitiveEngine:
         )
 
     def _finish_plan(self, request: CognitiveRequest, plan: CognitiveResponsePlan) -> None:
+        plan.speech_plan = self.normalizer.compile(
+            plan.display_text, turn_id=request.turn_id, privacy_scope=request.privacy_scope,
+        )
         self._journal(
             request,
             JournalStage.RESPONSE_PLANNED,

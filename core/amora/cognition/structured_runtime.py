@@ -321,6 +321,12 @@ class CognitiveEngine(ProductionCognitiveEngine):
         reason_codes: list[str],
         usage: dict[str, Any],
     ) -> CognitiveResponsePlan:
+        request = request.model_copy(update={
+            "metadata": {**request.metadata, "response_display_text": validated.text},
+        })
+        speech_plan = self.normalizer.compile(
+            validated.text, turn_id=request.turn_id, privacy_scope=request.privacy_scope,
+        )
         segmenter = SpeechSegmenter()
         emitted: list[str] = []
         ordinal = len(self.store.list_segments(request.turn_id))
@@ -333,7 +339,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 model,
                 on_segment,
             )
-            if speech:
+            if speech is not None:
                 emitted.append(speech)
                 ordinal += 1
         if not emitted:
@@ -370,7 +376,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
         plan = CognitiveResponsePlan(
             turn_id=request.turn_id,
             display_text=validated.text,
-            speech_text=validated.text,
+            speech_text=speech_plan.speech_text,
+            speech_plan=speech_plan,
             speech_segments=emitted,
             provider=provider,
             model=model,
@@ -382,6 +389,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 "realization_frame": frame_dump,
                 "realization_validated": True,
                 "candidate_index": usage.get("candidate_index"),
+                "cues": [cue.value for cue in speech_plan.cues],
+                "cue_support": speech_plan.cue_support(),
             },
         )
         self._finish_plan(request, plan)

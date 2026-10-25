@@ -134,6 +134,8 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="utterance does not belong to Safari")
         if item.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="privacy scope cannot be rendered")
+        if item.status.value in {"cancelled", "spoken"} or not item.text.strip():
+            raise HTTPException(409, "utterance is no longer renderable")
 
         dashboard = console()
         if dashboard is not None:
