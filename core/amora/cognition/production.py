@@ -68,6 +68,8 @@ class CognitiveEngine(ResilientCognitiveEngine):
                 return bundle
             if failed:
                 latest = self.store.latest_usage(descriptor.name, task_class=TaskClass.REASONING.value)
+                if latest and latest.get("turn_id") != str(request.turn_id):
+                    latest = None  # Never use another turn's status for an unconfirmed usage write.
                 status_code = int(latest["status_code"]) if latest and latest.get("status_code") is not None else None
                 self._backoff(descriptor, status_code=status_code)
         return last

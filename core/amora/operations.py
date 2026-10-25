@@ -113,6 +113,7 @@ def operational_snapshot(core, voice=None):
         )
     # Usage ledger contains counters/quota only, not prompts or model reasoning.
     usage = core.cognition.store.usage_ledger()
+    usage_persistence = core.cognition.usage.state()
     turns = core.conversation.store.list_utterances(limit=30)
     speech = {}
     for item in turns:
@@ -140,6 +141,7 @@ def operational_snapshot(core, voice=None):
         "latency_ms": latest.duration_ms if latest else None,
         "providers": providers,
         "quota": usage,
+        "usage_persistence": usage_persistence,
         "cooldowns": {
             key: value.isoformat()
             for key, value in cooldowns.items()
@@ -148,6 +150,7 @@ def operational_snapshot(core, voice=None):
         "modules": {
             "core": "OFF" if core._closed else "ON",
             "storage": core.database.backend.capabilities.name,
+            "usage_ledger": usage_persistence["status"],
             "voice": "ON" if voice_state.get("available") else "DEGRADED",
         },
         "speech": {

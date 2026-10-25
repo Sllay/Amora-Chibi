@@ -118,7 +118,7 @@ class CognitiveEngine(BaseCognitiveEngine):
             usage = raw.pop("_usage", {}) if isinstance(raw.get("_usage"), dict) else {}
             bundle = CognitiveProposalBundle.model_validate(raw)
         except Exception as exc:
-            self.store.record_usage(
+            self._record_usage(
                 provider=descriptor.name,
                 model=descriptor.model or "unknown",
                 task_class=TaskClass.REASONING.value,
@@ -256,7 +256,7 @@ class CognitiveEngine(BaseCognitiveEngine):
             bundle.deferred_action_count += 1
 
         elapsed = (perf_counter() - started) * 1000.0
-        self.store.record_usage(
+        self._record_usage(
             provider=descriptor.name,
             model=descriptor.model or "unknown",
             task_class=TaskClass.REASONING.value,

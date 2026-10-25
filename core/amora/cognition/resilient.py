@@ -241,7 +241,7 @@ class CognitiveEngine(HardenedCognitiveEngine):
                     continue
 
                 effective_latency = latency_ms if latency_ms is not None else (perf_counter() - provider_started) * 1000.0
-                self.store.record_usage(
+                self._record_usage(
                     provider=descriptor.name,
                     model=descriptor.model or "unknown",
                     task_class=TaskClass.SOCIAL_DIALOGUE.value,
@@ -321,7 +321,7 @@ class CognitiveEngine(HardenedCognitiveEngine):
         status_code: int | None,
         started: float,
     ) -> None:
-        self.store.record_usage(
+        self._record_usage(
             provider=descriptor.name,
             model=descriptor.model or "unknown",
             task_class=TaskClass.SOCIAL_DIALOGUE.value,
