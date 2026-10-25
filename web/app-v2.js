@@ -299,9 +299,10 @@ async function prepareLocalSpeech(record) {
     setVoiceStatus("áudio pronto");
     pumpPlayback();
   } catch (error) {
-    if (record.interrupted || record.epoch !== state.speechEpoch || error?.name === "AbortError") return;
+    if (record.interrupted || record.epoch !== state.speechEpoch) return;
     record.status = "failed";
-    await failVoiceTransport(record, error);
+    await failVoiceTransport(record, error?.name === "AbortError"
+      ? new Error("tempo limite do worker de voz") : error);
   } finally {
     clearTimeout(timer);
   }

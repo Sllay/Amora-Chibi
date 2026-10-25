@@ -510,12 +510,13 @@ que esta é a mesma causa real ainda depende do traceback/código de staging.
 `amora pair` usa somente paths/clock/PairingManager, sem bootstrap/storage.
 Logs REQUEST_FAILED passam a identificar method/path template, stage,
 correlation_id, latency e código seguro/store/operação, sem corpo/SQL/secrets.
-Safari app-v2 exibe erro de claim em vez de escondê-lo; texto não depende do TTS
+Safari app-v2 exibe erro de claim em vez de escondê-lo; timeout de voz deixa
+erro explícito e libera a fila; texto não depende do TTS
 e UI distingue worker remoto de backend local. Sem fallback secreto ou mudança
 de voz, schema, providers, tokens, regras de branch ou configuração Northflank.
 
 Gates locais: 108 específicos PASS; remote storage 26 PASS; Core completo
-366 PASS (5 avisos existentes); Node 22.23.4 Avatar+Web 9 PASS. Regressões de baton,
+366 PASS (5 avisos existentes); Node 22.23.4 Avatar+Web 10 PASS. Regressões de baton,
 COMMIT ambíguo sem retry, constraints, STT/WAV, browser token, ACK/cancel e restart
 preservadas. Detalhes, arquivos e gate real em
 `docs/engineering/reviews/CLOUD_WEB_INCIDENT.md`. Encerramento exige validar a

@@ -83,7 +83,10 @@ incompatibilidade RETURNING ou falha de FTS como causa deste incidente.
    recuperação limpa o erro. Tratamento 401 continua intacto. Texto é adicionado
    antes do fetch TTS e permanece após falha/cancelamento. A UI não manda instalar
    voz no Termux quando o backend é remoto; mostra configurado/indisponível ou
-   disponível conforme estado real do renderer. Nenhum fallback TTS foi criado.
+   disponível conforme estado real do renderer. Timeout de fetch antes era
+   descartado como AbortError de cancelamento e deixava a fila em preparing;
+   agora é erro explícito, libera a fila e preserva texto. Cancelamento real
+   continua suprimindo callbacks antigos. Nenhum fallback TTS foi criado.
 
 ## Evidência por fluxo
 
@@ -121,7 +124,7 @@ simulado; não se instalou Supertonic no Core nem se mudou identidade vocal.
 - Core completo: `.venv/bin/python -m pytest -o addopts= tests -q`:
   **366 passed**, 5 avisos existentes, sem skips.
 - Node oficial 22.23.4: `node --test avatar/tests/*.test.mjs tests/web_browser.test.mjs`:
-  **9 passed**; `node --check web/app-v2.js` PASS.
+  **10 passed**; `node --check web/app-v2.js` PASS.
 
 Implementação: `core/amora/__main__.py`, `storage/remote.py`, `api.py`,
 `observability.py`, `web/routes.py`, `web/app-v2.js`. Regressões:

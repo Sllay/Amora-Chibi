@@ -70,3 +70,19 @@ test('configured remote worker is not mislabeled as local Termux setup', async (
   assert.match(b.elements.get('voiceLabel').textContent, /remoto/);
   assert.match(b.elements.get('diagVoice').textContent, /configurado/);
 });
+
+
+test('voice fetch timeout is diagnosed and releases queue without erasing text', async () => {
+  const b = browser();
+  vm.runInContext(section('function queueLocalSpeech(', 'function pumpPlayback('), b.context);
+  b.context.VOICE_FETCH_TIMEOUT_MS = 1;
+  b.context.api = async () => ({});
+  b.context.apiBinary = (path, options) => new Promise((resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+  });
+  b.context.queueLocalSpeech({ id: 'timeout-test', text: 'Texto continua visível' });
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(b.messages[0].text, 'Texto continua visível');
+  assert.equal(b.state.speechQueue.length, 0);
+  assert.ok(b.messages.some(m => m.text.includes('tempo limite do worker')));
+});
