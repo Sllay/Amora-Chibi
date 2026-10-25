@@ -586,3 +586,40 @@ Container smoke restrito e pip check PASS. CI/PR e SHA finais reportados no hand
 Validação física Safari/Northflank/worker real continua gate separado; nenhum
 deploy realizado nesta missão. Detalhes/arquivos/checklist em
 `docs/engineering/reviews/CHAT_TURN_VOICE_CONTROLS.md`.
+
+## Incidente libSQL: recovery de sessão e usage ledger — 2026-10-25
+
+Base main ae3b2f6 (PR #62), branch nova `fix/libsql-connection-recovery`.
+Staging real confirmou SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN em record_usage
+durante POST /v1/audio/transcribe/conversation (600bf18d-3302-4cca-bf56-18f4f0ac687c),
+seguido de SQL_CONNECTION_CLOSED em get_message_by_dedupe no mesmo Store.
+O poison era correto, mas o wrapper de conexão longa ficava morto até restart.
+
+ADR-0020: recovery lazy genérico, somente na próxima operação independente,
+com client/pool novo, baton=null e PRAGMA foreign_keys=ON. Nenhum replay de
+INSERT/UPDATE/DELETE/COMMIT. Contexto broken não reconecta; close explícito é
+terminal. Corrigidos BEGIN que fechava terminalmente, script que retinha
+transaction após erro e contexto que engolia falha e simulava saída bem-sucedida.
+Nove owners e SQLBlobStore mantêm a mesma conexão lógica, sem reconnect no domínio.
+
+UsageRecorder central captura exclusivamente falha DB-API de record_usage.
+Realização validada continua, com logs e estado DEGRADED/contagem/fingerprint,
+sem linha falsa de usage/failure ou retry. Escritas obrigatórias continuam
+fail-closed. Sinais reais de quota são preservados; reflection não usa status
+persistido de outro turno após uma lacuna de usage. test_mode não mudou.
+Logs seguros distinguem poison, uncertainty e recovery após validação real
+da sessão nova, com classe técnica/código/IDs; sem SQL, tokens ou conversa.
+
+Validação: Core **452 PASS**, também na imagem Alpine/musl restrita; regressões
+específicas **196 PASS**, incluindo 27 recovery; JS/Avatar **50 PASS** Node 22.23.4.
+Smoke de container, pip check, Ruff e diff check PASS. Scenario bootstrap →
+diálogo → STT/usage incerto → texto em fila → segundo STT sem restart PASS.
+INSERT de usage enviado uma vez; perda de resposta no INSERT/COMMIT não repete
+nenhum deles. CI/PR/SHA finais reportados no handoff.
+
+Sem alterações de schema, UI/PCM, personalidade, memória por design, canon
+emocional, malha de providers, voz, secrets, réplicas ou configuração Northflank.
+Nenhum deploy.
+Gate real desta revisão Northflank/Turso permanece: ambiente sem credenciais,
+sem inventar validação física. Relatório com contagens de requests e comandos:
+`docs/engineering/reviews/LIBSQL_CONNECTION_RECOVERY.md`.

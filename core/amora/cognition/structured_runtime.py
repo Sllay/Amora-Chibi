@@ -224,7 +224,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     "code": exc.code,
                     "turn_id": str(request.turn_id),
                 }
-                self.store.record_usage(
+                self._record_usage(
                     provider=descriptor.name,
                     model=descriptor.model or "unknown",
                     task_class=TaskClass.SOCIAL_DIALOGUE.value,
@@ -268,7 +268,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             remaining_requests = _optional_int(usage.get("remaining_requests"))
             remaining_tokens = _optional_int(usage.get("remaining_tokens"))
             effective_latency = _optional_float(usage.get("latency_ms")) or (perf_counter() - provider_started) * 1000.0
-            self.store.record_usage(
+            usage_persistence = self._record_usage(
                 provider=descriptor.name,
                 model=descriptor.model or "unknown",
                 task_class=TaskClass.SOCIAL_DIALOGUE.value,
@@ -298,6 +298,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                     "candidate_index": provider_index,
+                    "persistence": usage_persistence,
                 },
             )
 
@@ -391,6 +392,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 "candidate_index": usage.get("candidate_index"),
                 "cues": [cue.value for cue in speech_plan.cues],
                 "cue_support": speech_plan.cue_support(),
+                "usage_persistence": usage.get("persistence", "not_recorded"),
             },
         )
         self._finish_plan(request, plan)

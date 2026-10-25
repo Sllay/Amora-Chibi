@@ -176,6 +176,7 @@ class AmoraCore:
             models,
             active_clock,
             events,
+            operations=operations,
         )
 
         groq_cognition = GroqCognitiveProvider(secrets)

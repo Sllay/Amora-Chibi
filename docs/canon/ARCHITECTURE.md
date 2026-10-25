@@ -668,6 +668,14 @@ Não expor chain-of-thought privado de modelos. Expor apenas estados/decisões e
 
 ## 18. Persistência, backup e recovery
 
+ADR-0020: falha de transporte remoto mantém o resultado atual incerto e invalida
+a sessão, sem retry de writes/COMMIT. Após abandonar o contexto transacional,
+uma operação independente pode abrir nova sessão/client, com novo baton e
+bootstrap de constraints. close explícito continua terminal. O usage ledger tem
+fronteira de telemetria best-effort observável, sem apagar realização validada;
+escritas obrigatórias de domínio continuam fail-closed. Não existe fallback
+silencioso para um banco local vazio.
+
 O banco representa história de longo prazo e é insubstituível.
 
 Requisitos:

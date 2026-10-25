@@ -111,6 +111,7 @@ def request_failure_fields(exc: Exception) -> dict[str, str]:
         {
             "SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN",
             "SQL_CONNECTION_CLOSED",
+            "SQL_CONNECTION_RECOVERY_FAILED",
             "SQL_TRANSACTION_STREAM_LOST",
             "SQL_INVALID_RESPONSE",
             "SQL_FOREIGN_KEYS_UNAVAILABLE",

@@ -23,6 +23,7 @@ from .models import (
 from .providers import CognitiveProvider, ProviderError
 from .speech import SpeechNormalizer, SpeechSegmenter
 from .store import CognitiveStore
+from .usage import UsagePersistence, UsageRecorder
 
 
 SegmentSink = Callable[[SpeechSegment], Awaitable[None]]
@@ -45,6 +46,7 @@ class CognitiveEngine:
         events: AsyncEventBus,
         *,
         normalizer: SpeechNormalizer | None = None,
+        operations=None,
     ) -> None:
         self.store = store
         self.compiler = compiler
@@ -53,6 +55,7 @@ class CognitiveEngine:
         self.events = events
         self.normalizer = normalizer or SpeechNormalizer()
         self._providers: dict[str, CognitiveProvider] = {}
+        self.usage = UsageRecorder(store, clock, operations=operations)
 
     def close(self) -> None:
         self.store.close()
@@ -66,6 +69,7 @@ class CognitiveEngine:
             "cognitive_message_count": self.store.message_count(),
             "cognitive_journal_count": self.store.journal_count(),
             "cognitive_provider_count": self.router.provider_count,
+            "usage_persistence": self.usage.state(),
             "cognitive_providers": [
                 {
                     "name": item.name,
@@ -77,6 +81,9 @@ class CognitiveEngine:
                 for item in self.router.descriptors()
             ],
         }
+
+    def _record_usage(self, **usage: Any) -> UsagePersistence:
+        return self.usage.record(**usage)
 
     def observe_input(self, request: CognitiveRequest) -> None:
         self._record_input(request)
@@ -201,7 +208,7 @@ class CognitiveEngine:
                 )
             normalized = self.normalizer.normalize(full_display)
             effective_latency = latency_ms if latency_ms is not None else (perf_counter() - started) * 1000.0
-            self.store.record_usage(
+            self._record_usage(
                 provider=descriptor.name,
                 model=descriptor.model or "unknown",
                 task_class=TaskClass.SOCIAL_DIALOGUE.value,
@@ -232,7 +239,7 @@ class CognitiveEngine:
         except Exception as exc:
             error_code = type(exc).__name__
             status = exc.status_code if isinstance(exc, ProviderError) else None
-            self.store.record_usage(
+            self._record_usage(
                 provider=descriptor.name,
                 model=descriptor.model or "unknown",
                 task_class=TaskClass.SOCIAL_DIALOGUE.value,

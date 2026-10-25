@@ -429,8 +429,9 @@ def test_baton_lost_during_statement_invalidates_transaction(remote, tmp_path, s
         assert str(caught.value.__cause__) == "SQL_TRANSACTION_STREAM_LOST"
         assert connection._broken
         assert "COMMIT" not in server.calls
-        with pytest.raises(StorageUnavailable, match="SQL_CONNECTION_CLOSED"):
-            connection.execute("SELECT 1")
+        assert not connection._transaction
+        # The failed transaction stays failed; an independent read may recover.
+        assert connection.execute("SELECT 2").fetchone()[0] == 2
     finally:
         connection.close()
     assert not server.streams
@@ -466,8 +467,9 @@ def test_commit_transport_failure_is_unknown_and_never_retried(
                 connection.execute("CREATE TABLE probe(value TEXT)")
         assert len(commits) == 1
         assert connection._broken
-        with pytest.raises(StorageUnavailable, match="SQL_CONNECTION_CLOSED"):
-            connection.execute("SELECT 1")
+        assert not connection._transaction
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+        assert len(commits) == 1
     finally:
         connection.close()
     assert not server.streams
