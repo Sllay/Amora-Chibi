@@ -273,6 +273,14 @@ class RemoteConnection:
             first = results[0]
             if first["type"] == "error":
                 code = first["error"].get("code", "SQL_ERROR")
+                # Hrana may expose only SQLite's primary constraint code. Use
+                # the fixed diagnostic prefix solely to identify uniqueness;
+                # never retain/log the suffix (table/column names or values).
+                message = first["error"].get("message", "")
+                if code == "SQLITE_CONSTRAINT" and message.startswith(
+                    "UNIQUE constraint failed:"
+                ):
+                    code = "SQLITE_CONSTRAINT_UNIQUE"
                 # Messages may contain SQL values; expose only machine codes.
                 error = (
                     sqlite3.IntegrityError
@@ -281,7 +289,12 @@ class RemoteConnection:
                     else sqlite3.DatabaseError
                 )
                 if code.startswith("SQLITE_CONSTRAINT"):
-                    raise error(code)
+                    failure = error(code)
+                    failure.sqlite_errorname = code
+                    failure.sqlite_errorcode = getattr(
+                        sqlite3, code, sqlite3.SQLITE_CONSTRAINT
+                    )
+                    raise failure
                 if code == "SQLITE_ERROR":
                     message = first["error"].get("message", "")
                     if "no such module: fts5" in message:

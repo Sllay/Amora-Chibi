@@ -20,7 +20,10 @@ from fastapi.testclient import TestClient
 
 
 class HranaSQLite:
-    def __init__(self, path, *, close_after_transaction=True):
+    def __init__(
+        self, path, *, close_after_transaction=True, primary_constraint_codes=False
+    ):
+        self.primary_constraint_codes = primary_constraint_codes
         self.close_after_transaction = close_after_transaction
         self.path, self.streams = path, {}
         self.fail = False
@@ -70,10 +73,15 @@ class HranaSQLite:
                     }
                 )
             except sqlite3.Error as exc:
+                code = exc.sqlite_errorname
+                if self.primary_constraint_codes and code.startswith(
+                    "SQLITE_CONSTRAINT"
+                ):
+                    code = "SQLITE_CONSTRAINT"
                 results.append(
                     {
                         "type": "error",
-                        "error": {"code": exc.sqlite_errorname, "message": str(exc)},
+                        "error": {"code": code, "message": str(exc)},
                     }
                 )
         if (
@@ -528,6 +536,42 @@ def test_null_baton_does_not_hide_malformed_terminator_result(remote, tmp_path):
             with connection:
                 connection.execute("CREATE TABLE probe(value TEXT)")
         assert connection._broken
+    finally:
+        connection.close()
+    assert not server.streams
+
+
+@pytest.mark.parametrize("primary", [False, True])
+def test_constraint_classification_never_treats_foreign_key_or_not_null_as_dedupe(
+    tmp_path, primary
+):
+    from amora.storage.backend import is_duplicate_error
+
+    server = HranaSQLite(tmp_path / "server.db", primary_constraint_codes=primary)
+    backend = LibSQLBackend(
+        "https://database.example", "test-only", transport=httpx.MockTransport(server)
+    )
+    connection = backend.connect(tmp_path / "unused")
+    try:
+        connection.execute("CREATE TABLE parent(id INTEGER PRIMARY KEY)")
+        connection.execute(
+            "CREATE TABLE child(value TEXT NOT NULL UNIQUE, parent_id INTEGER REFERENCES parent(id))"
+        )
+        with connection:
+            connection.execute("INSERT INTO child(value) VALUES ('duplicate')")
+        with pytest.raises(sqlite3.IntegrityError) as unique:
+            with connection:
+                connection.execute("INSERT INTO child(value) VALUES ('duplicate')")
+        assert is_duplicate_error(unique.value)
+        for sql in [
+            "INSERT INTO child(value) VALUES (NULL)",
+            "INSERT INTO child VALUES ('foreign', 99)",
+        ]:
+            with pytest.raises(sqlite3.DatabaseError) as invalid:
+                with connection:
+                    connection.execute(sql)
+            assert not is_duplicate_error(invalid.value)
+        assert connection.execute("SELECT COUNT(*) FROM child").fetchone()[0] == 1
     finally:
         connection.close()
     assert not server.streams

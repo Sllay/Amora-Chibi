@@ -143,11 +143,17 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             response = await call_next(request)
         except Exception as exc:
             core.operations.error("api", "REQUEST_FAILED", correlation_id=correlation_id)
+            from amora.observability import request_failure_fields
+            route_path = getattr(request.scope.get("route"), "path", "/unmatched")
             logging.getLogger("amora.api").error("request_failed", extra={
+                "method": request.method if request.method in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"} else "OTHER",
+                "path": route_path,
+                "stage": getattr(request.state, "pipeline_stage", "request"),
+                **request_failure_fields(exc),
                 "error_code": "REQUEST_FAILED", "exception_type": type(exc).__name__,
                 "correlation_id": correlation_id, "latency_ms": (perf_counter()-started)*1000})
             if console is not None:
-                console.record_error("api", f"{request.method} {request.url.path}: {type(exc).__name__}: {exc}")
+                console.record_error("api", f"{request.method} {route_path}: {type(exc).__name__}")
             raise
         response.headers["X-Correlation-ID"] = correlation_id
         if response.status_code >= 500:
@@ -293,6 +299,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         try:
             if console is not None:
                 console.set_activity("TRANSCRIBINDO", "Groq STT", ttl_seconds=45.0)
+            request.state.pipeline_stage = "stt.transcribe"
             transcript = await core.stt.transcribe(
                 AudioSegment(path=audio_path, mime_type="audio/wav", language=language)
             )
@@ -326,6 +333,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
                     else "ANDROID_CLIENT_DECLARED_SPEAKER"
                 ],
             )
+            request.state.pipeline_stage = "language_social"
             observation = await core.language_social.observe_transcript(
                 transcript,
                 speaker,
@@ -346,6 +354,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
                     }
                 )
             try:
+                request.state.pipeline_stage = "conversation"
                 turn, reply = await core.conversation.observe_completed_utterance(
                     transcript.text,
                     speaker_id=speaker.speaker_id,

@@ -100,3 +100,37 @@ def configure_logging(log_dir: Path, *, level: int = logging.INFO) -> None:
     root.addHandler(stderr)
 
     setattr(root, "_amora_configured", True)
+
+
+def request_failure_fields(exc: Exception) -> dict[str, str]:
+    """Finite machine codes and internal module names, never exception messages."""
+    import sqlite3
+
+    allowed = {name for name in dir(sqlite3) if name.startswith("SQLITE_")}
+    allowed.update(
+        {
+            "SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN",
+            "SQL_CONNECTION_CLOSED",
+            "SQL_TRANSACTION_STREAM_LOST",
+            "SQL_INVALID_RESPONSE",
+            "SQL_FOREIGN_KEYS_UNAVAILABLE",
+            "SQL_ROUTING_ORIGIN_CHANGED",
+            "FTS5_UNSUPPORTED",
+        }
+    )
+    fields = {}
+    if isinstance(exc, sqlite3.Error):
+        code = getattr(exc, "sqlite_errorname", None)
+        if code not in allowed:
+            code = str(exc) if str(exc) in allowed else "SQL_ERROR"
+        fields["storage_error_code"] = code
+    tb = exc.__traceback__
+    while tb is not None:
+        module = tb.tb_frame.f_globals.get("__name__", "")
+        if module.startswith("amora.") and (
+            module.endswith(".store") or module == "amora.storage.database"
+        ):
+            fields["storage_module"] = module
+            fields["operation"] = tb.tb_frame.f_code.co_name
+        tb = tb.tb_next
+    return fields

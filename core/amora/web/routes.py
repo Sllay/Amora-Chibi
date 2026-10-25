@@ -6,7 +6,7 @@ import os
 from typing import Callable
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -83,7 +83,8 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
         }
 
     @app.post("/v1/web/utterance", dependencies=auth)
-    async def web_utterance(request: WebTextTurnRequest) -> dict[str, object]:
+    async def web_utterance(request: WebTextTurnRequest, http_request: Request) -> dict[str, object]:
+        http_request.state.pipeline_stage = "language_social"
         observation = await core.language_social.observe_text(
             request.text,
             speaker_id=request.speaker_id,
@@ -102,6 +103,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
                 }
             )
         try:
+            http_request.state.pipeline_stage = "conversation"
             turn, reply = await core.conversation.observe_completed_utterance(
                 request.text,
                 speaker_id=request.speaker_id,
