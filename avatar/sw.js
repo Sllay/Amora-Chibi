@@ -1,4 +1,4 @@
-const CACHE = 'amora-avatar-v09-3';
+const CACHE = 'amora-avatar-v09-security-20261023';
 const SHELL = [
   '/avatar/',
   '/avatar/index.html',

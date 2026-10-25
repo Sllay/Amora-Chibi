@@ -115,6 +115,12 @@ class Scheduler:
                 heapq.heappush(self._heap, job)
         return executed
 
+    def snapshot(self) -> list[dict[str, object]]:
+        now = self.clock.monotonic()
+        return [{"job_id": job.job_id, "state": "scheduled", "due_in_seconds": max(0.,job.due-now),
+                 "idle_only": job.idle_only, "interval_seconds": job.interval}
+                for job in self._jobs.values() if not job.cancelled]
+
     def _schedule(self, job_id: str, delay_seconds: float, callback: JobCallback, *, interval: float | None, idle_only: bool) -> None:
         if delay_seconds < 0:
             raise ValueError("delay_seconds cannot be negative")

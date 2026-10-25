@@ -5,6 +5,9 @@ import asyncio
 import getpass
 import json
 import mimetypes
+import os
+from amora.security import trusted_proxy_ips
+from amora.settings import ServerSettings
 from pathlib import Path
 
 from amora import __version__
@@ -41,13 +44,14 @@ def backup(name: str | None) -> int:
         core.close()
 
 
-def serve(port: int) -> int:
+def serve(port: int | None = None, host: str | None = None) -> int:
     import uvicorn
 
     core = AmoraCore.bootstrap()
-    app = create_api(core)
+    settings = ServerSettings.from_environment()
     try:
-        uvicorn.run(app, host="127.0.0.1", port=port, log_config=None)
+        app = create_api(core, own_core=True)
+        uvicorn.run(app, host=host or settings.host, port=port or settings.port, log_config=None, timeout_graceful_shutdown=30, proxy_headers=bool(os.getenv("AMORA_TRUSTED_PROXY_IPS")), forwarded_allow_ips=trusted_proxy_ips(), timeout_keep_alive=5, ws_max_size=16384, ws_ping_interval=20, ws_ping_timeout=20, server_header=False)
     finally:
         core.close()
     return 0
@@ -388,7 +392,8 @@ def main() -> int:
     backup_parser.add_argument("--name", default=None)
 
     serve_parser = sub.add_parser("serve", help="Inicia API local do Core em 127.0.0.1")
-    serve_parser.add_argument("--port", type=int, default=8765)
+    serve_parser.add_argument("--port", type=int, default=None)
+    serve_parser.add_argument("--host", default=None)
 
     resolve_parser = sub.add_parser("resolve", help="Debug do Perspective Resolver V0.2")
     resolve_parser.add_argument("expression")
@@ -482,7 +487,7 @@ def main() -> int:
     if args.command == "backup":
         return backup(args.name)
     if args.command == "serve":
-        return serve(args.port)
+        return serve(args.port, args.host)
     if args.command == "resolve":
         return resolve_reference(args.expression, speaker=args.speaker, addressee=args.addressee, focus=args.focus, candidates=args.candidate)
     if args.command == "addressee":

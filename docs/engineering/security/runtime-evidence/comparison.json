@@ -1,0 +1,243 @@
+{
+  "analyzed_at": "2026-10-24T00:16:08.523191+00:00",
+  "source_commit": "eb03eb8b89de3aa121a8f57bec57b4723fed1403",
+  "scanner": "Trivy 0.76.0",
+  "scanner_image": "aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c",
+  "database": {
+    "Version": 2,
+    "NextUpdate": "2026-10-24T19:15:43.73441704Z",
+    "UpdatedAt": "2026-10-23T19:15:43.7344174Z",
+    "DownloadedAt": "2026-10-23T21:03:26.819353819Z"
+  },
+  "gate_arguments": [
+    "image",
+    "--scanners",
+    "vuln",
+    "--severity",
+    "HIGH,CRITICAL",
+    "--exit-code",
+    "1"
+  ],
+  "gate_exit_codes": {
+    "debian": 1,
+    "alpine": 0
+  },
+  "decision": "PASS",
+  "scope": "local Linux amd64 runtime gate only; no deploy or remote CI certification",
+  "debian": {
+    "image": {
+      "id": "sha256:c487e0e2f608949de456ce21ea33a08dfa470908b0167341fcdc91a58c62a7d3",
+      "size_bytes": 139163245,
+      "architecture": "amd64",
+      "os": "linux"
+    },
+    "scan": {
+      "report_sha256": "315959473d629adbf61c2536dbbe5b92b1b2a7c39b9620eb354bea6675049d03",
+      "created_at": "2026-10-23T21:32:17.822815754Z",
+      "image_id": "sha256:c487e0e2f608949de456ce21ea33a08dfa470908b0167341fcdc91a58c62a7d3",
+      "severity_counts": {
+        "UNKNOWN": 1,
+        "LOW": 61,
+        "MEDIUM": 58,
+        "HIGH": 44,
+        "CRITICAL": 0
+      },
+      "targets": [
+        {
+          "target": "amora-core:security (debian 13.7)",
+          "type": "debian",
+          "severity_counts": {
+            "LOW": 61,
+            "HIGH": 44,
+            "MEDIUM": 58,
+            "UNKNOWN": 1
+          }
+        },
+        {
+          "target": "Python",
+          "type": "python-pkg",
+          "severity_counts": {}
+        }
+      ]
+    },
+    "benchmark": {
+      "samples": [
+        {
+          "image": "amora-core:security",
+          "cold_start_seconds": 5.584801728000457,
+          "idle_rss_kib": 69104
+        },
+        {
+          "image": "amora-core:security",
+          "cold_start_seconds": 2.9370100619998993,
+          "idle_rss_kib": 69380
+        },
+        {
+          "image": "amora-core:security",
+          "cold_start_seconds": 2.8728925339964917,
+          "idle_rss_kib": 68752
+        }
+      ],
+      "median_cold_start_seconds": 2.9370100619998993,
+      "median_idle_rss_kib": 69104
+    },
+    "build": {
+      "exit_code": 0,
+      "seconds": 24.932219674999942,
+      "cache": "no-cache; base already pulled; proxy/network included"
+    },
+    "base": {
+      "digest": "sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm/v5",
+        "linux/arm/v7",
+        "linux/arm64/v8",
+        "linux/386",
+        "linux/ppc64le",
+        "linux/riscv64",
+        "linux/s390x"
+      ]
+    },
+    "python_tests": "347 passed, 5 warnings",
+    "catalog_before_fix": 500
+  },
+  "alpine": {
+    "image": {
+      "id": "sha256:2c94048f2574cee2f25a5630a13b6080256952b95c23189b4bdd590bdb14efc7",
+      "size_bytes": 69694167,
+      "architecture": "amd64",
+      "os": "linux"
+    },
+    "scan": {
+      "report_sha256": "cc5fef598658766cab726c88a192cd0ab09a038f639ab42864e609e4cb2261a6",
+      "created_at": "2026-10-24T00:10:58.472832691Z",
+      "image_id": "sha256:2c94048f2574cee2f25a5630a13b6080256952b95c23189b4bdd590bdb14efc7",
+      "severity_counts": {
+        "UNKNOWN": 0,
+        "LOW": 0,
+        "MEDIUM": 0,
+        "HIGH": 0,
+        "CRITICAL": 0
+      },
+      "targets": [
+        {
+          "target": "amora-core:runtime-security (alpine 3.24.3)",
+          "type": "alpine",
+          "severity_counts": {}
+        },
+        {
+          "target": "Python",
+          "type": "python-pkg",
+          "severity_counts": {}
+        }
+      ]
+    },
+    "benchmark": {
+      "samples": [
+        {
+          "image": "amora-core:alpine",
+          "cold_start_seconds": 1.993347534997156,
+          "idle_rss_kib": 67164
+        },
+        {
+          "image": "amora-core:alpine",
+          "cold_start_seconds": 2.621001716994215,
+          "idle_rss_kib": 67340
+        },
+        {
+          "image": "amora-core:alpine",
+          "cold_start_seconds": 2.914040688003297,
+          "idle_rss_kib": 67336
+        }
+      ],
+      "median_cold_start_seconds": 2.621001716994215,
+      "median_idle_rss_kib": 67336
+    },
+    "build": {
+      "exit_code": 0,
+      "seconds": 22.546118899001158,
+      "cache": "no-cache; base already pulled; proxy/network included"
+    },
+    "base": {
+      "digest": "sha256:b658b05ce9c4eb97ec6fc19424818a1f31993659c2b505a532f470e83807815d",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm/v6",
+        "linux/arm/v7",
+        "linux/arm64/v8",
+        "linux/386",
+        "linux/ppc64le",
+        "linux/riscv64",
+        "linux/s390x"
+      ]
+    },
+    "python_tests": "347 passed, 5 warnings",
+    "final_smoke": {
+      "image": "amora-core:runtime-security",
+      "cold_start_seconds": 4.201567911994061,
+      "idle_rss_kib": 67568,
+      "mapped_libraries": [
+        "/lib/ld-musl-x86_64.so.1",
+        "/opt/venv/lib/python3.12/site-packages/pydantic_core.libs/libgcc_s-f685abf1.so.1",
+        "/opt/venv/lib/python3.12/site-packages/pydantic_core/_pydantic_core.cpython-312-x86_64-linux-musl.so",
+        "/usr/lib/libbz2.so.1.0.8",
+        "/usr/lib/libcrypto.so.3",
+        "/usr/lib/libffi.so.8.2.0",
+        "/usr/lib/liblzma.so.5.8.4",
+        "/usr/lib/libsqlite3.so.3.53.4",
+        "/usr/lib/libssl.so.3",
+        "/usr/lib/libuuid.so.1.3.0",
+        "/usr/lib/libz.so.1.3.2",
+        "/usr/local/lib/libpython3.12.so.1.0",
+        "/usr/local/lib/python3.12/lib-dynload/_asyncio.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_bisect.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_blake2.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_bz2.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_contextvars.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_csv.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_ctypes.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_datetime.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_decimal.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_hashlib.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_heapq.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_json.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_lzma.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_multiprocessing.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_opcode.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_pickle.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_posixsubprocess.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_queue.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_random.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_sha2.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_socket.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_sqlite3.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_ssl.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_struct.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_uuid.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/_zoneinfo.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/array.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/binascii.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/fcntl.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/math.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/select.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/termios.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/unicodedata.cpython-312-x86_64-linux-musl.so",
+        "/usr/local/lib/python3.12/lib-dynload/zlib.cpython-312-x86_64-linux-musl.so"
+      ]
+    },
+    "catalog_sha256": "9407b6edefe4047a282d72c91d98d4f0708c1c7efc394b79919094ce17a12058"
+  },
+  "benchmark_notes": "Sequential smoke runs; base already local, owned new volumes; polling 0.5s; RSS PID1 after smoke; other validation work on host. Alpine benchmark preceded catalog directory mode repair; final canonical smoke includes catalog route verification. Build times include network via session proxy; Debian rebuild used same original source commit. No architectural CPU emulation tests.",
+  "namespace_comparison_to_outer_executor": {
+    "net": "distinct",
+    "uts": "distinct",
+    "ipc": "distinct",
+    "pid": "distinct",
+    "pid_for_children": "distinct",
+    "user": "shared",
+    "mnt": "distinct",
+    "cgroup": "distinct"
+  },
+  "user_namespace_note": "No userns-remap; identity uid_map. Do not claim user-namespace isolation."
+}

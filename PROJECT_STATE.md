@@ -367,3 +367,128 @@ Não voltar para:
 - Gemini TTS como fallback oculto;
 - APK-per-small-test;
 - retuning de FINAL_B/VoiceSignature sem evidência nova.
+
+## Migração de infraestrutura — 2026-10-23
+
+Decisão nova de BK: Core/Web → container (Koyeb candidato), persistência →
+SQLite ou libSQL remoto (Turso candidato), voz → worker independente (Modal
+candidato); A15 será futuramente Living Console. ADR-0015 registra a direção.
+A seção de próximo trabalho local acima é histórico operacional anterior;
+certificação acústica continua pendente e parâmetros congelados não mudam.
+
+Etapa 1: auditoria em `docs/engineering/CLOUD_MIGRATION_AUDIT.md`, injeção
+StorageBackend nos nove stores e contrato VoiceBackend, mantendo defaults
+locais e queries/migrations. Testar interfaces antes da etapa cloud.
+
+Etapa 2: Core/Web Linux possui host/port por ambiente/CLI, /live, /ready,
+health com HTTP 503 em falha, lifespan e close idempotente, logs JSON stdout
+cloud, Dockerfile e lock de dependências. Cloud falha fechado para token
+não injetado ou SQLite sem volume durável declarado. Voz continua opcional.
+Operação em `docs/engineering/CLOUD_OPERATIONS.md`. CI remoto e deploy Koyeb
+não equivalem aos testes locais e continuam pendentes.
+
+Etapa 3: LibSQLBackend Hrana HTTP v2 com transações stateful, tipos, constraints,
+FTS, backup SQLite portátil e restore explícito para destino vazio. Migration 11
+adiciona blobs de Avatar; AMORA_ASSET_STORAGE=database permite compute efêmero
+com SQL remoto. SQLite local permanece default. Corrigidos claim concorrente,
+ACK/cancel fora da transação, IntegrityError mascarado como dedupe e FTS que
+mascarava falhas operacionais. 285 testes passaram, incluindo contratos de
+memória/world/emoção/autonomia/ações/Web sobre adapter remoto mockado. Nenhuma
+conta Turso/Koyeb foi utilizada; latência/quotas/dados grandes são gates de staging.
+
+Etapa 4: VoiceRenderRequest mínimo versionado, RemoteVoiceBackend HTTPS,
+worker ASGI independente e template Modal. Reusa o renderer Supertonic e o DSP
+C++ existentes; não altera nenhum parâmetro vocal. Core valida WAV/identidade,
+falhas de voz preservam texto e resultado após cancelamento é rejeitado.
+Sete testes novos cobrem serviço autenticado, payload mínimo/bounds, sucesso,
+worker indisponível, áudio inválido/identidade errada, ACK e cancelamento.
+Bundle vocal nativo real e deploy/certificação Modal não foram executados;
+preparação exige archive+SHA revisados e WORLD no commit congelado. Instruções
+em CLOUD_OPERATIONS.md. Tickets de áudio direto ficam explicitamente futuros.
+
+Etapa 5: /v1/operations/state autenticado, schema amora.operations.v1,
+projeção sem texto/contexto privado, lifecycle de ações e erros bounded agrupados
+por fingerprint+contagem. Jobs continuam opt-in; Dev MCP/Living Console recebem
+fundação, não um servidor novo. Request correlation IDs e latência disponíveis.
+Corrigidos também task cognitiva órfã por cancel externo, cleanup de bootstrap
+incompleto, consumo concorrente do pairing e subscription WebSocket ociosa;
+SECRET não é mais transmitido no stream. Snapshot remoto preserva high-water
+marks AUTOINCREMENT e recusa perda de baton em transação. Gates de serviços
+remotos/bundle real/custos/acústica permanecem abertos.
+
+Validação final local: 304 pytest PASS, 5 testes Node Avatar PASS, pip check sem
+inconsistências, Docker final com base por digest e build tools pinados PASS.
+Smoke automático valida non-root, endpoints, autenticação, texto, fila persistente,
+restart e SIGTERM; workflow cloud-contracts.yml reproduz esse gate na CI.
+Avisos existentes de Pydantic/Starlette permanecem (5), sem testes pulados.
+Relatórios para revisão por etapa em `docs/engineering/reviews/`.
+
+## Security pass pré-deploy — 2026-10-23
+
+ADR-0016 e `docs/engineering/security/PREDEPLOY.md` registram a nova fronteira:
+cloud pairing com token web/avatar 12h, admin separado, auth ASGI global,
+origins/hosts explícitos, proxies sem confiança implícita, limites de body/rate/
+timeout, WebSocket administrativo com origem validada e headers CSP/security.
+Bearer do browser passa a sessionStorage; logs redigem secrets observados.
+Node CI 22.23.4 testado por distribuição oficial verificada; actions Node 24
+pinadas. Runtime Docker non-root/read-only sem pip/setuptools/wheel.
+
+Scans: Core lock (23) e worker lock (17) sem vulnerabilidades conhecidas ou skips.
+Runtime Python sem CVEs reportados após remover tooling. **Deploy bloqueado:**
+Debian mantém 44 ocorrências HIGH/oito CVEs sem FixedVersion; nenhuma exclusão.
+CI security-predeploy deve bloquear HIGH/CRITICAL. 347 testes Python e cinco
+Avatar passaram localmente; cloud providers/ingress/egress, bundle real e Safari
+físico continuam gates. Inventário de 69 operações HTTP e evidências versionadas
+na pasta de segurança. Não tratar preparação como aprovação de publicação.
+
+## Runtime/container security — 2026-10-24
+
+Continuação de feat/security-predeploy / eb03eb8. ADR-0017 e
+`docs/engineering/security/RUNTIME_BASE_DECISION.md` analisam individualmente
+as oito CVEs e explicam 44 findings por cinco pacotes-fonte. Posição Debian
+obtida no espelho do Tracker, com revisão registrada; domínio direto bloqueado
+pelo proxy, sem contorno. Não houve VEX, ignore list ou redução do gate.
+
+**PASS do gate local de runtime:** Python oficial 3.12.15-alpine3.24 por digest,
+após variante experimental separada; imagem final ~69,7 MB versus 139,2 MB Debian.
+Trivy 0.76.0: zero findings em todas as severidades; HIGH/CRITICAL incluindo
+unfixed retorna 0 na nova imagem e 1 na Debian original (controle negativo).
+Wheels musllinux disponíveis; nenhum compilador/build tool adicionado. Pipeline
+vocal e contratos Core/worker/providers/storage não foram alterados.
+
+347 testes Python passaram em cada base e novamente na imagem canônica final;
+cinco testes Avatar Node 22.23.4 PASS; pip check PASS. Smoke valida UID 10001,
+read-only, capabilities zeradas, NNP, health/readiness sem dados privados,
+Web/auth/pairing com escopo e proteção contra replay, texto sem voz, SQLite,
+restart/SIGTERM e catálogo instalado. Corrigido bug de packaging: catálogo JSON
+existente omitido da imagem causava 500; bytes e parâmetros preservados.
+CI cloud-contracts agora executa suíte completa na libc da imagem e verifica
+dependências do runtime sem reinstalar pip no estágio de produção.
+
+Somente Linux amd64 foi executado; multiarch/wheels arm64 verificados como
+disponibilidade, sem certificação. DNS/ABI musl em host real, limites de execução,
+CI remoto, ingress/egress e serviços remotos continuam gates. Nenhum deploy.
+Próximo passo: revisão/CI e gate de staging separado.
+
+## Hrana HTTP — fechamento transacional real — 2026-10-25
+
+Na branch `feat/runtime-base-security`, continuação de `4ee10fc`. Primeiro
+deploy real Northflank → Turso, relatado por BK, revelou falso
+SQL_TRANSACTION_STREAM_LOST/SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN: HTTP 200 e
+COMMIT válido podiam terminar com baton=null. O mock anterior sempre mantinha
+baton até close, por isso não reproduzia o comportamento real do servidor.
+
+Adapter agora processa o resultado SQL antes de validar o stream: apenas
+COMMIT/ROLLBACK explícitos bem-sucedidos permitem fechamento transacional sem
+close; BEGIN e statements intermediários sem baton continuam fail-closed.
+Erros SQL dos terminadores são propagados; HTTP/transport failure continua
+OUTCOME_UNKNOWN, conexão inválida e nenhuma repetição automática de COMMIT.
+Mock passa a fechar após terminador sem estado transacional restante, com
+regressões de migrations completas, schema persistido/restart e falhas.
+
+24 testes de storage remoto PASS; suíte Core completa: 357 PASS, 5 avisos
+existentes, sem skips. Detalhes em `docs/engineering/reviews/03.md`.
+Somente adapter, testes e documentação alterados; schema/migrations, domínio,
+providers, segurança/tokens, seleção de storage, contratos públicos e voz intactos.
+Nenhum novo deploy executado. Próximo passo: CI/revisão e repetir startup e
+restart no staging Northflank → Turso real para confirmar o efeito operacional.

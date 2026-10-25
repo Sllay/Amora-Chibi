@@ -1,0 +1,27 @@
+# Test-only layer over the exact runtime under review; never published as runtime.
+ARG RUNTIME_IMAGE=amora-core:test
+FROM ${RUNTIME_IMAGE}
+USER 0
+WORKDIR /workspace
+COPY deploy/python.lock /tmp/python.lock
+RUN --mount=type=secret,id=proxy_ca \
+    set -eu; \
+    export PIP_CERT=/etc/ssl/certs/ca-certificates.crt; \
+    if [ -f /run/secrets/proxy_ca ]; then export PIP_CERT=/run/secrets/proxy_ca; fi; \
+    python -m venv /testenv && \
+    /testenv/bin/pip install --only-binary=:all: --no-cache-dir pip==26.2.2 && \
+    /testenv/bin/pip install --only-binary=:all: --no-cache-dir -r /tmp/python.lock && \
+    /testenv/bin/pip check
+COPY --chown=10001:10001 core ./core
+COPY --chown=10001:10001 config ./config
+COPY --chown=10001:10001 tests ./tests
+COPY --chown=10001:10001 tools ./tools
+COPY --chown=10001:10001 android ./android
+COPY --chown=10001:10001 web ./web
+COPY --chown=10001:10001 avatar ./avatar
+COPY --chown=10001:10001 pyproject.toml ./
+ENV AMORA_MODE=local AMORA_HOME=/tmp/amora-validation \
+    AMORA_WEB_ROOT=/workspace/web AMORA_AVATAR_ROOT=/workspace/avatar \
+    PYTHONPATH=/workspace/core PATH=/testenv/bin:/opt/venv/bin:/usr/local/bin:/usr/bin:/bin
+USER 10001:10001
+CMD ["python", "-m", "pytest", "-p", "no:cacheprovider"]

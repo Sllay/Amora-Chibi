@@ -6,6 +6,7 @@ from time import perf_counter
 from typing import AsyncIterator
 
 import httpx
+import re
 
 from amora.events import PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
@@ -120,7 +121,7 @@ class OpenAICompatibleMeshProvider:
     async def _post(self, payload: dict[str, object]) -> tuple[dict[str, object], httpx.Response, float]:
         started = perf_counter()
         timeout = httpx.Timeout(self.timeout_seconds, connect=15.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             response = await client.post(self.api_url, headers=self._headers(), json=payload)
         if response.status_code >= 400:
             raise ProviderError(
@@ -231,6 +232,8 @@ class CloudflareCognitiveProvider(OpenAICompatibleMeshProvider):
 
     def __init__(self, secrets: SecretStore, *, model: str | None = None, timeout_seconds: float = 45.0) -> None:
         account_id = (secrets.get("CLOUDFLARE_ACCOUNT_ID") or "").strip()
+        if account_id and not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", account_id):
+            raise ValueError("invalid Cloudflare account identifier")
         token_present = secrets.get("CLOUDFLARE_API_TOKEN") is not None
         selected = model or os.getenv("AMORA_CLOUDFLARE_COGNITION_MODEL", self.DEFAULT_MODEL)
         api_url = (

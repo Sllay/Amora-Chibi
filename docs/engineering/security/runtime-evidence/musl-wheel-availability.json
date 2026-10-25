@@ -1,0 +1,17 @@
+[
+  {
+    "filename": "pydantic_core-2.49.0-cp312-cp312-musllinux_1_1_aarch64.whl",
+    "sha256": "119505798feabc587642e03579a9acff7da6ef6816a70ef2de50960037b4b0c8",
+    "size": 2255757
+  },
+  {
+    "filename": "pydantic_core-2.49.0-cp312-cp312-musllinux_1_1_armv7l.whl",
+    "sha256": "45137bb8182ae8b8631550d54d82d654db7e8bcbff2a8ebce5e56c85e25fc7ab",
+    "size": 2414108
+  },
+  {
+    "filename": "pydantic_core-2.49.0-cp312-cp312-musllinux_1_1_x86_64.whl",
+    "sha256": "c8b4390b0e79235acb8c4d2337e76efdf00fd17936b19227726ec63f23840acb",
+    "size": 2444515
+  }
+]

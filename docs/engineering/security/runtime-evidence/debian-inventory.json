@@ -1,0 +1,146 @@
+{
+  "python": "3.12.15",
+  "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+  "libc": [
+    "glibc",
+    "2.41"
+  ],
+  "soabi": "cpython-312-x86_64-linux-gnu",
+  "uid": 10001,
+  "gid": 10001,
+  "privileges": {
+    "CapEff": "0000000000000000",
+    "CapPrm": "0000000000000000",
+    "CapBnd": "0000000000000000",
+    "NoNewPrivs": "1",
+    "Seccomp": "2"
+  },
+  "namespaces": {
+    "net": "net:[4026532216]",
+    "uts": "uts:[4026532208]",
+    "ipc": "ipc:[4026532209]",
+    "pid": "pid:[4026532214]",
+    "pid_for_children": "pid:[4026532214]",
+    "user": "user:[4026531837]",
+    "mnt": "mnt:[4026532207]",
+    "cgroup": "cgroup:[4026532215]"
+  },
+  "uid_map": "         0          0 4294967295\n",
+  "tools": {
+    "mount": "/usr/bin/mount",
+    "umount": "/usr/bin/umount",
+    "nsenter": "/usr/bin/nsenter",
+    "login": "/usr/bin/login",
+    "perl": "/usr/bin/perl",
+    "infocmp": "/usr/bin/infocmp",
+    "tic": "/usr/bin/tic",
+    "getfacl": null,
+    "setfacl": null,
+    "systemd-homed": null,
+    "gcc": null,
+    "g++": null,
+    "cc": null,
+    "make": null
+  },
+  "setid_files": {
+    "/usr/bin/chage": "0o2755",
+    "/usr/bin/chfn": "0o4755",
+    "/usr/bin/chsh": "0o4755",
+    "/usr/bin/expiry": "0o2755",
+    "/usr/bin/gpasswd": "0o4755",
+    "/usr/bin/mount": "0o4755",
+    "/usr/bin/newgrp": "0o4755",
+    "/usr/bin/passwd": "0o4755",
+    "/usr/bin/su": "0o4755",
+    "/usr/bin/umount": "0o4755",
+    "/usr/sbin/unix_chkpwd": "0o2755"
+  },
+  "file_capabilities": {},
+  "fstab": "# UNCONFIGURED FSTAB FOR BASE SYSTEM\n",
+  "homed_files": [],
+  "archive_tar_files": [],
+  "component_libraries": {
+    "libmount": [
+      "/usr/lib/x86_64-linux-gnu/libmount.so.1.1.0"
+    ],
+    "libblkid": [
+      "/usr/lib/x86_64-linux-gnu/libblkid.so.1.1.0"
+    ],
+    "libuuid": [
+      "/usr/lib/x86_64-linux-gnu/libuuid.so.1.3.0"
+    ],
+    "libacl": [
+      "/usr/lib/x86_64-linux-gnu/libacl.so.1.1.2302"
+    ],
+    "libsystemd": [
+      "/usr/lib/x86_64-linux-gnu/libsystemd.so.0.40.0"
+    ],
+    "libudev": [
+      "/usr/lib/x86_64-linux-gnu/libudev.so.1.7.10"
+    ],
+    "libncursesw": [
+      "/usr/lib/x86_64-linux-gnu/libncursesw.so.6.5"
+    ],
+    "libtinfo": [
+      "/usr/lib/x86_64-linux-gnu/libtinfo.so.6.5"
+    ]
+  },
+  "extensions": {
+    "_sqlite3": {
+      "path": "/usr/local/lib/python3.12/lib-dynload/_sqlite3.cpython-312-x86_64-linux-gnu.so",
+      "import": "PASS",
+      "ldd_with_libpython_preloaded": {
+        "exit_code": 0,
+        "stdout": "\tlinux-vdso.so.1 (0x00007fc1d6693000)\n\t/usr/local/lib/libpython3.12.so (0x00007fc1d6016000)\n\tlibsqlite3.so.0 => /lib/x86_64-linux-gnu/libsqlite3.so.0 (0x00007fc1d5e94000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fc1d5ca0000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fc1d5bb0000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007fc1d6695000)\n",
+        "stderr": ""
+      }
+    },
+    "_ssl": {
+      "path": "/usr/local/lib/python3.12/lib-dynload/_ssl.cpython-312-x86_64-linux-gnu.so",
+      "import": "PASS",
+      "ldd_with_libpython_preloaded": {
+        "exit_code": 0,
+        "stdout": "\tlinux-vdso.so.1 (0x00007fbef6dc0000)\n\t/usr/local/lib/libpython3.12.so (0x00007fbef672e000)\n\tlibssl.so.3 => /lib/x86_64-linux-gnu/libssl.so.3 (0x00007fbef661c000)\n\tlibcrypto.so.3 => /lib/x86_64-linux-gnu/libcrypto.so.3 (0x00007fbef5fe1000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fbef5ded000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fbef5cfb000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007fbef6dc2000)\n\tlibz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007fbef5cdb000)\n\tlibzstd.so.1 => /lib/x86_64-linux-gnu/libzstd.so.1 (0x00007fbef5c11000)\n",
+        "stderr": ""
+      }
+    },
+    "_uuid": {
+      "path": "/usr/local/lib/python3.12/lib-dynload/_uuid.cpython-312-x86_64-linux-gnu.so",
+      "import": "PASS",
+      "ldd_with_libpython_preloaded": {
+        "exit_code": 0,
+        "stdout": "\tlinux-vdso.so.1 (0x00007f28d9184000)\n\t/usr/local/lib/libpython3.12.so (0x00007f28d8b22000)\n\tlibuuid.so.1 => /lib/x86_64-linux-gnu/libuuid.so.1 (0x00007f28d8b16000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f28d8922000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f28d8832000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f28d9186000)\n",
+        "stderr": ""
+      }
+    },
+    "_curses": {
+      "path": "/usr/local/lib/python3.12/lib-dynload/_curses.cpython-312-x86_64-linux-gnu.so",
+      "import": "PASS",
+      "ldd_with_libpython_preloaded": {
+        "exit_code": 0,
+        "stdout": "\tlinux-vdso.so.1 (0x00007f5d4e709000)\n\t/usr/local/lib/libpython3.12.so (0x00007f5d4e08c000)\n\tlibncursesw.so.6 => /lib/x86_64-linux-gnu/libncursesw.so.6 (0x00007f5d4e050000)\n\tlibtinfo.so.6 => /lib/x86_64-linux-gnu/libtinfo.so.6 (0x00007f5d4e01a000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f5d4de26000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f5d4dd34000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f5d4e70b000)\n",
+        "stderr": ""
+      }
+    },
+    "pydantic_core._pydantic_core": {
+      "path": "/opt/venv/lib/python3.12/site-packages/pydantic_core/_pydantic_core.cpython-312-x86_64-linux-gnu.so",
+      "import": "PASS",
+      "ldd_with_libpython_preloaded": {
+        "exit_code": 0,
+        "stdout": "\tlinux-vdso.so.1 (0x00007f7e96360000)\n\t/usr/local/lib/libpython3.12.so (0x00007f7e95862000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f7e95833000)\n\tlibrt.so.1 => /lib/x86_64-linux-gnu/librt.so.1 (0x00007f7e9582e000)\n\tlibpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007f7e95829000)\n\tlibdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x00007f7e95822000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f7e9562e000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f7e96362000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f7e9553e000)\n",
+        "stderr": ""
+      }
+    }
+  },
+  "packages": {
+    "exit_code": 0,
+    "stdout": "adduser adduser 3.152\napt apt 3.0.3\nbase-files base-files 13.8+deb13u7\nbase-passwd base-passwd 3.6.7\nbash bash 5.2.37-2+b10\nbsdutils util-linux 1:2.41.5-0+deb13u1\nca-certificates ca-certificates 20250419+deb13u1\ncoreutils coreutils 9.7-3\ndash dash 0.5.12-12\ndebconf debconf 1.5.91\ndebian-archive-keyring debian-archive-keyring 2025.1\ndebianutils debianutils 5.23.2\ndiffutils diffutils 1:3.10-4\ndpkg dpkg 1.22.22\nfindutils findutils 4.10.0-3\ngcc-14-base:amd64 gcc-14 14.2.0-19\ngrep grep 3.11-4\ngzip gzip 1.13-1+deb13u1\nhostname hostname 3.25\ninit-system-helpers init-system-helpers 1.69~deb13u1\nlibacl1:amd64 acl 2.3.2-2+b1\nlibapt-pkg7.0:amd64 apt 3.0.3\nlibattr1:amd64 attr 1:2.5.2-3\nlibaudit-common audit 1:4.0.2-2+deb13u1\nlibaudit1:amd64 audit 1:4.0.2-2+deb13u1\nlibblkid1:amd64 util-linux 2.41.5-0+deb13u1\nlibbsd0:amd64 libbsd 0.12.2-2\nlibbz2-1.0:amd64 bzip2 1.0.8-6\nlibc-bin glibc 2.41-12+deb13u4\nlibc6:amd64 glibc 2.41-12+deb13u4\nlibcap-ng0:amd64 libcap-ng 0.8.5-4+b1\nlibcap2:amd64 libcap2 1:2.75-10+deb13u1+b3\nlibcrypt1:amd64 libxcrypt 1:4.4.38-1\nlibdb5.3t64:amd64 db5.3 5.3.28+dfsg2-9\nlibdebconfclient0:amd64 cdebconf 0.280\nlibffi8:amd64 libffi 3.4.8-2\nlibgcc-s1:amd64 gcc-14 14.2.0-19\nlibgdbm6t64:amd64 gdbm 1.24-2\nlibgmp10:amd64 gmp 2:6.3.0+dfsg-3\nlibhogweed6t64:amd64 nettle 3.10.1-1\nliblastlog2-2:amd64 util-linux 2.41.5-0+deb13u1\nliblz4-1:amd64 lz4 1.10.0-4\nliblzma5:amd64 xz-utils 5.8.1-1+deb13u2\nlibmd0:amd64 libmd 1.1.0-2+b1\nlibmount1:amd64 util-linux 2.41.5-0+deb13u1\nlibncursesw6:amd64 ncurses 6.5+20250216-2\nlibnettle8t64:amd64 nettle 3.10.1-1\nlibpam-modules:amd64 pam 1.7.0-5\nlibpam-modules-bin pam 1.7.0-5\nlibpam-runtime pam 1.7.0-5\nlibpam0g:amd64 pam 1.7.0-5\nlibpcre2-8-0:amd64 pcre2 10.46-1~deb13u3\nlibreadline8t64:amd64 readline 8.2-6\nlibseccomp2:amd64 libseccomp 2.6.0-2\nlibselinux1:amd64 libselinux 3.8.1-1\nlibsemanage-common libsemanage 3.8.1-1\nlibsemanage2:amd64 libsemanage 3.8.1-1\nlibsepol2:amd64 libsepol 3.8.1-1\nlibsmartcols1:amd64 util-linux 2.41.5-0+deb13u1\nlibsqlite3-0:amd64 sqlite3 3.46.1-7+deb13u2\nlibssl3t64:amd64 openssl 3.5.7-1~deb13u3\nlibstdc++6:amd64 gcc-14 14.2.0-19\nlibsystemd0:amd64 systemd 257.13-1~deb13u1\nlibtinfo6:amd64 ncurses 6.5+20250216-2\nlibudev1:amd64 systemd 257.13-1~deb13u1\nlibuuid1:amd64 util-linux 2.41.5-0+deb13u1\nlibxxhash0:amd64 xxhash 0.8.3-2\nlibzstd1:amd64 libzstd 1.5.7+dfsg-1\nlogin util-linux 1:4.16.0-2+really2.41.5-0+deb13u1\nlogin.defs shadow 1:4.17.4-2\nmawk mawk 1.3.4.20250131-1\nmount util-linux 2.41.5-0+deb13u1\nncurses-base ncurses 6.5+20250216-2\nncurses-bin ncurses 6.5+20250216-2\nnetbase netbase 6.5\nopenssl openssl 3.5.7-1~deb13u3\nopenssl-provider-legacy openssl 3.5.7-1~deb13u3\npasswd shadow 1:4.17.4-2\nperl-base perl 5.40.1-6+deb13u1\nreadline-common readline 8.2-6\nsed sed 4.9-2+deb13u1\nsqv rust-sequoia-sqv 1.3.0-3+b2\nsysvinit-utils sysvinit 3.14-4\ntar tar 1.35+dfsg-3.1\ntzdata tzdata 2026c-0+deb13u1\nutil-linux util-linux 2.41.5-0+deb13u1\nzlib1g:amd64 zlib 1:1.3.dfsg+really1.3.1-1+b1\n",
+    "stderr": ""
+  },
+  "archive_tar_load": {
+    "exit_code": 2,
+    "stdout": "",
+    "stderr": "Can't locate Archive/Tar.pm in @INC (you may need to install the Archive::Tar module) (@INC entries checked: /etc/perl /usr/local/lib/x86_64-linux-gnu/perl/5.40.1 /usr/local/share/perl/5.40.1 /usr/lib/x86_64-linux-gnu/perl5/5.40 /usr/share/perl5 /usr/lib/x86_64-linux-gnu/perl-base /usr/lib/x86_64-linux-gnu/perl/5.40 /usr/share/perl/5.40 /usr/local/lib/site_perl).\nBEGIN failed--compilation aborted.\n"
+  },
+  "image": "sha256:c487e0e2f608949de456ce21ea33a08dfa470908b0167341fcdc91a58c62a7d3"
+}

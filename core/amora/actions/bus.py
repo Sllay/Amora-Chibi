@@ -19,9 +19,12 @@ class ActionBus:
     def __init__(self, registry: PluginRegistry, clock: Clock) -> None:
         self.registry = registry
         self.clock = clock
+        self.operations = None
 
     async def dispatch(self, call: ToolCall, context: ExecutionContext, *, attempt: int = 1) -> ToolExecutionResult:
         started = self.clock.now()
+        if self.operations is not None:
+            self.operations.action(call, "requested")
         resolved = self.registry.resolve_tool(call.plugin_id, call.tool_name)
         if resolved is None:
             return self._result(call, started, ToolExecutionStatus.DENIED, attempt, error_code="TOOL_NOT_REGISTERED", error_message="tool is not registered")
@@ -47,6 +50,8 @@ class ActionBus:
         if validate_schema(call.arguments, spec.input_schema):
             return self._result(call, started, ToolExecutionStatus.DENIED, attempt, error_code="INPUT_SCHEMA_INVALID", error_message="tool arguments do not satisfy the declared input schema")
         timeout = min(manifest.timeout_seconds, spec.timeout_seconds)
+        if self.operations is not None:
+            self.operations.action(call, "running")
         try:
             output = await asyncio.wait_for(plugin.execute(call.tool_name, dict(call.arguments), call), timeout=timeout)
         except asyncio.TimeoutError:
@@ -66,6 +71,9 @@ class ActionBus:
 
     def _result(self, call: ToolCall, started, status: ToolExecutionStatus, attempt: int, *, output: dict[str, object] | None = None, error_code: str | None = None, error_message: str | None = None, retryable: bool = False) -> ToolExecutionResult:
         result = ToolExecutionResult(call_id=call.id, plan_id=call.plan_id, step_id=call.step_id, plugin_id=call.plugin_id, tool_name=call.tool_name, status=status, attempt=attempt, output=output or {}, error_code=error_code, error_message=error_message, retryable=retryable, started_at=started, finished_at=self.clock.now(), dedupe_key=call.dedupe_key)
+        if self.operations is not None:
+            self.operations.action(call, status.value, error_code=error_code,
+                                   latency_ms=max(0., (result.finished_at-started).total_seconds()*1000))
         log = logger.info if status == ToolExecutionStatus.SUCCEEDED else logger.warning
         log("tool_call call_id=%s plan_id=%s plugin=%s tool=%s status=%s attempt=%s error_code=%s", call.id, call.plan_id, call.plugin_id, call.tool_name, status.value, attempt, error_code)
         return result

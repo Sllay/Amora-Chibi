@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import os
 from typing import Callable
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from amora.events import PrivacyScope
+from amora.voice.backend import VoiceBackend
 from amora.voice.local_amora import AmoraLocalVoiceRenderer, LocalVoiceUnavailable, MODEL_ID, NUM_STEPS, VOICE_ID
 
 
@@ -23,7 +25,7 @@ class WebTextTurnRequest(BaseModel):
     test_mode: bool = True
 
 
-def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None]) -> None:
+def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *, voice: VoiceBackend | None = None) -> None:
     """Register the Safari/Web platform adapter without duplicating Core logic.
 
     The web client reuses the same language/social, conversation, STT and speech
@@ -33,8 +35,33 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None]) -
     """
 
     auth = [Depends(require_auth)]
-    local_voice = AmoraLocalVoiceRenderer(core.paths)
+    local_voice = voice or getattr(app.state, "voice_backend", None)
+    if local_voice is None:
+        backend_name = os.getenv("AMORA_VOICE_BACKEND", "local")
+        if backend_name == "remote":
+            from amora.voice.remote import RemoteVoiceBackend
+            token = os.getenv("AMORA_VOICE_SERVICE_TOKEN", "")
+            if token and token == core.secrets.get("LOCAL_API_TOKEN"):
+                raise ValueError("voice service token must differ from the Core user token")
+            local_voice = RemoteVoiceBackend(os.getenv("AMORA_VOICE_WORKER_URL", ""), token)
+        elif backend_name == "local":
+            local_voice = AmoraLocalVoiceRenderer(core.paths)
+        else:
+            raise ValueError("AMORA_VOICE_BACKEND must be local or remote")
     app.state.web_local_voice = local_voice
+    import threading
+    render_slot = threading.BoundedSemaphore(1)
+
+    def render_bounded(item):
+        if not render_slot.acquire(blocking=False):
+            raise LocalVoiceUnavailable("VOICE_BUSY")
+        try:
+            return local_voice.render(item)
+        finally:
+            render_slot.release()
+
+    def voice_state_remote():
+        return local_voice.state().get("provider") == "amora_remote_supertonic_world"
 
     def console():
         return getattr(app.state, "server_console", None)
@@ -48,11 +75,11 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None]) -
             # Identity is approved in the lab; physical/canonical product
             # certification is still a separate gate.
             "canonical_voice": False,
-            "voice_transport": "amora_local_supertonic_world",
+            "voice_transport": voice_state["provider"],
             "voice_candidate": VOICE_ID,
             "voice_candidate_available": voice_state["available"],
             "local_voice": voice_state,
-            "core": core.health_report(),
+            "core": core.readiness() if os.getenv("AMORA_MODE") == "cloud" else core.health_report(),
         }
 
     @app.post("/v1/web/utterance", dependencies=auth)
@@ -109,8 +136,9 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None]) -
         if dashboard is not None:
             dashboard.set_activity("SINTETIZANDO", "Amora local • Supertonic → FINAL_B", ttl_seconds=60.0)
         try:
-            audio = await asyncio.to_thread(local_voice.render, item)
+            audio = await asyncio.to_thread(render_bounded, item)
         except LocalVoiceUnavailable as exc:
+            core.operations.error("voice", "VOICE_RENDER_FAILED", correlation_id=utterance_id)
             if dashboard is not None:
                 dashboard.set_module("amora.local_voice", "Amora Voz Local", "OFF", str(exc)[:120])
                 dashboard.record_error("Amora Voz Local", str(exc))
@@ -118,6 +146,10 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None]) -
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(exc),
             ) from exc
+
+        current = core.conversation.store.get_utterance(utterance_id)
+        if current is None or current.status.value in {"cancelled", "spoken"}:
+            raise HTTPException(409, "utterance is no longer renderable")
 
         if dashboard is not None:
             dashboard.clear_module_override("amora.local_voice")
@@ -131,7 +163,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None]) -
             media_type="audio/wav",
             headers={
                 "Cache-Control": "no-store",
-                "X-Amora-TTS-Provider": "amora-local",
+                "X-Amora-TTS-Provider": "amora-remote" if voice_state_remote() else "amora-local",
                 "X-Amora-TTS-Model": MODEL_ID,
                 "X-Amora-Voice": VOICE_ID,
                 "X-Amora-Sample-Rate": str(audio.sample_rate),
@@ -141,7 +173,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None]) -
             },
         )
 
-    web_root = Path(__file__).resolve().parents[3] / "web"
+    web_root = Path(os.environ.get("AMORA_WEB_ROOT", str(Path(__file__).resolve().parents[3] / "web")))
     if not web_root.is_dir():
         return
 

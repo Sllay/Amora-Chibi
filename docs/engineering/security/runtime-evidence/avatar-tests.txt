@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: humanoid template has unique hierarchy ids and four standard IK chains
+ok 1 - humanoid template has unique hierarchy ids and four standard IK chains
+  ---
+  duration_ms: 1.492132
+  type: 'test'
+  ...
+# Subtest: two-bone IK moves end effector to reachable target
+ok 2 - two-bone IK moves end effector to reachable target
+  ---
+  duration_ms: 2.593939
+  type: 'test'
+  ...
+# Subtest: reparenting a sprite to a rotated bone preserves its world pose
+ok 3 - reparenting a sprite to a rotated bone preserves its world pose
+  ---
+  duration_ms: 0.522653
+  type: 'test'
+  ...
+# Subtest: moving a bone-bound sprite by world delta follows the finger direction
+ok 4 - moving a bone-bound sprite by world delta follows the finger direction
+  ---
+  duration_ms: 0.278731
+  type: 'test'
+  ...
+# Subtest: expression mouth selection yields to talk mouth while speaking
+ok 5 - expression mouth selection yields to talk mouth while speaking
+  ---
+  duration_ms: 0.550931
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 63.299487

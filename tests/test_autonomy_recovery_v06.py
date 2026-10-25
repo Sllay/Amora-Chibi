@@ -43,7 +43,7 @@ async def test_backup_restore_preserves_autonomy_state(tmp_path, monkeypatch) ->
     finally: core.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored_db = AmoraDatabase(restored_path)
     try:
-        assert restored_db.integrity_check() == "ok"; assert restored_db.schema_version() == 10
+        assert restored_db.integrity_check() == "ok"; assert restored_db.schema_version() == 11
     finally: restored_db.close()
     store = AutonomyStore(restored_path, clock)
     try:

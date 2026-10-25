@@ -1,0 +1,40 @@
+name: Pre-deploy security
+on:
+  pull_request:
+  push:
+    branches: [main, 'feat/**', 'fix/**']
+permissions:
+  contents: read
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6, Node 24
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pip-audit==2.10.1
+      - name: Audit all locked Core and Voice Worker dependencies
+        run: |
+          mkdir -p reports
+          pip-audit -r deploy/python.lock --no-deps --disable-pip --progress-spinner off --format json --output reports/python-audit.json
+          pip-audit -r deploy/voice-worker.lock --no-deps --disable-pip --progress-spinner off --format json --output reports/voice-audit.json
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node 24
+        if: always()
+        with:
+          name: dependency-security-reports
+          path: reports/
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
+      - run: docker build -t amora-core:security .
+      - name: Scan image; block on HIGH or CRITICAL, including unfixed
+        run: |
+          mkdir -p reports
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/reports:/reports" aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format json --output /reports/image-audit.json amora-core:security
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node 24
+        if: always()
+        with:
+          name: image-security-report
+          path: reports/

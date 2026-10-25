@@ -7,22 +7,19 @@ from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 
+from amora.storage.backend import SQLiteBackend, StorageBackend, is_duplicate_error
 from amora.time import Clock
 
 from .models import SpeechUtterance, TurnDecision, UtteranceStatus
 
 
 class ConversationStore:
-    def __init__(self, path: Path, clock: Clock) -> None:
+    def __init__(self, path: Path, clock: Clock, *, backend: StorageBackend | None = None) -> None:
         self.path = path
         self.clock = clock
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._lock:
-            self._conn.execute("PRAGMA foreign_keys = ON")
-            self._conn.execute("PRAGMA journal_mode = WAL")
-            self._conn.execute("PRAGMA synchronous = NORMAL")
+        self.backend = backend or SQLiteBackend()
+        self._conn = self.backend.connect(path)
 
     def close(self) -> None:
         with self._lock:
@@ -37,7 +34,9 @@ class ConversationStore:
                     VALUES (?, ?, ?, ?, ?, ?)""",
                     (str(item.id), item.state.value, item.score, payload, item.created_at.isoformat(), item.dedupe_key),
                 )
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
+                if not is_duplicate_error(exc):
+                    raise
                 return False
         return True
 
@@ -77,7 +76,9 @@ class ConversationStore:
                         item.spoken_at.isoformat() if item.spoken_at else None, item.dedupe_key,
                     ),
                 )
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
+                if not is_duplicate_error(exc):
+                    raise
                 return False
         return True
 
@@ -158,40 +159,40 @@ class ConversationStore:
             return selected
 
     def acknowledge(self, utterance_id: UUID | str, *, spoken: bool) -> SpeechUtterance | None:
-        item = self.get_utterance(utterance_id)
-        if item is None:
-            return None
-        if item.status in {UtteranceStatus.SPOKEN, UtteranceStatus.CANCELLED}:
-            return item
-        if item.status not in {UtteranceStatus.CLAIMED, UtteranceStatus.QUEUED}:
-            return item
-        if spoken:
-            item.status = UtteranceStatus.SPOKEN
-            item.spoken_at = self.clock.now()
-            item.claim_expires_at = None
-        else:
-            item.status = UtteranceStatus.QUEUED
-            item.claimed_at = None
-            item.claim_expires_at = None
         with self._lock, self._conn:
+            item = self.get_utterance(utterance_id)
+            if item is None:
+                return None
+            if item.status in {UtteranceStatus.SPOKEN, UtteranceStatus.CANCELLED}:
+                return item
+            if item.status not in {UtteranceStatus.CLAIMED, UtteranceStatus.QUEUED}:
+                return item
+            if spoken:
+                item.status = UtteranceStatus.SPOKEN
+                item.spoken_at = self.clock.now()
+                item.claim_expires_at = None
+            else:
+                item.status = UtteranceStatus.QUEUED
+                item.claimed_at = None
+                item.claim_expires_at = None
             self._update_utterance(item)
-        return item
+            return item
 
     def cancel(self, utterance_id: UUID | str, *, reason: str = "cancelled") -> SpeechUtterance | None:
-        item = self.get_utterance(utterance_id)
-        if item is None:
-            return None
-        if item.status == UtteranceStatus.SPOKEN:
-            return item
-        if item.status == UtteranceStatus.CANCELLED:
-            return item
-        item.status = UtteranceStatus.CANCELLED
-        item.claim_expires_at = None
-        item.metadata["cancel_reason"] = reason[:96]
-        item.metadata["cancelled_at"] = self.clock.now().isoformat()
         with self._lock, self._conn:
+            item = self.get_utterance(utterance_id)
+            if item is None:
+                return None
+            if item.status == UtteranceStatus.SPOKEN:
+                return item
+            if item.status == UtteranceStatus.CANCELLED:
+                return item
+            item.status = UtteranceStatus.CANCELLED
+            item.claim_expires_at = None
+            item.metadata["cancel_reason"] = reason[:96]
+            item.metadata["cancelled_at"] = self.clock.now().isoformat()
             self._update_utterance(item)
-        return item
+            return item
 
     def cancel_cognitive_turn(self, turn_id: UUID | str, *, reason: str = "barge_in") -> int:
         turn = str(turn_id)

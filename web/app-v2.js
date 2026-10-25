@@ -5,8 +5,9 @@ const TEST_KEY = "amora.web.test.v1";
 const MAX_SPEECH_QUEUE = 3;
 const VOICE_FETCH_TIMEOUT_MS = 90000;
 
+localStorage.removeItem(TOKEN_KEY); // discard legacy persistent bearer
 const state = {
-  token: localStorage.getItem(TOKEN_KEY) || "",
+  token: sessionStorage.getItem(TOKEN_KEY) || "",
   fillBusy: false,
   speechQueue: [],
   activeRecord: null,
@@ -136,7 +137,7 @@ async function validatePairing() {
     return true;
   } catch (error) {
     if (error.status === 401) {
-      localStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(TOKEN_KEY);
       state.token = "";
     }
     return false;
@@ -190,7 +191,7 @@ $("pairForm").addEventListener("submit", async (event) => {
       body: JSON.stringify({ code }),
     }, false);
     state.token = data.token;
-    localStorage.setItem(TOKEN_KEY, state.token);
+    sessionStorage.setItem(TOKEN_KEY, state.token);
     $("pairCode").value = "";
     await unlockPlayback();
     await showCorrectSurface();
@@ -201,7 +202,7 @@ $("pairForm").addEventListener("submit", async (event) => {
 
 $("forgetPairing").addEventListener("click", async () => {
   await interruptVoice("web_unpair");
-  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
   state.token = "";
   location.reload();
 });
@@ -383,7 +384,7 @@ async function fillSpeechQueue() {
   } catch (error) {
     if (error.status === 401) {
       state.token = "";
-      localStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(TOKEN_KEY);
       pairPanel.classList.remove("hidden");
       appPanel.classList.add("hidden");
     }

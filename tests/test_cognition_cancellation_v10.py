@@ -134,3 +134,23 @@ async def test_turn_finishes_only_after_validated_delivery_settles(tmp_path: Pat
         assert plan.speech_segments
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_request_cancellation_joins_provider_child(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMORA_HOME',str(tmp_path))
+    core=AmoraCore.bootstrap(clock=_clock())
+    try:
+        provider=BlockingStructuredProvider()
+        core.cognition.register_provider(provider)
+        request=_request()
+        task=asyncio.create_task(core.cognition.respond(request))
+        await asyncio.wait_for(provider.started.wait(),2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert provider.closed.is_set()
+        assert str(request.turn_id) not in core.cognition._turn_cancel_events
+        assert not [t for t in asyncio.all_tasks() if not t.done() and str(request.turn_id) in t.get_name()]
+    finally:
+        core.close()

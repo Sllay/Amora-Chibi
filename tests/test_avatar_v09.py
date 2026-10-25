@@ -22,7 +22,7 @@ def test_avatar_project_and_asset_survive_restart(tmp_path: Path, monkeypatch) -
     try:
         project = first.avatar.project(); project.name = "Amora — papis custom"; project.color_slots[0].value = "#e8bcbc"; first.avatar.save_project(project)
         info = first.avatar.store.put_asset("hair_front", "image/png", b"\x89PNG\r\n\x1a\nfixture"); assert info.id == "hair_front"
-        assert first.health_report()["schema_version"] == 10
+        assert first.health_report()["schema_version"] == 11
     finally: first.close()
     second = AmoraCore.bootstrap(clock=clock)
     try:
@@ -65,7 +65,7 @@ def test_backup_restore_preserves_avatar_project_and_binary_assets(tmp_path: Pat
     finally: core.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored_db = AmoraDatabase(restored_path)
     try:
-        assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 10
+        assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 11
     finally: restored_db.close()
     restored_assets = tmp_path / "restored-assets"; store = AvatarStore(restored_path, restored_assets, clock)
     try:

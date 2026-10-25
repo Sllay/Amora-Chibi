@@ -296,23 +296,17 @@ Próximo gate desta frente:
 - confirmar voz, latência, fila e barge-in reais;
 - depois disso o ciclo de laboratório deve ser majoritariamente `git pull → reiniciar Core → atualizar Safari → testar`, sem novo APK para mudanças que não sejam Android-specific.
 
-### Core remoto / disponibilidade contínua
+### Core remoto / disponibilidade contínua — ADR-0015
 
-Depois que o cliente PWA estiver estável, avaliar separação entre frontend e Core persistente remoto de custo zero/baixo.
+Origem: V1.0.1 portabilidade; destino: V1.0.1 migração incremental;
+status: IN_PROGRESS; motivo: decisão explícita de BK em 2026-10-23.
 
-Candidatos arquiteturais incluem Cloudflare Workers/Durable Objects/D1 ou equivalentes, desde que passem gates de:
-
-- persistência real;
-- backup/restore;
-- privacidade;
-- custo previsível/zero-cost guard;
-- latência;
-- ausência de dependência de celular ligado;
-- capacidade de manter identidade/memória fora do provider cognitivo.
-
-**Importante:** cognição por API continua sendo provider; hospedar o Core não significa hospedar o LLM.
-
-Nenhuma migração do Core Termux deve ocorrer antes de prova de persistência/backup e ADR específico.
+Core/Web em Linux (Koyeb candidato), SQLite local ou libSQL remoto (Turso
+candidato), mesma voz em worker independente (Modal candidato). A15 deixa
+host principal e será Living Console. Não altera V1.1/V1.2 nem cancela SQLite.
+Auditoria, fronteiras, container, storage remoto, voz remota e observabilidade
+são etapas separadas. Deploy e certificação reais dependem de gates de
+persistência/backup/restore, privacidade, custo, latência e áudio físico.
 
 ---
 

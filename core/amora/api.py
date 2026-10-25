@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import hmac
+from contextlib import asynccontextmanager
 import logging
 import sys
 from dataclasses import asdict
 from uuid import uuid4
+from time import perf_counter
 
+from fastapi.responses import JSONResponse
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
+from typing import Literal
+from fastapi.exceptions import RequestValidationError
+from amora.security import SecurityMiddleware, SecuritySettings, token_role, issue_browser_token, token_equal
 
 from amora import __version__
 from amora.actions.routes import register_action_routes
@@ -35,7 +41,8 @@ class SessionCreateRequest(BaseModel):
 
 
 class PairingRedeemRequest(BaseModel):
-    code: str = Field(pattern=r"^\d{6}$")
+    code: str = Field(pattern=r"^[0-9]{6}$")
+    client: Literal["web", "avatar"] = "web"
 
 
 class AddresseeInferRequest(BaseModel):
@@ -59,14 +66,39 @@ class ObserveTextRequest(BaseModel):
     dedupe_key: str | None = None
 
 
-def create_api(core: AmoraCore) -> FastAPI:
+def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAPI:
     # High-frequency request polling and successful provider requests remain in
     # structured diagnostics, not in the human terminal surface.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    app = FastAPI(title="Amora Core API", version=__version__)
+    @asynccontextmanager
+    async def lifespan(app):
+        app.state.accepting = True
+        try:
+            yield
+        finally:
+            app.state.accepting = False
+            console = getattr(app.state, "server_console", None)
+            try:
+                if console is not None:
+                    console.close()
+            finally:
+                try:
+                    backend = getattr(app.state, "web_local_voice", None)
+                    if hasattr(backend, "close"):
+                        backend.close()
+                finally:
+                    if own_core:
+                        core.close()
+
+    settings = SecuritySettings.from_environment()
+    if settings.cloud and len((core.secrets.get("LOCAL_API_TOKEN") or "").encode()) < 32:
+        raise ValueError("cloud admin token must contain at least 32 bytes")
+    app = FastAPI(title="Amora Core API", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.accepting = True
     app.state.server_console = None
+    app.state.voice_backend = voice
 
     def expected_token() -> str:
         value = core.secrets.get("LOCAL_API_TOKEN")
@@ -74,19 +106,21 @@ def create_api(core: AmoraCore) -> FastAPI:
             raise RuntimeError("LOCAL_API_TOKEN is missing")
         return value
 
-    def require_auth(authorization: str | None = Header(default=None)) -> None:
+    def require_auth(request: Request, authorization: str | None = Header(default=None)) -> None:
+        if getattr(request.state, "security_role", None) in {"admin", "web", "avatar"}:
+            return
         prefix = "Bearer "
         if authorization is None or not authorization.startswith(prefix):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="authentication required")
         supplied = authorization[len(prefix):]
-        if not hmac.compare_digest(supplied, expected_token()):
+        if not token_equal(supplied, expected_token()):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
     def server_console(request: Request | None = None) -> ServerConsole | None:
         existing = getattr(app.state, "server_console", None)
         if existing is not None:
             return existing
-        if not bool(getattr(sys.stderr, "isatty", lambda: False)()):
+        if settings.cloud or not bool(getattr(sys.stderr, "isatty", lambda: False)()):
             return None
         host = request.url.hostname if request is not None else "127.0.0.1"
         port = request.url.port if request is not None and request.url.port is not None else 8765
@@ -102,29 +136,27 @@ def create_api(core: AmoraCore) -> FastAPI:
     @app.middleware("http")
     async def server_console_middleware(request: Request, call_next):
         console = server_console(request)
+        correlation_id = str(uuid4())
+        request.state.correlation_id = correlation_id
+        started = perf_counter()
         try:
             response = await call_next(request)
         except Exception as exc:
+            core.operations.error("api", "REQUEST_FAILED", correlation_id=correlation_id)
+            logging.getLogger("amora.api").error("request_failed", extra={
+                "error_code": "REQUEST_FAILED", "exception_type": type(exc).__name__,
+                "correlation_id": correlation_id, "latency_ms": (perf_counter()-started)*1000})
             if console is not None:
                 console.record_error("api", f"{request.method} {request.url.path}: {type(exc).__name__}: {exc}")
             raise
+        response.headers["X-Correlation-ID"] = correlation_id
+        if response.status_code >= 500:
+            core.operations.error("api", "HTTP_"+str(response.status_code), correlation_id=correlation_id)
         if console is not None:
             if response.status_code >= 500 and not request.url.path.startswith("/v1/voice/"):
                 console.record_error("api", f"{request.method} {request.url.path} → HTTP {response.status_code}")
             console.heartbeat(core)
         return response
-
-    # FastAPI 0.143 removed the legacy app.add_event_handler surface used by
-    # older releases. The dashboard only owns terminal/logging presentation and
-    # does not hold canonical state, so process teardown is sufficient. On older
-    # FastAPI versions, close it cleanly when the compatibility hook exists.
-    add_event_handler = getattr(app, "add_event_handler", None)
-    if callable(add_event_handler):
-        def close_server_console() -> None:
-            console = getattr(app.state, "server_console", None)
-            if console is not None:
-                console.close()
-        add_event_handler("shutdown", close_server_console)
 
     register_memory_routes(app, core, require_auth)
     register_world_routes(app, core, require_auth)
@@ -137,18 +169,37 @@ def create_api(core: AmoraCore) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, object]:
-        report = core.health_report()
-        return {
-            "status": report["status"],
-            "version": report["version"],
-            "database_integrity": report["database_integrity"],
-        }
+        try:
+            integrity = core.database.integrity_check() if not core._closed else "closed"
+        except Exception:
+            integrity = "unavailable"
+        return JSONResponse({"status": "ok" if integrity == "ok" else "degraded",
+                             **({} if settings.cloud else {"version": __version__, "database_integrity": integrity})},
+                            status_code=200 if integrity == "ok" else 503)
+
+    @app.get("/live")
+    def live():
+        return {"status": "alive"}
+
+    @app.get("/ready")
+    def ready():
+        report = core.readiness() if app.state.accepting else {"status": "not_ready", "error_code": "DRAINING"}
+        if settings.cloud:
+            report = {"status": report["status"]}
+        return JSONResponse(report, status_code=200 if report["status"] == "ready" else 503,
+                            headers={"Cache-Control": "no-store"})
+
+    @app.get("/v1/operations/state", dependencies=[Depends(require_auth)])
+    def operations_state():
+        from amora.operations import operational_snapshot
+        return operational_snapshot(core, getattr(app.state, "web_local_voice", None))
 
     @app.post("/v1/pairing/redeem")
     def redeem_pairing(request: PairingRedeemRequest) -> dict[str, str]:
         if not core.pairing.redeem(request.code):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired pairing code")
-        return {"token": expected_token(), "token_type": "Bearer"}
+        token = issue_browser_token(expected_token(), core.clock, request.client) if settings.cloud else expected_token()
+        return {"token": token, "token_type": "Bearer"}
 
     @app.get("/v1/state", dependencies=[Depends(require_auth)])
     def state_view() -> dict[str, object]:
@@ -360,7 +411,7 @@ def create_api(core: AmoraCore) -> FastAPI:
         queue: asyncio.Queue[AmoraEvent] = asyncio.Queue(maxsize=128)
 
         async def receive_event(event: AmoraEvent) -> None:
-            if event.privacy_scope == PrivacyScope.AUTH:
+            if event.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
                 return
             if queue.full():
                 try:
@@ -370,13 +421,76 @@ def create_api(core: AmoraCore) -> FastAPI:
             queue.put_nowait(event)
 
         await core.events.subscribe("*", receive_event)
+        receive_task = asyncio.create_task(websocket.receive())
+        queued_task = None
         try:
             while True:
-                event = await queue.get()
-                await websocket.send_json(event.model_dump(mode="json"))
+                queued_task = asyncio.create_task(queue.get())
+                done, _ = await asyncio.wait({receive_task, queued_task}, return_when=asyncio.FIRST_COMPLETED)
+                if receive_task in done:
+                    message = receive_task.result()
+                    if message["type"] == "websocket.disconnect":
+                        break
+                    await websocket.close(code=1008)
+                    break  # server-to-client stream has no inbound command protocol
+                if queued_task in done:
+                    await websocket.send_json(queued_task.result().model_dump(mode="json"))
+                else:
+                    queued_task.cancel()
+                    await asyncio.gather(queued_task, return_exceptions=True)
         except WebSocketDisconnect:
             pass
         finally:
-            await core.events.unsubscribe("*", receive_event)
+            tasks = [task for task in (receive_task, queued_task) if task is not None]
+            for task in tasks:
+                task.cancel()
+            import anyio
+            with anyio.CancelScope(shield=True):
+                await asyncio.gather(*tasks, return_exceptions=True)
+                await core.events.unsubscribe("*", receive_event)
 
+    def browser_access(role, scope):
+        from urllib.parse import parse_qs
+        path = scope["path"]
+        method = scope["method"]
+        import re
+        if role == "avatar":
+            fixed = {"/v1/avatar/state": {"GET"}, "/v1/avatar/project": {"GET", "PUT"},
+                     "/v1/avatar/assets": {"GET"}}
+            if method in fixed.get(path, set()):
+                return True
+            return bool(re.fullmatch(r"/v1/avatar/assets/[A-Za-z0-9_.-]{1,96}", path)) and method in {"GET", "PUT", "DELETE"}
+        if path == "/v1/web/state":
+            return method == "GET"
+        if path == "/v1/web/utterance":
+            return method == "POST"
+        query = parse_qs(scope.get("query_string", b"").decode("utf-8", "replace"))
+        if path == "/v1/audio/transcribe":
+            return method == "POST" and query.get("speech_device_id") == ["WEB_SAFARI"]
+        if path == "/v1/conversation/next":
+            return method == "GET" and query.get("device_id") == ["WEB_SAFARI"]
+        match = re.fullmatch(r"/v1/(web/voice|conversation)/utterances/([0-9a-fA-F-]{36})/(audio|started|ack|cancel)", path)
+        if match:
+            prefix, utterance_id, action = match.groups()
+            if not ((prefix == "web/voice" and action == "audio" and method == "GET") or
+                    (prefix == "conversation" and action in {"started", "ack", "cancel"} and method == "POST")):
+                return False
+            try:
+                item = core.conversation.store.get_utterance(utterance_id)
+                return item is not None and item.device_id == "WEB_SAFARI"
+            except ValueError:
+                return False
+        return False
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request, exc):
+        return JSONResponse({"detail": "invalid request"}, status_code=422)
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request, exc):
+        return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    app.add_middleware(SecurityMiddleware, settings=settings, clock=core.clock,
+                       authenticate=lambda supplied: token_role(supplied, expected_token(), core.clock),
+                       web_access=browser_access)
     return app

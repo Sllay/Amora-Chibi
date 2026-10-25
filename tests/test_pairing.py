@@ -30,3 +30,21 @@ def test_pairing_expires_and_limits_attempts(tmp_path) -> None:
     clock.advance(timedelta(seconds=11))
     assert manager.redeem(issued.code) is False
     assert path.exists() is False
+
+
+def test_pairing_redeem_is_single_use_across_instances(tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from amora.pairing import PairingManager
+    from amora.time import SimulatedClock
+    clock=SimulatedClock()
+    first=PairingManager(tmp_path/'pairing.json',clock)
+    second=PairingManager(tmp_path/'pairing.json',clock)
+    code=first.issue().code
+    barrier=threading.Barrier(2)
+    def redeem(manager):
+        barrier.wait()
+        return manager.redeem(code)
+    with ThreadPoolExecutor(2) as pool:
+        results=list(pool.map(redeem,[first,second]))
+    assert sum(results)==1

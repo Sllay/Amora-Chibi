@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import threading
 import zipfile
 from pathlib import Path
 
+from amora.storage.blobs import BlobStore, FileBlobStore, SQLBlobStore
+from amora.storage.backend import SQLiteBackend, StorageBackend
 from amora.time import Clock
 
 from .models import AvatarAssetInfo, AvatarProject, default_project
@@ -22,18 +25,15 @@ _ALLOWED_TYPES = {
 
 
 class AvatarStore:
-    def __init__(self, path: Path, asset_dir: Path, clock: Clock) -> None:
+    def __init__(self, path: Path, asset_dir: Path, clock: Clock, *, backend: StorageBackend | None = None, blobs: BlobStore | None = None) -> None:
         self.path = path
         self.asset_dir = asset_dir
         self.clock = clock
         self.asset_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._lock:
-            self._conn.execute("PRAGMA foreign_keys = ON")
-            self._conn.execute("PRAGMA journal_mode = WAL")
-            self._conn.execute("PRAGMA synchronous = NORMAL")
+        self.backend = backend or SQLiteBackend()
+        self._conn = self.backend.connect(path)
+        self.blobs = blobs or (SQLBlobStore(self._conn) if os.getenv("AMORA_ASSET_STORAGE", "files") == "database" else FileBlobStore(self.asset_dir))
 
     def close(self) -> None:
         with self._lock:
@@ -84,16 +84,14 @@ class AvatarStore:
         path = self.asset_dir / file_name
         digest = hashlib.sha256(body).hexdigest()
         now = self.clock.now()
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_bytes(body)
-        tmp.replace(path)
         with self._lock, self._conn:
+            self.blobs.put(file_name, body)
             old = self._conn.execute("SELECT file_name, created_at FROM avatar_assets WHERE id = ?", (asset_id,)).fetchone()
             created_at = old["created_at"] if old else now.isoformat()
             if old and old["file_name"] != file_name:
                 old_path = self.asset_dir / old["file_name"]
                 if old_path != path:
-                    old_path.unlink(missing_ok=True)
+                    self.blobs.delete(old["file_name"])
             self._conn.execute(
                 """
                 INSERT INTO avatar_assets(id, content_type, file_name, size_bytes, sha256, created_at, updated_at)
@@ -120,10 +118,13 @@ class AvatarStore:
         info = self.get_asset_info(asset_id)
         if info is None:
             return None
-        path = self.asset_dir / info.file_name
-        if not path.is_file():
+        with self._lock:
+            body = self.blobs.get(info.file_name)
+        if body is None:
             return None
-        return info, path.read_bytes()
+        if len(body) != info.size_bytes or hashlib.sha256(body).hexdigest() != info.sha256:
+            raise ValueError("avatar asset integrity mismatch")
+        return info, body
 
     def list_assets(self) -> list[AvatarAssetInfo]:
         with self._lock:
@@ -136,7 +137,7 @@ class AvatarStore:
             return False
         with self._lock, self._conn:
             self._conn.execute("DELETE FROM avatar_assets WHERE id = ?", (asset_id,))
-        (self.asset_dir / info.file_name).unlink(missing_ok=True)
+            self.blobs.delete(info.file_name)
         return True
 
     def asset_count(self) -> int:
@@ -167,10 +168,14 @@ class AvatarStore:
         try:
             with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 for info in infos:
-                    path = self.asset_dir / info.file_name
-                    if not path.is_file():
+                    if isinstance(self.blobs, SQLBlobStore):
+                        with sqlite3.connect(database_backup) as snapshot:
+                            row = snapshot.execute("SELECT body FROM avatar_asset_blobs WHERE file_name=?", (info.file_name,)).fetchone()
+                        body = bytes(row[0]) if row else None
+                    else:
+                        body = self.blobs.get(info.file_name)
+                    if body is None:
                         raise FileNotFoundError(f"avatar asset missing during backup: {info.id}")
-                    body = path.read_bytes()
                     digest = hashlib.sha256(body).hexdigest()
                     if digest != info.sha256 or len(body) != info.size_bytes:
                         raise ValueError(f"avatar asset integrity mismatch during backup: {info.id}")
@@ -212,9 +217,7 @@ class AvatarStore:
                 body = archive.read(f"assets/{info.file_name}")
                 if len(body) != info.size_bytes or hashlib.sha256(body).hexdigest() != info.sha256:
                     raise ValueError(f"avatar asset backup integrity mismatch: {asset_id}")
-                destination = self.asset_dir / info.file_name
-                tmp = destination.with_suffix(destination.suffix + ".restore.tmp")
-                tmp.write_bytes(body)
-                tmp.replace(destination)
+                with self._lock, self._conn:
+                    self.blobs.put(info.file_name, body)
                 restored += 1
         return restored

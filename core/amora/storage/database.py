@@ -10,6 +10,8 @@ from amora.events import AmoraEvent
 from amora.identity.models import Entity, EntityRegistry, EntityType, Relationship, normalize_alias
 from amora.identity.session import DeviceIdentity, DeviceTrust, PrivacyContext, SessionIdentity
 
+from .migrations_v101 import MIGRATION_V101
+from .backend import SQLiteBackend, StorageBackend, is_duplicate_error
 from .migrations import MIGRATIONS
 from .migrations_v06 import MIGRATION_V06
 from .migrations_v07 import MIGRATION_V07
@@ -19,16 +21,12 @@ from .migrations_v10 import MIGRATION_V10
 
 
 class AmoraDatabase:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, backend: StorageBackend | None = None) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._lock:
-            self._conn.execute("PRAGMA foreign_keys = ON")
-            self._conn.execute("PRAGMA journal_mode = WAL")
-            self._conn.execute("PRAGMA synchronous = NORMAL")
+        self.backend = backend or SQLiteBackend()
+        self._conn = self.backend.connect(self.path)
 
     def close(self) -> None:
         with self._lock:
@@ -39,8 +37,16 @@ class AmoraDatabase:
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             applied = {row[0] for row in self._conn.execute("SELECT version FROM schema_migrations")}
             count = 0
-            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07, MIGRATION_V08, MIGRATION_V09, MIGRATION_V10):
+            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07, MIGRATION_V08, MIGRATION_V09, MIGRATION_V10, MIGRATION_V101):
                 if version in applied:
+                    continue
+                if self.backend.capabilities.remote:
+                    from .remote import statements
+                    with self._conn:
+                        for statement in statements(sql):
+                            self._conn.execute(statement)
+                        self._conn.execute("INSERT INTO schema_migrations(version) VALUES (?)", (version,))
+                    count += 1
                     continue
                 script = f"BEGIN IMMEDIATE;\n{sql}\nINSERT INTO schema_migrations(version) VALUES ({int(version)});\nCOMMIT;"
                 try:
@@ -65,7 +71,9 @@ class AmoraDatabase:
             try:
                 with self._conn:
                     self._conn.execute("""INSERT INTO events (id, schema_version, event_type, timestamp, source, actor, target, confidence, importance, priority, payload_json, privacy_scope, session_id, correlation_id, causation_id, causal_parent, sequence, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", values)
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
+                if not is_duplicate_error(exc):
+                    raise
                 return False
             return True
 
@@ -141,14 +149,8 @@ class AmoraDatabase:
             return str(row[0]) if row else "unknown"
 
     def backup_to(self, destination: Path) -> Path:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        target = sqlite3.connect(destination)
-        try:
-            with self._lock:
-                self._conn.backup(target)
-        finally:
-            target.close()
-        return destination
+        with self._lock:
+            return self.backend.backup(self._conn, destination)
 
     @staticmethod
     def restore_backup(source: Path, destination: Path) -> Path:
