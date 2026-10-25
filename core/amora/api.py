@@ -340,6 +340,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
                 session_id=session_id,
                 privacy_scope=privacy_scope,
                 dedupe_key=f"stt:{transcript.request_id}" if transcript.request_id else None,
+                explicit_addressee_id="ENTITY_AMORA" if speech_device_id == "WEB_SAFARI" else None,
             )
             if console is not None:
                 console.set_activity("PENSANDO", "Core local → plano semântico → linguagem", ttl_seconds=60.0)

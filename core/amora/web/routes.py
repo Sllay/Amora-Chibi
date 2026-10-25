@@ -90,6 +90,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             speaker_id=request.speaker_id,
             session_id=request.session_id,
             source="web:text",
+            explicit_addressee_id="ENTITY_AMORA",
             privacy_scope=request.privacy_scope,
         )
         metadata: dict[str, object] = {"speech_device_id": "WEB_SAFARI"}

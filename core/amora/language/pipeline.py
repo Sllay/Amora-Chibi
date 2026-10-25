@@ -4,7 +4,12 @@ from pydantic import BaseModel
 
 from amora.audio import SpeakerResult, Transcript
 from amora.events import AmoraEvent, AsyncEventBus, PrivacyScope
-from amora.social import AddresseeEngine, AddresseeResult, SocialSceneTracker
+from amora.social import (
+    AddresseeEngine,
+    AddresseeKind,
+    AddresseeResult,
+    SocialSceneTracker,
+)
 from amora.time import Clock
 from .perspective import PerspectiveFrame
 
@@ -44,12 +49,26 @@ class LanguageSocialPipeline:
         dedupe_key: str | None = None,
         speaker_confidence: float = 1.0,
         extra_payload: dict[str, object] | None = None,
+        explicit_addressee_id: str | None = None,
     ) -> UtteranceObservation:
-        result = self.addressee.infer(
-            text,
-            speaker_id=speaker_id,
-            scene=self.social.scene,
-        )
+        if explicit_addressee_id is not None:
+            if self.addressee.registry.get(explicit_addressee_id) is None:
+                raise ValueError("unknown explicit surface addressee")
+            result = AddresseeResult(
+                kind=AddresseeKind.AMORA
+                if explicit_addressee_id == self.addressee.amora_id
+                else AddresseeKind.PERSON,
+                entity_id=explicit_addressee_id,
+                confidence=1.0,
+                candidates=[explicit_addressee_id],
+                reason_codes=["EXPLICIT_SURFACE_TARGET"],
+            )
+        else:
+            result = self.addressee.infer(
+                text,
+                speaker_id=speaker_id,
+                scene=self.social.scene,
+            )
         scene_confidence = min(
             speaker_confidence,
             result.confidence if result.entity_id else speaker_confidence,
@@ -67,6 +86,8 @@ class LanguageSocialPipeline:
             "addressee_confidence": result.confidence,
             "addressee_reason_codes": result.reason_codes,
         }
+        if explicit_addressee_id is not None:
+            payload["explicit_addressee_id"] = explicit_addressee_id
         if is_auth:
             payload["auth_redacted"] = True
         else:
@@ -109,6 +130,7 @@ class LanguageSocialPipeline:
         session_id: str | None = None,
         privacy_scope: PrivacyScope = PrivacyScope.PERSONAL,
         dedupe_key: str | None = None,
+        explicit_addressee_id: str | None = None,
     ) -> UtteranceObservation:
         return await self.observe_text(
             transcript.text,
@@ -118,6 +140,7 @@ class LanguageSocialPipeline:
             privacy_scope=privacy_scope,
             dedupe_key=dedupe_key,
             speaker_confidence=speaker.confidence,
+            explicit_addressee_id=explicit_addressee_id,
             extra_payload={
                 "stt_provider": transcript.provider,
                 "stt_model": transcript.model,
