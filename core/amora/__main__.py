@@ -58,15 +58,17 @@ def serve(port: int | None = None, host: str | None = None) -> int:
 
 
 def issue_pairing_code() -> int:
-    core = AmoraCore.bootstrap()
-    try:
-        issued = core.pairing.issue()
-        print(f"Código de pareamento: {issued.code}")
-        print(f"Expira em: {issued.expires_at.isoformat()}")
-        print("Uso único; máximo de 5 tentativas.")
-        return 0
-    finally:
-        core.close()
+    from amora.settings import RuntimePaths
+    from amora.time import SystemClock
+    from amora.pairing import PairingManager
+
+    paths = RuntimePaths.from_environment()
+    paths.ensure()
+    issued = PairingManager(paths.cache / "pairing.json", SystemClock()).issue()
+    print(f"Código de pareamento: {issued.code}")
+    print(f"Expira em: {issued.expires_at.isoformat()}")
+    print("Uso único; máximo de 5 tentativas.")
+    return 0
 
 
 def resolve_reference(
