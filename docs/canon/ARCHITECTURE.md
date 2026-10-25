@@ -574,6 +574,21 @@ Regras:
 
 O caminho Android de produção existente pode continuar com Faber provisório enquanto a promoção nativa final não for concluída. O Android debug é referência/gate secundário; pequenas iterações de diálogo/Web não exigem novo APK.
 
+### Apresentação de turno e plano vocal — ADR-0019
+
+Texto validado para apresentação permanece literal em `SpeechPlan.display_text`;
+normalização gera `speech_text` e cues sem reescrevê-lo. Web apresenta uma bolha
+por cognitive_turn_id, independente dos segmentos, render, ACK ou cancel vocal.
+Cues sem renderer ficam explicitamente unsupported; identidade/DSP não mudam.
+Mute/stop Web cancelam apenas entrega vocal; barge-in cognitivo/A15 mantém seu
+contrato existente. Histórico visual local conta no máximo 50 user + 50 turnos
+Amora; sua limpeza exige confirmação e não altera memória canônica.
+
+VoiceBackend preserva render WAV; streaming é capacidade opcional e não ativada.
+VoiceSession/VoiceChunk identificam PCM ordenado, formato e final. O player PCM
+progressivo é uma fronteira de plataforma testada com samples sintéticos,
+sem novo modelo, rota streaming ou certificação acústica implícita.
+
 ### 14.6 Certificação
 
 Identidade de laboratório aprovada não equivale a produto fisicamente certificado. Ainda medir voz, RTF/latência, barge-in, estabilidade, CPU/RAM/temperatura e equivalência percebida no hardware real.
