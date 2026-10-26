@@ -37,6 +37,34 @@ def inspect_wav(
             raise ValueError("container")
         if struct.unpack_from("<I", body, 4)[0] + 8 != len(body):
             raise ValueError("truncated container")
+        offset, seen = 12, set()
+        while offset < len(body):
+            if offset + 8 > len(body):
+                raise ValueError("truncated chunk")
+            name, size = struct.unpack_from("<4sI", body, offset)
+            offset += 8
+            end = offset + size
+            if end + size % 2 > len(body):
+                raise ValueError("truncated chunk")
+            if name in {b"fmt ", b"data"}:
+                if name in seen:
+                    raise ValueError("duplicate audio chunk")
+                seen.add(name)
+            if name == b"fmt ":
+                if size < 16 or struct.unpack_from("<HHIIHH", body, offset) != (
+                    1,
+                    1,
+                    sample_rate,
+                    sample_rate * 2,
+                    2,
+                    16,
+                ):
+                    raise ValueError("invalid PCM format")
+            if name == b"data" and (size == 0 or size % 2):
+                raise ValueError("invalid PCM alignment")
+            offset = end + size % 2
+        if seen != {b"fmt ", b"data"}:
+            raise ValueError("missing audio chunks")
         with wave.open(io.BytesIO(body), "rb") as wav:
             if (
                 wav.getnchannels() != 1

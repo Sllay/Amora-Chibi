@@ -179,6 +179,9 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
         }
         if "num_steps" in voice_state:
             headers["X-Amora-TTS-Steps"] = str(voice_state["num_steps"])
+        if voice_state_remote():
+            headers["X-Amora-Unsupported-Cues"] = ",".join(voice_state.get("unsupported_cues", []))
+            headers["X-Amora-Unsupported-Controls"] = ",".join(voice_state.get("unsupported_controls", []))
         return Response(
             content=audio.wav_bytes,
             media_type="audio/wav",

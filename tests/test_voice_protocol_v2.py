@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -13,11 +14,13 @@ import pytest
 
 from amora.api import create_api
 from amora.events import PrivacyScope
+from amora.conversation.models import SpeechStyle
 from amora.voice.local_amora import LocalVoiceUnavailable
 from amora.voice.remote import RemoteVoiceBackend
 from amora.voice.renderers import renderer_from_environment
 from amora.voice.worker import create_worker
 from test_web_safari_v101 import _client, _enqueue_web
+from test_remote_voice import Renderer, wav_bytes
 import test_omnivoice_renderer
 
 mocked_omni = test_omnivoice_renderer.mocked_omni
@@ -46,7 +49,14 @@ def test_v2_worker_auth_headers_and_v1_does_not_silently_switch_renderer(mocked_
         assert client.get("/live").json() == {"status": "alive"}
         assert client.get("/ready").status_code == 401
         assert client.post("/v1/render", json=payload()).status_code == 401
-        assert client.post("/v1/render", json=payload(), headers={"Authorization": "Bearer browser-only-token"}).status_code == 401
+        assert (
+            client.post(
+                "/v1/render",
+                json=payload(),
+                headers={"Authorization": "Bearer browser-only-token"},
+            ).status_code
+            == 401
+        )
         ready = client.get("/ready", headers=headers)
         assert ready.status_code == 200 and ready.json()["streaming_capable"] is False
         data = payload()
@@ -63,6 +73,47 @@ def test_v2_worker_auth_headers_and_v1_does_not_silently_switch_renderer(mocked_
             == 409
         )
         assert len(model.calls) == 1
+
+
+def test_supertonic_v2_keeps_frozen_audio_and_reports_unsupported_cues():
+    renderer = Renderer()
+    with TestClient(create_worker(renderer, TOKEN)) as worker:
+
+        def transport(request):
+            response = worker.post(
+                "/v1/render",
+                content=request.content,
+                headers={
+                    "Authorization": "Bearer " + TOKEN,
+                    "Content-Type": "application/json",
+                },
+            )
+            return httpx.Response(
+                response.status_code, headers=response.headers, content=response.content
+            )
+
+        from amora.voice.renderers import SupertonicRendererAdapter
+
+        backend = RemoteVoiceBackend(
+            "https://voice.example",
+            TOKEN,
+            protocol="amora.voice.render.v2",
+            expected_identity=SupertonicRendererAdapter.identity,
+            transport=httpx.MockTransport(transport),
+        )
+        item = SimpleNamespace(
+            privacy_scope=PrivacyScope.PERSONAL,
+            text="pai...",
+            style=SpeechStyle(),
+            id=uuid4(),
+            metadata={"cues": ["LAUGHTER", "SIGH"]},
+        )
+        try:
+            assert backend.render(item).wav_bytes == wav_bytes()
+            assert backend.state()["unsupported_cues"] == ["LAUGHTER", "SIGH"]
+            assert renderer.inputs[0].text == "pai..."
+        finally:
+            backend.close()
 
 
 @pytest.mark.parametrize(

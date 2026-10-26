@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 import logging
 import math
 import os
+import sys
 import threading
 from typing import Annotated
 
@@ -202,7 +203,7 @@ def application():
 
 def main():
     # stdout only; no Core paths/database/providers/secrets store are initialized.
-    handler = logging.StreamHandler()
+    handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
     for name in ("omnivoice", "httpx", "huggingface_hub", "transformers"):

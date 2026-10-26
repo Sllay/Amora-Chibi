@@ -55,6 +55,8 @@ class RemoteVoiceBackend:
         )
         self._available = False
         self._last_error = None
+        self._unsupported_cues = []
+        self._unsupported_controls = []
 
     @classmethod
     def from_environment(cls, *, transport=None):
@@ -90,6 +92,8 @@ class RemoteVoiceBackend:
             "available": self._available,
             "last_error": self._last_error,
             "zero_cost_required": True,
+            "unsupported_cues": list(self._unsupported_cues),
+            "unsupported_controls": list(self._unsupported_controls),
         }
         if self.protocol.endswith(".v1"):
             state["num_steps"] = NUM_STEPS
@@ -123,6 +127,30 @@ class RemoteVoiceBackend:
                 seconds = float(response.headers.get("X-Amora-Render-Seconds", "0"))
                 if not math.isfinite(seconds) or seconds < 0:
                     raise LocalVoiceUnavailable("VOICE_INVALID_METRICS")
+                if isinstance(payload, VoiceRenderRequestV2):
+                    cues = list(
+                        filter(
+                            None,
+                            response.headers.get("X-Amora-Unsupported-Cues", "").split(
+                                ","
+                            ),
+                        )
+                    )
+                    controls = list(
+                        filter(
+                            None,
+                            response.headers.get(
+                                "X-Amora-Unsupported-Controls", ""
+                            ).split(","),
+                        )
+                    )
+                    if not set(cues) <= set(payload.cues) or not set(controls) <= {
+                        "rate",
+                        "volume",
+                        "expression",
+                    }:
+                        raise LocalVoiceUnavailable("VOICE_INVALID_CAPABILITIES")
+                    self._unsupported_cues, self._unsupported_controls = cues, controls
             self._available, self._last_error = True, None
             return LocalVoiceAudio(bytes(body), rate, frames, seconds, 0.0)
         except (httpx.HTTPError, ValueError, LocalVoiceUnavailable) as exc:
