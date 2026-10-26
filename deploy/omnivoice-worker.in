@@ -1,0 +1,12 @@
+# Regeneration input ONLY; install the fully hashed lock on the CPU worker.
+# CPython 3.12 / Linux x86_64 glibc. Never use this in the Alpine Core image.
+--extra-index-url https://download.pytorch.org/whl/cpu
+--only-binary=:all:
+-c python.lock
+fastapi
+uvicorn
+httpx
+pydantic
+torch==2.11.0+cpu
+torchaudio==2.11.0+cpu
+omnivoice==0.2.1

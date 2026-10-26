@@ -19,6 +19,7 @@ jobs:
           mkdir -p reports
           pip-audit -r deploy/python.lock --no-deps --disable-pip --progress-spinner off --format json --output reports/python-audit.json
           pip-audit -r deploy/voice-worker.lock --no-deps --disable-pip --progress-spinner off --format json --output reports/voice-audit.json
+          python tools/security/audit-omnivoice.py --output reports/omnivoice-audit.json
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node 24
         if: always()
         with:
