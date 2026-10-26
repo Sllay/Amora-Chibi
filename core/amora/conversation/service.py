@@ -50,6 +50,13 @@ class ConversationEngine:
     def close(self) -> None:
         self.store.close()
 
+    def cancel_event_state(self) -> dict[str, object]:
+        return {
+            "status": "DEGRADED" if self._cancel_event_uncertain_count else "ON",
+            "uncertain_count": self._cancel_event_uncertain_count,
+            "retention": "bounded-process-local",
+        }
+
     def state(self) -> dict[str, object]:
         return {
             "turn_decision_count": self.store.turn_count(),
@@ -59,11 +66,7 @@ class ConversationEngine:
             "cognition_enabled": self.cognition is not None,
             "conversation_floor": self.social.scene.conversation_floor,
             "active_addressee": self.social.scene.active_addressee,
-            "cancel_event_persistence": {
-                "status": "DEGRADED" if self._cancel_event_uncertain_count else "ON",
-                "uncertain_count": self._cancel_event_uncertain_count,
-                "retention": "bounded-process-local",
-            },
+            "cancel_event_persistence": self.cancel_event_state(),
         }
 
     def decide_turn(self, signal: TurnSignal) -> TurnDecision:

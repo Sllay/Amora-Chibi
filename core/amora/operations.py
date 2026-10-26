@@ -142,7 +142,7 @@ def operational_snapshot(core, voice=None):
         "providers": providers,
         "quota": usage,
         "usage_persistence": usage_persistence,
-        "cancel_event_persistence": core.conversation.state()["cancel_event_persistence"],
+        "cancel_event_persistence": core.conversation.cancel_event_state(),
         "cooldowns": {
             key: value.isoformat()
             for key, value in cooldowns.items()
@@ -152,6 +152,7 @@ def operational_snapshot(core, voice=None):
             "core": "OFF" if core._closed else "ON",
             "storage": core.database.backend.capabilities.name,
             "usage_ledger": usage_persistence["status"],
+            "cancel_event": core.conversation.cancel_event_state()["status"],
             "voice": "ON" if voice_state.get("available") else "DEGRADED",
         },
         "speech": {
