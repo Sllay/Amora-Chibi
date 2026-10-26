@@ -1,5 +1,7 @@
 # AMORA — Architecture Decision Records (ADR)
 
+- [ADR-0021 — Speech I/O V2 e OmniVoice CPU sem custo](ADR-0021-renderer-neutral-speech-io-and-zero-cost-omnivoice-lab.md).
+
 Este diretório registra **por que** decisões importantes da Amora foram tomadas, rejeitadas ou substituídas.
 
 O objetivo é impedir que chats, agentes ou ciclos futuros restaurem sem querer um método que já falhou ou interpretem uma mudança de roadmap como esquecimento.

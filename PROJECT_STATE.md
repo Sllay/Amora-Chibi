@@ -623,3 +623,44 @@ Nenhum deploy.
 Gate real desta revisão Northflank/Turso permanece: ambiente sem credenciais,
 sem inventar validação física. Relatório com contagens de requests e comandos:
 `docs/engineering/reviews/LIBSQL_CONNECTION_RECOVERY.md`.
+
+## Speech I/O V2 / OmniVoice CPU experimental — 2026-10-26
+
+Base main e2afcde (PR #63), branch feat/speech-io-v2-omnivoice. ADR-0021
+adiciona protocolo V2 renderer-neutral e autoridade de renderer no worker.
+Core só envia síntese mínima HTTPS autenticada e valida identidade/IDs/WAV;
+não instala/carrega OmniVoice. V1 e Supertonic/FINAL_B/Signature/DSP congelados
+preservados; nenhum fallback secreto ou streaming falso. DisplayText, cues,
+mute/Stop/ACK e UI existentes mantidos.
+
+OmniVoice oficial 0.2.1, modelo k2-fsa/OmniVoice, CPU/torch.float32 também no
+codec, load_asr=False. Referência/prompt privados e versionados, hashes/RMS/
+duração/transcript/shape validados. Modelo/prompt load uma vez; readiness sem
+sintetizar. Nenhuma referência BK inventada. Tooling cria prompt e mede steps
+16/24/32 no host, sem declarar vencedor. Runbook em docs/deploy/LIGHTNING_OMNIVOICE.md.
+ZERO_COST_REQUIRED=true, R$ 0,00 obrigatório: Free CPU Studio 4 CPU é laboratório,
+sem billing/card/GPU paga/auto-upgrade; se gratuito acabar, voz DEGRADED/texto ON.
+
+Cancelamento real PR #63: mutação confirmada seguida de append_event incerto
+causava 500 apesar do cancel efetivo. Fronteira agora retorna cancelled com
+cancel_event_persistence=uncertain, logs/correlation/DEGRADED/fingerprint, sem
+retry/evento falso. Mutação principal/COMMIT incerto continuam fail-closed.
+Recovery Hrana já confirmado por BK, adapter intacto. Quatro regressões SQL-backed.
+
+Gates: Core 537 PASS host e Alpine restrito (85 novos; cinco avisos existentes),
+específicos 241 PASS, JS/Avatar 50 PASS Node 22.23.4, container smoke/restart/
+SIGTERM/non-root/read-only/cap-drop/NNP e pip check PASS. Imagem Core sem runtimes
+neurais. Venv opcional import oficial CPU/CUDA=None e pip check PASS, sem modelo.
+
+PUBLICAÇÃO DO WORKER BLOQUEADA: audit completo 91 pacotes / 41 advisories,
+37 Pillow + 3 setuptools + 1 Torch, constraints upstream incompatíveis com as
+correções indicadas. Gate novo inclui public versions dos wheels +cpu, sem skips,
+ignores/VEX ou redução do gate HIGH/CRITICAL Core. Evidências em
+OMNIVOICE_DEPENDENCIES.md e inventário JSON na pasta engineering/security.
+Trivy local não atualizou DB por registry Forbidden/DENIED; resultado fresco
+precisa da CI, sem usar DB antigo para declarar PASS. CI/PR/SHA no handoff.
+
+Não houve deploy, alteração de Turso, secrets, Northflank, cognition/providers,
+UI, voz congelada ou pairing. Pendentes: dependências seguras, referência final,
+benchmark/modelo real Lightning CPU, host gratuito/persistência/ingress e áudio
+real Safari/Northflank. Detalhes em docs/engineering/reviews/SPEECH_IO_V2_OMNIVOICE.md.

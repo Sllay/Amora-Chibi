@@ -591,6 +591,14 @@ sem novo modelo, rota streaming ou certificação acústica implícita.
 
 ### 14.6 Certificação
 
+ADR-0021 acrescenta laboratório opcional OmniVoice oficial CPU/float32 em worker
+remoto, por protocolo V2 renderer-neutral com identidade verificada. Não promove
+nova voz nem altera Supertonic/FINAL_B/Signature. Worker escolhe renderer; Core
+só envia síntese mínima e valida WAV. streaming=false inicialmente. Invariante
+financeiro atual: ZERO_COST_REQUIRED=true, R$ 0,00 obrigatório, sem cobrança ou
+fallback pago; indisponibilidade gratuita degrada voz e preserva texto.
+Referência BK, dependências seguras e benchmark Lightning real continuam gates.
+
 Identidade de laboratório aprovada não equivale a produto fisicamente certificado. Ainda medir voz, RTF/latência, barge-in, estabilidade, CPU/RAM/temperatura e equivalência percebida no hardware real.
 
 ---
