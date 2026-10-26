@@ -142,6 +142,7 @@ def operational_snapshot(core, voice=None):
         "providers": providers,
         "quota": usage,
         "usage_persistence": usage_persistence,
+        "cancel_event_persistence": core.conversation.state()["cancel_event_persistence"],
         "cooldowns": {
             key: value.isoformat()
             for key, value in cooldowns.items()

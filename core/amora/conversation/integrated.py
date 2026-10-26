@@ -317,6 +317,7 @@ class ConversationEngine(BaseConversationEngine):
         reason: str = "barge_in",
         spoken_chars: int | None = None,
         speech_only: bool = False,
+        correlation_id: UUID | None = None,
     ) -> tuple[SpeechUtterance | None, int]:
         current = self.store.get_utterance(utterance_id)
         if current is None:
@@ -340,7 +341,7 @@ class ConversationEngine(BaseConversationEngine):
             item = self.store.cancel(utterance_id, reason=reason)
             cancelled = 1 if item is not None else 0
         if item is not None:
-            await self.events.publish(
+            item = await self._publish_cancel_event(
                 AmoraEvent(
                     event_type="conversation.utterance_cancelled",
                     timestamp=self.clock.now(),
@@ -359,7 +360,8 @@ class ConversationEngine(BaseConversationEngine):
                     privacy_scope=item.privacy_scope,
                     causation_id=item.source_event_id,
                     dedupe_key=f"conversation.cancelled:{item.id}:{reason}",
-                )
+                    correlation_id=correlation_id,
+                ), item,
             )
         return item, cancelled
 

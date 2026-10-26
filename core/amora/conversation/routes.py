@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from amora.app import AmoraCore
@@ -128,12 +129,13 @@ def register_conversation_routes(app: FastAPI, core: AmoraCore, require_auth: Ca
         }
 
     @app.post("/v1/conversation/utterances/{utterance_id}/cancel", dependencies=[Depends(require_auth)])
-    async def cancel_utterance(utterance_id: str, request: CancelSpeechRequest) -> dict[str, object]:
+    async def cancel_utterance(utterance_id: str, request: CancelSpeechRequest, http_request: Request) -> dict[str, object]:
         item, cancelled = await core.conversation.cancel_utterance(
             utterance_id,
             reason=request.reason,
             spoken_chars=request.spoken_chars,
             speech_only=request.speech_only,
+            correlation_id=UUID(http_request.state.correlation_id),
         )
         if item is None:
             raise HTTPException(status_code=404, detail="utterance not found")
