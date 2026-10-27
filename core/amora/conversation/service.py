@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import sqlite3
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -7,6 +9,8 @@ from amora.emotion import EmotionEngine
 from amora.events import AmoraEvent, AsyncEventBus, PrivacyScope
 from amora.social import SocialSceneTracker
 from amora.time import Clock
+from amora.observability import request_failure_fields
+from amora.operations import OperationMonitor
 
 from .composer import LocalSpeechComposer
 from .dialogue import DialogueProvider, NoDialogueProvider
@@ -29,6 +33,7 @@ class ConversationEngine:
         *,
         dialogue: DialogueProvider | None = None,
         cognition: "CognitiveEngine | None" = None,
+        operations: OperationMonitor | None = None,
     ) -> None:
         self.store = store
         self.clock = clock
@@ -39,9 +44,18 @@ class ConversationEngine:
         self.composer = LocalSpeechComposer()
         self.dialogue = dialogue or NoDialogueProvider()
         self.cognition = cognition
+        self.operations = operations
+        self._cancel_event_uncertain_count = 0
 
     def close(self) -> None:
         self.store.close()
+
+    def cancel_event_state(self) -> dict[str, object]:
+        return {
+            "status": "DEGRADED" if self._cancel_event_uncertain_count else "ON",
+            "uncertain_count": self._cancel_event_uncertain_count,
+            "retention": "bounded-process-local",
+        }
 
     def state(self) -> dict[str, object]:
         return {
@@ -52,6 +66,7 @@ class ConversationEngine:
             "cognition_enabled": self.cognition is not None,
             "conversation_floor": self.social.scene.conversation_floor,
             "active_addressee": self.social.scene.active_addressee,
+            "cancel_event_persistence": self.cancel_event_state(),
         }
 
     def decide_turn(self, signal: TurnSignal) -> TurnDecision:
@@ -383,7 +398,45 @@ class ConversationEngine:
             )
         return item
 
-    async def cancel_utterance(self, utterance_id: UUID | str, *, reason: str = "barge_in") -> tuple[SpeechUtterance | None, int]:
+    async def _publish_cancel_event(self, event: AmoraEvent, item: SpeechUtterance) -> SpeechUtterance:
+        """Only the post-confirmation audit event may have an uncertain outcome.
+
+        Domain cancellation/segment writes happen before this boundary. Never
+        replay an ambiguous event, claim it persisted, or suppress domain errors.
+        """
+        try:
+            await self.events.publish(event)
+        except sqlite3.Error as exc:
+            fields = request_failure_fields(exc)
+            if not (
+                item.status.value == "cancelled"
+                and fields.get("storage_error_code") == "SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN"
+                and fields.get("storage_module") == "amora.storage.database"
+                and fields.get("operation") == "append_event"
+            ):
+                raise
+            self._cancel_event_uncertain_count += 1
+            code = "CONVERSATION_CANCEL_EVENT_PERSISTENCE_UNCERTAIN"
+            logging.getLogger(__name__).warning(
+                code.lower(),
+                extra={
+                    "error_code": code,
+                    "exception_type": type(exc).__name__,
+                    "correlation_id": str(event.correlation_id or event.id),
+                    "event_id": str(event.id),
+                    "utterance_id": str(item.id),
+                    "canonical_cancel_confirmed": True,
+                    "outcome": "unknown",
+                    **fields,
+                },
+            )
+            if self.operations is not None:
+                self.operations.error("conversation.cancel_event", code, correlation_id=event.correlation_id)
+            # Response-only metadata; no new write or fake persisted event.
+            return item.model_copy(update={"metadata": {**item.metadata, "cancel_event_persistence": "uncertain"}})
+        return item
+
+    async def cancel_utterance(self, utterance_id: UUID | str, *, reason: str = "barge_in", correlation_id: UUID | None = None) -> tuple[SpeechUtterance | None, int]:
         current = self.store.get_utterance(utterance_id)
         if current is None:
             return None, 0
@@ -398,7 +451,7 @@ class ConversationEngine:
             item = self.store.cancel(utterance_id, reason=reason)
             cancelled = 1 if item is not None else 0
         if item is not None:
-            await self.events.publish(
+            item = await self._publish_cancel_event(
                 AmoraEvent(
                     event_type="conversation.utterance_cancelled",
                     timestamp=self.clock.now(),
@@ -410,7 +463,8 @@ class ConversationEngine:
                     privacy_scope=item.privacy_scope,
                     causation_id=item.source_event_id,
                     dedupe_key=f"conversation.cancelled:{item.id}:{reason}",
-                )
+                    correlation_id=correlation_id,
+                ), item,
             )
         return item, cancelled
 

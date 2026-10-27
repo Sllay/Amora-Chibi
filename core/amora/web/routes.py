@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from amora.events import PrivacyScope
 from amora.voice.backend import VoiceBackend
-from amora.voice.local_amora import AmoraLocalVoiceRenderer, LocalVoiceUnavailable, MODEL_ID, NUM_STEPS, VOICE_ID
+from amora.voice.local_amora import AmoraLocalVoiceRenderer, LocalVoiceUnavailable, MODEL_ID, VOICE_ID
 
 
 class WebTextTurnRequest(BaseModel):
@@ -43,7 +43,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             token = os.getenv("AMORA_VOICE_SERVICE_TOKEN", "")
             if token and token == core.secrets.get("LOCAL_API_TOKEN"):
                 raise ValueError("voice service token must differ from the Core user token")
-            local_voice = RemoteVoiceBackend(os.getenv("AMORA_VOICE_WORKER_URL", ""), token)
+            local_voice = RemoteVoiceBackend.from_environment()
         elif backend_name == "local":
             local_voice = AmoraLocalVoiceRenderer(core.paths)
         else:
@@ -61,7 +61,8 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             render_slot.release()
 
     def voice_state_remote():
-        return local_voice.state().get("provider") == "amora_remote_supertonic_world"
+        voice_state = local_voice.state()
+        return voice_state.get("remote", False) or voice_state.get("provider") == "amora_remote_supertonic_world"
 
     def console():
         return getattr(app.state, "server_console", None)
@@ -76,7 +77,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             # certification is still a separate gate.
             "canonical_voice": False,
             "voice_transport": voice_state["provider"],
-            "voice_candidate": VOICE_ID,
+            "voice_candidate": voice_state.get("voice", VOICE_ID),
             "voice_candidate_available": voice_state["available"],
             "local_voice": voice_state,
             "core": core.readiness() if os.getenv("AMORA_MODE") == "cloud" else core.health_report(),
@@ -139,7 +140,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
 
         dashboard = console()
         if dashboard is not None:
-            dashboard.set_activity("SINTETIZANDO", "Amora local • Supertonic → FINAL_B", ttl_seconds=60.0)
+            dashboard.set_activity("SINTETIZANDO", str(local_voice.state().get("model", MODEL_ID)), ttl_seconds=60.0)
         try:
             audio = await asyncio.to_thread(render_bounded, item)
         except LocalVoiceUnavailable as exc:
@@ -160,22 +161,31 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             dashboard.clear_module_override("amora.local_voice")
             dashboard.set_activity(
                 "VOZ PRONTA",
-                f"FINAL_B + Signature V1 • RTF {audio.total_rtf:.3f}",
+                f"voz • RTF {audio.total_rtf:.3f}",
                 ttl_seconds=4.0,
             )
+        voice_state = local_voice.state()
+        headers = {
+            "Cache-Control": "no-store",
+            "X-Amora-TTS-Provider": "amora-remote" if voice_state_remote() else "amora-local",
+            "X-Amora-TTS-Model": str(voice_state.get("model", MODEL_ID)),
+            "X-Amora-Voice-Model": str(voice_state.get("model", MODEL_ID)),
+            "X-Amora-Voice-Renderer": str(voice_state.get("renderer", "supertonic")),
+            "X-Amora-Streaming-Capable": str(voice_state.get("streaming_capable", False)).lower(),
+            "X-Amora-Voice": str(voice_state.get("voice", VOICE_ID)),
+            "X-Amora-Sample-Rate": str(audio.sample_rate),
+            "X-Amora-RTF": f"{audio.total_rtf:.6f}",
+            "X-Amora-Voice-Certification": "lab-approved-physical-gate-pending" if voice_state.get("voice", VOICE_ID) == VOICE_ID else "experimental-reference-physical-gate-pending",
+        }
+        if "num_steps" in voice_state:
+            headers["X-Amora-TTS-Steps"] = str(voice_state["num_steps"])
+        if voice_state_remote():
+            headers["X-Amora-Unsupported-Cues"] = ",".join(voice_state.get("unsupported_cues", []))
+            headers["X-Amora-Unsupported-Controls"] = ",".join(voice_state.get("unsupported_controls", []))
         return Response(
             content=audio.wav_bytes,
             media_type="audio/wav",
-            headers={
-                "Cache-Control": "no-store",
-                "X-Amora-TTS-Provider": "amora-remote" if voice_state_remote() else "amora-local",
-                "X-Amora-TTS-Model": MODEL_ID,
-                "X-Amora-Voice": VOICE_ID,
-                "X-Amora-Sample-Rate": str(audio.sample_rate),
-                "X-Amora-TTS-Steps": str(NUM_STEPS),
-                "X-Amora-RTF": f"{audio.total_rtf:.6f}",
-                "X-Amora-Voice-Certification": "lab-approved-physical-gate-pending",
-            },
+            headers=headers,
         )
 
     web_root = Path(os.environ.get("AMORA_WEB_ROOT", str(Path(__file__).resolve().parents[3] / "web")))

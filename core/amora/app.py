@@ -208,6 +208,7 @@ class AmoraCore:
             emotion,
             events,
             cognition=cognition,
+            operations=operations,
         )
         avatar = AvatarEngine(
             AvatarStore(paths.database, paths.avatar_assets, active_clock, backend=storage),
