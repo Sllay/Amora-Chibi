@@ -211,7 +211,6 @@ class RemoteConnection:
         self.client = self._new_client()
         self._baton = None
         self._transaction = False
-        self._transaction_started = False
         self._closed = False
         self._broken = False
         self._previous_error = None
@@ -314,21 +313,9 @@ class RemoteConnection:
         return results
 
     @staticmethod
-    def _request(sql, parameters=(), *, want_rows=True):
-        return {
-            "type": "execute",
-            "stmt": {
-                "sql": sql,
-                "args": [_encode(v) for v in parameters],
-                "want_rows": want_rows,
-            },
-        }
-
-    @staticmethod
-    def _decode_execute(first, sql):
+    def _decode_execute_result(first):
         if first["type"] == "error":
             code = first["error"].get("code", "SQL_ERROR")
-            # Messages may contain SQL values; expose only machine codes.
             error = (
                 sqlite3.IntegrityError
                 if code in {"SQLITE_CONSTRAINT_UNIQUE", "SQLITE_CONSTRAINT_PRIMARYKEY"}
@@ -337,9 +324,7 @@ class RemoteConnection:
             if code.startswith("SQLITE_CONSTRAINT"):
                 failure = error(code)
                 failure.sqlite_errorname = code
-                failure.sqlite_errorcode = getattr(
-                    sqlite3, code, sqlite3.SQLITE_CONSTRAINT
-                )
+                failure.sqlite_errorcode = getattr(sqlite3, code, sqlite3.SQLITE_CONSTRAINT)
                 raise failure
             if code == "SQLITE_ERROR":
                 message = first["error"].get("message", "")
@@ -348,36 +333,34 @@ class RemoteConnection:
             raise StorageUnavailable(code)
         if first["type"] != "ok" or first["response"]["type"] != "execute":
             raise StorageUnavailable("SQL_INVALID_RESPONSE")
-        payload = first["response"]["result"]
-        rowcount = payload.get("affected_row_count")
+        result = first["response"]["result"]
+        rowcount = result.get("affected_row_count")
         if type(rowcount) is not int or rowcount < 0:
             raise StorageUnavailable("SQL_INVALID_RESPONSE")
         return Result(
-            [c["name"] for c in payload["cols"]],
-            [[_decode(v) for v in row] for row in payload["rows"]],
+            [c["name"] for c in result["cols"]],
+            [[_decode(v) for v in row] for row in result["rows"]],
             rowcount,
         )
 
     def execute(self, sql, parameters=()):
         if isinstance(parameters, dict):
             raise TypeError("named parameters are not used by Amora stores")
-        normalized = sql.strip().rstrip(";").strip().upper()
-        starting_transaction = self._transaction and not self._transaction_started
-        requests = []
-        if starting_transaction:
-            # BEGIN and the first real statement share one network round-trip.
-            requests.append(self._request("BEGIN IMMEDIATE", (), want_rows=False))
-        requests.append(self._request(sql, parameters))
+        requests = [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": sql,
+                    "args": [_encode(v) for v in parameters],
+                    "want_rows": True,
+                },
+            }
+        ]
         if not self._transaction:
             requests.append({"type": "close"})
         results = self._pipeline(requests)
         try:
-            offset = 0
-            if starting_transaction:
-                self._decode_execute(results[0], "BEGIN IMMEDIATE")
-                self._transaction_started = True
-                offset = 1
-            result = self._decode_execute(results[offset], sql)
+            result = self._decode_execute_result(results[0])
         except BaseException:
             if self._transaction and self._baton is None:
                 self._poison("SQL_TRANSACTION_STREAM_LOST")
@@ -386,9 +369,8 @@ class RemoteConnection:
         # only after processing its SQL result, so errors never become success.
         if (
             self._transaction
-            and self._transaction_started
             and self._baton is None
-            and normalized not in {"COMMIT", "ROLLBACK"}
+            and sql.strip().rstrip(";").strip().upper() not in {"COMMIT", "ROLLBACK"}
         ):
             self._poison("SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN")
             raise StorageUnavailable(
@@ -407,33 +389,29 @@ class RemoteConnection:
     def executemany(self, sql, values):
         items = list(values)
         if not items:
-            return Result(rowcount=0)
-        if not self._transaction:
-            # Preserve the historical DB-API behavior outside an explicit atomic
-            # context: each statement commits independently and a later failure
-            # does not roll back prior successful rows.
-            total = 0
+            return None
+        if not self._transaction or len(items) == 1:
             for value in items:
-                total += self.execute(sql, value).rowcount
-            return Result(rowcount=total)
+                self.execute(sql, value)
+            return None
 
-        starting_transaction = not self._transaction_started
-        requests = []
-        if starting_transaction:
-            requests.append(self._request("BEGIN IMMEDIATE", (), want_rows=False))
-        requests.extend(self._request(sql, value) for value in items)
+        requests = [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": sql,
+                    "args": [_encode(v) for v in value],
+                    "want_rows": True,
+                },
+            }
+            for value in items
+        ]
         results = self._pipeline(requests)
         try:
-            offset = 0
-            if starting_transaction:
-                self._decode_execute(results[0], "BEGIN IMMEDIATE")
-                self._transaction_started = True
-                offset = 1
-            total = 0
-            for item in results[offset:]:
-                total += self._decode_execute(item, sql).rowcount
+            for first in results:
+                self._decode_execute_result(first)
         except BaseException:
-            if self._baton is None:
+            if self._transaction and self._baton is None:
                 self._poison("SQL_TRANSACTION_STREAM_LOST")
             raise
         if self._baton is None:
@@ -441,7 +419,13 @@ class RemoteConnection:
             raise StorageUnavailable(
                 "SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN"
             ) from StorageUnavailable("SQL_TRANSACTION_STREAM_LOST")
-        return Result(rowcount=total)
+        if self._recovering_from is not None:
+            logger.info(
+                "storage_connection_recovered",
+                extra={**self._log_fields(), "previous_error": self._recovering_from},
+            )
+            self._recovering_from = None
+        return None
 
     def executescript(self, script):
         # Migrations supply explicit BEGIN/COMMIT and rollback on failure.
@@ -470,19 +454,23 @@ class RemoteConnection:
             raise RuntimeError("nested transactions are not supported")
         self._ensure_ready()
         self._transaction = True
-        self._transaction_started = False
+        try:
+            self.execute("BEGIN IMMEDIATE")
+        except BaseException:
+            try:
+                if not self._broken and self._baton is not None:
+                    self._pipeline([{"type": "close"}])
+            finally:
+                self._transaction = False
+                self._baton = None
+            raise
         return self
 
     def __exit__(self, kind, value, traceback):
         try:
             if self._transaction and self._broken and kind is None:
                 raise StorageUnavailable("SQL_CONNECTION_CLOSED")
-            if (
-                self._transaction
-                and self._transaction_started
-                and not self._broken
-                and not self._closed
-            ):
+            if self._transaction and not self._broken and not self._closed:
                 try:
                     self.execute("COMMIT" if kind is None else "ROLLBACK")
                 finally:
@@ -490,7 +478,6 @@ class RemoteConnection:
                         self._pipeline([{"type": "close"}])
         finally:
             self._transaction = False
-            self._transaction_started = False
             self._baton = None
 
     def close(self):
