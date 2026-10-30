@@ -26,10 +26,19 @@ test('server phase timing overrides the ambiguous total-only diagnostic', () => 
   assert.match(source, /compact\.join\(" · "\)/);
 });
 
-test('progressive preview sends an ephemeral id and never persists partial text', () => {
+test('progressive preview wraps fetch without stealing the app submit lifecycle', () => {
+  assert.match(preview, /amoraProgressivePreviewFetch/);
   assert.match(preview, /X-Amora-Preview-Id/);
   assert.match(preview, /\/v1\/web\/state\?preview_id=/);
-  assert.match(preview, /previewState\.node\.textContent = final\.text/);
+  assert.match(preview, /response\.clone\(\)\.json\(\)/);
+  assert.match(preview, /reconcileFinal\(state, data\.reply_queued\)/);
+  assert.doesNotMatch(preview, /addEventListener\("submit"/);
+  assert.doesNotMatch(preview, /stopImmediatePropagation/);
+});
+
+test('partial preview is ephemeral and only the validated final reply is persisted', () => {
+  assert.match(preview, /renderPreview\(text\)/);
+  assert.match(preview, /browserStore\.appendMessage\("amora", final\.text/);
   assert.doesNotMatch(preview, /appendMessage\("amora", text/);
 });
 
