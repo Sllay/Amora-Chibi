@@ -42,7 +42,8 @@ test('text reaches the browser before remote TTS failure and remains after cance
 test('configured remote worker is not mislabeled as local Termux setup', async () => {
   const b = await app(paired());
   assert.match(b.nodes.get('voiceLabel').textContent, /remoto/);
-  assert.match(b.nodes.get('diagVoice').textContent, /configurado/);
+  assert.doesNotMatch(b.nodes.get('voiceLabel').textContent, /local/);
+  assert.doesNotMatch(b.nodes.get('diagVoice').textContent, /Termux/);
 });
 
 test('voice fetch timeout is diagnosed and releases queue without erasing text', async () => {
