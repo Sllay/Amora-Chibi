@@ -20,8 +20,30 @@ function setVoiceDiagnostic(text) {
   if (node) node.textContent = text;
 }
 
+function numericHeader(response, name) {
+  const raw = response.headers.get(name);
+  if (raw === null || raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
 function observeTurnTiming(response) {
   if (!response.ok) return;
+  const trace = {
+    context: numericHeader(response, "X-Amora-Latency-Context-Ms"),
+    provider: numericHeader(response, "X-Amora-Latency-Provider-Total-Ms"),
+    surface: numericHeader(response, "X-Amora-Latency-Provider-Surface-Ms"),
+    headers: numericHeader(response, "X-Amora-Latency-Provider-Headers-Ms"),
+    firstContent: numericHeader(response, "X-Amora-Latency-Provider-First-Content-Ms"),
+    firstPreview: numericHeader(response, "X-Amora-Latency-Provider-First-Preview-Ms"),
+    previewFromRequest: numericHeader(response, "X-Amora-Latency-First-Preview-Ms"),
+    parse: numericHeader(response, "X-Amora-Latency-Provider-Parse-Ms"),
+    specialist: numericHeader(response, "X-Amora-Latency-Specialist-Ms"),
+    remoteSql: numericHeader(response, "X-Amora-Latency-Remote-Sql-Ms"),
+    remoteSqlCalls: numericHeader(response, "X-Amora-Latency-Remote-Sql-Calls"),
+    remoteSqlMax: numericHeader(response, "X-Amora-Latency-Remote-Sql-Max-Ms"),
+  };
+
   response.clone().json().then((body) => {
     const timing = body?.timing;
     if (!timing || typeof timing.total_ms !== "number") return;
@@ -34,6 +56,13 @@ function observeTurnTiming(response) {
       const local = typeof timing.local_overhead_ms === "number" ? Math.round(timing.local_overhead_ms) : null;
       const compact = [`${total} ms`];
       if (cognition !== null) compact.push(`cog ${cognition}`);
+      if (trace.provider !== null) compact.push(`prov ${Math.round(trace.provider)}`);
+      if (trace.firstContent !== null) compact.push(`ttft ${Math.round(trace.firstContent)}`);
+      if (trace.context !== null) compact.push(`ctx ${Math.round(trace.context)}`);
+      if (trace.remoteSql !== null) {
+        const calls = trace.remoteSqlCalls !== null ? `/${Math.round(trace.remoteSqlCalls)}` : "";
+        compact.push(`db ${Math.round(trace.remoteSql)}${calls}`);
+      }
       if (social !== null) compact.push(`social ${social}`);
       if (local !== null) compact.push(`local ${local}`);
       node.textContent = compact.join(" · ");
@@ -43,6 +72,18 @@ function observeTurnTiming(response) {
         `conversation=${timing.conversation_ms}ms`,
         `cognition=${timing.cognition_ms}ms`,
         `local_overhead=${timing.local_overhead_ms}ms`,
+        `context_compile=${trace.context ?? "n/a"}ms`,
+        `provider_total=${trace.provider ?? "n/a"}ms`,
+        `provider_surface=${trace.surface ?? "n/a"}ms`,
+        `provider_headers=${trace.headers ?? "n/a"}ms`,
+        `provider_first_content=${trace.firstContent ?? "n/a"}ms`,
+        `provider_first_preview=${trace.firstPreview ?? "n/a"}ms`,
+        `first_preview_from_request=${trace.previewFromRequest ?? "n/a"}ms`,
+        `provider_parse=${trace.parse ?? "n/a"}ms`,
+        `specialist=${trace.specialist ?? "n/a"}ms`,
+        `remote_sql=${trace.remoteSql ?? "n/a"}ms`,
+        `remote_sql_calls=${trace.remoteSqlCalls ?? "n/a"}`,
+        `remote_sql_max=${trace.remoteSqlMax ?? "n/a"}ms`,
       ].join(" | ");
     }, 0);
   }).catch(() => {});
