@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from amora.events import PrivacyScope
 from amora.voice.backend import VoiceBackend
-from amora.voice.cloud import AMORA_CLOUD_VOICE_ID, FishGeminiVoiceBackend
+from amora.voice.cloud import FishGeminiVoiceBackend
 from amora.voice.local_amora import AmoraLocalVoiceRenderer, LocalVoiceUnavailable, MODEL_ID, NUM_STEPS, VOICE_ID
 
 
@@ -139,8 +139,8 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="utterance not found")
         if item.device_id != "WEB_SAFARI":
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="utterance does not belong to Safari")
-        if item.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="privacy scope cannot be rendered")
+        if item.privacy_scope not in {PrivacyScope.PUBLIC, PrivacyScope.PERSONAL}:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="privacy scope cannot use cloud voice")
         if item.status.value in {"cancelled", "spoken"} or not item.text.strip():
             raise HTTPException(409, "utterance is no longer renderable")
 
