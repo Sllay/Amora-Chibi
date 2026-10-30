@@ -12,11 +12,24 @@ function scrollMessages() {
   });
 }
 
+function pruneLiveMessages() {
+  const container = $("messages");
+  if (!container) return;
+  const counts = { user: 0, amora: 0 };
+  for (const child of [...container.children].reverse()) {
+    const role = child.classList.contains("user") ? "user" : child.classList.contains("amora") ? "amora" : null;
+    if (!role) continue;
+    counts[role] += 1;
+    if (counts[role] > 50) child.remove();
+  }
+}
+
 function renderMessage(role, text, extraClass = "") {
   const node = document.createElement("div");
   node.className = `message ${role}${extraClass ? ` ${extraClass}` : ""}`;
   node.textContent = text;
   $("messages")?.appendChild(node);
+  pruneLiveMessages();
   scrollMessages();
   return node;
 }
@@ -33,11 +46,25 @@ function setNotice(text) {
   if (node) node.textContent = text;
 }
 
+function snapshotMicStatus() {
+  return {
+    visible: $("micState")?.textContent || "",
+    diag: $("diagMic")?.textContent || "",
+  };
+}
+
 function setMicStatus(text) {
   const visible = $("micState");
   const diag = $("diagMic");
   if (visible) visible.textContent = text;
   if (diag) diag.textContent = text;
+}
+
+function restoreMicStatus(snapshot) {
+  const visible = $("micState");
+  const diag = $("diagMic");
+  if (visible) visible.textContent = snapshot.visible;
+  if (diag) diag.textContent = snapshot.diag;
 }
 
 function setTiming(timing, clientElapsed) {
@@ -122,10 +149,11 @@ async function submitRealtimeText(event) {
 
   persistAndRender("user", clean);
   setNotice("");
+  const previousMic = snapshotMicStatus();
   setMicStatus("Amora pensando…");
   const started = performance.now();
-  const previewId = globalThis.crypto?.randomUUID?.().replaceAll("-", "")
-    || `${Date.now()}${Math.random().toString(36).slice(2)}`;
+  const randomId = globalThis.crypto?.randomUUID?.() || "";
+  const previewId = randomId.replace(/-/g, "") || `${Date.now()}${Math.random().toString(36).slice(2)}`;
   const previewState = { node: null, finished: false, requestDone: false };
   const poller = pollPreview(previewId, previewState);
 
@@ -167,7 +195,7 @@ async function submitRealtimeText(event) {
   } finally {
     previewState.finished = true;
     await poller;
-    setMicStatus("microfone desligado");
+    restoreMicStatus(previousMic);
   }
 }
 
