@@ -66,11 +66,40 @@ def elapsed_ms(started: float) -> float:
     return (perf_counter() - started) * 1000.0
 
 
+def _pipeline_class(requests: list[dict[str, Any]]) -> str:
+    """Classify one Hrana pipeline without exposing SQL text or arguments.
+
+    Only the first SQL verb of non-control statements is inspected. No SQL text,
+    identifiers, parameters, user content or values are retained in the trace.
+    A pipeline is counted exactly once so read/write/txn/other call counts sum to
+    the aggregate remote_sql_calls metric.
+    """
+    verbs: list[str] = []
+    for request in requests:
+        if request.get("type") != "execute":
+            continue
+        sql = str(request.get("stmt", {}).get("sql") or "").lstrip()
+        if not sql:
+            continue
+        verbs.append(sql.split(None, 1)[0].upper())
+
+    controls = {"BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE"}
+    data_verbs = [verb for verb in verbs if verb not in controls]
+    if not data_verbs:
+        return "txn"
+    if any(verb in {"INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "ALTER", "DROP", "VACUUM"} for verb in data_verbs):
+        return "write"
+    if all(verb in {"SELECT", "WITH", "EXPLAIN", "PRAGMA"} for verb in data_verbs):
+        return "read"
+    return "other"
+
+
 def install_remote_storage_probe() -> None:
     """Instrument libSQL/Hrana pipeline latency only while a trace is bound.
 
-    This preserves the storage adapter contract and never inspects SQL text or
-    parameters. It records aggregate pipeline wall time/call count/max only.
+    This preserves the storage adapter contract. The v3 classifier observes only
+    SQL verbs so Safari can distinguish read, write and transaction-control RTTs;
+    it never records SQL text, identifiers, arguments, user text or provider data.
     """
     from amora.storage.remote import RemoteConnection
 
@@ -79,6 +108,7 @@ def install_remote_storage_probe() -> None:
         return
 
     def traced_pipeline(self, requests):
+        category = _pipeline_class(requests)
         started = perf_counter()
         try:
             return original(self, requests)
@@ -87,6 +117,8 @@ def install_remote_storage_probe() -> None:
             add_ms("remote_sql_ms", elapsed)
             increment("remote_sql_calls")
             max_ms("remote_sql_max_ms", elapsed)
+            add_ms(f"remote_sql_{category}_ms", elapsed)
+            increment(f"remote_sql_{category}_calls")
 
     traced_pipeline._amora_latency_probe = True  # type: ignore[attr-defined]
     RemoteConnection._pipeline = traced_pipeline

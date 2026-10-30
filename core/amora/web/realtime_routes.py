@@ -31,6 +31,14 @@ _TRACE_HEADERS = {
     "remote_sql_ms": "X-Amora-Latency-Remote-Sql-Ms",
     "remote_sql_calls": "X-Amora-Latency-Remote-Sql-Calls",
     "remote_sql_max_ms": "X-Amora-Latency-Remote-Sql-Max-Ms",
+    "remote_sql_read_ms": "X-Amora-Latency-Remote-Sql-Read-Ms",
+    "remote_sql_read_calls": "X-Amora-Latency-Remote-Sql-Read-Calls",
+    "remote_sql_write_ms": "X-Amora-Latency-Remote-Sql-Write-Ms",
+    "remote_sql_write_calls": "X-Amora-Latency-Remote-Sql-Write-Calls",
+    "remote_sql_txn_ms": "X-Amora-Latency-Remote-Sql-Txn-Ms",
+    "remote_sql_txn_calls": "X-Amora-Latency-Remote-Sql-Txn-Calls",
+    "remote_sql_other_ms": "X-Amora-Latency-Remote-Sql-Other-Ms",
+    "remote_sql_other_calls": "X-Amora-Latency-Remote-Sql-Other-Calls",
 }
 
 
@@ -123,7 +131,7 @@ def register_web_routes(
                 raise
 
         put(preview_id, done=True, error=None)
-        response.headers["X-Amora-Latency-Trace-Version"] = "v2"
+        response.headers["X-Amora-Latency-Trace-Version"] = "v3"
         for key, header in _TRACE_HEADERS.items():
             value = trace.get(key)
             if value is not None:

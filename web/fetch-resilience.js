@@ -77,6 +77,14 @@ function observeTurnTiming(response) {
     remoteSql: numericHeader(response, "X-Amora-Latency-Remote-Sql-Ms"),
     remoteSqlCalls: numericHeader(response, "X-Amora-Latency-Remote-Sql-Calls"),
     remoteSqlMax: numericHeader(response, "X-Amora-Latency-Remote-Sql-Max-Ms"),
+    remoteSqlRead: numericHeader(response, "X-Amora-Latency-Remote-Sql-Read-Ms"),
+    remoteSqlReadCalls: numericHeader(response, "X-Amora-Latency-Remote-Sql-Read-Calls"),
+    remoteSqlWrite: numericHeader(response, "X-Amora-Latency-Remote-Sql-Write-Ms"),
+    remoteSqlWriteCalls: numericHeader(response, "X-Amora-Latency-Remote-Sql-Write-Calls"),
+    remoteSqlTxn: numericHeader(response, "X-Amora-Latency-Remote-Sql-Txn-Ms"),
+    remoteSqlTxnCalls: numericHeader(response, "X-Amora-Latency-Remote-Sql-Txn-Calls"),
+    remoteSqlOther: numericHeader(response, "X-Amora-Latency-Remote-Sql-Other-Ms"),
+    remoteSqlOtherCalls: numericHeader(response, "X-Amora-Latency-Remote-Sql-Other-Calls"),
   };
 
   response.clone().json().then((body) => {
@@ -96,6 +104,14 @@ function observeTurnTiming(response) {
     trace.remoteSql = value(trace.remoteSql, "remote_sql_ms");
     trace.remoteSqlCalls = value(trace.remoteSqlCalls, "remote_sql_calls");
     trace.remoteSqlMax = value(trace.remoteSqlMax, "remote_sql_max_ms");
+    trace.remoteSqlRead = value(trace.remoteSqlRead, "remote_sql_read_ms");
+    trace.remoteSqlReadCalls = value(trace.remoteSqlReadCalls, "remote_sql_read_calls");
+    trace.remoteSqlWrite = value(trace.remoteSqlWrite, "remote_sql_write_ms");
+    trace.remoteSqlWriteCalls = value(trace.remoteSqlWriteCalls, "remote_sql_write_calls");
+    trace.remoteSqlTxn = value(trace.remoteSqlTxn, "remote_sql_txn_ms");
+    trace.remoteSqlTxnCalls = value(trace.remoteSqlTxnCalls, "remote_sql_txn_calls");
+    trace.remoteSqlOther = value(trace.remoteSqlOther, "remote_sql_other_ms");
+    trace.remoteSqlOtherCalls = value(trace.remoteSqlOtherCalls, "remote_sql_other_calls");
 
     setTimeout(() => {
       const node = document.getElementById("diagTurn");
@@ -112,6 +128,12 @@ function observeTurnTiming(response) {
       if (trace.remoteSql !== null) {
         const calls = trace.remoteSqlCalls !== null ? `/${Math.round(trace.remoteSqlCalls)}` : "";
         compact.push(`db ${Math.round(trace.remoteSql)}${calls}`);
+        const classes = [];
+        if (trace.remoteSqlReadCalls !== null) classes.push(`r${Math.round(trace.remoteSqlReadCalls)}/${Math.round(trace.remoteSqlRead ?? 0)}`);
+        if (trace.remoteSqlWriteCalls !== null) classes.push(`w${Math.round(trace.remoteSqlWriteCalls)}/${Math.round(trace.remoteSqlWrite ?? 0)}`);
+        if (trace.remoteSqlTxnCalls !== null) classes.push(`tx${Math.round(trace.remoteSqlTxnCalls)}/${Math.round(trace.remoteSqlTxn ?? 0)}`);
+        if (trace.remoteSqlOtherCalls !== null) classes.push(`o${Math.round(trace.remoteSqlOtherCalls)}/${Math.round(trace.remoteSqlOther ?? 0)}`);
+        if (classes.length) compact.push(`sql ${classes.join(" ")}`);
       }
       if (trace.provider === null && trace.context === null && trace.remoteSql === null) {
         compact.push(`trace ${trace.version || "n/a"}`);
@@ -138,6 +160,10 @@ function observeTurnTiming(response) {
         `remote_sql=${trace.remoteSql ?? "n/a"}ms`,
         `remote_sql_calls=${trace.remoteSqlCalls ?? "n/a"}`,
         `remote_sql_max=${trace.remoteSqlMax ?? "n/a"}ms`,
+        `remote_sql_read=${trace.remoteSqlRead ?? "n/a"}ms/${trace.remoteSqlReadCalls ?? "n/a"}`,
+        `remote_sql_write=${trace.remoteSqlWrite ?? "n/a"}ms/${trace.remoteSqlWriteCalls ?? "n/a"}`,
+        `remote_sql_txn=${trace.remoteSqlTxn ?? "n/a"}ms/${trace.remoteSqlTxnCalls ?? "n/a"}`,
+        `remote_sql_other=${trace.remoteSqlOther ?? "n/a"}ms/${trace.remoteSqlOtherCalls ?? "n/a"}`,
       ].join(" | ");
     }, 0);
   }).catch(() => {});

@@ -32,15 +32,26 @@ def test_web_turn_exposes_request_scoped_context_and_remote_sql_latency(safari) 
         },
     )
     assert response.status_code == 200, response.text
-    assert response.headers["X-Amora-Latency-Trace-Version"] == "v2"
+    assert response.headers["X-Amora-Latency-Trace-Version"] == "v3"
     context_ms = float(response.headers["X-Amora-Latency-Context-Ms"])
     remote_sql_ms = float(response.headers["X-Amora-Latency-Remote-Sql-Ms"])
     remote_sql_calls = int(response.headers["X-Amora-Latency-Remote-Sql-Calls"])
     remote_sql_max_ms = float(response.headers["X-Amora-Latency-Remote-Sql-Max-Ms"])
+    read_ms = float(response.headers["X-Amora-Latency-Remote-Sql-Read-Ms"])
+    read_calls = int(response.headers["X-Amora-Latency-Remote-Sql-Read-Calls"])
+    write_ms = float(response.headers["X-Amora-Latency-Remote-Sql-Write-Ms"])
+    write_calls = int(response.headers["X-Amora-Latency-Remote-Sql-Write-Calls"])
+    txn_ms = float(response.headers["X-Amora-Latency-Remote-Sql-Txn-Ms"])
+    txn_calls = int(response.headers["X-Amora-Latency-Remote-Sql-Txn-Calls"])
+    other_calls = int(response.headers.get("X-Amora-Latency-Remote-Sql-Other-Calls", "0"))
     assert context_ms >= 0.0
     assert remote_sql_ms >= 0.0
     assert remote_sql_calls >= 1
     assert 0.0 <= remote_sql_max_ms <= remote_sql_ms
+    assert read_ms >= 0.0 and read_calls >= 1
+    assert write_ms >= 0.0 and write_calls >= 1
+    assert txn_ms >= 0.0 and txn_calls >= 1
+    assert read_calls + write_calls + txn_calls + other_calls == remote_sql_calls
 
 
 def test_safari_lab_assets_disable_runtime_module_caching(safari) -> None:

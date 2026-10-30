@@ -34,11 +34,17 @@ test('surgical timing surfaces provider TTFT, context and remote DB cost', () =>
   assert.match(source, /X-Amora-Latency-Provider-First-Content-Ms/);
   assert.match(source, /X-Amora-Latency-Remote-Sql-Ms/);
   assert.match(source, /X-Amora-Latency-Remote-Sql-Calls/);
+  assert.match(source, /X-Amora-Latency-Remote-Sql-Read-Ms/);
+  assert.match(source, /X-Amora-Latency-Remote-Sql-Write-Ms/);
+  assert.match(source, /X-Amora-Latency-Remote-Sql-Txn-Ms/);
   assert.match(source, /timing\.surgical/);
   assert.match(source, /`prov \$\{Math\.round\(trace\.provider\)\}`/);
   assert.match(source, /`ttft \$\{Math\.round\(trace\.firstContent\)\}`/);
   assert.match(source, /`ctx \$\{Math\.round\(trace\.context\)\}`/);
   assert.match(source, /`db \$\{Math\.round\(trace\.remoteSql\)\}\$\{calls\}`/);
+  assert.match(source, /classes\.push\(`r\$\{Math\.round\(trace\.remoteSqlReadCalls\)\}\/\$\{Math\.round\(trace\.remoteSqlRead \?\? 0\)\}`\)/);
+  assert.match(source, /classes\.push\(`w\$\{Math\.round\(trace\.remoteSqlWriteCalls\)\}\/\$\{Math\.round\(trace\.remoteSqlWrite \?\? 0\)\}`\)/);
+  assert.match(source, /classes\.push\(`tx\$\{Math\.round\(trace\.remoteSqlTxnCalls\)\}\/\$\{Math\.round\(trace\.remoteSqlTxn \?\? 0\)\}`\)/);
   assert.match(source, /trace \$\{trace\.version \|\| "n\/a"\}/);
 });
 
@@ -73,8 +79,8 @@ test('health polling is coalesced and queue polling yields while a turn is activ
   assert.match(source, /url\.pathname === "\/v1\/audio\/transcribe"/);
 });
 
-test('resilience and preview shims are cache-busted before the main Safari client', () => {
-  const resilience = html.indexOf('./fetch-resilience.js?v=20261030-74');
+test('resilience shim is cache-busted before the existing Safari runtime modules', () => {
+  const resilience = html.indexOf('./fetch-resilience.js?v=20261030-76');
   const realtime = html.indexOf('./realtime-preview.js?v=20261030-74');
   const appScript = html.indexOf('./app-v2.js?v=20261030-74');
   assert.ok(resilience >= 0);
