@@ -12,7 +12,8 @@ import httpx
 import pytest
 
 from amora.app import AmoraCore
-from amora.conversation import UtteranceKind, VoiceExpressionStyle
+from amora.conversation import UtteranceKind
+from amora.conversation.models import VoiceExpressionStyle
 from amora.events import PrivacyScope
 from amora.time import SimulatedClock
 from amora.voice.backend import VoiceSession, validated_chunks
