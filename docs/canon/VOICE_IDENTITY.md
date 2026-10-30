@@ -1,5 +1,10 @@
 # AMORA — Identidade Vocal Canônica
 
+> Atualização de transporte (2026-10-30, ADR-0022): `WEB_SAFARI` usa uma única
+> entrega vocal por turno cognitivo e toca PCM incremental enquanto Fish ainda
+> sintetiza. Segmentos cognitivos permanecem no journal, mas não geram uma chamada
+> TTS por frase. Tags expressivas Fish são tradução bounded da emoção/cues do Core.
+>
 > Atualização Web (2026-10-30, ADR-0021): `WEB_SAFARI` passa a usar o clone
 > aprovado da Amora no Fish Audio `s2.1-pro-free` como caminho normal de voz.
 > Gemini é fallback explícito de disponibilidade. Supertonic/FINAL_B/Signature
@@ -14,6 +19,7 @@
 **Status:** CANÔNICO / REFERÊNCIA FINAL APROVADA / CORE→SAFARI CERTIFICATION PENDING  
 **Atualizado em:** 2026-10-30  
 **Backend Web primário:** Fish Audio `s2.1-pro-free` + clone persistente da Amora  
+**Transporte Web primário:** PCM s16le incremental por turno via Core  
 **Fallback Web:** Gemini TTS configurado  
 **Backend local preservado:** sherpa-onnx + Supertonic 3 INT8  
 **Base local congelada:** `AMORA_CHILD_FINAL_B_PLUS60`  
@@ -34,20 +40,24 @@ Locale canônico: **pt-BR**.
 Na Web atual:
 
 ```text
-SpeechUtterance do Core
+SpeechPlan completo do Core
+↓
+1 SpeechUtterance de delivery por cognitive_turn_id
 ↓
 privacy / remote-processing gate
 ↓
 Fish S2.1 Pro Free + clone da Amora
 ↓
-WAV
+PCM s16le incremental
 ↓
-Safari Web Audio
+Safari PcmStreamPlayer / Web Audio
 ```
 
-Se Fish falhar, Gemini pode ser usado como fallback explícito de disponibilidade
-por decisão atual de BK. Essa troca não redefine a identidade canônica e deve
-aparecer em diagnóstico/headers. Se ambos falharem, texto continua utilizável.
+Se Fish falhar antes de emitir o primeiro áudio, Gemini pode ser usado como
+fallback explícito de disponibilidade por decisão atual de BK. Depois que Fish
+começou a tocar, não emendar outra voz no meio da frase. Essa troca não redefine
+a identidade canônica e deve aparecer em diagnóstico/headers. Se ambos falharem,
+texto continua utilizável.
 
 `window.speechSynthesis` não é transporte principal da voz Web.
 
@@ -97,27 +107,49 @@ licença impeça o uso pretendido.
 
 ---
 
-## 4. Caminho Web/Safari atual — ADR-0021
+## 4. Caminho Web/Safari atual — ADR-0021 + ADR-0022
 
 O navegador não chama Fish diretamente. A key fica no Core/hosting.
 
+Normal:
+
 ```text
 WEB_SAFARI
-→ Core /v1/web/voice/utterances/{id}/audio
+→ Core /v1/web/voice/utterances/{id}/stream
 → Fish `s2.1-pro-free`
 → reference_id do clone da Amora
-→ WAV
-→ Safari decodeAudioData / Web Audio
+→ format=pcm / latency=balanced / chunk_length=200
+→ Core retransmite chunks PCM16LE
+→ Safari ReadableStream
+→ buffer inicial pequeno e bounded
+→ PcmStreamPlayer toca enquanto próximos chunks chegam
+```
+
+A segmentação cognitiva permanece no Core, mas `WEB_SAFARI` não cria mais uma
+requisição Fish por segmento curto. A unidade de delivery vocal normal é o turno
+cognitivo completo. Isso evita gaps artificiais e reduz pontos de falha sem
+apagar `SpeechSegment`, journal ou cues.
+
+Compatibilidade:
+
+```text
+backend Web sem StreamingVoiceBackend
+→ /audio
+→ WAV completo
+→ Safari decodeAudioData
 ```
 
 Fallback:
 
 ```text
-Fish indisponível / quota / erro
+Fish indisponível / quota / erro antes do primeiro PCM
 → Gemini TTS, se configurado
-→ WAV empacotado pelo Core
+→ PCM/WAV convertido pelo Core para a mesma entrega
 → Safari
 ```
+
+Não trocar Fish por Gemini depois que áudio Fish já foi emitido. Falha no meio do
+stream encerra aquela entrega; o texto continua preservado.
 
 Falha total:
 
@@ -249,8 +281,28 @@ A semântica emocional continua pertencendo ao Core. Nem Fish nem Gemini ganham
 autoridade sobre estado emocional, relação ou intenção.
 
 O pipeline local Supertonic ainda suporta `AMORA_VOICE_EXPRESSION_V2` bounded.
-Para Fish, controles/tags expressivos são capability do renderer e devem ser
-mapeados separadamente; não inventar tags no texto sem contrato/teste.
+No Fish, tags expressivas são uma capability do renderer e só podem traduzir
+estado/cues que o Core já determinou.
+
+Mapeamento Fish inicial:
+
+```text
+joy             -> [happy]
+gratitude       -> [grateful]
+relief          -> [relieved]
+anger           -> [angry]
+irritation      -> [annoyed]
+fear            -> [worried]
+disappointment  -> [disappointed]
+```
+
+A tag emocional exige `source_intensity >= 0.35`. Cues canônicos podem mapear,
+por exemplo, `LAUGHTER -> [chuckling]`, `SIGH -> [sighing]`,
+`SURPRISE -> [surprised]` e `DISSATISFACTION -> [annoyed]`.
+
+Essas tags entram somente na requisição provider-specific. Não alterar
+`DisplayText`, texto salvo em memória/journal ou identidade-base. Prosody Fish
+pode consumir somente valores bounded derivados pelo Core.
 
 Invariante:
 
@@ -263,24 +315,26 @@ expressão emocional = variável e bounded
 
 ## 10. Verdade de entrega
 
-Renderizar áudio não significa que a fala foi ouvida.
+Receber/renderizar áudio não significa que a fala foi ouvida.
 
-Contrato permanece:
+Streaming normal:
 
 ```text
 QUEUED
 → CLAIMED
-→ render áudio
-→ player começa
+→ abre stream
+→ buffer inicial bounded
+→ primeiro PCM começa a tocar
 → started
-→ player termina
+→ provider termina
+→ todo PCM agendado termina no player
 → ACK spoken=true
 ```
 
 Interrupção:
 
 ```text
-barge-in / Parar fala / erro de voz
+barge-in / Parar fala / mute / pagehide / erro de voz
 → abortar fetch/player
 → cancelar utterance/turno no Core
 → liberar fila/interface
@@ -295,14 +349,18 @@ O texto visível da resposta não depende do sucesso do áudio.
 A Web deve expor sem secrets:
 
 - chain configurado;
+- streaming disponível sim/não;
 - Fish configurado sim/não;
 - Gemini configurado sim/não;
 - provider/modelo efetivamente usado na última renderização;
+- formato/sample rate;
 - erro bounded;
-- sample rate/RTF quando disponível.
+- underrun no cliente quando ocorrer;
+- RTF quando aplicável ao caminho WAV.
 
-Headers de áudio indicam `X-Amora-TTS-Provider` e `X-Amora-TTS-Model`.
-Quando Gemini for fallback, incluir `X-Amora-TTS-Fallback: gemini`.
+Headers de áudio/stream indicam `X-Amora-TTS-Provider` e
+`X-Amora-TTS-Model`. Stream também indica formato, sample rate, canais e session
+transport ID. Quando Gemini for fallback, incluir `X-Amora-TTS-Fallback: gemini`.
 
 ---
 
@@ -330,18 +388,24 @@ ausência de credencial não quebra o texto.
 Apesar da aprovação do clone no site Fish, ainda validar no fluxo real:
 
 - Core hospedado → Fish → Safari/iPhone;
+- início de playback antes da síntese completa;
+- gaps entre frases em respostas longas;
+- underruns/recovery em rede móvel/Wi-Fi;
 - pt-BR/inteligibilidade;
 - preservação da identidade da referência;
 - primeira latência;
 - tempo total de geração;
 - frases curtas e longas;
 - pronúncia de Amora/BK/Sllay/gírias;
-- artefatos/gaguejos;
+- artefatos/gaguejos/tom robótico ocasional;
+- expressão `[happy]`/`[chuckling]` etc. sem exagero;
 - barge-in/manual stop;
-- fallback Fish → Gemini;
+- texto enviado pelo teclado e por STT;
+- fallback Fish → Gemini somente antes do primeiro áudio;
 - falha Fish + Gemini preservando texto;
 - ausência de secrets no browser/observabilidade;
-- comportamento quando `remote_tts_allowed=false`.
+- comportamento quando `remote_tts_allowed=false`;
+- comportamento com tela/background do iPhone, tratado como gate separado de OS/browser.
 
 Até esse gate, `/v1/web/state` continua reportando:
 
@@ -360,8 +424,10 @@ Revisitar quando houver evidência clara de:
 
 - Fish não preservar no Core/Safari a qualidade aprovada no site;
 - mudança do acesso/custo de `s2.1-pro-free`;
-- latência/reliability inadequadas;
+- latência/reliability inadequadas mesmo em PCM incremental;
+- ingress/proxy bufferizar o stream e impedir playback progressivo;
 - fallback Gemini causar troca de timbre inaceitável;
+- tags expressivas degradarem a identidade ou ficarem artificiais;
 - backend local novo reproduzir a referência com qualidade e velocidade prática;
 - nova decisão explícita de BK.
 
