@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import os
+from time import perf_counter
 from typing import Callable
 from uuid import UUID, uuid4
 
@@ -79,6 +80,27 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
     def console():
         return getattr(app.state, "server_console", None)
 
+    def cognitive_duration_ms(reply) -> float | None:
+        """Read the persisted response-plan duration without making diagnostics fatal."""
+        if reply is None:
+            return None
+        turn_raw = reply.metadata.get("cognitive_turn_id")
+        if not turn_raw:
+            return None
+        try:
+            entries = core.cognition.store.journal_for_turn(turn_raw)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return None
+        for entry in reversed(entries):
+            stage = getattr(entry.stage, "value", entry.stage)
+            if stage != "response_planned" or entry.duration_ms is None:
+                continue
+            try:
+                return round(float(entry.duration_ms), 3)
+            except (TypeError, ValueError):
+                return None
+        return None
+
     def voice_item(utterance_id: UUID):
         item = core.conversation.store.get_utterance(utterance_id)
         if item is None:
@@ -135,7 +157,9 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
 
     @app.post("/v1/web/utterance", dependencies=auth)
     async def web_utterance(request: WebTextTurnRequest, http_request: Request) -> dict[str, object]:
+        request_started = perf_counter()
         http_request.state.pipeline_stage = "language_social"
+        language_started = perf_counter()
         observation = await core.language_social.observe_text(
             request.text,
             speaker_id=request.speaker_id,
@@ -144,6 +168,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             explicit_addressee_id="ENTITY_AMORA",
             privacy_scope=request.privacy_scope,
         )
+        language_social_ms = (perf_counter() - language_started) * 1000.0
         metadata: dict[str, object] = {
             "speech_device_id": "WEB_SAFARI",
             "explicit_surface_target": "ENTITY_AMORA",
@@ -158,6 +183,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
                 }
             )
         http_request.state.pipeline_stage = "conversation"
+        conversation_started = perf_counter()
         turn, reply = await core.conversation.observe_completed_utterance(
             request.text,
             speaker_id=request.speaker_id,
@@ -168,12 +194,24 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             session_id=request.session_id,
             metadata=metadata,
         )
+        conversation_ms = (perf_counter() - conversation_started) * 1000.0
+        cognition_ms = cognitive_duration_ms(reply)
+        total_ms = (perf_counter() - request_started) * 1000.0
+        local_overhead_ms = max(0.0, total_ms - cognition_ms) if cognition_ms is not None else None
+        http_request.state.pipeline_stage = "complete"
 
         return {
             "observation": observation.model_dump(mode="json"),
             "turn": turn.model_dump(mode="json"),
             "reply_queued": reply.model_dump(mode="json") if reply else None,
             "test_mode": request.test_mode,
+            "timing": {
+                "total_ms": round(total_ms, 3),
+                "language_social_ms": round(language_social_ms, 3),
+                "conversation_ms": round(conversation_ms, 3),
+                "cognition_ms": cognition_ms,
+                "local_overhead_ms": round(local_overhead_ms, 3) if local_overhead_ms is not None else None,
+            },
         }
 
     @app.get("/v1/web/voice/utterances/{utterance_id}/stream", dependencies=auth)
