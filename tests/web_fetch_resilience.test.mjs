@@ -27,6 +27,18 @@ test('server phase timing overrides the ambiguous total-only diagnostic', () => 
   assert.match(source, /compact\.join\(" · "\)/);
 });
 
+test('surgical timing surfaces provider TTFT, context and remote DB cost', () => {
+  assert.match(source, /X-Amora-Latency-Context-Ms/);
+  assert.match(source, /X-Amora-Latency-Provider-Total-Ms/);
+  assert.match(source, /X-Amora-Latency-Provider-First-Content-Ms/);
+  assert.match(source, /X-Amora-Latency-Remote-Sql-Ms/);
+  assert.match(source, /X-Amora-Latency-Remote-Sql-Calls/);
+  assert.match(source, /`prov \$\{Math\.round\(trace\.provider\)\}`/);
+  assert.match(source, /`ttft \$\{Math\.round\(trace\.firstContent\)\}`/);
+  assert.match(source, /`ctx \$\{Math\.round\(trace\.context\)\}`/);
+  assert.match(source, /`db \$\{Math\.round\(trace\.remoteSql\)\}\$\{calls\}`/);
+});
+
 test('progressive preview wraps fetch without stealing the app submit lifecycle', () => {
   assert.match(preview, /amoraProgressivePreviewFetch/);
   assert.match(preview, /X-Amora-Preview-Id/);
