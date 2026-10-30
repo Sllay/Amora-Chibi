@@ -22,6 +22,7 @@ from .tts import GeminiStreamingTTS, VoiceEngine, VoiceRenderRequest, VoiceUnava
 FISH_API_URL = "https://api.fish.audio/v1/tts"
 FISH_FREE_MODEL = "s2.1-pro-free"
 AMORA_CLOUD_VOICE_ID = "AMORA_GOLD_REFERENCE_V1"
+CLOUD_AUDIO_POSTPROCESSING = "none"
 MAX_CLOUD_AUDIO_BYTES = 16 * 1024 * 1024
 
 
@@ -36,6 +37,10 @@ class FishGeminiVoiceBackend:
     environment override to a paid Fish model: if the free endpoint stops
     working, the backend falls through to Gemini (when configured) or fails
     closed so text delivery can continue without silently enabling billing.
+
+    Cloud audio is deliberately provider passthrough. FINAL_B, VoiceSignature,
+    WORLD and the legacy local expression DSP remain preserved for explicit
+    local/worker backends but are not applied to Fish/Gemini output.
     """
 
     def __init__(
@@ -94,6 +99,8 @@ class FishGeminiVoiceBackend:
             "fish_configured": self.fish_configured,
             "fish_reference_configured": bool(self.reference_id),
             "gemini_configured": self.gemini_configured,
+            "provider_audio_passthrough": True,
+            "audio_postprocessing": CLOUD_AUDIO_POSTPROCESSING,
             "last_provider": last_provider,
             "last_model": last_model,
             "last_error": last_error,
