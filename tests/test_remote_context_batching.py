@@ -88,3 +88,29 @@ def test_remote_world_state_hydrates_evidence_in_constant_pipelines(tmp_path: Pa
         assert server.pipeline_calls <= 2
     finally:
         core.close()
+
+
+def test_remote_transaction_batches_begin_and_executemany(tmp_path: Path) -> None:
+    server = CountingHrana(tmp_path / "transaction-batching.db")
+    backend = LibSQLBackend(
+        "https://database.example",
+        "test-only",
+        transport=httpx.MockTransport(server),
+    )
+    connection = backend.connect(tmp_path / "unused.db")
+    try:
+        connection.execute("CREATE TABLE probe(value INTEGER)")
+        server.pipeline_calls = 0
+
+        with connection:
+            result = connection.executemany(
+                "INSERT INTO probe(value) VALUES (?)",
+                [(index,) for index in range(12)],
+            )
+
+        assert result.rowcount == 12
+        assert [row[0] for row in connection.execute("SELECT value FROM probe ORDER BY value").fetchall()] == list(range(12))
+        # BEGIN + all INSERTs share one Hrana pipeline; COMMIT is the second.
+        assert server.pipeline_calls <= 3
+    finally:
+        connection.close()
