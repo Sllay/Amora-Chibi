@@ -1,7 +1,7 @@
 import { BrowserState, browserStorage } from "./browser-state.mjs";
 
 const browserStore = new BrowserState(browserStorage("localStorage"), browserStorage("sessionStorage"));
-const PREVIEW_POLL_MS = 140;
+const PREVIEW_POLL_MS = 200;
 const upstreamFetch = window.fetch.bind(window);
 
 const $ = (id) => document.getElementById(id);
@@ -85,43 +85,20 @@ async function pollPreview(previewId, state) {
 }
 
 function finalDisplay(reply) {
-  if (!reply) return { text: "", id: undefined, privacyScope: null };
+  if (!reply) return "";
   const metadata = reply.metadata || {};
-  return {
-    text: String(reply.display_text ?? metadata.display_text ?? reply.text ?? "").trim(),
-    id: metadata.cognitive_turn_id || reply.id,
-    privacyScope: reply.privacy_scope || null,
-  };
+  return String(reply.display_text ?? metadata.display_text ?? reply.text ?? "").trim();
 }
 
-function reconcileFinal(state, reply) {
-  const final = finalDisplay(reply);
-  if (!final.text) {
-    state.node?.remove();
-    return;
-  }
-
-  if (browserStore.hasMessage("amora", final.id)) {
-    state.node?.remove();
-    return;
-  }
-
-  if (!browserStore.appendMessage("amora", final.text, final.id, final.privacyScope)) {
-    state.node?.remove();
-    return;
-  }
-
-  if (state.node) {
-    state.node.textContent = final.text;
-    state.node.classList.remove("preview");
-  } else {
-    const node = document.createElement("div");
-    node.className = "message amora";
-    node.textContent = final.text;
-    $("messages")?.appendChild(node);
-    pruneLiveMessages();
-  }
-  scrollMessages();
+function retirePreview(state, reply) {
+  // Preview is deliberately reversible and ephemeral. app-v2 is the sole owner
+  // of canonical chat persistence/rendering once the queued utterance is claimed.
+  // Keeping those responsibilities separate prevents one turn from appearing
+  // twice when the preview finishes immediately before fillSpeechQueue().
+  const finalText = finalDisplay(reply);
+  if (state.node && finalText) state.node.textContent = finalText;
+  state.node?.remove();
+  state.node = null;
 }
 
 function newPreviewId() {
@@ -147,7 +124,7 @@ window.fetch = async function amoraProgressivePreviewFetch(input, init = {}) {
     if (response.ok) {
       try {
         const data = await response.clone().json();
-        reconcileFinal(state, data.reply_queued);
+        retirePreview(state, data.reply_queued);
       } catch (_) {
         state.node?.remove();
       }
