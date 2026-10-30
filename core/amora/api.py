@@ -482,10 +482,10 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             return method == "POST" and query.get("speech_device_id") == ["WEB_SAFARI"]
         if path == "/v1/conversation/next":
             return method == "GET" and query.get("device_id") == ["WEB_SAFARI"]
-        match = re.fullmatch(r"/v1/(web/voice|conversation)/utterances/([0-9a-fA-F-]{36})/(audio|started|ack|cancel)", path)
+        match = re.fullmatch(r"/v1/(web/voice|conversation)/utterances/([0-9a-fA-F-]{36})/(audio|stream|started|ack|cancel)", path)
         if match:
             prefix, utterance_id, action = match.groups()
-            if not ((prefix == "web/voice" and action == "audio" and method == "GET") or
+            if not ((prefix == "web/voice" and action in {"audio", "stream"} and method == "GET") or
                     (prefix == "conversation" and action in {"started", "ack", "cancel"} and method == "POST")):
                 return False
             try:
