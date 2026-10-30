@@ -5,6 +5,8 @@ from time import perf_counter
 
 import httpx
 
+from amora.latency_trace import set_ms, set_value
+
 from .models import CognitiveContext
 from .preview import preview_enabled, publish_preview
 from .providers import ProviderError
@@ -33,6 +35,9 @@ class GroqCognitiveProvider(StructuredGroqCognitiveProvider):
         if not api_key:
             raise ProviderError("GROQ_API_KEY is not configured")
 
+        provider_total_started = perf_counter()
+        set_value("provider_model", self.model)
+
         specialist_started = perf_counter()
         specialist_support: dict[str, object] | None = None
         specialist_error: str | None = None
@@ -42,6 +47,8 @@ class GroqCognitiveProvider(StructuredGroqCognitiveProvider):
                 specialist_support = await self._reasoning_assist(context, api_key=api_key)
             except Exception as exc:
                 specialist_error = type(exc).__name__
+        specialist_elapsed_ms = (perf_counter() - specialist_started) * 1000.0 if needs_specialist else 0.0
+        set_ms("specialist_ms", specialist_elapsed_ms)
 
         effective_context = context.model_copy(
             update={"specialist_support": specialist_support}
@@ -75,9 +82,12 @@ class GroqCognitiveProvider(StructuredGroqCognitiveProvider):
         remaining_tokens: str | None = None
         input_tokens: int | None = None
         output_tokens: int | None = None
+        first_content_recorded = False
+        first_preview_recorded = False
 
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             async with client.stream("POST", self.API_URL, headers=headers, json=payload) as response:
+                set_ms("provider_headers_ms", (perf_counter() - started) * 1000.0)
                 status_code = response.status_code
                 remaining_requests = response.headers.get("x-ratelimit-remaining-requests")
                 remaining_tokens = response.headers.get("x-ratelimit-remaining-tokens")
@@ -106,28 +116,41 @@ class GroqCognitiveProvider(StructuredGroqCognitiveProvider):
                         piece = str(delta.get("content") or "")
                         finish_reason = choice.get("finish_reason") or finish_reason
                         if piece:
+                            if not first_content_recorded:
+                                first_content_recorded = True
+                                set_ms("provider_first_content_ms", (perf_counter() - started) * 1000.0)
                             content_parts.append(piece)
                             preview = _realization_preview_text("".join(content_parts))
                             if preview and preview != last_preview:
+                                if not first_preview_recorded:
+                                    first_preview_recorded = True
+                                    set_ms("provider_first_preview_ms", (perf_counter() - started) * 1000.0)
                                 last_preview = preview
                                 await publish_preview(preview)
                     usage = root.get("usage") or {}
                     input_tokens = _optional_int(usage.get("prompt_tokens")) or input_tokens
                     output_tokens = _optional_int(usage.get("completion_tokens")) or output_tokens
 
+        set_ms("provider_surface_ms", (perf_counter() - started) * 1000.0)
         content = "".join(content_parts).strip()
+        parse_started = perf_counter()
         try:
             parsed = json.loads(content)
         except (TypeError, json.JSONDecodeError, ValueError) as exc:
             raise ProviderError("Groq returned invalid streamed realization JSON") from exc
+        finally:
+            set_ms("provider_parse_ms", (perf_counter() - parse_started) * 1000.0)
         if not isinstance(parsed, dict):
             raise ProviderError("Groq realization root must be an object")
 
         if not last_preview:
             final_preview = _realization_preview_text(content)
             if final_preview:
+                if not first_preview_recorded:
+                    set_ms("provider_first_preview_ms", (perf_counter() - started) * 1000.0)
                 await publish_preview(final_preview)
 
+        set_ms("provider_total_ms", (perf_counter() - provider_total_started) * 1000.0)
         parsed["_usage"] = {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
@@ -138,9 +161,7 @@ class GroqCognitiveProvider(StructuredGroqCognitiveProvider):
             "finish_reason": finish_reason,
             "specialist_used": specialist_support is not None,
             "specialist_error": specialist_error,
-            "specialist_elapsed_ms": (
-                (started - specialist_started) * 1000.0 if needs_specialist else 0.0
-            ),
+            "specialist_elapsed_ms": specialist_elapsed_ms,
             "preview_streamed": True,
         }
         return parsed

@@ -10,6 +10,7 @@ from amora.cognition.models import CognitiveContext
 from amora.cognition.preview import bind_preview_sink
 from amora.cognition.providers_realtime import GroqCognitiveProvider, _realization_preview_text
 from amora.events import PrivacyScope
+from amora.latency_trace import bind_latency_trace
 
 
 class _Secrets:
@@ -99,8 +100,9 @@ async def test_realtime_provider_streams_preview_but_returns_complete_json(monke
     async def capture(text: str) -> None:
         previews.append(text)
 
-    with bind_preview_sink(capture):
-        result = await provider.realize(_context())
+    with bind_latency_trace() as trace:
+        with bind_preview_sink(capture):
+            result = await provider.realize(_context())
 
     assert result["moves"] == [
         {"kind": "answer_question", "text": "Tô bem, papis. Só meio elétrica hoje."}
@@ -109,3 +111,15 @@ async def test_realtime_provider_streams_preview_but_returns_complete_json(monke
     assert result["_usage"]["preview_streamed"] is True
     assert previews
     assert previews[-1] == "Tô bem, papis. Só meio elétrica hoje."
+    assert trace["provider_model"] == provider.model
+    assert trace["specialist_ms"] == 0.0
+    for key in (
+        "provider_headers_ms",
+        "provider_first_content_ms",
+        "provider_first_preview_ms",
+        "provider_surface_ms",
+        "provider_parse_ms",
+        "provider_total_ms",
+    ):
+        assert key in trace
+        assert float(trace[key]) >= 0.0
