@@ -106,7 +106,7 @@ async function pollPreview(previewId, state) {
   let last = "";
   while (!state.finished) {
     try {
-      const data = await authenticatedJson(`/v1/web/previews/${encodeURIComponent(previewId)}`);
+      const data = await authenticatedJson(`/v1/web/state?preview_id=${encodeURIComponent(previewId)}`);
       const text = typeof data.text === "string" ? data.text.trim() : "";
       if (text && text !== last) {
         last = text;
@@ -116,7 +116,7 @@ async function pollPreview(previewId, state) {
       }
       if (data.done && state.requestDone) return;
     } catch (error) {
-      if (error.status === 401) return;
+      if (error.status === 401 || error.status === 403) return;
     }
     await sleep(PREVIEW_POLL_MS);
   }
