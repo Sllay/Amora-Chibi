@@ -68,7 +68,7 @@ def test_unknown_nonverbal_markers_are_explicitly_unsupported_not_discarded():
     assert plan.cue_support()["unsupported_markers"] == ["(sorri)", "💜"]
 
 
-def test_remote_realization_three_segments_preserves_full_turn_and_restart(
+def test_remote_realization_keeps_three_cognitive_segments_but_one_web_voice_turn(
     safari, tmp_path, monkeypatch
 ):
     core, server, backend, client, headers = safari
@@ -83,59 +83,53 @@ def test_remote_realization_three_segments_preserves_full_turn_and_restart(
         },
     )
     assert response.status_code == 200, response.text
-    items = [
-        client.get(
-            "/v1/conversation/next?device_id=WEB_SAFARI", headers=headers
-        ).json()["utterance"]
-        for _ in range(3)
-    ]
-    assert all(items), items
-    turn = items[0]["metadata"]["cognitive_turn_id"]
-    assert {item["metadata"]["cognitive_turn_id"] for item in items} == {turn}
-    assert {item["display_text"] for item in items} == {TurnProvider.text}
-    assert all(
-        "kkkk" not in item["text"] and "😂" not in item["text"] for item in items
-    )
-    assert "LAUGHTER" in items[0]["metadata"]["unsupported_cues"]
-    assert len(core.cognition.store.list_segments(turn)) == 3
+    item = client.get(
+        "/v1/conversation/next?device_id=WEB_SAFARI", headers=headers
+    ).json()["utterance"]
+    assert item is not None
+    turn = item["metadata"]["cognitive_turn_id"]
+    assert item["metadata"]["speech_delivery_unit"] == "cognitive_turn"
+    assert item["display_text"] == TurnProvider.text
+    assert "kkkk" not in item["text"] and "😂" not in item["text"]
+    assert "Tu é impossível." in item["text"]
+    assert "Vou ficar por aqui." in item["text"]
+    assert "LAUGHTER" in item["metadata"]["cues"]
 
-    cancelled = client.post(
-        f"/v1/conversation/utterances/{items[0]['id']}/cancel",
-        headers=headers,
-        json={"reason": "web_muted", "speech_only": True},
-    )
-    assert (
-        cancelled.status_code == 200 and cancelled.json()["cancelled_utterances"] == 3
-    )
-    assert not core.cognition.is_turn_cancelled(turn)
+    segments = core.cognition.store.list_segments(turn)
+    assert len(segments) == 3
+    assert item["metadata"]["cognitive_segment_ids"] == [str(segment.id) for segment in segments]
+    # Safari no longer owns one TTS lease per cognitive clause.
     assert (
         client.get(
-            "/v1/conversation/next?device_id=WEB_SAFARI", headers=headers
+            f"/v1/conversation/next?device_id=WEB_SAFARI&cognitive_turn_id={turn}",
+            headers=headers,
         ).json()["utterance"]
         is None
     )
+
+    cancelled = client.post(
+        f"/v1/conversation/utterances/{item['id']}/cancel",
+        headers=headers,
+        json={"reason": "web_muted", "speech_only": True},
+    )
+    assert cancelled.status_code == 200 and cancelled.json()["cancelled_utterances"] == 1
+    assert not core.cognition.is_turn_cancelled(turn)
     assert (
         client.get(
-            f"/v1/web/voice/utterances/{items[0]['id']}/audio", headers=headers
+            f"/v1/web/voice/utterances/{item['id']}/audio", headers=headers
         ).status_code
         == 409
     )
-    assert all(
-        core.conversation.store.get_utterance(item["id"]).display_text
-        == TurnProvider.text
-        for item in items
-    )
-    assert core.cognition.store.list_segments(turn)[0].status.value == "interrupted"
+    assert core.conversation.store.get_utterance(item["id"]).display_text == TurnProvider.text
+    assert all(segment.status.value == "interrupted" for segment in core.cognition.store.list_segments(turn))
     # A stale player callback must not rewrite cancelled delivery as spoken.
+    client.post(f"/v1/conversation/utterances/{item['id']}/started", headers=headers)
     client.post(
-        f"/v1/conversation/utterances/{items[0]['id']}/started", headers=headers
-    )
-    client.post(
-        f"/v1/conversation/utterances/{items[0]['id']}/ack",
+        f"/v1/conversation/utterances/{item['id']}/ack",
         headers=headers,
         json={"spoken": True},
     )
-    assert core.cognition.store.list_segments(turn)[0].status.value == "interrupted"
+    assert all(segment.status.value == "interrupted" for segment in core.cognition.store.list_segments(turn))
     monkeypatch.setenv(
         "AMORA_SECRET_LOCAL_API_TOKEN", core.secrets.get("LOCAL_API_TOKEN")
     )
@@ -144,10 +138,7 @@ def test_remote_realization_three_segments_preserves_full_turn_and_restart(
     restarted = AmoraCore.bootstrap(storage=backend)
     try:
         assert restarted.conversation.claim_next("WEB_SAFARI") is None
-        assert (
-            restarted.conversation.store.get_utterance(items[0]["id"]).display_text
-            == TurnProvider.text
-        )
+        assert restarted.conversation.store.get_utterance(item["id"]).display_text == TurnProvider.text
     finally:
         restarted.close()
 
@@ -184,7 +175,7 @@ async def test_voice_only_cancellation_suppresses_late_segments_without_cancelli
 
 
 @pytest.mark.asyncio
-async def test_muting_during_enqueue_does_not_cancel_response_production(
+async def test_muting_aggregated_web_turn_does_not_cancel_response_production(
     safari, monkeypatch
 ):
     core, _, _, _, _ = safari
@@ -211,14 +202,12 @@ async def test_muting_during_enqueue_does_not_cancel_response_production(
         remote_processing_allowed=True,
         metadata={"speech_device_id": "WEB_SAFARI", "test_mode": True},
     )
-    assert reply is not None and len(items) == 3
+    assert reply is not None and len(items) == 1
     turn = reply.metadata["cognitive_turn_id"]
+    assert reply.metadata["speech_delivery_unit"] == "cognitive_turn"
     assert not core.cognition.is_turn_cancelled(turn)
-    assert all(item.display_text == TurnProvider.text for item in items)
-    assert all(
-        core.conversation.store.get_utterance(item.id).status.value == "cancelled"
-        for item in items
-    )
+    assert reply.display_text == TurnProvider.text
+    assert core.conversation.store.get_utterance(reply.id).status.value == "cancelled"
     assert all(
         segment.status.value == "interrupted"
         for segment in core.cognition.store.list_segments(turn)
@@ -251,6 +240,12 @@ def test_cue_only_response_is_visible_without_tts(safari):
     assert (
         client.get(
             f"/v1/web/voice/utterances/{item['id']}/audio", headers=headers
+        ).status_code
+        == 409
+    )
+    assert (
+        client.get(
+            f"/v1/web/voice/utterances/{item['id']}/stream", headers=headers
         ).status_code
         == 409
     )
@@ -287,7 +282,8 @@ def test_cue_only_prefix_does_not_suppress_later_spoken_content(safari):
         "/v1/conversation/next?device_id=WEB_SAFARI", headers=headers
     ).json()["utterance"]
     assert item["display_text"] == provider.text
-    assert item["text"] == "Tu é impossível."
+    assert item["text"] == "Tu é impossível. Vou ficar por aqui."
+    assert "LAUGHTER" in item["metadata"]["cues"]
 
 
 def test_optional_voice_stream_contract_and_resource_cleanup():
