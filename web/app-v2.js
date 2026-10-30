@@ -194,8 +194,9 @@ async function validatePairing() {
     else if (transport === "amora_remote_supertonic_world") label = "Amora · worker remoto Supertonic";
     else if (transport === "amora_local_supertonic_world") label = "Amora · backend local Supertonic";
     $("voiceLabel").textContent = label;
+    const post = voice.audio_postprocessing ? ` · DSP ${voice.audio_postprocessing}` : "";
     setVoiceStatus(voice.available
-      ? (active ? `disponível · ${active}` : "disponível")
+      ? (active ? `disponível · ${active}${post}` : `disponível${post}`)
       : (voice.last_error || "voz indisponível · verifique secrets/configuração"));
     if (state.voiceMuted) setVoiceStatus("mutada · texto ativo");
     return true;
@@ -351,6 +352,10 @@ function queueLocalSpeech(item, claimEpoch = state.speechEpoch) {
     epoch: state.speechEpoch,
     status: "queued",
     audioBuffer: null,
+    voiceProvider: "",
+    voiceModel: "",
+    voiceFallback: "",
+    audioPostprocessing: "",
     controller: new AbortController(),
     interrupted: false,
   };
@@ -378,6 +383,10 @@ async function prepareLocalSpeech(record) {
     );
     if (record.epoch !== state.speechEpoch || record.interrupted) return;
     const rtf = response.headers.get("x-amora-rtf");
+    record.voiceProvider = response.headers.get("x-amora-tts-provider") || "unknown";
+    record.voiceModel = response.headers.get("x-amora-tts-model") || "unknown";
+    record.voiceFallback = response.headers.get("x-amora-tts-fallback") || "";
+    record.audioPostprocessing = response.headers.get("x-amora-audio-postprocessing") || "unknown";
     record.audioBuffer = await voicePlayer.prepare(response,
       () => record.epoch === state.speechEpoch && !record.interrupted && !state.voiceMuted);
     if (record.epoch !== state.speechEpoch || record.interrupted || state.voiceMuted) return;
@@ -386,7 +395,8 @@ async function prepareLocalSpeech(record) {
       const value = Number(rtf);
       $("diagRtf").textContent = Number.isFinite(value) ? value.toFixed(3) : rtf;
     }
-    setVoiceStatus("áudio pronto");
+    const fallback = record.voiceFallback ? " · fallback" : "";
+    setVoiceStatus(`áudio pronto · ${record.voiceProvider}${fallback} · DSP ${record.audioPostprocessing}`);
     pumpPlayback();
   } catch (error) {
     if (record.interrupted || record.epoch !== state.speechEpoch) return;
@@ -425,7 +435,8 @@ function pumpPlayback() {
     $("diagGap").textContent = `${Math.round(performance.now() - state.lastSpeechEndAt)} ms`;
   }
   updateQueueDiag();
-  setVoiceStatus("falando · Amora");
+  const fallback = record.voiceFallback ? " · fallback" : "";
+  setVoiceStatus(`falando · ${record.voiceProvider || "Amora"}${fallback} · DSP ${record.audioPostprocessing || "unknown"}`);
 
   state.activeSource = voicePlayer.play(record.audioBuffer, () => {
     if (record.interrupted || record.epoch !== state.speechEpoch) return;
@@ -446,7 +457,8 @@ function finishPlayedRecord(record) {
   const index = state.speechQueue.indexOf(record);
   if (index >= 0) state.speechQueue.splice(index, 1);
   updateQueueDiag();
-  setVoiceStatus("pronta");
+  const fallback = record.voiceFallback ? " · fallback" : "";
+  setVoiceStatus(`pronta · última voz ${record.voiceProvider || "Amora"}${fallback} · DSP ${record.audioPostprocessing || "unknown"}`);
 
   api(`/v1/conversation/utterances/${encodeURIComponent(record.item.id)}/ack`, {
     method: "POST",
