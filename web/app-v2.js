@@ -186,14 +186,17 @@ async function validatePairing() {
   if (!state.token) return false;
   try {
     const data = await api("/v1/web/state");
-    const local = data.local_voice || {};
-    const remote = data.voice_transport === "amora_remote_supertonic_world";
-    $("voiceLabel").textContent = remote
-      ? "Amora · worker remoto Supertonic"
-      : "Amora · backend local Supertonic";
-    setVoiceStatus(local.available ? "disponível" : remote
-      ? (local.last_error || "worker remoto configurado · áudio ainda não validado")
-      : "backend local indisponível · verifique configuração de voz");
+    const voice = data.voice || data.local_voice || {};
+    const transport = String(data.voice_transport || "");
+    const active = voice.last_provider || (voice.fish_configured ? "fish" : voice.gemini_configured ? "gemini" : "");
+    let label = "Amora · voz do Core";
+    if (transport === "fish_s2_1_pro_free_then_gemini") label = "Amora · Fish S2.1 Pro";
+    else if (transport === "amora_remote_supertonic_world") label = "Amora · worker remoto Supertonic";
+    else if (transport === "amora_local_supertonic_world") label = "Amora · backend local Supertonic";
+    $("voiceLabel").textContent = label;
+    setVoiceStatus(voice.available
+      ? (active ? `disponível · ${active}` : "disponível")
+      : (voice.last_error || "voz indisponível · verifique secrets/configuração"));
     if (state.voiceMuted) setVoiceStatus("mutada · texto ativo");
     return true;
   } catch (error) {

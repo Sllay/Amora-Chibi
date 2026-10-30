@@ -58,6 +58,7 @@ Superseded by: ADR-NNNN / none
 
 ## Índice
 
+- `ADR-0021-fish-cloud-voice-primary-for-web.md` — Fish `s2.1-pro-free` + clone da Amora como voz Web primária; Gemini fallback explícito; Supertonic deixa de ser default da Web.
 - `ADR-0020-libsql-session-recovery-and-usage-boundary.md` — recovery de sessão após operação/transação falha, sem retry ambíguo; telemetria de usage degradável preservando realização válida.
 - `ADR-0019-turn-display-and-optional-voice-stream.md` — bolha por turno, DisplayText/SpeechPlan, mute/stop vocal, confirmação de limpeza e streaming PCM opcional sem novo renderer.
 - `ADR-0018-private-web-surface-and-browser-continuity.md` — target explícito Web 1:1, journal idempotente em SQL, credencial Web durável limitada e histórico visual 50+50.

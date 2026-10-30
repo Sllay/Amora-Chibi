@@ -51,7 +51,7 @@ def _enqueue_web(core: AmoraCore, text: str, dedupe_key: str):
             privacy_scope=PrivacyScope.PERSONAL,
             source_event_id=None,
             dedupe_key=dedupe_key,
-            metadata={"speech_device_id": "WEB_SAFARI"},
+            metadata={"speech_device_id": "WEB_SAFARI", "remote_tts_allowed": True},
             device_id="WEB_SAFARI",
         )
     )
@@ -79,7 +79,9 @@ def test_safari_lab_static_shell_and_manifest_are_served(tmp_path: Path, monkeyp
         core.close()
 
 
-def test_web_state_is_authenticated_and_exposes_local_amora_voice_worker(tmp_path: Path, monkeypatch) -> None:
+def test_web_state_is_authenticated_and_exposes_cloud_voice_chain(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_SECRET_FISH_API_KEY", "test-only-fish-key")
+    monkeypatch.setenv("AMORA_FISH_REFERENCE_ID", "test-amora-reference")
     core, client, headers = _client(tmp_path, monkeypatch)
     try:
         assert client.get("/v1/web/state").status_code == 401
@@ -89,10 +91,14 @@ def test_web_state_is_authenticated_and_exposes_local_amora_voice_worker(tmp_pat
         assert payload["surface"] == "AMORA_WEB_SAFARI_LAB_V2"
         assert payload["status"] == "experimental"
         assert payload["canonical_voice"] is False
-        assert payload["voice_transport"] == "amora_local_supertonic_world"
-        assert payload["voice_candidate"] == "AMORA_VOICE_SIGNATURE_V1_SOFT"
-        assert payload["local_voice"]["provider"] == "amora_local_supertonic_world"
-        assert payload["local_voice"]["num_steps"] == 5
+        assert payload["voice_transport"] == "fish_s2_1_pro_free_then_gemini"
+        assert payload["voice_candidate"] == "AMORA_GOLD_REFERENCE_V1"
+        assert payload["voice"]["primary_provider"] == "fish"
+        assert payload["voice"]["fallback_provider"] == "gemini"
+        assert payload["voice"]["fish_model"] == "s2.1-pro-free"
+        assert payload["voice"]["fish_configured"] is True
+        assert "test-amora-reference" not in str(payload)
+        assert "test-only-fish-key" not in str(payload)
     finally:
         core.close()
 
@@ -143,31 +149,45 @@ def test_web_mic_can_request_same_test_isolation_through_shared_audio_contract(t
         core.close()
 
 
-def test_web_local_voice_route_returns_wav_without_falsifying_delivery(tmp_path: Path, monkeypatch) -> None:
+def test_web_cloud_voice_route_returns_wav_without_falsifying_delivery(tmp_path: Path, monkeypatch) -> None:
     core, client, headers = _client(tmp_path, monkeypatch)
     try:
-        item = _enqueue_web(core, "Oi, BK.", "web-local-voice-route")
+        item = _enqueue_web(core, "Oi, BK.", "web-cloud-voice-route")
         claimed = core.conversation.claim_next("WEB_SAFARI")
         assert claimed is not None
 
-        renderer = client.app.state.web_local_voice
+        renderer = client.app.state.web_voice
         monkeypatch.setattr(
             renderer,
             "render",
             lambda utterance: LocalVoiceAudio(
                 wav_bytes=b"RIFFfake-wav",
-                sample_rate=24_000,
-                sample_count=48_000,
+                sample_rate=48_000,
+                sample_count=96_000,
                 synthesis_seconds=0.4,
-                world_seconds=0.2,
+                world_seconds=0.0,
             ),
+        )
+        monkeypatch.setattr(
+            renderer,
+            "state",
+            lambda: {
+                "provider": "fish_s2_1_pro_free_then_gemini",
+                "available": True,
+                "primary_provider": "fish",
+                "fallback_provider": "gemini",
+                "last_provider": "fish",
+                "last_model": "s2.1-pro-free",
+                "voice": "AMORA_GOLD_REFERENCE_V1",
+            },
         )
         response = client.get(f"/v1/web/voice/utterances/{item.id}/audio", headers=headers)
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("audio/wav")
-        assert response.headers["x-amora-tts-provider"] == "amora-local"
-        assert response.headers["x-amora-voice"] == "AMORA_VOICE_SIGNATURE_V1_SOFT"
-        assert response.headers["x-amora-rtf"] == "0.300000"
+        assert response.headers["x-amora-tts-provider"] == "fish"
+        assert response.headers["x-amora-tts-model"] == "s2.1-pro-free"
+        assert response.headers["x-amora-voice"] == "AMORA_GOLD_REFERENCE_V1"
+        assert response.headers["x-amora-rtf"] == "0.200000"
         assert response.content == b"RIFFfake-wav"
 
         unchanged = core.conversation.store.get_utterance(item.id)
@@ -232,33 +252,33 @@ def test_web_manual_cancel_marks_claimed_utterance_cancelled(tmp_path: Path, mon
         core.close()
 
 
-def test_web_local_voice_failure_cancels_cleanly_and_next_message_can_continue(tmp_path: Path, monkeypatch) -> None:
+def test_web_cloud_voice_failure_cancels_cleanly_and_next_message_can_continue(tmp_path: Path, monkeypatch) -> None:
     core, client, headers = _client(tmp_path, monkeypatch)
     try:
-        first = _enqueue_web(core, "Primeira fala.", "web-local-voice-unavailable")
+        first = _enqueue_web(core, "Primeira fala.", "web-cloud-voice-unavailable")
         claim = client.get("/v1/conversation/next?device_id=WEB_SAFARI", headers=headers)
         assert claim.status_code == 200
         assert claim.json()["utterance"]["id"] == str(first.id)
 
-        renderer = client.app.state.web_local_voice
+        renderer = client.app.state.web_voice
 
         def fail(_):
-            raise LocalVoiceUnavailable("sherpa-onnx não está instalado no venv do Core")
+            raise LocalVoiceUnavailable("VOICE_CLOUD_TTS_UNAVAILABLE")
 
         monkeypatch.setattr(renderer, "render", fail)
         response = client.get(f"/v1/web/voice/utterances/{first.id}/audio", headers=headers)
         assert response.status_code == 503
-        assert "sherpa-onnx" in response.json()["detail"]
+        assert response.json()["detail"] == "VOICE_CLOUD_TTS_UNAVAILABLE"
 
         cancelled = client.post(
             f"/v1/conversation/utterances/{first.id}/cancel",
-            json={"reason": "web_local_voice_error"},
+            json={"reason": "web_cloud_voice_error"},
             headers=headers,
         )
         assert cancelled.status_code == 200
         assert cancelled.json()["utterance"]["status"] == "cancelled"
 
-        second = _enqueue_web(core, "Segunda fala continua.", "web-after-local-voice-failure")
+        second = _enqueue_web(core, "Segunda fala continua.", "web-after-cloud-voice-failure")
         next_response = client.get("/v1/conversation/next?device_id=WEB_SAFARI", headers=headers)
         assert next_response.status_code == 200
         assert next_response.json()["utterance"]["id"] == str(second.id)
