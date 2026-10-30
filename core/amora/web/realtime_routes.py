@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from amora.cognition.preview import bind_preview_sink
+from amora.latency_trace import bind_latency_trace, install_remote_storage_probe
 from amora.voice.backend import VoiceBackend
 
 from .routes import register_web_routes as register_base_web_routes
@@ -17,6 +18,20 @@ from .routes import register_web_routes as register_base_web_routes
 _PREVIEW_ID_RE = re.compile(r"^[A-Za-z0-9._-]{8,96}$")
 _MAX_PREVIEWS = 128
 _PREVIEW_TTL_SECONDS = 180.0
+_TRACE_HEADERS = {
+    "context_compile_ms": "X-Amora-Latency-Context-Ms",
+    "provider_total_ms": "X-Amora-Latency-Provider-Total-Ms",
+    "provider_surface_ms": "X-Amora-Latency-Provider-Surface-Ms",
+    "provider_headers_ms": "X-Amora-Latency-Provider-Headers-Ms",
+    "provider_first_content_ms": "X-Amora-Latency-Provider-First-Content-Ms",
+    "provider_first_preview_ms": "X-Amora-Latency-Provider-First-Preview-Ms",
+    "provider_parse_ms": "X-Amora-Latency-Provider-Parse-Ms",
+    "specialist_ms": "X-Amora-Latency-Specialist-Ms",
+    "first_preview_from_request_ms": "X-Amora-Latency-First-Preview-Ms",
+    "remote_sql_ms": "X-Amora-Latency-Remote-Sql-Ms",
+    "remote_sql_calls": "X-Amora-Latency-Remote-Sql-Calls",
+    "remote_sql_max_ms": "X-Amora-Latency-Remote-Sql-Max-Ms",
+}
 
 
 def register_web_routes(
@@ -33,6 +48,7 @@ def register_web_routes(
     ``SecurityMiddleware`` remains the outer access-control boundary.
     """
     register_base_web_routes(app, core, require_auth, voice=voice)
+    install_remote_storage_probe()
     previews: OrderedDict[str, dict[str, object]] = OrderedDict()
 
     def prune() -> None:
@@ -81,15 +97,27 @@ def register_web_routes(
             return await call_next(request)
 
         put(preview_id, text="", done=False, error=None)
+        request_started = monotonic()
 
-        async def publish(text: str) -> None:
-            put(preview_id, text=text, done=False, error=None)
+        with bind_latency_trace() as trace:
+            async def publish(text: str) -> None:
+                if "first_preview_from_request_ms" not in trace:
+                    trace["first_preview_from_request_ms"] = round(
+                        (monotonic() - request_started) * 1000.0,
+                        3,
+                    )
+                put(preview_id, text=text, done=False, error=None)
 
-        try:
-            with bind_preview_sink(publish):
-                response = await call_next(request)
-        except Exception as exc:
-            put(preview_id, done=True, error=type(exc).__name__)
-            raise
+            try:
+                with bind_preview_sink(publish):
+                    response = await call_next(request)
+            except Exception as exc:
+                put(preview_id, done=True, error=type(exc).__name__)
+                raise
+
         put(preview_id, done=True, error=None)
+        for key, header in _TRACE_HEADERS.items():
+            value = trace.get(key)
+            if value is not None:
+                response.headers[header] = str(value)
         return response
