@@ -312,6 +312,37 @@ class RemoteConnection:
             results = results[1:]
         return results
 
+    @staticmethod
+    def _decode_execute_result(first):
+        if first["type"] == "error":
+            code = first["error"].get("code", "SQL_ERROR")
+            error = (
+                sqlite3.IntegrityError
+                if code in {"SQLITE_CONSTRAINT_UNIQUE", "SQLITE_CONSTRAINT_PRIMARYKEY"}
+                else sqlite3.DatabaseError
+            )
+            if code.startswith("SQLITE_CONSTRAINT"):
+                failure = error(code)
+                failure.sqlite_errorname = code
+                failure.sqlite_errorcode = getattr(sqlite3, code, sqlite3.SQLITE_CONSTRAINT)
+                raise failure
+            if code == "SQLITE_ERROR":
+                message = first["error"].get("message", "")
+                if "no such module: fts5" in message:
+                    raise sqlite3.OperationalError("FTS5_UNSUPPORTED")
+            raise StorageUnavailable(code)
+        if first["type"] != "ok" or first["response"]["type"] != "execute":
+            raise StorageUnavailable("SQL_INVALID_RESPONSE")
+        result = first["response"]["result"]
+        rowcount = result.get("affected_row_count")
+        if type(rowcount) is not int or rowcount < 0:
+            raise StorageUnavailable("SQL_INVALID_RESPONSE")
+        return Result(
+            [c["name"] for c in result["cols"]],
+            [[_decode(v) for v in row] for row in result["rows"]],
+            rowcount,
+        )
+
     def execute(self, sql, parameters=()):
         if isinstance(parameters, dict):
             raise TypeError("named parameters are not used by Amora stores")
@@ -329,39 +360,7 @@ class RemoteConnection:
             requests.append({"type": "close"})
         results = self._pipeline(requests)
         try:
-            first = results[0]
-            if first["type"] == "error":
-                code = first["error"].get("code", "SQL_ERROR")
-                # Messages may contain SQL values; expose only machine codes.
-                error = (
-                    sqlite3.IntegrityError
-                    if code
-                    in {"SQLITE_CONSTRAINT_UNIQUE", "SQLITE_CONSTRAINT_PRIMARYKEY"}
-                    else sqlite3.DatabaseError
-                )
-                if code.startswith("SQLITE_CONSTRAINT"):
-                    failure = error(code)
-                    failure.sqlite_errorname = code
-                    failure.sqlite_errorcode = getattr(
-                        sqlite3, code, sqlite3.SQLITE_CONSTRAINT
-                    )
-                    raise failure
-                if code == "SQLITE_ERROR":
-                    message = first["error"].get("message", "")
-                    if "no such module: fts5" in message:
-                        raise sqlite3.OperationalError("FTS5_UNSUPPORTED")
-                raise StorageUnavailable(code)
-            if first["type"] != "ok" or first["response"]["type"] != "execute":
-                raise StorageUnavailable("SQL_INVALID_RESPONSE")
-            result = first["response"]["result"]
-            rowcount = result.get("affected_row_count")
-            if type(rowcount) is not int or rowcount < 0:
-                raise StorageUnavailable("SQL_INVALID_RESPONSE")
-            result = Result(
-                [c["name"] for c in result["cols"]],
-                [[_decode(v) for v in row] for row in result["rows"]],
-                rowcount,
-            )
+            result = self._decode_execute_result(results[0])
         except BaseException:
             if self._transaction and self._baton is None:
                 self._poison("SQL_TRANSACTION_STREAM_LOST")
@@ -388,8 +387,45 @@ class RemoteConnection:
         return result
 
     def executemany(self, sql, values):
-        for value in values:
-            self.execute(sql, value)
+        items = list(values)
+        if not items:
+            return None
+        if not self._transaction or len(items) == 1:
+            for value in items:
+                self.execute(sql, value)
+            return None
+
+        requests = [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": sql,
+                    "args": [_encode(v) for v in value],
+                    "want_rows": True,
+                },
+            }
+            for value in items
+        ]
+        results = self._pipeline(requests)
+        try:
+            for first in results:
+                self._decode_execute_result(first)
+        except BaseException:
+            if self._transaction and self._baton is None:
+                self._poison("SQL_TRANSACTION_STREAM_LOST")
+            raise
+        if self._baton is None:
+            self._poison("SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN")
+            raise StorageUnavailable(
+                "SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN"
+            ) from StorageUnavailable("SQL_TRANSACTION_STREAM_LOST")
+        if self._recovering_from is not None:
+            logger.info(
+                "storage_connection_recovered",
+                extra={**self._log_fields(), "previous_error": self._recovering_from},
+            )
+            self._recovering_from = None
+        return None
 
     def executescript(self, script):
         # Migrations supply explicit BEGIN/COMMIT and rollback on failure.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID
@@ -149,7 +150,7 @@ class WorldStore:
         params.append(query.limit)
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
-            return [self._hydrate_claim(row) for row in rows]
+        return self._hydrate_claims(rows)
 
     def current_state(self, *, subject_id: str | None = None, at: datetime | None = None) -> list[WorldClaim]:
         return self.query_claims(
@@ -267,12 +268,31 @@ class WorldStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [self._hydrate_relationship(row) for row in rows]
 
-    def _hydrate_claim(self, row: sqlite3.Row) -> WorldClaim:
+    def _hydrate_claims(self, rows) -> list[WorldClaim]:
+        if not rows:
+            return []
+        claim_ids = [str(row["id"]) for row in rows]
+        placeholders = ",".join("?" for _ in claim_ids)
         with self._lock:
             evidence_rows = self._conn.execute(
-                "SELECT kind, ref_id, confidence, note FROM world_evidence WHERE claim_id = ? ORDER BY ordinal",
-                (row["id"],),
+                f"SELECT claim_id, kind, ref_id, confidence, note FROM world_evidence WHERE claim_id IN ({placeholders}) ORDER BY claim_id, ordinal",
+                claim_ids,
             ).fetchall()
+        evidence_by_claim: dict[str, list[object]] = defaultdict(list)
+        for item in evidence_rows:
+            evidence_by_claim[str(item["claim_id"])].append(item)
+        return [
+            self._hydrate_claim(row, evidence_rows=evidence_by_claim.get(str(row["id"]), ()))
+            for row in rows
+        ]
+
+    def _hydrate_claim(self, row: sqlite3.Row, *, evidence_rows=None) -> WorldClaim:
+        if evidence_rows is None:
+            with self._lock:
+                evidence_rows = self._conn.execute(
+                    "SELECT kind, ref_id, confidence, note FROM world_evidence WHERE claim_id = ? ORDER BY ordinal",
+                    (row["id"],),
+                ).fetchall()
         return WorldClaim(
             id=UUID(row["id"]),
             kind=EpistemicKind(row["kind"]),
