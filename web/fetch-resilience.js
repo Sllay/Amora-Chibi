@@ -1,10 +1,22 @@
 const nativeFetch = window.fetch.bind(window);
 
 let voiceStreamDowngraded = false;
+let activeTurnRequests = 0;
+let queueEmptyUntil = 0;
+let lastHealthBody = null;
+let lastHealthAt = 0;
+
+const HEALTH_CACHE_MS = 4000;
+const HEALTH_STALE_GRACE_MS = 12000;
+const EMPTY_QUEUE_CACHE_MS = 2000;
 
 function asUrl(input) {
   const raw = typeof input === "string" || input instanceof URL ? input : input?.url;
   return new URL(raw, window.location.href);
+}
+
+function methodOf(init) {
+  return String(init?.method || "GET").toUpperCase();
 }
 
 function isVoiceStream(url) {
@@ -13,6 +25,28 @@ function isVoiceStream(url) {
 
 function isWebTurn(url) {
   return url.pathname === "/v1/web/utterance";
+}
+
+function isTurnRequest(url, init) {
+  if (methodOf(init) !== "POST") return false;
+  return url.pathname === "/v1/web/utterance" || url.pathname === "/v1/audio/transcribe";
+}
+
+function isHealth(url, init) {
+  return methodOf(init) === "GET" && url.pathname === "/health";
+}
+
+function isSafariQueueNext(url, init) {
+  return methodOf(init) === "GET"
+    && url.pathname === "/v1/conversation/next"
+    && url.searchParams.get("device_id") === "WEB_SAFARI";
+}
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
 }
 
 function setVoiceDiagnostic(text) {
@@ -30,6 +64,7 @@ function numericHeader(response, name) {
 function observeTurnTiming(response) {
   if (!response.ok) return;
   const trace = {
+    version: response.headers.get("X-Amora-Latency-Trace-Version"),
     context: numericHeader(response, "X-Amora-Latency-Context-Ms"),
     provider: numericHeader(response, "X-Amora-Latency-Provider-Total-Ms"),
     surface: numericHeader(response, "X-Amora-Latency-Provider-Surface-Ms"),
@@ -47,6 +82,21 @@ function observeTurnTiming(response) {
   response.clone().json().then((body) => {
     const timing = body?.timing;
     if (!timing || typeof timing.total_ms !== "number") return;
+    const embedded = timing.surgical || {};
+    const value = (headerValue, key) => headerValue ?? (Number.isFinite(Number(embedded[key])) ? Number(embedded[key]) : null);
+    trace.context = value(trace.context, "context_compile_ms");
+    trace.provider = value(trace.provider, "provider_total_ms");
+    trace.surface = value(trace.surface, "provider_surface_ms");
+    trace.headers = value(trace.headers, "provider_headers_ms");
+    trace.firstContent = value(trace.firstContent, "provider_first_content_ms");
+    trace.firstPreview = value(trace.firstPreview, "provider_first_preview_ms");
+    trace.previewFromRequest = value(trace.previewFromRequest, "first_preview_from_request_ms");
+    trace.parse = value(trace.parse, "provider_parse_ms");
+    trace.specialist = value(trace.specialist, "specialist_ms");
+    trace.remoteSql = value(trace.remoteSql, "remote_sql_ms");
+    trace.remoteSqlCalls = value(trace.remoteSqlCalls, "remote_sql_calls");
+    trace.remoteSqlMax = value(trace.remoteSqlMax, "remote_sql_max_ms");
+
     setTimeout(() => {
       const node = document.getElementById("diagTurn");
       if (!node) return;
@@ -63,6 +113,9 @@ function observeTurnTiming(response) {
         const calls = trace.remoteSqlCalls !== null ? `/${Math.round(trace.remoteSqlCalls)}` : "";
         compact.push(`db ${Math.round(trace.remoteSql)}${calls}`);
       }
+      if (trace.provider === null && trace.context === null && trace.remoteSql === null) {
+        compact.push(`trace ${trace.version || "n/a"}`);
+      }
       if (social !== null) compact.push(`social ${social}`);
       if (local !== null) compact.push(`local ${local}`);
       node.textContent = compact.join(" · ");
@@ -72,6 +125,7 @@ function observeTurnTiming(response) {
         `conversation=${timing.conversation_ms}ms`,
         `cognition=${timing.cognition_ms}ms`,
         `local_overhead=${timing.local_overhead_ms}ms`,
+        `trace_version=${trace.version ?? "n/a"}`,
         `context_compile=${trace.context ?? "n/a"}ms`,
         `provider_total=${trace.provider ?? "n/a"}ms`,
         `provider_surface=${trace.surface ?? "n/a"}ms`,
@@ -87,6 +141,39 @@ function observeTurnTiming(response) {
       ].join(" | ");
     }, 0);
   }).catch(() => {});
+}
+
+async function resilientHealth(input, init) {
+  const now = Date.now();
+  if (lastHealthBody && now - lastHealthAt < HEALTH_CACHE_MS) return jsonResponse(lastHealthBody);
+  try {
+    const response = await nativeFetch(input, init);
+    if (response.ok) {
+      try {
+        lastHealthBody = await response.clone().json();
+        lastHealthAt = Date.now();
+      } catch (_) {}
+    }
+    return response;
+  } catch (error) {
+    if (lastHealthBody && now - lastHealthAt < HEALTH_STALE_GRACE_MS) return jsonResponse(lastHealthBody);
+    throw error;
+  }
+}
+
+async function resilientQueueNext(input, init) {
+  if (activeTurnRequests > 0 || Date.now() < queueEmptyUntil) {
+    return jsonResponse({ utterance: null });
+  }
+  const response = await nativeFetch(input, init);
+  if (response.ok) {
+    try {
+      const body = await response.clone().json();
+      if (!body?.utterance) queueEmptyUntil = Date.now() + EMPTY_QUEUE_CACHE_MS;
+      else queueEmptyUntil = 0;
+    } catch (_) {}
+  }
+  return response;
 }
 
 function readAscii(bytes, offset, length) {
@@ -230,7 +317,11 @@ window.fetch = async function amoraResilientFetch(input, init = {}) {
   if (isVoiceStream(url) && voiceStreamDowngraded && !init?.signal?.aborted) {
     return wavFallback(url, init, new Error("stream desativado após falha anterior"));
   }
+  if (isHealth(url, init)) return resilientHealth(input, init);
+  if (isSafariQueueNext(url, init)) return resilientQueueNext(input, init);
 
+  const turnRequest = isTurnRequest(url, init);
+  if (turnRequest) activeTurnRequests += 1;
   try {
     const response = await nativeFetch(input, init);
     if (isWebTurn(url)) observeTurnTiming(response);
@@ -242,9 +333,12 @@ window.fetch = async function amoraResilientFetch(input, init = {}) {
       return wavFallback(url, init, error);
     }
     throw error;
+  } finally {
+    if (turnRequest) activeTurnRequests = Math.max(0, activeTurnRequests - 1);
   }
 };
 
 window.__AMORA_FETCH_RESILIENCE__ = {
   get voiceStreamDowngraded() { return voiceStreamDowngraded; },
+  get activeTurnRequests() { return activeTurnRequests; },
 };
