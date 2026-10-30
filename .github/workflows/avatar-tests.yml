@@ -33,6 +33,8 @@ jobs:
           node --check avatar/rig-v2.js
           node --check avatar/sw.js
           node --check web/app-v2.js
+          node --check web/fetch-resilience.js
+          node --check web/realtime-preview.js
           node --check web/audio-player.mjs
           node --check web/browser-state.mjs
       - name: Test Avatar Engine

@@ -7,7 +7,7 @@ from typing import Callable
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.staticfiles import StaticFiles
 
-from amora.web.routes import register_web_routes
+from amora.web import register_web_routes
 
 from .models import AvatarProject
 

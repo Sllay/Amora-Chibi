@@ -85,7 +85,7 @@
           <div><dt>Fila de voz</dt><dd id="diagQueue">0</dd></div>
           <div><dt>Microfone</dt><dd id="diagMic">off</dd></div>
         </dl>
-        <p class="notice">O Safari não sintetiza mais a voz. O Core encaminha a renderização ao backend configurado — worker remoto no ambiente cloud — com Supertonic 60/40 → FINAL_B → VoiceSignature V1 Soft → Emotion V2 e envia WAV ao navegador. A identidade vocal de laboratório foi aprovada; certificação física/final continua sendo um gate separado.</p>
+        <p class="notice">O Safari não sintetiza mais a voz: ele só captura entrada e reproduz saída. O Core mantém identidade/estado; Fish S2.1 Pro Free é a voz cloud primária, Gemini é fallback. A escrita aparece progressivamente enquanto o Qwen gera, mas só vira resposta/voz canônica depois que o frame completo passa pelos gates locais.</p>
         <button id="forgetPairing" class="ghost" type="button">Esquecer pareamento deste navegador</button>
       </aside>
     </section>
@@ -100,6 +100,8 @@
     </form>
   </dialog>
 
+  <script type="module" src="./fetch-resilience.js"></script>
+  <script type="module" src="./realtime-preview.js"></script>
   <script type="module" src="./app-v2.js"></script>
 </body>
 </html>
