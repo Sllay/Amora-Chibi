@@ -18,6 +18,7 @@ from .realization import realization_instruction
 
 _DIALOGUE_MODEL = "qwen/qwen3.8-27b"
 _REASONING_MODEL = "openai/gpt-oss-120b"
+_REASONING_ASSIST_TIMEOUT_SECONDS = 6.0
 _TECHNICAL_MARKERS = (
     "codigo", "código", "programacao", "programação", "python", "java", "kotlin",
     "bug", "erro", "arquitetura", "algoritmo", "api", "banco de dados", "servidor",
@@ -79,7 +80,8 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
         specialist_started = perf_counter()
         specialist_support: dict[str, object] | None = None
         specialist_error: str | None = None
-        if _needs_reasoning_support(context):
+        needs_specialist = _needs_reasoning_support(context)
+        if needs_specialist:
             try:
                 specialist_support = await self._reasoning_assist(context, api_key=api_key)
             except Exception as exc:
@@ -139,13 +141,19 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
             "specialist_used": specialist_support is not None,
             "specialist_error": specialist_error,
             "specialist_elapsed_ms": (
-                (started - specialist_started) * 1000.0 if _needs_reasoning_support(context) else 0.0
+                (started - specialist_started) * 1000.0 if needs_specialist else 0.0
             ),
         }
         return parsed
 
     async def _reasoning_assist(self, context: CognitiveContext, *, api_key: str) -> dict[str, object]:
-        """Get factual/reasoning support without asking the specialist to be Amora."""
+        """Get factual/reasoning support without asking the specialist to be Amora.
+
+        This helper is deliberately outside the normal conversational critical
+        path. When a deep technical turn really needs it, cap the optional assist
+        aggressively so a specialist stall cannot add tens of seconds before the
+        surface realizer even starts.
+        """
         depth = str(context.dialogue_plan.get("depth") or "medium")
         effort = "medium" if depth == "deep" else "low"
         prompt = {
@@ -178,7 +186,8 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
             "reasoning_format": "hidden",
             "response_format": {"type": "json_object"},
         }
-        timeout = httpx.Timeout(self.timeout_seconds, connect=10.0)
+        assist_timeout = min(float(self.timeout_seconds), _REASONING_ASSIST_TIMEOUT_SECONDS)
+        timeout = httpx.Timeout(assist_timeout, connect=min(4.0, assist_timeout))
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             response = await client.post(
                 self.API_URL,
@@ -285,15 +294,21 @@ def _dialogue_token_budget(context: CognitiveContext) -> int:
 
 
 def _needs_reasoning_support(context: CognitiveContext) -> bool:
+    """Reserve the expensive specialist for deep, genuinely technical turns.
+
+    The surface realizer is already capable of ordinary technical conversation.
+    A second serial model call is justified only when the local dialogue planner
+    has classified the turn as deep *and* the text actually contains technical
+    subject matter. Long natural conversation alone must never trigger it.
+    """
     plan = context.dialogue_plan
     act = str(plan.get("act") or "")
     if act in _RELATIONAL_ACTS:
         return False
     if act not in {"answer_question", "support_request", "express_opinion", "disagree"}:
         return False
+    if str(plan.get("depth") or "medium") != "deep":
+        return False
 
     text = context.user_text.casefold()
-    if any(marker in text for marker in _TECHNICAL_MARKERS):
-        return True
-    words = text.split()
-    return str(plan.get("depth") or "medium") == "deep" and len(words) >= 28
+    return any(marker in text for marker in _TECHNICAL_MARKERS)

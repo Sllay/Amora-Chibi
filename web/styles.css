@@ -47,10 +47,29 @@ button:disabled { opacity: .45; cursor: default; }
 .danger { color: #ffdbe2; border-color: rgba(255,109,132,.32); }
 .error { min-height: 1.2em; color: #ff9aaa !important; }
 
-.app-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; }
-.conversation { min-height: min(74dvh, 820px); display: flex; flex-direction: column; overflow: hidden; }
+.app-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+.conversation {
+  height: min(74dvh, 820px);
+  min-height: min(620px, 74dvh);
+  max-height: 820px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .conversation-head { padding: 16px 16px 10px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }
-.messages { flex: 1; overflow: auto; padding: 18px 14px; display: flex; flex-direction: column; gap: 10px; scroll-behavior: smooth; }
+.messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  padding: 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scroll-behavior: smooth;
+}
 .message { max-width: min(78%, 620px); padding: 11px 14px; border-radius: 18px; line-height: 1.43; white-space: pre-wrap; word-wrap: break-word; }
 .message.user { align-self: flex-end; background: linear-gradient(135deg, #e989ba, #c690ed); color: #1d1422; border-bottom-right-radius: 6px; }
 .message.amora { align-self: flex-start; background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.07); border-bottom-left-radius: 6px; }
@@ -79,7 +98,11 @@ dd { margin: 0; text-align: right; font-size: 12px; font-variant-numeric: tabula
   .shell { padding-left: 10px; padding-right: 10px; }
   .app-grid { grid-template-columns: 1fr; }
   .diagnostics { position: static; }
-  .conversation { min-height: 72dvh; }
+  .conversation {
+    height: min(78dvh, 760px);
+    min-height: min(560px, 78dvh);
+    max-height: 760px;
+  }
   .message { max-width: 88%; }
   .pair-form { flex-direction: column; }
 }
