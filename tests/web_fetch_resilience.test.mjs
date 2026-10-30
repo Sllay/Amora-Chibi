@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../web/fetch-resilience.js', import.meta.url), 'utf8');
 const preview = readFileSync(new URL('../web/realtime-preview.js', import.meta.url), 'utf8');
+const app = readFileSync(new URL('../web/app-v2.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
 
 test('Safari voice stream is preflighted before the app sees it', () => {
@@ -34,6 +35,11 @@ test('progressive preview wraps fetch without stealing the app submit lifecycle'
   assert.match(preview, /reconcileFinal\(state, data\.reply_queued\)/);
   assert.doesNotMatch(preview, /addEventListener\("submit"/);
   assert.doesNotMatch(preview, /stopImmediatePropagation/);
+
+  // app-v2 remains the sole owner of user-gesture playback unlock and of
+  // claiming the canonical voice item after the POST completes.
+  assert.match(app, /async function submitText\(text\)[\s\S]*?await unlockPlayback\(\)/);
+  assert.match(app, /await api\("\/v1\/web\/utterance"[\s\S]*?await fillSpeechQueue\(\)/);
 });
 
 test('partial preview is ephemeral and only the validated final reply is persisted', () => {
@@ -45,8 +51,8 @@ test('partial preview is ephemeral and only the validated final reply is persist
 test('resilience and preview shims load before the main Safari client', () => {
   const resilience = html.indexOf('./fetch-resilience.js');
   const realtime = html.indexOf('./realtime-preview.js');
-  const app = html.indexOf('./app-v2.js');
+  const appScript = html.indexOf('./app-v2.js');
   assert.ok(resilience >= 0);
   assert.ok(realtime > resilience);
-  assert.ok(app > realtime);
+  assert.ok(appScript > realtime);
 });
