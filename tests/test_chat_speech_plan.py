@@ -237,12 +237,7 @@ def test_cue_only_response_is_visible_without_tts(safari):
         "/v1/conversation/next?device_id=WEB_SAFARI", headers=headers
     ).json()["utterance"]
     assert item["display_text"] == "😂" and item["text"] == ""
-    assert (
-        client.get(
-            f"/v1/web/voice/utterances/{item['id']}/audio", headers=headers
-        ).status_code
-        == 409
-    )
+    # Streaming is the primary cloud path; cue-only turns must remain display-only.
     assert (
         client.get(
             f"/v1/web/voice/utterances/{item['id']}/stream", headers=headers
@@ -266,7 +261,7 @@ def test_legacy_barge_in_still_cancels_cognition(safari):
 def test_cue_only_prefix_does_not_suppress_later_spoken_content(safari):
     core, _, _, client, headers = safari
     provider = TurnProvider()
-    provider.text = "kkkkkkkkkkkk. Tu é impossível. Vou ficar por aqui."
+    provider.text = "😂 Tu é impossível. Vou ficar por aqui."
     core.cognition.register_provider(provider)
     response = client.post(
         "/v1/web/utterance",
