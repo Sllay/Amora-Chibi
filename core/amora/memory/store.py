@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import threading
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -187,7 +188,11 @@ class MemoryStore:
         if not rows:
             return []
 
-        records = {row["id"]: self._hydrate(row) for row in rows}
+        # Candidate hydration used to issue two SQL round-trips per row (entities
+        # and tags). That is cheap in local SQLite but catastrophic over Hrana.
+        # Preserve the exact candidate/ranking semantics while loading both child
+        # collections in two bounded bulk reads.
+        records = self._hydrate_many(rows)
         scores: dict[str, float] = {memory_id: 0.0 for memory_id in records}
         reasons: dict[str, set[str]] = {memory_id: set() for memory_id in records}
 
@@ -344,23 +349,65 @@ class MemoryStore:
     def _mark_accessed(self, memory_ids: list[str], now: datetime) -> None:
         if not memory_ids:
             return
+        placeholders = ",".join("?" for _ in memory_ids)
         with self._lock, self._conn:
-            self._conn.executemany(
-                "UPDATE memory_records SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?",
-                [(now.isoformat(), memory_id) for memory_id in memory_ids],
+            self._conn.execute(
+                f"UPDATE memory_records SET access_count = access_count + 1, last_accessed_at = ? WHERE id IN ({placeholders})",
+                (now.isoformat(), *memory_ids),
             )
 
-    def _hydrate(self, row: sqlite3.Row) -> MemoryRecord:
-        memory_id = row["id"]
+    def _hydrate_many(self, rows: list[sqlite3.Row]) -> dict[str, MemoryRecord]:
+        if not rows:
+            return {}
+        memory_ids = [str(row["id"]) for row in rows]
+        placeholders = ",".join("?" for _ in memory_ids)
         with self._lock:
             entity_rows = self._conn.execute(
-                "SELECT entity_id, confidence FROM memory_entities WHERE memory_id = ? ORDER BY entity_id",
-                (memory_id,),
+                f"SELECT memory_id, entity_id, confidence FROM memory_entities WHERE memory_id IN ({placeholders}) ORDER BY memory_id, entity_id",
+                memory_ids,
             ).fetchall()
             tag_rows = self._conn.execute(
-                "SELECT tag FROM memory_tags WHERE memory_id = ? ORDER BY tag",
-                (memory_id,),
+                f"SELECT memory_id, tag FROM memory_tags WHERE memory_id IN ({placeholders}) ORDER BY memory_id, tag",
+                memory_ids,
             ).fetchall()
+
+        entities: dict[str, list[object]] = defaultdict(list)
+        tags: dict[str, list[object]] = defaultdict(list)
+        for item in entity_rows:
+            entities[str(item["memory_id"])].append(item)
+        for item in tag_rows:
+            tags[str(item["memory_id"])].append(item)
+        return {
+            str(row["id"]): self._hydrate(
+                row,
+                entity_rows=entities.get(str(row["id"]), ()),
+                tag_rows=tags.get(str(row["id"]), ()),
+            )
+            for row in rows
+        }
+
+    def _hydrate(
+        self,
+        row: sqlite3.Row,
+        *,
+        entity_rows: Iterable[object] | None = None,
+        tag_rows: Iterable[object] | None = None,
+    ) -> MemoryRecord:
+        memory_id = row["id"]
+        if entity_rows is None or tag_rows is None:
+            with self._lock:
+                loaded_entities = self._conn.execute(
+                    "SELECT entity_id, confidence FROM memory_entities WHERE memory_id = ? ORDER BY entity_id",
+                    (memory_id,),
+                ).fetchall()
+                loaded_tags = self._conn.execute(
+                    "SELECT tag FROM memory_tags WHERE memory_id = ? ORDER BY tag",
+                    (memory_id,),
+                ).fetchall()
+            if entity_rows is None:
+                entity_rows = loaded_entities
+            if tag_rows is None:
+                tag_rows = loaded_tags
         provenance = MemoryProvenance(
             kind=ProvenanceKind(row["provenance_kind"]),
             source=row["provenance_source"],
