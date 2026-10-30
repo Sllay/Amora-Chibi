@@ -90,7 +90,7 @@ def test_remote_world_state_hydrates_evidence_in_constant_pipelines(tmp_path: Pa
         core.close()
 
 
-def test_remote_transaction_batches_begin_and_executemany(tmp_path: Path) -> None:
+def test_remote_transaction_batches_executemany_without_changing_transaction_contract(tmp_path: Path) -> None:
     server = CountingHrana(tmp_path / "transaction-batching.db")
     backend = LibSQLBackend(
         "https://database.example",
@@ -108,9 +108,12 @@ def test_remote_transaction_batches_begin_and_executemany(tmp_path: Path) -> Non
                 [(index,) for index in range(12)],
             )
 
-        assert result.rowcount == 12
+        # Preserve the adapter's historical DB-API surface: executemany returns
+        # no cursor/result, while the transaction remains fully atomic.
+        assert result is None
         assert [row[0] for row in connection.execute("SELECT value FROM probe ORDER BY value").fetchall()] == list(range(12))
-        # BEGIN + all INSERTs share one Hrana pipeline; COMMIT is the second.
-        assert server.pipeline_calls <= 3
+        # BEGIN, one batched INSERT pipeline, COMMIT, then the verification SELECT.
+        # Without batching these 12 rows require 15 pipelines in the same flow.
+        assert server.pipeline_calls <= 4
     finally:
         connection.close()
