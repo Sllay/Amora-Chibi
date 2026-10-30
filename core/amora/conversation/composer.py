@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from amora.emotion import MoodState
+from amora.emotion import EmotionType, MoodState
 from amora.voice_expression import VoiceProsodyPlanner
 
 from .models import SpeechStyle, UtteranceKind, VoiceExpressionStyle
@@ -12,8 +12,24 @@ class LocalSpeechComposer:
     def __init__(self) -> None:
         self.voice_prosody = VoiceProsodyPlanner()
 
-    def style_for_mood(self, mood: MoodState) -> SpeechStyle:
-        expression = self.voice_prosody.safe_plan(mood)
+    def style_for_mood(
+        self,
+        mood: MoodState,
+        *,
+        emotion: EmotionType | str | None = None,
+        intensity: float = 0.0,
+    ) -> SpeechStyle:
+        resolved_emotion: EmotionType | None = None
+        if emotion is not None:
+            try:
+                resolved_emotion = emotion if isinstance(emotion, EmotionType) else EmotionType(str(emotion))
+            except ValueError:
+                resolved_emotion = None
+        expression = self.voice_prosody.safe_plan(
+            mood,
+            emotion=resolved_emotion,
+            intensity=max(0.0, min(1.0, float(intensity))),
+        )
         return SpeechStyle(
             locale="pt-BR",
             # Legacy fields stay available for old/non-candidate adapters, but the
