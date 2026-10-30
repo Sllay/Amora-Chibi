@@ -97,6 +97,8 @@ def test_web_state_is_authenticated_and_exposes_cloud_voice_chain(tmp_path: Path
         assert payload["voice"]["fallback_provider"] == "gemini"
         assert payload["voice"]["fish_model"] == "s2.1-pro-free"
         assert payload["voice"]["fish_configured"] is True
+        assert payload["voice"]["provider_audio_passthrough"] is True
+        assert payload["voice"]["audio_postprocessing"] == "none"
         assert "test-amora-reference" not in str(payload)
         assert "test-only-fish-key" not in str(payload)
     finally:
@@ -179,6 +181,8 @@ def test_web_cloud_voice_route_returns_wav_without_falsifying_delivery(tmp_path:
                 "last_provider": "fish",
                 "last_model": "s2.1-pro-free",
                 "voice": "AMORA_GOLD_REFERENCE_V1",
+                "provider_audio_passthrough": True,
+                "audio_postprocessing": "none",
             },
         )
         response = client.get(f"/v1/web/voice/utterances/{item.id}/audio", headers=headers)
@@ -187,6 +191,7 @@ def test_web_cloud_voice_route_returns_wav_without_falsifying_delivery(tmp_path:
         assert response.headers["x-amora-tts-provider"] == "fish"
         assert response.headers["x-amora-tts-model"] == "s2.1-pro-free"
         assert response.headers["x-amora-voice"] == "AMORA_GOLD_REFERENCE_V1"
+        assert response.headers["x-amora-audio-postprocessing"] == "none"
         assert response.headers["x-amora-rtf"] == "0.200000"
         assert response.content == b"RIFFfake-wav"
 
@@ -297,6 +302,9 @@ def test_web_v2_has_no_safari_speech_synthesis_dependency_and_preserves_delivery
         assert "SpeechSynthesisUtterance" not in app.text
         assert "/v1/web/voice/utterances/" in app.text
         assert "voicePlayer.prepare(response" in app.text
+        assert 'response.headers.get("x-amora-tts-provider")' in app.text
+        assert 'response.headers.get("x-amora-tts-fallback")' in app.text
+        assert 'response.headers.get("x-amora-audio-postprocessing")' in app.text
         player = client.get("/web/audio-player.mjs")
         assert player.status_code == 200
         assert "decodeAudioData" in player.text
