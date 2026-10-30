@@ -85,11 +85,18 @@ def register_web_routes(
     async def bind_web_preview(request, call_next):
         path = request.url.path
 
+        # Safari Lab assets change frequently during physical certification.
+        # Do not let a long-lived module cache keep an older runtime after deploy.
+        if path == "/web" or path.startswith("/web/"):
+            response = await call_next(request)
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            return response
+
         # Browser credentials already have GET access to /v1/web/state. A query
         # parameter selects the ephemeral preview view without granting another
         # endpoint or exposing the main Core state payload to this helper.
         if path == "/v1/web/state" and request.method == "GET" and "preview_id" in request.query_params:
-            return JSONResponse(read(request.query_params.get("preview_id", "")))
+            return JSONResponse(read(request.query_params.get("preview_id", "")), headers={"Cache-Control": "no-store"})
 
         preview_id = request.headers.get("x-amora-preview-id", "").strip()
         eligible = path == "/v1/web/utterance" and bool(_PREVIEW_ID_RE.fullmatch(preview_id))
@@ -116,6 +123,7 @@ def register_web_routes(
                 raise
 
         put(preview_id, done=True, error=None)
+        response.headers["X-Amora-Latency-Trace-Version"] = "v2"
         for key, header in _TRACE_HEADERS.items():
             value = trace.get(key)
             if value is not None:

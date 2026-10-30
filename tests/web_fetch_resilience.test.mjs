@@ -28,15 +28,18 @@ test('server phase timing overrides the ambiguous total-only diagnostic', () => 
 });
 
 test('surgical timing surfaces provider TTFT, context and remote DB cost', () => {
+  assert.match(source, /X-Amora-Latency-Trace-Version/);
   assert.match(source, /X-Amora-Latency-Context-Ms/);
   assert.match(source, /X-Amora-Latency-Provider-Total-Ms/);
   assert.match(source, /X-Amora-Latency-Provider-First-Content-Ms/);
   assert.match(source, /X-Amora-Latency-Remote-Sql-Ms/);
   assert.match(source, /X-Amora-Latency-Remote-Sql-Calls/);
+  assert.match(source, /timing\.surgical/);
   assert.match(source, /`prov \$\{Math\.round\(trace\.provider\)\}`/);
   assert.match(source, /`ttft \$\{Math\.round\(trace\.firstContent\)\}`/);
   assert.match(source, /`ctx \$\{Math\.round\(trace\.context\)\}`/);
   assert.match(source, /`db \$\{Math\.round\(trace\.remoteSql\)\}\$\{calls\}`/);
+  assert.match(source, /trace \$\{trace\.version \|\| "n\/a"\}/);
 });
 
 test('progressive preview wraps fetch without stealing the app submit lifecycle', () => {
@@ -44,7 +47,7 @@ test('progressive preview wraps fetch without stealing the app submit lifecycle'
   assert.match(preview, /X-Amora-Preview-Id/);
   assert.match(preview, /\/v1\/web\/state\?preview_id=/);
   assert.match(preview, /response\.clone\(\)\.json\(\)/);
-  assert.match(preview, /reconcileFinal\(state, data\.reply_queued\)/);
+  assert.match(preview, /retirePreview\(state, data\.reply_queued\)/);
   assert.doesNotMatch(preview, /addEventListener\("submit"/);
   assert.doesNotMatch(preview, /stopImmediatePropagation/);
 
@@ -54,16 +57,26 @@ test('progressive preview wraps fetch without stealing the app submit lifecycle'
   assert.match(app, /await api\("\/v1\/web\/utterance"[\s\S]*?await fillSpeechQueue\(\)/);
 });
 
-test('partial preview is ephemeral and only the validated final reply is persisted', () => {
+test('partial preview is ephemeral and never persists the canonical reply', () => {
   assert.match(preview, /renderPreview\(text\)/);
-  assert.match(preview, /browserStore\.appendMessage\("amora", final\.text/);
-  assert.doesNotMatch(preview, /appendMessage\("amora", text/);
+  assert.match(preview, /state\.node\?\.remove\(\)/);
+  assert.doesNotMatch(preview, /appendMessage\("amora"/);
+  assert.match(preview, /app-v2 is the sole owner/);
 });
 
-test('resilience and preview shims load before the main Safari client', () => {
-  const resilience = html.indexOf('./fetch-resilience.js');
-  const realtime = html.indexOf('./realtime-preview.js');
-  const appScript = html.indexOf('./app-v2.js');
+test('health polling is coalesced and queue polling yields while a turn is active', () => {
+  assert.match(source, /HEALTH_CACHE_MS = 4000/);
+  assert.match(source, /HEALTH_STALE_GRACE_MS = 12000/);
+  assert.match(source, /activeTurnRequests > 0/);
+  assert.match(source, /EMPTY_QUEUE_CACHE_MS = 2000/);
+  assert.match(source, /return jsonResponse\(\{ utterance: null \}\)/);
+  assert.match(source, /url\.pathname === "\/v1\/audio\/transcribe"/);
+});
+
+test('resilience and preview shims are cache-busted before the main Safari client', () => {
+  const resilience = html.indexOf('./fetch-resilience.js?v=20261030-74');
+  const realtime = html.indexOf('./realtime-preview.js?v=20261030-74');
+  const appScript = html.indexOf('./app-v2.js?v=20261030-74');
   assert.ok(resilience >= 0);
   assert.ok(realtime > resilience);
   assert.ok(appScript > realtime);
