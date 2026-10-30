@@ -1,4 +1,6 @@
 // Platform audio only. No synthesis, prosody, identity or conversation ownership.
+const PCM_SCHEDULE_QUANTUM_SECONDS = 0.25;
+
 export class WavPlayer {
   constructor(getContext) {
     this.getContext = getContext;
@@ -39,9 +41,10 @@ export class WavPlayer {
 }
 
 export class PcmStreamPlayer {
-  // Scheduled PCM blocks are supported by Safari Web Audio. This bounded queue
-  // is also the boundary for a future AudioWorklet/ring-buffer sink. It never
-  // waits for a complete response or runs decodeAudioData. Not wired to TTS yet.
+  // Safari can receive one HTTP ReadableStream block containing several upstream
+  // TTS chunks because proxies are free to coalesce transfer boundaries. Keep
+  // that unavoidable transport backlog, but only schedule a bounded Web Audio
+  // horizon. Small scheduled quanta refill the horizon as playback advances.
   constructor(context, identity, { minBufferSeconds = 0.06, maxBufferSeconds = 2, onState = () => {}, onEnded = () => {} } = {}) {
     if (!identity?.turnId || !identity?.utteranceId || !identity?.sessionId
         || !Number.isFinite(minBufferSeconds) || !Number.isFinite(maxBufferSeconds)
@@ -65,9 +68,15 @@ export class PcmStreamPlayer {
   }
 
   state() {
-    return { status: this.status, underruns: this.underruns,
-      bufferedSeconds: this.pending.reduce((n, block) => n + block.frames / block.sampleRate, 0)
-        + Math.max(0, this.nextAt - this.context.currentTime) };
+    const pendingSeconds = this.pending.reduce((n, block) => n + block.frames / block.sampleRate, 0);
+    const scheduledSeconds = Math.max(0, this.nextAt - this.context.currentTime);
+    return {
+      status: this.status,
+      underruns: this.underruns,
+      bufferedSeconds: pendingSeconds + scheduledSeconds,
+      pendingSeconds,
+      scheduledSeconds,
+    };
   }
 
   report(status) {
@@ -86,8 +95,8 @@ export class PcmStreamPlayer {
     const format = `${chunk.sampleRate}:${chunk.channels}`;
     if (this.format !== null && this.format !== format) throw new Error('PCM_FORMAT_CHANGED');
     const frames = chunk.samples.length / chunk.channels;
-    if (this.state().bufferedSeconds + frames / chunk.sampleRate > this.maxBufferSeconds) throw new Error('PCM_BUFFER_FULL');
-    // Own the buffer; callers may reuse or mutate their transport chunk.
+    // Own the transport block. A single browser read may exceed maxBufferSeconds
+    // after proxy coalescing; schedule() keeps only the playback horizon bounded.
     this.pending.push({ samples: chunk.samples.slice(), sampleRate: chunk.sampleRate, channels: chunk.channels, frames });
     this.format = format;
     this.sequence++;
@@ -97,15 +106,41 @@ export class PcmStreamPlayer {
   }
 
   schedule() {
+    if (this.stopped) return;
     const epoch = this.epoch;
     this.nextAt = Math.max(this.nextAt, this.context.currentTime);
-    for (const chunk of this.pending.splice(0)) {
-      if (!chunk.frames) continue; // An empty final block is allowed.
-      const buffer = this.context.createBuffer(chunk.channels, chunk.frames, chunk.sampleRate);
+    let scheduledSeconds = Math.max(0, this.nextAt - this.context.currentTime);
+
+    while (this.pending.length && scheduledSeconds < this.maxBufferSeconds) {
+      const chunk = this.pending[0];
+      if (!chunk.frames) {
+        this.pending.shift(); // An empty final transport block is valid.
+        continue;
+      }
+
+      const capacityFrames = Math.floor((this.maxBufferSeconds - scheduledSeconds) * chunk.sampleRate + 1e-6);
+      if (capacityFrames <= 0) break;
+      const quantumFrames = Math.max(1, Math.floor(PCM_SCHEDULE_QUANTUM_SECONDS * chunk.sampleRate));
+      const frames = Math.min(chunk.frames, capacityFrames, quantumFrames);
+      const sampleCount = frames * chunk.channels;
+      const samples = chunk.samples.subarray(0, sampleCount);
+
+      const buffer = this.context.createBuffer(chunk.channels, frames, chunk.sampleRate);
       for (let channel = 0; channel < chunk.channels; channel++) {
         const output = buffer.getChannelData(channel);
-        for (let frame = 0; frame < chunk.frames; frame++) output[frame] = chunk.samples[frame * chunk.channels + channel];
+        for (let frame = 0; frame < frames; frame++) output[frame] = samples[frame * chunk.channels + channel];
       }
+
+      if (frames === chunk.frames) {
+        this.pending.shift();
+      } else {
+        this.pending[0] = {
+          ...chunk,
+          samples: chunk.samples.subarray(sampleCount),
+          frames: chunk.frames - frames,
+        };
+      }
+
       const source = this.context.createBufferSource();
       source.buffer = buffer;
       source.connect(this.context.destination);
@@ -114,12 +149,18 @@ export class PcmStreamPlayer {
         source.disconnect();
         if (this.epoch !== epoch) return;
         this.nodes.delete(source);
+        // Refill before the scheduled horizon drains completely. This avoids a
+        // callback-sized gap even when one HTTP read contained many seconds.
+        if (this.pending.length && !this.stopped) this.schedule();
         if (!this.nodes.size && !this.pending.length) this.drained();
       };
       source.start(this.nextAt);
-      this.nextAt += chunk.frames / chunk.sampleRate;
+      this.nextAt += frames / chunk.sampleRate;
+      scheduledSeconds = Math.max(0, this.nextAt - this.context.currentTime);
     }
+
     if (this.nodes.size) this.report('playing');
+    else if (this.pending.length) this.report('buffering');
     else this.drained();
   }
 
