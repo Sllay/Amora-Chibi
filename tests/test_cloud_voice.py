@@ -6,15 +6,17 @@ import json
 import wave
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import pytest
 
 from amora.app import AmoraCore
-from amora.conversation import UtteranceKind
+from amora.conversation import UtteranceKind, VoiceExpressionStyle
 from amora.events import PrivacyScope
 from amora.time import SimulatedClock
-from amora.voice.cloud import FISH_FREE_MODEL, FishGeminiVoiceBackend
+from amora.voice.backend import VoiceSession, validated_chunks
+from amora.voice.cloud import FISH_FREE_MODEL, FISH_STREAM_SAMPLE_RATE, FishGeminiVoiceBackend
 from amora.voice.local_amora import LocalVoiceUnavailable
 
 
@@ -80,6 +82,7 @@ def test_fish_free_clone_is_primary_and_never_exposes_credentials(tmp_path: Path
             body = json.loads(request.content)
             assert body["reference_id"] == "amora-reference-test"
             assert body["format"] == "wav"
+            assert body["latency"] == "balanced"
             return httpx.Response(200, content=_wav())
 
         backend = FishGeminiVoiceBackend(
@@ -97,8 +100,54 @@ def test_fish_free_clone_is_primary_and_never_exposes_credentials(tmp_path: Path
         assert state["last_model"] == "s2.1-pro-free"
         assert state["provider_audio_passthrough"] is True
         assert state["audio_postprocessing"] == "none"
+        assert state["streaming"] is True
+        assert state["stream_format"] == "pcm_s16le"
         assert "fish-test-secret" not in str(state)
         assert "amora-reference-test" not in str(state)
+        backend.close()
+    finally:
+        core.close()
+
+
+def test_fish_stream_yields_pcm_before_final_and_maps_core_expression(tmp_path: Path, monkeypatch) -> None:
+    core = _core(tmp_path, monkeypatch)
+    try:
+        core.secrets.set("FISH_API_KEY", "fish-test-secret")
+        pcm = b"\x01\x00" * 5000
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            assert body["format"] == "pcm"
+            assert body["sample_rate"] == FISH_STREAM_SAMPLE_RATE
+            assert body["latency"] == "balanced"
+            assert body["chunk_length"] == 200
+            assert body["text"].startswith("[happy] [chuckling]")
+            assert "reference_id" in body
+            return httpx.Response(200, content=pcm)
+
+        backend = FishGeminiVoiceBackend(
+            core.secrets,
+            reference_id="amora-reference-test",
+            transport=httpx.MockTransport(handler),
+            gemini=FakeGemini(),
+        )
+        item = _utterance(core)
+        item.style.expression = VoiceExpressionStyle(
+            source_emotion="joy",
+            source_intensity=0.8,
+            rate_scale=1.02,
+        )
+        item.metadata["cues"] = ["LAUGHTER"]
+        session = VoiceSession(uuid4(), uuid4(), item.id)
+        chunks = list(validated_chunks(session, backend.stream(item, session)))
+        assert len(chunks) >= 3
+        assert chunks[0].pcm and chunks[0].final is False
+        assert chunks[-1].pcm == b"" and chunks[-1].final is True
+        assert b"".join(chunk.pcm for chunk in chunks) == pcm
+        assert all(chunk.sample_rate == FISH_STREAM_SAMPLE_RATE for chunk in chunks)
+        state = backend.state()
+        assert state["last_provider"] == "fish"
+        assert state["sample_rate"] == FISH_STREAM_SAMPLE_RATE
         backend.close()
     finally:
         core.close()
@@ -129,6 +178,31 @@ def test_fish_failure_falls_back_to_gemini_as_wav(tmp_path: Path, monkeypatch) -
         assert state["provider_audio_passthrough"] is True
         assert state["audio_postprocessing"] == "none"
         assert "FISH_HTTP_429" in str(state["last_error"])
+        backend.close()
+    finally:
+        core.close()
+
+
+def test_stream_falls_back_only_before_fish_audio_starts(tmp_path: Path, monkeypatch) -> None:
+    core = _core(tmp_path, monkeypatch)
+    try:
+        core.secrets.set("FISH_API_KEY", "fish-test-secret")
+        gemini = FakeGemini()
+        backend = FishGeminiVoiceBackend(
+            core.secrets,
+            reference_id="amora-reference-test",
+            transport=httpx.MockTransport(lambda request: httpx.Response(429, text="fair use")),
+            gemini=gemini,
+        )
+        item = _utterance(core)
+        session = VoiceSession(uuid4(), uuid4(), item.id)
+        chunks = list(validated_chunks(session, backend.stream(item, session)))
+        assert gemini.calls == 1
+        assert chunks[0].sample_rate == 24_000
+        assert chunks[-1].final is True
+        assert b"".join(chunk.pcm for chunk in chunks) == b"\x01\x00" * 2400
+        assert backend.state()["last_provider"] == "gemini"
+        assert "FISH_HTTP_429" in str(backend.state()["last_error"])
         backend.close()
     finally:
         core.close()
