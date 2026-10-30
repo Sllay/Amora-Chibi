@@ -14,7 +14,8 @@ from .models import (
     SpeechSegment,
 )
 from .providers import CognitiveProvider, ProviderDelta, ProviderError
-from .providers_structured import GeminiCognitiveProvider, GroqCognitiveProvider
+from .providers_realtime import GroqCognitiveProvider
+from .providers_structured import GeminiCognitiveProvider
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
 from .structured_runtime import CognitiveEngine
 from .replay import CognitiveReplayResult
