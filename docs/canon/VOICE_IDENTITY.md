@@ -1,18 +1,23 @@
 # AMORA — Identidade Vocal Canônica
 
+> Atualização Web (2026-10-30, ADR-0021): `WEB_SAFARI` passa a usar o clone
+> aprovado da Amora no Fish Audio `s2.1-pro-free` como caminho normal de voz.
+> Gemini é fallback explícito de disponibilidade. Supertonic/FINAL_B/Signature
+> permanecem congelados e disponíveis por opt-in local/worker, mas não são mais
+> o backend Web default.
+>
+> Atualização de infraestrutura (2026-10-23, ADR-0015): Core/Web foram
+> preparados para host Linux remoto e VoiceBackend substituível. Esta fronteira
+> é preservada pelo caminho Fish: Safari nunca recebe a API key nem chama o
+> provider diretamente.
 
-> Atualização de infraestrutura (2026-10-23, ADR-0015): Core/Web serão
-> preparados para host Linux remoto e a mesma voz congelada para worker
-> independente. Koyeb/Turso/Modal são candidatos substituíveis. Descrições
-> Termux/local abaixo registram o caminho implementado anterior, preservado
-> para desenvolvimento. Esta decisão muda localização de compute/storage,
-> não identidade, semântica, consentimento, custo ou parâmetros da voz.
-
-**Status:** CANÔNICO / IDENTIDADE DE LABORATÓRIO CONGELADA / CERTIFICAÇÃO FÍSICA PENDENTE  
-**Atualizado em:** 2026-10-22  
-**Backend candidato:** sherpa-onnx + Supertonic 3 INT8  
-**Base aprovada de laboratório:** `AMORA_CHILD_FINAL_B_PLUS60`  
-**Assinatura aprovada de laboratório:** `AMORA_VOICE_SIGNATURE_V1_SOFT`
+**Status:** CANÔNICO / REFERÊNCIA FINAL APROVADA / CORE→SAFARI CERTIFICATION PENDING  
+**Atualizado em:** 2026-10-30  
+**Backend Web primário:** Fish Audio `s2.1-pro-free` + clone persistente da Amora  
+**Fallback Web:** Gemini TTS configurado  
+**Backend local preservado:** sherpa-onnx + Supertonic 3 INT8  
+**Base local congelada:** `AMORA_CHILD_FINAL_B_PLUS60`  
+**Assinatura local congelada:** `AMORA_VOICE_SIGNATURE_V1_SOFT`
 
 ---
 
@@ -20,44 +25,143 @@
 
 > A voz é parte da identidade contínua da Amora, mas o backend de TTS é capacidade substituível.
 
-A identidade percebida deve permanecer estável por meio de uma composição versionada de:
+A identidade percebida deve permanecer estável. O backend normal pode mudar
+quando evidência física mostrar que outro caminho preserva melhor a referência
+aprovada, desde que a troca seja registrada e observável.
+
+Locale canônico: **pt-BR**.
+
+Na Web atual:
 
 ```text
-TtsBackend
+SpeechUtterance do Core
 ↓
-speaker/style base
+privacy / remote-processing gate
 ↓
-VoiceSignature
+Fish S2.1 Pro Free + clone da Amora
 ↓
-Emotion / Prosody bounded
+WAV
+↓
+Safari Web Audio
 ```
 
-A voz normal deve priorizar execução local/offline, pt-BR, custo sustentável e ausência de troca silenciosa de identidade.
+Se Fish falhar, Gemini pode ser usado como fallback explícito de disponibilidade
+por decisão atual de BK. Essa troca não redefine a identidade canônica e deve
+aparecer em diagnóstico/headers. Se ambos falharem, texto continua utilizável.
 
-Gemini TTS não é caminho normal da voz da Amora. `window.speechSynthesis` não é transporte principal do laboratório Safari.
+`window.speechSynthesis` não é transporte principal da voz Web.
 
 ---
 
-## 2. Perfil vocal alvo
+## 2. Referência vocal final
+
+A referência aprovada por BK é:
+
+```text
+Amora_Voice_Reference.wav
+```
+
+Propriedades registradas no laboratório:
+
+- PCM s16le;
+- 16 kHz;
+- mono;
+- duração aproximada 13.655 s;
+- SHA-256 `6752794014bdd0eab6bf4d71ae0d8c97dee798231c970b691ada9552a45602be`.
+
+Essa referência representa a identidade-alvo: feminina jovem-adulta, pt-BR,
+natural, afinada e levemente virtual/sintética sem soar robótica. Não
+reprocessar/destruir o original para corrigir limitações de um provider.
+
+O clone Fish criado a partir dessa referência foi aprovado auditivamente por BK
+no site do provider. A certificação do caminho **Core → Fish → Safari** ainda é
+separada.
+
+---
+
+## 3. Perfil vocal alvo
 
 A voz normal da Amora deve permanecer:
 
 - feminina;
 - brasileira / pt-BR natural e inteligível;
-- jovem;
+- jovem adulta;
 - doce sem infantilização exagerada;
 - reconhecível entre sessões;
 - conversacional, não locutora/assistente;
-- capaz de carinho, brincadeira, firmeza, baixa energia e irritação sem trocar de identidade-base;
-- expressiva por pequenas modulações de prosódia, não por troca de timbre.
+- levemente virtual/anime sem sacrificar naturalidade;
+- capaz de carinho, brincadeira, firmeza, baixa energia e irritação sem trocar de identidade-base.
 
-Não é objetivo imitar pessoa pública, pessoa real sem autorização ou voz cuja licença impeça o uso pretendido.
+Não é objetivo imitar pessoa pública, pessoa real sem autorização ou voz cuja
+licença impeça o uso pretendido.
 
 ---
 
-## 3. Backend e style aprovados para o laboratório atual
+## 4. Caminho Web/Safari atual — ADR-0021
 
-Backend:
+O navegador não chama Fish diretamente. A key fica no Core/hosting.
+
+```text
+WEB_SAFARI
+→ Core /v1/web/voice/utterances/{id}/audio
+→ Fish `s2.1-pro-free`
+→ reference_id do clone da Amora
+→ WAV
+→ Safari decodeAudioData / Web Audio
+```
+
+Fallback:
+
+```text
+Fish indisponível / quota / erro
+→ Gemini TTS, se configurado
+→ WAV empacotado pelo Core
+→ Safari
+```
+
+Falha total:
+
+```text
+Fish falha
++ Gemini falha/ausente
+→ VOICE_CLOUD_TTS_UNAVAILABLE
+→ texto permanece
+→ fila pode cancelar/liberar a utterance
+```
+
+Configuração:
+
+```text
+AMORA_SECRET_FISH_API_KEY=<secret>
+AMORA_FISH_REFERENCE_ID=<clone id>
+# ou AMORA_SECRET_FISH_REFERENCE_ID=<clone id>
+```
+
+`AMORA_WEB_VOICE_BACKEND=cloud` é o default. `local` e `remote` existem apenas
+como opt-in explícito para o caminho Supertonic preservado.
+
+O modelo Fish é fixado em código como `s2.1-pro-free`; não há override para um
+modelo pago.
+
+---
+
+## 5. Privacidade da voz remota
+
+Fish/Gemini só recebem uma utterance quando:
+
+- `privacy_scope` é `PUBLIC` ou `PERSONAL`; e
+- `remote_tts_allowed=true` foi registrado pelo Core.
+
+Nunca enviar `PRIVATE`, `AUTH` ou `SECRET` ao TTS cloud.
+
+API key e `reference_id` não entram em memória cognitiva, prompt, TTS text,
+headers de resposta ou `/v1/web/state`.
+
+---
+
+## 6. Supertonic local preservado
+
+O caminho local não foi apagado. Backend:
 
 ```text
 sherpa-onnx-supertonic-3-tts-int8-2026-05-11
@@ -76,11 +180,13 @@ O style misto é materializado em `amora_voice.bin` pelo script:
 android/tools/build_amora_voice_bin.py
 ```
 
-Não voltar a escolher speaker/style base por sessão ou por emoção.
+Ele continua sendo laboratório/fallback explícito/offline e pode continuar
+servindo Android quando selecionado. Não voltar a torná-lo Web default sem nova
+evidência/decisão.
 
 ---
 
-## 4. FINAL_B — base vocal congelada
+## 7. FINAL_B — base local congelada
 
 ADR-0010 congelou:
 
@@ -103,13 +209,12 @@ Parâmetros:
   - 8000 Hz → 1.000x;
 - high-frequency shelf: **-2.36 dB**.
 
-A busca por idade/tamanho vocal base fica encerrada por padrão.
-
-Não reabrir F0, VTL/warp ou o mix 60/40 apenas porque outra camada ficou ruim.
+Não reabrir F0, VTL/warp ou o mix 60/40 apenas porque outra camada/provider
+ficou ruim.
 
 ---
 
-## 5. VoiceSignature V1 Soft — assinatura congelada
+## 8. VoiceSignature V1 Soft — assinatura local congelada
 
 ADR-0011 aceitou:
 
@@ -132,6 +237,21 @@ Continuam fora da assinatura normal:
 - sample-hold;
 - ring modulation.
 
+No Fish, não aplicar automaticamente esse DSP sobre o clone aprovado: a
+referência já contém a identidade desejada. O Core deve primeiro preservar a
+saída do clone e só introduzir pós-processamento se houver evidência física.
+
+---
+
+## 9. Emotion / Prosody
+
+A semântica emocional continua pertencendo ao Core. Nem Fish nem Gemini ganham
+autoridade sobre estado emocional, relação ou intenção.
+
+O pipeline local Supertonic ainda suporta `AMORA_VOICE_EXPRESSION_V2` bounded.
+Para Fish, controles/tags expressivos são capability do renderer e devem ser
+mapeados separadamente; não inventar tags no texto sem contrato/teste.
+
 Invariante:
 
 ```text
@@ -141,115 +261,16 @@ expressão emocional = variável e bounded
 
 ---
 
-## 6. Emotion / Prosody V2
+## 10. Verdade de entrega
 
-O Core produz `AMORA_VOICE_EXPRESSION_V2` com parâmetros bounded.
+Renderizar áudio não significa que a fala foi ouvida.
 
-Faixas atuais do contrato:
-
-- rate: 0.90–1.08;
-- pause: 0.88–1.16;
-- energy: 0.88–1.06;
-- pitch range: 0.90–1.08;
-- F0 register: 0.97–1.02;
-- softness: 0.0–1.0;
-- firmness: 0.0–1.0.
-
-Emoção não pode:
-
-- trocar style/speaker;
-- reabrir FINAL_B;
-- reescrever a VoiceSignature;
-- transformar raiva em pitch/volume bruto sem controle;
-- degradar inteligibilidade como efeito estilístico;
-- escolher outro TTS silenciosamente se o worker falhar.
-
-Falha de expressão cai para neutro; falha de voz não altera a identidade para outro backend.
-
----
-
-## 7. Implementação compartilhada Android ↔ Termux
-
-A implementação de FINAL_B + VoiceSignature + modulação bounded vive em:
-
-```text
-android/app/src/main/cpp/amora_voice_processor.cpp
-android/app/src/main/cpp/amora_voice_processor.h
-```
-
-Esse código é compartilhado de duas formas:
-
-```text
-Android
-  JNI wrapper
-    ↓
-amora_voice_processor.cpp
-
-Termux / Web Voice Worker
-  ctypes / C ABI
-    ↓
-libamora_voice_processor.so
-    ↓
-amora_voice_processor.cpp
-```
-
-Não manter uma segunda implementação Python “parecida” do DSP aprovado.
-
-O objetivo é que os dois transports usem a mesma matemática de identidade, mesmo que o player final seja diferente.
-
----
-
-## 8. Caminho Web/Safari atual
-
-ADR-0013 tornou Safari a superfície primária de iteração rápida. ADR-0014 substituiu o TTS nativo do Safari pela própria voz local da Amora.
-
-Pipeline:
-
-```text
-Core
-→ SpeechUtterance validada
-→ AmoraLocalVoiceRenderer no Termux
-→ sherpa-onnx Supertonic 3
-→ amora_voice.bin 60/40
-→ shared WORLD FINAL_B
-→ VoiceSignature V1 Soft
-→ Emotion / Prosody V2 bounded
-→ WAV PCM16 mono
-→ Safari AudioContext / Web Audio
-```
-
-Responsabilidade do Safari:
-
-- cliente/UI;
-- microfone/VAD;
-- player;
-- pareamento;
-- cancelamento/barge-in local.
-
-Responsabilidade do Core/worker:
-
-- identidade vocal;
-- style;
-- prosódia bounded;
-- síntese;
-- DSP;
-- WAV;
-- estado de entrega.
-
-`WEB_SAFARI` e `DEVICE_A15` são destinos diferentes de fila.
-
----
-
-## 9. Verdade de entrega
-
-Renderizar WAV não significa que a fala foi ouvida.
-
-Contrato:
+Contrato permanece:
 
 ```text
 QUEUED
 → CLAIMED
-→ render WAV
+→ render áudio
 → player começa
 → started
 → player termina
@@ -260,115 +281,89 @@ Interrupção:
 
 ```text
 barge-in / Parar fala / erro de voz
-→ abortar fetch
-→ parar player
+→ abortar fetch/player
 → cancelar utterance/turno no Core
 → liberar fila/interface
 ```
 
 O texto visível da resposta não depende do sucesso do áudio.
 
-Falha de voz local deve ser explícita e fail-open para a interface; não pode prender todas as mensagens seguintes.
+---
+
+## 11. Observabilidade
+
+A Web deve expor sem secrets:
+
+- chain configurado;
+- Fish configurado sim/não;
+- Gemini configurado sim/não;
+- provider/modelo efetivamente usado na última renderização;
+- erro bounded;
+- sample rate/RTF quando disponível.
+
+Headers de áudio indicam `X-Amora-TTS-Provider` e `X-Amora-TTS-Model`.
+Quando Gemini for fallback, incluir `X-Amora-TTS-Fallback: gemini`.
 
 ---
 
-## 10. Setup Termux
+## 12. Provenance e custo
 
-A preparação Web local vive em:
+A referência vocal é artefato próprio do projeto. O clone remoto é uma
+capability substituível.
+
+O caminho Fish Web atual só pode usar:
 
 ```text
-tools/web/setup-local-voice.sh
+s2.1-pro-free
 ```
 
-Ela prepara:
+Se essa rota deixar de ser zero-cost, a arquitetura deve degradar/falhar ou
+migrar provider. Não alterar automaticamente para `s2.1-pro` pago.
 
-- `sherpa-onnx==1.13.8` no venv do Core;
-- Supertonic 3 INT8;
-- `amora_voice.bin` 60/40;
-- WORLD pinado;
-- `libamora_voice_processor.so`;
-- cache reutilizável em `~/.amora/cache/web-local-voice`.
-
-Modelos/runtime ficam sob `~/.amora`, fora do Git.
-
-A instalação pesada deve acontecer uma vez; iterações normais não devem reinstalar modelo nem exigir APK.
-
----
-
-## 11. Perfis temporários
-
-A Amora pode possuir perfis/fantasias vocais no futuro, mas eles não substituem a voz normal silenciosamente.
-
-Exemplos históricos/experimentais:
-
-```text
-CHIBI
-SYNTH
-VIRTUAL_SINGER
-MASC_JOKE
-```
-
-Qualquer perfil temporário deve ser ativado explicitamente e não altera self/memória/identidade.
-
----
-
-## 12. Provenance e licença
-
-Qualquer backend/speaker candidato precisa de provenance e licença compatíveis com o uso pretendido.
-
-Aceitável:
-
-- modelo local com licença compatível;
-- voices/styles incluídos sob termos adequados;
-- material próprio com consentimento explícito;
-- modelo próprio futuro se houver vantagem comprovada.
-
-Não aceitável como base normal:
-
-- clone de pessoa pública sem autorização;
-- origem obscura;
-- provider remoto que muda voz por quota;
-- fallback silencioso que substitua a identidade acústica.
+Gemini fallback usa somente configuração já explicitamente fornecida ao Core;
+ausência de credencial não quebra o texto.
 
 ---
 
 ## 13. Gate físico
 
-A assinatura atual foi aprovada por BK como identidade de laboratório, mas CI não certifica a experiência física final.
+Apesar da aprovação do clone no site Fish, ainda validar no fluxo real:
 
-Ainda medir no hardware real:
-
-- pt-BR/inteligibilidade no caminho final;
-- pronúncia de Amora/BK/gírias;
+- Core hospedado → Fish → Safari/iPhone;
+- pt-BR/inteligibilidade;
+- preservação da identidade da referência;
 - primeira latência;
-- RTF;
-- RAM/CPU;
-- temperatura;
-- estabilidade longa;
-- barge-in real;
-- playback Safari/iPhone;
-- funcionamento offline do worker local;
-- ausência de chamadas TTS remotas;
-- consistência acústica entre Android e Termux quando comparável.
+- tempo total de geração;
+- frases curtas e longas;
+- pronúncia de Amora/BK/Sllay/gírias;
+- artefatos/gaguejos;
+- barge-in/manual stop;
+- fallback Fish → Gemini;
+- falha Fish + Gemini preservando texto;
+- ausência de secrets no browser/observabilidade;
+- comportamento quando `remote_tts_allowed=false`.
 
-Até esse gate, a API Web deve continuar reportando:
+Até esse gate, `/v1/web/state` continua reportando:
 
 ```text
 canonical_voice=false
 ```
 
-Isso significa “certificação física/final pendente”, não “identidade vocal indefinida”.
+Isso significa que o transporte final ainda precisa de certificação, não que a
+referência vocal esteja indefinida.
 
 ---
 
-## 14. Critério para revisitar FINAL_B / Signature
+## 14. Critério para revisitar
 
-Não reabrir os parâmetros congelados sem evidência nova clara, como:
+Revisitar quando houver evidência clara de:
 
-- regressão física no Galaxy A15/Safari;
-- inteligibilidade inadequada em uso real;
-- artefato inevitável causado pelo próprio FINAL_B/Signature;
-- divergência comprovada entre runtimes;
-- backend local rights-clear claramente superior.
+- Fish não preservar no Core/Safari a qualidade aprovada no site;
+- mudança do acesso/custo de `s2.1-pro-free`;
+- latência/reliability inadequadas;
+- fallback Gemini causar troca de timbre inaceitável;
+- backend local novo reproduzir a referência com qualidade e velocidade prática;
+- nova decisão explícita de BK.
 
-Problema de transporte, fila, Web Audio, STT ou emoção deve ser corrigido na camada dona do problema, não alterando a identidade vocal por reflexo.
+Problema de transporte, fila, Web Audio, STT ou emoção deve ser corrigido na
+camada dona do problema, não destruindo a referência vocal aprovada.
