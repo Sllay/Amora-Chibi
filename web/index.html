@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Amora" />
-  <meta name="format-detection" content="telephone=no" />
+  <meta name="format-detection" content="no" />
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="stylesheet" href="./styles.css" />
   <title>Amora Web Lab</title>
@@ -85,7 +85,7 @@
           <div><dt>Fila de voz</dt><dd id="diagQueue">0</dd></div>
           <div><dt>Microfone</dt><dd id="diagMic">off</dd></div>
         </dl>
-        <p class="notice">A Web só captura entrada e reproduz saída. O Core mantém identidade/estado; Fish S2.1 Pro Free é a voz cloud primária, Gemini é fallback, e a Web tenta PCM em stream com recuperação automática por WAV quando o Safari/proxy falha antes do primeiro áudio.</p>
+        <p class="notice">A Web só captura entrada e reproduz saída. O Core mantém identidade/estado; Fish S2.1 Pro Free é a voz cloud primária, Gemini é fallback. A escrita aparece progressivamente enquanto o Qwen gera, mas só vira resposta/voz canônica depois que o frame completo passa pelos gates locais.</p>
         <button id="forgetPairing" class="ghost" type="button">Esquecer pareamento deste navegador</button>
       </aside>
     </section>
@@ -101,6 +101,7 @@
   </dialog>
 
   <script type="module" src="./fetch-resilience.js"></script>
+  <script type="module" src="./realtime-preview.js"></script>
   <script type="module" src="./app-v2.js"></script>
 </body>
 </html>
