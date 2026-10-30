@@ -28,7 +28,7 @@ test('server phase timing overrides the ambiguous total-only diagnostic', () => 
 
 test('progressive preview sends an ephemeral id and never persists partial text', () => {
   assert.match(preview, /X-Amora-Preview-Id/);
-  assert.match(preview, /\/v1\/web\/previews\//);
+  assert.match(preview, /\/v1\/web\/state\?preview_id=/);
   assert.match(preview, /previewState\.node\.textContent = final\.text/);
   assert.doesNotMatch(preview, /appendMessage\("amora", text/);
 });
