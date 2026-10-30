@@ -52,9 +52,39 @@ test('underrun is observable and later chunks resume the same stream', () => {
   nodes[1].end(); assert.equal(player.state().status, 'ended');
 });
 
-test('PCM backpressure is bounded and stereo interleaving is preserved', () => {
-  const { audio, nodes } = context(); const player = new PcmStreamPlayer(audio, identity, { minBufferSeconds: 0, maxBufferSeconds: 0.1 });
-  assert.throws(() => player.push(chunk(0, false, 16000)), /PCM_BUFFER_FULL/);
+test('proxy-coalesced PCM keeps the scheduled horizon bounded and drains transport backlog', () => {
+  const { audio, nodes } = context(); let ended = 0;
+  const player = new PcmStreamPlayer(audio, identity, {
+    minBufferSeconds: 0,
+    maxBufferSeconds: 0.1,
+    onEnded: () => ended++,
+  });
+
+  // A proxy/browser is allowed to merge many upstream chunks into one read.
+  // One second arrives at once even though only 100 ms may be scheduled ahead.
+  player.push(chunk(0, true, 16000));
+  assert.equal(nodes.length, 1);
+  assert.equal(nodes[0].buffer.duration, 0.1);
+  assert.ok(player.state().scheduledSeconds <= 0.100001);
+  assert.ok(player.state().pendingSeconds >= 0.899);
+  assert.ok(player.state().bufferedSeconds >= 0.999);
+
+  let index = 0;
+  while (player.state().status !== 'ended') {
+    const node = nodes[index++];
+    assert.ok(node, `missing refill node ${index}`);
+    node.end();
+    assert.ok(player.state().scheduledSeconds <= 0.100001);
+    assert.ok(index < 20, 'coalesced backlog did not drain');
+  }
+  assert.equal(index, 10);
+  assert.equal(ended, 1);
+  assert.equal(player.state().pendingSeconds, 0);
+});
+
+test('stereo interleaving is preserved', () => {
+  const { audio, nodes } = context();
+  const player = new PcmStreamPlayer(audio, identity, { minBufferSeconds: 0, maxBufferSeconds: 0.1 });
   player.push({ ...chunk(0, true, 4), channels: 2, samples: Float32Array.of(0.25, 0.5, 0.75, 1) });
   assert.deepEqual([...nodes[0].buffer.getChannelData(0)], [0.25, 0.75]);
   assert.deepEqual([...nodes[0].buffer.getChannelData(1)], [0.5, 1]);
