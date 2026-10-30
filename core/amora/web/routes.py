@@ -177,6 +177,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             or MODEL_ID
         )
         actual_voice = str(rendered_state.get("voice") or VOICE_ID)
+        audio_postprocessing = str(rendered_state.get("audio_postprocessing") or "backend-defined")
         provider_header = {
             "amora_remote_supertonic_world": "amora-remote",
             "amora_local_supertonic_world": "amora-local",
@@ -195,6 +196,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             "X-Amora-TTS-Provider": provider_header,
             "X-Amora-TTS-Model": actual_model,
             "X-Amora-Voice": actual_voice,
+            "X-Amora-Audio-Postprocessing": audio_postprocessing,
             "X-Amora-Sample-Rate": str(audio.sample_rate),
             "X-Amora-RTF": f"{audio.total_rtf:.6f}",
             "X-Amora-Voice-Certification": "provider-approved-core-safari-gate-pending",

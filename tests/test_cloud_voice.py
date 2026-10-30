@@ -95,6 +95,8 @@ def test_fish_free_clone_is_primary_and_never_exposes_credentials(tmp_path: Path
         state = backend.state()
         assert state["last_provider"] == "fish"
         assert state["last_model"] == "s2.1-pro-free"
+        assert state["provider_audio_passthrough"] is True
+        assert state["audio_postprocessing"] == "none"
         assert "fish-test-secret" not in str(state)
         assert "amora-reference-test" not in str(state)
         backend.close()
@@ -124,6 +126,8 @@ def test_fish_failure_falls_back_to_gemini_as_wav(tmp_path: Path, monkeypatch) -
         state = backend.state()
         assert state["last_provider"] == "gemini"
         assert state["last_model"] == "fake-gemini-tts"
+        assert state["provider_audio_passthrough"] is True
+        assert state["audio_postprocessing"] == "none"
         assert "FISH_HTTP_429" in str(state["last_error"])
         backend.close()
     finally:
