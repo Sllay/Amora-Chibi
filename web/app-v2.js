@@ -1,5 +1,5 @@
 import { BrowserState, browserStorage } from "./browser-state.mjs";
-import { WavPlayer } from "./audio-player.mjs";
+import { PcmStreamPlayer, WavPlayer } from "./audio-player.mjs";
 
 const $ = (id) => document.getElementById(id);
 const browserStore = new BrowserState(browserStorage("localStorage"), browserStorage("sessionStorage"));
@@ -7,6 +7,8 @@ const REMOTE_KEY = "amora.web.remote.v1";
 const TEST_KEY = "amora.web.test.v1";
 const MAX_SPEECH_QUEUE = 3;
 const VOICE_FETCH_TIMEOUT_MS = 90000;
+const STREAM_BACKPRESSURE_HIGH_SECONDS = 1.25;
+const STREAM_BACKPRESSURE_LOW_SECONDS = 0.85;
 
 const state = {
   token: browserStore.pairing(),
@@ -18,6 +20,7 @@ const state = {
   preparingRecord: null,
   speechEpoch: 0,
   voiceMuted: browserStore.voiceMuted(),
+  voiceStreaming: false,
   claimed: new Map(),
   suppressedTurns: new Set(),
   pendingCancels: new Map(),
@@ -189,14 +192,17 @@ async function validatePairing() {
     const voice = data.voice || data.local_voice || {};
     const transport = String(data.voice_transport || "");
     const active = voice.last_provider || (voice.fish_configured ? "fish" : voice.gemini_configured ? "gemini" : "");
+    const fetchStreaming = typeof ReadableStream !== "undefined" && typeof Response !== "undefined" && "body" in Response.prototype;
+    state.voiceStreaming = Boolean(voice.streaming && fetchStreaming);
     let label = "Amora · voz do Core";
     if (transport === "fish_s2_1_pro_free_then_gemini") label = "Amora · Fish S2.1 Pro";
     else if (transport === "amora_remote_supertonic_world") label = "Amora · worker remoto Supertonic";
     else if (transport === "amora_local_supertonic_world") label = "Amora · backend local Supertonic";
     $("voiceLabel").textContent = label;
     const post = voice.audio_postprocessing ? ` · DSP ${voice.audio_postprocessing}` : "";
+    const stream = state.voiceStreaming ? " · stream PCM" : "";
     setVoiceStatus(voice.available
-      ? (active ? `disponível · ${active}${post}` : `disponível${post}`)
+      ? (active ? `disponível · ${active}${stream}${post}` : `disponível${stream}${post}`)
       : (voice.last_error || "voz indisponível · verifique secrets/configuração"));
     if (state.voiceMuted) setVoiceStatus("mutada · texto ativo");
     return true;
@@ -352,6 +358,8 @@ function queueLocalSpeech(item, claimEpoch = state.speechEpoch) {
     epoch: state.speechEpoch,
     status: "queued",
     audioBuffer: null,
+    streamPlayer: null,
+    streamStarted: false,
     voiceProvider: "",
     voiceModel: "",
     voiceFallback: "",
@@ -366,6 +374,7 @@ function queueLocalSpeech(item, claimEpoch = state.speechEpoch) {
 
 function pumpPreparation() {
   if (state.voiceMuted || state.preparingRecord) return;
+  if (state.voiceStreaming && state.activeRecord) return;
   const record = state.speechQueue.find(item => item.status === "queued" && item.epoch === state.speechEpoch);
   if (!record) return;
   state.preparingRecord = record;
@@ -374,6 +383,18 @@ function pumpPreparation() {
 }
 
 async function prepareLocalSpeech(record) {
+  if (state.voiceStreaming) return prepareStreamedSpeech(record);
+  return prepareWavSpeech(record);
+}
+
+function applyVoiceHeaders(record, response) {
+  record.voiceProvider = response.headers.get("x-amora-tts-provider") || "unknown";
+  record.voiceModel = response.headers.get("x-amora-tts-model") || "unknown";
+  record.voiceFallback = response.headers.get("x-amora-tts-fallback") || "";
+  record.audioPostprocessing = response.headers.get("x-amora-audio-postprocessing") || "unknown";
+}
+
+async function prepareWavSpeech(record) {
   const timer = setTimeout(() => record.controller.abort("voice_timeout"), VOICE_FETCH_TIMEOUT_MS);
   try {
     setVoiceStatus("preparando voz da Amora…");
@@ -383,10 +404,7 @@ async function prepareLocalSpeech(record) {
     );
     if (record.epoch !== state.speechEpoch || record.interrupted) return;
     const rtf = response.headers.get("x-amora-rtf");
-    record.voiceProvider = response.headers.get("x-amora-tts-provider") || "unknown";
-    record.voiceModel = response.headers.get("x-amora-tts-model") || "unknown";
-    record.voiceFallback = response.headers.get("x-amora-tts-fallback") || "";
-    record.audioPostprocessing = response.headers.get("x-amora-audio-postprocessing") || "unknown";
+    applyVoiceHeaders(record, response);
     record.audioBuffer = await voicePlayer.prepare(response,
       () => record.epoch === state.speechEpoch && !record.interrupted && !state.voiceMuted);
     if (record.epoch !== state.speechEpoch || record.interrupted || state.voiceMuted) return;
@@ -410,6 +428,153 @@ async function prepareLocalSpeech(record) {
   }
 }
 
+function pcm16leToFloat32(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength % 2) throw new Error("PCM16_ALIGNMENT_INVALID");
+  const output = new Float32Array(bytes.byteLength / 2);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let i = 0; i < output.length; i += 1) {
+    const sample = view.getInt16(i * 2, true);
+    output[i] = sample < 0 ? sample / 32768 : sample / 32767;
+  }
+  return output;
+}
+
+async function waitForStreamCapacity(player, record) {
+  while (!record.interrupted && record.epoch === state.speechEpoch
+      && player.state().bufferedSeconds > STREAM_BACKPRESSURE_HIGH_SECONDS) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+    if (player.state().bufferedSeconds <= STREAM_BACKPRESSURE_LOW_SECONDS) break;
+  }
+}
+
+async function markStreamStarted(record) {
+  if (record.streamStarted || record.interrupted || record.epoch !== state.speechEpoch) return;
+  record.streamStarted = true;
+  record.status = "playing";
+  if (state.lastSpeechEndAt) {
+    $("diagGap").textContent = `${Math.round(performance.now() - state.lastSpeechEndAt)} ms`;
+  }
+  updateQueueDiag();
+  const fallback = record.voiceFallback ? " · fallback" : "";
+  setVoiceStatus(`falando em stream · ${record.voiceProvider || "Amora"}${fallback} · DSP ${record.audioPostprocessing || "unknown"}`);
+  api(`/v1/conversation/utterances/${encodeURIComponent(record.item.id)}/started`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  }).catch(() => setVoiceStatus("falha ao confirmar início da fala"));
+}
+
+async function prepareStreamedSpeech(record) {
+  const timer = setTimeout(() => record.controller.abort("voice_timeout"), VOICE_FETCH_TIMEOUT_MS);
+  try {
+    setVoiceStatus("abrindo stream da Amora…");
+    const response = await apiBinary(
+      `/v1/web/voice/utterances/${encodeURIComponent(record.item.id)}/stream`,
+      { signal: record.controller.signal },
+    );
+    if (record.epoch !== state.speechEpoch || record.interrupted) return;
+    if (!response.body?.getReader) {
+      state.voiceStreaming = false;
+      try { await response.body?.cancel?.(); } catch (_) {}
+      record.status = "preparing";
+      return prepareWavSpeech(record);
+    }
+
+    applyVoiceHeaders(record, response);
+    const sampleRate = Number(response.headers.get("x-amora-sample-rate"));
+    const channels = Number(response.headers.get("x-amora-channels") || "1");
+    const sessionId = response.headers.get("x-amora-stream-session");
+    const format = response.headers.get("x-amora-audio-format");
+    if (!Number.isInteger(sampleRate) || !Number.isInteger(channels) || !sessionId || format !== "pcm_s16le") {
+      throw new Error("metadados de stream PCM inválidos");
+    }
+
+    const context = getPlaybackContext();
+    if (!state.playbackUnlocked || context.state !== "running") {
+      throw new Error("player Web Audio não está liberado");
+    }
+    const identity = {
+      sessionId,
+      turnId: cognitiveTurnId(record.item) || record.item.id,
+      utteranceId: record.item.id,
+    };
+    let sequence = 0;
+    const player = new PcmStreamPlayer(context, identity, {
+      minBufferSeconds: 0.06,
+      maxBufferSeconds: 2.0,
+      onState: (streamState) => {
+        if (streamState.status === "playing") markStreamStarted(record);
+        if (streamState.status === "underrun") {
+          setVoiceStatus(`stream recuperando · ${record.voiceProvider || "Amora"} · underruns ${streamState.underruns}`);
+        }
+      },
+      onEnded: () => {
+        if (record.interrupted || record.epoch !== state.speechEpoch) return;
+        finishStreamedRecord(record);
+      },
+    });
+    record.streamPlayer = player;
+    state.activeRecord = record;
+    updateQueueDiag();
+
+    const reader = response.body.getReader();
+    const bytesPerFrame = 2 * channels;
+    let carry = new Uint8Array(0);
+    let receivedAudio = false;
+    while (true) {
+      await waitForStreamCapacity(player, record);
+      if (record.interrupted || record.epoch !== state.speechEpoch || state.voiceMuted) {
+        try { await reader.cancel("voice_interrupted"); } catch (_) {}
+        return;
+      }
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      const incoming = value instanceof Uint8Array ? value : new Uint8Array(value);
+      const joined = new Uint8Array(carry.byteLength + incoming.byteLength);
+      joined.set(carry, 0);
+      joined.set(incoming, carry.byteLength);
+      const usable = joined.byteLength - (joined.byteLength % bytesPerFrame);
+      if (!usable) {
+        carry = joined;
+        continue;
+      }
+      const block = joined.slice(0, usable);
+      carry = joined.slice(usable);
+      player.push({
+        ...identity,
+        sequence: sequence++,
+        sampleRate,
+        channels,
+        samples: pcm16leToFloat32(block),
+        final: false,
+      });
+      receivedAudio = true;
+    }
+    if (carry.byteLength) throw new Error("stream PCM terminou desalinhado");
+    if (!receivedAudio) throw new Error("stream PCM terminou sem áudio");
+    player.push({
+      ...identity,
+      sequence: sequence++,
+      sampleRate,
+      channels,
+      samples: new Float32Array(0),
+      final: true,
+    });
+    $("diagRtf").textContent = "stream";
+  } catch (error) {
+    if (record.interrupted || record.epoch !== state.speechEpoch) return;
+    record.status = "failed";
+    record.streamPlayer?.stop();
+    await failVoiceTransport(record, error?.name === "AbortError"
+      ? new Error("tempo limite do stream de voz") : error);
+  } finally {
+    clearTimeout(timer);
+    if (state.preparingRecord === record) state.preparingRecord = null;
+    pumpPreparation();
+  }
+}
+
 async function failVoiceTransport(record, error) {
   if (!state.voiceErrorShown) {
     state.voiceErrorShown = true;
@@ -420,7 +585,7 @@ async function failVoiceTransport(record, error) {
 }
 
 function pumpPlayback() {
-  if (state.voiceMuted || state.activeRecord || state.userSpeaking) return;
+  if (state.voiceStreaming || state.voiceMuted || state.activeRecord || state.userSpeaking) return;
   const record = state.speechQueue[0];
   if (!record || record.epoch !== state.speechEpoch || record.status !== "ready") return;
   const context = getPlaybackContext();
@@ -449,9 +614,8 @@ function pumpPlayback() {
   }).catch(() => setVoiceStatus("falha ao confirmar início da fala"));
 }
 
-function finishPlayedRecord(record) {
-  if (state.activeRecord !== record) return;
-  state.activeRecord = null;
+function settlePlayedRecord(record) {
+  if (state.activeRecord === record) state.activeRecord = null;
   state.activeSource = null;
   state.lastSpeechEndAt = performance.now();
   const index = state.speechQueue.indexOf(record);
@@ -468,7 +632,19 @@ function finishPlayedRecord(record) {
     .catch(() => setVoiceStatus("falha ao confirmar entrega da fala"));
 
   pumpPlayback();
+  pumpPreparation();
   fillSpeechQueue();
+}
+
+function finishPlayedRecord(record) {
+  if (state.activeRecord !== record) return;
+  settlePlayedRecord(record);
+}
+
+function finishStreamedRecord(record) {
+  if (state.activeRecord !== record) return;
+  record.streamPlayer = null;
+  settlePlayedRecord(record);
 }
 
 async function fillSpeechQueue() {
@@ -542,8 +718,12 @@ async function interruptVoice(reason = "web_barge_in", explicitTarget = null, sp
   for (const record of state.speechQueue) {
     record.interrupted = true;
     try { record.controller?.abort(reason); } catch (_) {}
+    try { record.streamPlayer?.stop(); } catch (_) {}
   }
-  if (state.activeRecord) state.activeRecord.interrupted = true;
+  if (state.activeRecord) {
+    state.activeRecord.interrupted = true;
+    try { state.activeRecord.streamPlayer?.stop(); } catch (_) {}
+  }
   voicePlayer.stop();
   state.activeSource = null;
   state.activeRecord = null;
@@ -807,6 +987,7 @@ document.addEventListener("visibilitychange", async () => {
       try { await state.playbackContext.resume(); } catch (_) {}
     }
     pumpPlayback();
+    pumpPreparation();
   }
 });
 
@@ -816,6 +997,7 @@ setInterval(() => {
     health();
     fillSpeechQueue();
     pumpPlayback();
+    pumpPreparation();
   }
 }, 900);
 
