@@ -58,6 +58,7 @@ Superseded by: ADR-NNNN / none
 
 ## Índice
 
+- `ADR-0022-turn-level-fish-pcm-streaming-and-expression-tags.md` — Safari entrega um fluxo PCM por turno cognitivo; Fish toca enquanto sintetiza; emoção/cues do Core viram tags bounded do renderer.
 - `ADR-0021-fish-cloud-voice-primary-for-web.md` — Fish `s2.1-pro-free` + clone da Amora como voz Web primária; Gemini fallback explícito; Supertonic deixa de ser default da Web.
 - `ADR-0020-libsql-session-recovery-and-usage-boundary.md` — recovery de sessão após operação/transação falha, sem retry ambíguo; telemetria de usage degradável preservando realização válida.
 - `ADR-0019-turn-display-and-optional-voice-stream.md` — bolha por turno, DisplayText/SpeechPlan, mute/stop vocal, confirmação de limpeza e streaming PCM opcional sem novo renderer.

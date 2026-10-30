@@ -4,15 +4,15 @@ import asyncio
 from pathlib import Path
 import os
 from typing import Callable
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from amora.events import PrivacyScope
-from amora.voice.backend import VoiceBackend
+from amora.voice.backend import StreamingVoiceBackend, VoiceBackend, VoiceSession, validated_chunks
 from amora.voice.cloud import FishGeminiVoiceBackend
 from amora.voice.local_amora import AmoraLocalVoiceRenderer, LocalVoiceUnavailable, MODEL_ID, NUM_STEPS, VOICE_ID
 
@@ -67,8 +67,52 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
         finally:
             render_slot.release()
 
+    def stream_bounded(item, session: VoiceSession):
+        if not render_slot.acquire(blocking=False):
+            raise LocalVoiceUnavailable("VOICE_BUSY")
+        try:
+            assert isinstance(voice_backend, StreamingVoiceBackend)
+            yield from voice_backend.stream(item, session)
+        finally:
+            render_slot.release()
+
     def console():
         return getattr(app.state, "server_console", None)
+
+    def voice_item(utterance_id: UUID):
+        item = core.conversation.store.get_utterance(utterance_id)
+        if item is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="utterance not found")
+        if item.device_id != "WEB_SAFARI":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="utterance does not belong to Safari")
+        if item.privacy_scope not in {PrivacyScope.PUBLIC, PrivacyScope.PERSONAL}:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="privacy scope cannot use cloud voice")
+        if item.status.value in {"cancelled", "spoken"} or not item.text.strip():
+            raise HTTPException(409, "utterance is no longer renderable")
+        return item
+
+    def voice_headers(rendered_state: dict[str, object], *, sample_rate: int | None = None) -> dict[str, str]:
+        actual_provider = str(rendered_state.get("last_provider") or rendered_state.get("provider") or "unknown")
+        actual_model = str(rendered_state.get("last_model") or rendered_state.get("model") or MODEL_ID)
+        actual_voice = str(rendered_state.get("voice") or VOICE_ID)
+        audio_postprocessing = str(rendered_state.get("audio_postprocessing") or "backend-defined")
+        provider_header = {
+            "amora_remote_supertonic_world": "amora-remote",
+            "amora_local_supertonic_world": "amora-local",
+        }.get(actual_provider, actual_provider)
+        headers = {
+            "Cache-Control": "no-store",
+            "X-Amora-TTS-Provider": provider_header,
+            "X-Amora-TTS-Model": actual_model,
+            "X-Amora-Voice": actual_voice,
+            "X-Amora-Audio-Postprocessing": audio_postprocessing,
+            "X-Amora-Voice-Certification": "provider-approved-core-safari-gate-pending",
+        }
+        if sample_rate is not None:
+            headers["X-Amora-Sample-Rate"] = str(sample_rate)
+        if actual_provider == "gemini":
+            headers["X-Amora-TTS-Fallback"] = "gemini"
+        return headers
 
     @app.get("/v1/web/state", dependencies=auth)
     def web_state() -> dict[str, object]:
@@ -132,17 +176,86 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             "test_mode": request.test_mode,
         }
 
+    @app.get("/v1/web/voice/utterances/{utterance_id}/stream", dependencies=auth)
+    def web_voice_stream(utterance_id: UUID) -> StreamingResponse:
+        item = voice_item(utterance_id)
+        if not isinstance(voice_backend, StreamingVoiceBackend):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="voice backend does not support streaming")
+
+        turn_raw = item.metadata.get("cognitive_turn_id")
+        try:
+            turn_id = UUID(str(turn_raw)) if turn_raw else item.id
+        except ValueError:
+            turn_id = item.id
+        session = VoiceSession(session_id=uuid4(), turn_id=turn_id, utterance_id=item.id)
+        chunks = validated_chunks(session, stream_bounded(item, session))
+
+        dashboard = console()
+        if dashboard is not None:
+            before_state = voice_backend.state()
+            primary = str(before_state.get("primary_provider") or before_state.get("provider") or "voz")
+            dashboard.set_activity("SINTETIZANDO", f"Amora stream • {primary}", ttl_seconds=60.0)
+
+        # Prime exactly one chunk before sending HTTP 200 so provider errors may
+        # still fall back cleanly and the response headers name the real renderer.
+        try:
+            first = next(chunks)
+        except (LocalVoiceUnavailable, ValueError) as exc:
+            core.operations.error("voice", "VOICE_STREAM_FAILED", correlation_id=utterance_id)
+            if dashboard is not None:
+                dashboard.set_module("amora.web_voice", "Amora Voz Web", "OFF", str(exc)[:120])
+                dashboard.record_error("Amora Voz Web", str(exc))
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        except StopIteration as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="VOICE_STREAM_EMPTY") from exc
+
+        current = core.conversation.store.get_utterance(utterance_id)
+        if current is None or current.status.value in {"cancelled", "spoken"}:
+            close = getattr(chunks, "close", None)
+            if close is not None:
+                close()
+            raise HTTPException(409, "utterance is no longer renderable")
+
+        rendered_state = voice_backend.state()
+        headers = voice_headers(rendered_state, sample_rate=first.sample_rate)
+        headers.update(
+            {
+                "X-Amora-Streaming": "1",
+                "X-Amora-Audio-Format": first.format,
+                "X-Amora-Channels": str(first.channels),
+                "X-Amora-Stream-Session": str(session.session_id),
+                "X-Accel-Buffering": "no",
+            }
+        )
+        if dashboard is not None:
+            dashboard.clear_module_override("amora.web_voice")
+            dashboard.set_activity(
+                "FALANDO EM STREAM",
+                str(rendered_state.get("last_provider") or "voz"),
+                ttl_seconds=8.0,
+            )
+
+        def body():
+            try:
+                if first.pcm:
+                    yield first.pcm
+                for chunk in chunks:
+                    if chunk.pcm:
+                        yield chunk.pcm
+            finally:
+                close = getattr(chunks, "close", None)
+                if close is not None:
+                    close()
+
+        return StreamingResponse(
+            body(),
+            media_type="application/octet-stream",
+            headers=headers,
+        )
+
     @app.get("/v1/web/voice/utterances/{utterance_id}/audio", dependencies=auth)
     async def web_voice_audio(utterance_id: UUID) -> Response:
-        item = core.conversation.store.get_utterance(utterance_id)
-        if item is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="utterance not found")
-        if item.device_id != "WEB_SAFARI":
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="utterance does not belong to Safari")
-        if item.privacy_scope not in {PrivacyScope.PUBLIC, PrivacyScope.PERSONAL}:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="privacy scope cannot use cloud voice")
-        if item.status.value in {"cancelled", "spoken"} or not item.text.strip():
-            raise HTTPException(409, "utterance is no longer renderable")
+        item = voice_item(utterance_id)
 
         dashboard = console()
         before_state = voice_backend.state()
@@ -166,22 +279,9 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             raise HTTPException(409, "utterance is no longer renderable")
 
         rendered_state = voice_backend.state()
-        actual_provider = str(
-            rendered_state.get("last_provider")
-            or rendered_state.get("provider")
-            or "unknown"
-        )
-        actual_model = str(
-            rendered_state.get("last_model")
-            or rendered_state.get("model")
-            or MODEL_ID
-        )
-        actual_voice = str(rendered_state.get("voice") or VOICE_ID)
-        audio_postprocessing = str(rendered_state.get("audio_postprocessing") or "backend-defined")
-        provider_header = {
-            "amora_remote_supertonic_world": "amora-remote",
-            "amora_local_supertonic_world": "amora-local",
-        }.get(actual_provider, actual_provider)
+        actual_provider = str(rendered_state.get("last_provider") or rendered_state.get("provider") or "unknown")
+        headers = voice_headers(rendered_state, sample_rate=audio.sample_rate)
+        headers["X-Amora-RTF"] = f"{audio.total_rtf:.6f}"
 
         if dashboard is not None:
             dashboard.clear_module_override("amora.web_voice")
@@ -191,18 +291,6 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
                 ttl_seconds=4.0,
             )
 
-        headers = {
-            "Cache-Control": "no-store",
-            "X-Amora-TTS-Provider": provider_header,
-            "X-Amora-TTS-Model": actual_model,
-            "X-Amora-Voice": actual_voice,
-            "X-Amora-Audio-Postprocessing": audio_postprocessing,
-            "X-Amora-Sample-Rate": str(audio.sample_rate),
-            "X-Amora-RTF": f"{audio.total_rtf:.6f}",
-            "X-Amora-Voice-Certification": "provider-approved-core-safari-gate-pending",
-        }
-        if actual_provider == "gemini":
-            headers["X-Amora-TTS-Fallback"] = "gemini"
         if rendered_state.get("num_steps") is not None:
             headers["X-Amora-TTS-Steps"] = str(rendered_state["num_steps"])
         elif actual_provider in {"amora_local_supertonic_world", "amora_remote_supertonic_world"}:

@@ -55,11 +55,12 @@ class VoiceChunk:
 
 @runtime_checkable
 class StreamingVoiceBackend(VoiceBackend, Protocol):
-    """Optional capability. Existing WAV renderers need not implement stream.
+    """Optional incremental PCM capability beside the complete-WAV renderer.
 
     Closing the iterator must stop generation and release renderer resources.
-    Emitted PCM must already carry the canonical DSP; clients only play samples.
-    This contract installs no streaming renderer and exposes no streaming route.
+    Emitted PCM must already carry provider/backend voice decisions; clients only
+    play samples. Fish cloud currently implements this capability for Safari,
+    while WAV-only local/remote renderers may continue implementing VoiceBackend.
     """
 
     def stream(

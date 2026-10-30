@@ -172,6 +172,9 @@ class ConversationEngine(BaseConversationEngine):
                 "preview": preview.model_dump(mode="json"),
                 "persistent": False,
             }
+            if preview.emotion is not None:
+                metadata["voice_emotion"] = preview.emotion.value
+                metadata["voice_emotion_intensity"] = preview.intensity
             self._last_emotion_event_id = None
             return
 
@@ -181,6 +184,9 @@ class ConversationEngine(BaseConversationEngine):
             "result": result.appraisal.model_dump(mode="json"),
             "persistent": True,
         }
+        if result.event is not None:
+            metadata["voice_emotion"] = result.event.emotion.value
+            metadata["voice_emotion_intensity"] = result.event.intensity
         self._last_emotion_event_id = str(result.event.id) if result.event is not None else None
 
     def _resolve_conversational_addressee(
@@ -329,11 +335,14 @@ class ConversationEngine(BaseConversationEngine):
                 if speech_only:
                     self.cognition.cancel_speech_delivery(str(turn_raw), reason=reason)
                 else:
+                    active_segment_id = None
+                    if current.metadata.get("speech_delivery_unit") != "cognitive_turn":
+                        active_segment_id = current.metadata.get("cognitive_segment_id")
                     self.cognition.interrupt_turn(
                         str(turn_raw),
                         reason=reason,
-                        active_segment_id=current.metadata.get("cognitive_segment_id"),
-                        spoken_chars=spoken_chars,
+                        active_segment_id=active_segment_id,
+                        spoken_chars=spoken_chars if active_segment_id is not None else None,
                     )
             item = self.store.get_utterance(utterance_id)
         else:

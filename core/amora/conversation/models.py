@@ -93,8 +93,10 @@ class SpeechStyle(BaseModel):
 
 class SpeechUtterance(BaseModel):
     id: UUID = Field(default_factory=uuid4)
-    # Empty speech is valid for a display-only response (for example "😂").
-    text: str = Field(max_length=800)
+    # Web cloud streaming delivers one whole cognitive turn instead of one TTS
+    # request per short clause. Keep this bounded, but large enough for a normal
+    # realized response. Empty speech remains valid for display-only Web turns.
+    text: str = Field(max_length=12000)
     display_text: str | None = None
     target_id: str | None = None
     kind: UtteranceKind = UtteranceKind.SEMANTIC

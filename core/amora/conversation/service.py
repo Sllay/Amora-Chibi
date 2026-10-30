@@ -177,7 +177,28 @@ class ConversationEngine:
         if self.cognition is not None and cognitive_request is not None:
             first_utterance: SpeechUtterance | None = None
             mood = self.emotion.current_mood()
+            style = self._style_for_turn(mood, turn_metadata)
             remote_tts_allowed = remote_processing_allowed and privacy_scope in {PrivacyScope.PUBLIC, PrivacyScope.PERSONAL}
+
+            # Safari cloud TTS is a turn-level stream. Cognitive segmentation is
+            # retained for journal/history but no longer creates one Fish request
+            # per clause. The Web request already waits for respond() to finish, so
+            # the complete SpeechPlan is available before the browser claims voice.
+            if speech_device_id == "WEB_SAFARI":
+                fallback = self.composer.fallback_dialogue(text, speaker_id=speaker_id)
+                plan = await self.cognition.respond(cognitive_request, on_segment=None, fallback_text=fallback)
+                first_utterance = await self._enqueue_web_cognitive_turn(
+                    plan,
+                    target_id=speaker_id,
+                    privacy_scope=privacy_scope,
+                    source_event_id=event_id,
+                    remote_tts_allowed=remote_tts_allowed,
+                    turn_state=decision.state.value,
+                    turn_metadata=turn_metadata,
+                    style=style,
+                )
+                await self.cognition.emit_event(plan)
+                return decision, first_utterance
 
             async def queue_segment(segment: "SpeechSegment") -> None:
                 nonlocal first_utterance
@@ -203,7 +224,7 @@ class ConversationEngine:
                         "nonverbal_cues": segment.metadata.get("nonverbal_cues", []),
                         "remote_tts_allowed": remote_tts_allowed,
                     },
-                    style=self.composer.style_for_mood(mood),
+                    style=style,
                 )
                 if first_utterance is None and item is not None:
                     first_utterance = item
@@ -238,9 +259,63 @@ class ConversationEngine:
                 "turn_state": decision.state.value,
                 "remote_provider_used": remote_processing_allowed and self.dialogue.name != "none",
             },
-            style=self.composer.style_for_mood(mood),
+            style=self._style_for_turn(mood, turn_metadata),
         )
         return decision, utterance
+
+    async def _enqueue_web_cognitive_turn(
+        self,
+        plan,
+        *,
+        target_id: str,
+        privacy_scope: PrivacyScope,
+        source_event_id: UUID | None,
+        remote_tts_allowed: bool,
+        turn_state: str,
+        turn_metadata: dict[str, object],
+        style,
+    ) -> SpeechUtterance | None:
+        assert self.cognition is not None
+        segments = self.cognition.store.list_segments(plan.turn_id)
+        segment_ids = [str(segment.id) for segment in segments]
+        metadata: dict[str, object] = {
+            **_execution_metadata(turn_metadata),
+            "turn_state": turn_state,
+            "cognitive_turn_id": str(plan.turn_id),
+            "cognitive_segment_ids": segment_ids,
+            "cognitive_segment_id": segment_ids[0] if segment_ids else None,
+            "display_text": plan.display_text,
+            "cues": _merge_segment_values(segments, "cues"),
+            "unsupported_cues": _merge_segment_values(segments, "unsupported_cues"),
+            "unsupported_markers": _merge_segment_values(segments, "unsupported_markers"),
+            "nonverbal_cues": _merge_segment_values(segments, "nonverbal_cues"),
+            "remote_tts_allowed": remote_tts_allowed,
+            "speech_delivery_unit": "cognitive_turn",
+        }
+        return await self.enqueue_text(
+            plan.speech_text,
+            target_id=target_id,
+            kind=UtteranceKind.DIALOGUE,
+            priority=70,
+            privacy_scope=privacy_scope,
+            source_event_id=source_event_id,
+            dedupe_key=f"speech:cognitive-turn:{plan.turn_id}",
+            device_id="WEB_SAFARI",
+            metadata=metadata,
+            style=style,
+        )
+
+    def _style_for_turn(self, mood, metadata: dict[str, object]):
+        raw_intensity = metadata.get("voice_emotion_intensity", 0.0)
+        try:
+            intensity = float(raw_intensity)
+        except (TypeError, ValueError):
+            intensity = 0.0
+        return self.composer.style_for_mood(
+            mood,
+            emotion=metadata.get("voice_emotion"),
+            intensity=intensity,
+        )
 
     async def enqueue_backchannel(
         self,
@@ -349,10 +424,10 @@ class ConversationEngine:
         if item.status.value in {"cancelled", "spoken"}:
             return item
         if self.cognition is not None:
-            segment_id = item.metadata.get("cognitive_segment_id")
             turn_id = item.metadata.get("cognitive_turn_id")
-            if segment_id and turn_id:
-                self.cognition.mark_segment_speaking(str(segment_id), turn_id=str(turn_id))
+            if turn_id:
+                for segment_id in _cognitive_segment_ids(item):
+                    self.cognition.mark_segment_speaking(segment_id, turn_id=str(turn_id))
         return item
 
     async def acknowledge(self, utterance_id: UUID | str, ack: SpeechAck) -> SpeechUtterance | None:
@@ -362,10 +437,10 @@ class ConversationEngine:
         if item.status.value == "cancelled":
             return item
         if self.cognition is not None:
-            segment_id = item.metadata.get("cognitive_segment_id")
             turn_id = item.metadata.get("cognitive_turn_id")
-            if segment_id and turn_id:
-                self.cognition.acknowledge_segment(str(segment_id), spoken=ack.spoken, turn_id=str(turn_id))
+            if turn_id:
+                for segment_id in _cognitive_segment_ids(item):
+                    self.cognition.acknowledge_segment(segment_id, spoken=ack.spoken, turn_id=str(turn_id))
         if ack.spoken:
             await self.events.publish(
                 AmoraEvent(
@@ -415,6 +490,36 @@ class ConversationEngine:
         return item, cancelled
 
 
+def _merge_segment_values(segments, key: str) -> list[str]:
+    values: list[str] = []
+    for segment in segments:
+        raw = segment.metadata.get(key, [])
+        if not isinstance(raw, list):
+            continue
+        for value in raw:
+            text = str(value)
+            if text and text not in values:
+                values.append(text)
+    return values
+
+
+def _cognitive_segment_ids(item: SpeechUtterance) -> list[str]:
+    raw = item.metadata.get("cognitive_segment_ids")
+    if isinstance(raw, list):
+        values = [str(value) for value in raw if value]
+        if values:
+            return values
+    single = item.metadata.get("cognitive_segment_id")
+    return [str(single)] if single else []
+
+
 def _execution_metadata(metadata: dict[str, object]) -> dict[str, object]:
-    keys = ("test_mode", "memory_consolidation", "relationship_learning", "emotion_persistence")
+    keys = (
+        "test_mode",
+        "memory_consolidation",
+        "relationship_learning",
+        "emotion_persistence",
+        "voice_emotion",
+        "voice_emotion_intensity",
+    )
     return {key: metadata[key] for key in keys if key in metadata}

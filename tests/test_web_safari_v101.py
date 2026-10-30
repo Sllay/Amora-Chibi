@@ -12,6 +12,7 @@ from amora.audio import Transcript
 from amora.conversation import UtteranceKind
 from amora.events import PrivacyScope
 from amora.time import SimulatedClock
+from amora.voice.backend import VoiceChunk
 from amora.voice.local_amora import LocalVoiceAudio, LocalVoiceUnavailable
 
 
@@ -99,6 +100,9 @@ def test_web_state_is_authenticated_and_exposes_cloud_voice_chain(tmp_path: Path
         assert payload["voice"]["fish_configured"] is True
         assert payload["voice"]["provider_audio_passthrough"] is True
         assert payload["voice"]["audio_postprocessing"] == "none"
+        assert payload["voice"]["streaming"] is True
+        assert payload["voice"]["stream_format"] == "pcm_s16le"
+        assert payload["voice"]["fish_latency"] == "balanced"
         assert "test-amora-reference" not in str(payload)
         assert "test-only-fish-key" not in str(payload)
     finally:
@@ -202,6 +206,41 @@ def test_web_cloud_voice_route_returns_wav_without_falsifying_delivery(tmp_path:
         core.close()
 
 
+def test_web_cloud_stream_route_proxies_pcm_without_falsifying_delivery(tmp_path: Path, monkeypatch) -> None:
+    core, client, headers = _client(tmp_path, monkeypatch)
+    try:
+        item = _enqueue_web(core, "Stream, BK.", "web-cloud-stream-route")
+        claimed = core.conversation.claim_next("WEB_SAFARI")
+        assert claimed is not None
+        renderer = client.app.state.web_voice
+
+        def fake_stream(utterance, session):
+            assert utterance.id == item.id
+            renderer._remember(provider="fish", model="s2.1-pro-free", error=None, sample_rate=44_100)
+            yield VoiceChunk(session, 0, b"\x01\x00" * 128, 44_100, 1)
+            yield VoiceChunk(session, 1, b"\x02\x00" * 64, 44_100, 1)
+            yield VoiceChunk(session, 2, b"", 44_100, 1, final=True)
+
+        monkeypatch.setattr(renderer, "stream", fake_stream)
+        response = client.get(f"/v1/web/voice/utterances/{item.id}/stream", headers=headers)
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/octet-stream")
+        assert response.headers["x-amora-streaming"] == "1"
+        assert response.headers["x-amora-audio-format"] == "pcm_s16le"
+        assert response.headers["x-amora-sample-rate"] == "44100"
+        assert response.headers["x-amora-channels"] == "1"
+        assert response.headers["x-amora-tts-provider"] == "fish"
+        assert response.headers["x-amora-audio-postprocessing"] == "none"
+        assert response.headers["x-accel-buffering"] == "no"
+        assert response.content == b"\x01\x00" * 128 + b"\x02\x00" * 64
+
+        unchanged = core.conversation.store.get_utterance(item.id)
+        assert unchanged is not None
+        assert unchanged.status.value == "claimed"
+    finally:
+        core.close()
+
+
 def test_web_delivery_ack_is_only_recorded_after_explicit_playback_ack(tmp_path: Path, monkeypatch) -> None:
     core, client, headers = _client(tmp_path, monkeypatch)
     try:
@@ -292,7 +331,7 @@ def test_web_cloud_voice_failure_cancels_cleanly_and_next_message_can_continue(t
         core.close()
 
 
-def test_web_v2_has_no_safari_speech_synthesis_dependency_and_preserves_delivery_contract(tmp_path: Path, monkeypatch) -> None:
+def test_web_v2_has_incremental_pcm_and_no_safari_speech_synthesis_dependency(tmp_path: Path, monkeypatch) -> None:
     core, client, _ = _client(tmp_path, monkeypatch)
     try:
         app = client.get("/web/app-v2.js")
@@ -301,7 +340,11 @@ def test_web_v2_has_no_safari_speech_synthesis_dependency_and_preserves_delivery
         assert "speechSynthesis" not in app.text
         assert "SpeechSynthesisUtterance" not in app.text
         assert "/v1/web/voice/utterances/" in app.text
-        assert "voicePlayer.prepare(response" in app.text
+        assert "/stream" in app.text
+        assert "response.body.getReader()" in app.text
+        assert "new PcmStreamPlayer" in app.text
+        assert "pcm16leToFloat32" in app.text
+        assert "voicePlayer.prepare(response" in app.text  # WAV compatibility path remains.
         assert 'response.headers.get("x-amora-tts-provider")' in app.text
         assert 'response.headers.get("x-amora-tts-fallback")' in app.text
         assert 'response.headers.get("x-amora-audio-postprocessing")' in app.text
@@ -311,6 +354,7 @@ def test_web_v2_has_no_safari_speech_synthesis_dependency_and_preserves_delivery
         assert "source.onended" in player.text
         assert "class PcmStreamPlayer" in player.text
         assert "class WavPlayer" in player.text
+        assert "finishStreamedRecord(record)" in app.text
         assert "finishPlayedRecord(record)" in app.text
         assert "/ack" in app.text
         assert "/cancel" in app.text
