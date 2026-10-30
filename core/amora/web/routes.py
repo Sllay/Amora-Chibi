@@ -177,6 +177,10 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             or MODEL_ID
         )
         actual_voice = str(rendered_state.get("voice") or VOICE_ID)
+        provider_header = {
+            "amora_remote_supertonic_world": "amora-remote",
+            "amora_local_supertonic_world": "amora-local",
+        }.get(actual_provider, actual_provider)
 
         if dashboard is not None:
             dashboard.clear_module_override("amora.web_voice")
@@ -188,7 +192,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
 
         headers = {
             "Cache-Control": "no-store",
-            "X-Amora-TTS-Provider": actual_provider,
+            "X-Amora-TTS-Provider": provider_header,
             "X-Amora-TTS-Model": actual_model,
             "X-Amora-Voice": actual_voice,
             "X-Amora-Sample-Rate": str(audio.sample_rate),
