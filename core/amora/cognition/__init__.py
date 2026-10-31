@@ -1,6 +1,5 @@
 from .context import ProviderPrivacyGate
 from .context_v1 import ContextCompiler
-from .mesh_providers import CloudflareCognitiveProvider, OpenRouterCognitiveProvider
 from .models import (
     CognitiveContext,
     CognitiveJournalEntry,
@@ -14,10 +13,18 @@ from .models import (
     SpeechSegment,
 )
 from .providers import CognitiveProvider, ProviderDelta, ProviderError
-from .providers_realtime import GroqCognitiveProvider
-from .providers_structured import GeminiCognitiveProvider
+from .providers_identity import (
+    CloudflareCognitiveProvider,
+    GeminiCognitiveProvider,
+    GroqCognitiveProvider,
+)
+from .providers_openrouter import OpenRouterCognitiveProvider
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
+# Preserve the historical layered-runtime import as an explicit architectural
+# dependency; the identity-aware subclass below only changes provider projection.
 from .structured_runtime import CognitiveEngine
+from .identity_runtime import CognitiveEngine as IdentityAwareCognitiveEngine
+CognitiveEngine = IdentityAwareCognitiveEngine
 from .replay import CognitiveReplayResult
 from .speech import SpeechCue, SpeechNormalizer, SpeechPlan, SpeechRender, SpeechSegmenter
 from .store_v1 import CognitiveStore

@@ -9,7 +9,7 @@
 > não identidade, semântica, consentimento, custo ou parâmetros da voz.
 
 **Status:** CANÔNICO / ATUAL  
-**Atualizado em:** 2026-10-11
+**Atualizado em:** 2026-10-31
 
 ## Princípio
 
@@ -45,6 +45,45 @@ DialoguePlan
 → validator local
 → só então fala
 ```
+
+### Fronteira de autoridade do provider
+
+O provider recebe um protocolo lógico comum, independente do transporte específico:
+
+```text
+Amora Constitution
++ LivingProfile
++ TurnFrame
++ RealizationContract
+        ↓
+trusted instructions/system context
+
+ConversationTurn(s) literais
+        ↓
+conversation input/content
+```
+
+- **Constitution** contém invariantes e a autoridade do Core.
+- **LivingProfile** é uma projeção revisionada de camadas lentas do Self Model e estilo expressivo; nunca é um segundo banco canônico.
+- **TurnFrame** contém metadados confiáveis do turno, `speaker_id`/`addressee_id`, ACIR/cena social, estado atual permitido, relações relevantes, emoção/drives, memórias/claims selecionados, `DialoguePlan` e `ExpressionCue`.
+- **RealizationContract** define o formato/limites da fala final e continua sujeito ao `RealizationValidator` local.
+- texto literal de conversa nunca pode sobrescrever metadados confiáveis, mesmo que contenha frases como `eu sou X`, `speaker_id=...` ou linguagem que imite uma instrução de desenvolvedor.
+- papéis técnicos `user`/`assistant`/`model` são papéis de transporte, não identidade social.
+
+O adapter deve usar o mecanismo nativo mais forte realmente suportado pelo provider/model:
+
+- Groq: Responses API — protocolo confiável em `instructions`, conversa em `input`;
+- OpenRouter: Responses API no adapter de produção — `instructions` separado de `input`;
+- Gemini: `systemInstruction` separado de `contents`;
+- Cloudflare: `system` + mensagens no caminho OpenAI-compatible suportado pelo modelo configurado, mantendo envelopes de identidade e a mesma separação semântica.
+
+Persistência/caching do provider é otimização, não autoridade. Se o provider não persistir sessão, o Core reenvia o contexto necessário.
+
+### Expressão linguística
+
+A voz textual da Amora é português brasileiro oral e pode carregar regionalidade nordestina leve e palavrão contextual. Isso não é um comando genérico de “falar nordestino”.
+
+`ExpressionProfile` define repertório/princípios de baixa densidade. `ExpressionCue` é compilado por turno a partir de relação, `DialoguePlan`, tone tags e histórico recente. A seleção usa variação replay-stable e cooldown lexical para evitar bordões repetitivos. Interjeições como `oxente`, `oxi`, `eita`, `nossa senhora`, `apois viu`, `eita mulesta` e `vish maria` são opções, não obrigação. Palavrão pode ser `none`, `light` ou `emphatic` conforme o contexto; hostilidade não deve ser inventada.
 
 ## Failover seguro
 

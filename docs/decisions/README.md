@@ -58,6 +58,7 @@ Superseded by: ADR-NNNN / none
 
 ## Índice
 
+- `ADR-0026-provider-authority-and-expression-protocol.md` — separa Constitution/LivingProfile/TurnFrame/RealizationContract da conversa literal; Groq/OpenRouter usam Responses `instructions`, Gemini usa `systemInstruction`; regionalidade/palavrão são projeção contextual do Core.
 - `ADR-0025-corroborated-local-relationship-learning.md` — Relationship Graph aprende apenas após corroboração local de eventos independentes; provider nunca ganha autoridade direta sobre identidade social.
 - `ADR-0024-portable-avatar-bundle.md` — bundle portátil v1 do Avatar com projeto + assets + manifest/hashes; distinto do backup operacional do Core.
 - `ADR-0023-fish-voice-stability-and-first-audio-telemetry.md` — sampling Fish mais consistente, tags expressivas bounded, payload stream/WAV unificado e telemetria de primeiro áudio.
