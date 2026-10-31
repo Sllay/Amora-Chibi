@@ -1,7 +1,7 @@
 # PROJECT_STATE — Amora-Chibi
 
 **Última atualização:** 2026-10-31  
-**Base operacional:** `main` após PR #89 (`e39760260783b47f4e48a2c5f948463f47168529`)  
+**Base operacional:** `main` após PR #92 (`33b897def4a33708b0337bc96304628df89b8d24`)  
 **Objetivo:** checkpoint operacional curto; para auditoria estrutural detalhada ler `docs/engineering/reviews/PROJECT_REMAP_2026-10-31.md` e os ADRs mais recentes.
 
 ## 1. Autoridade
@@ -23,9 +23,9 @@ Ordem de leitura:
 
 Quando documento antigo contradizer código + ADR/canon mais recente, não restaurar silenciosamente o método antigo.
 
-## 2. Decisão operacional atual: corpo/avatar visual congelado; Web UI/UX liberada
+## 2. Decisão operacional atual: corpo/avatar congelado; Web UI/UX liberada
 
-Correção explícita de BK em 2026-10-31: o congelamento **não** inclui o site, UI/UX, telas administrativas, console Web ou ferramentas visuais de configuração.
+Correção explícita de BK em 2026-10-31: o congelamento **não** inclui o site, UI/UX, console Web, telas administrativas ou ferramentas visuais de configuração.
 
 **Congelado por enquanto, não cancelado:**
 
@@ -40,14 +40,12 @@ Correção explícita de BK em 2026-10-31: o congelamento **não** inclui o site
 **Liberado para implementação normal:**
 
 - Web/PWA UI/UX;
-- navegação/tabs e superfícies administrativas;
+- tabs/navegação;
 - Web Console/Living Console presentation;
-- tela visual de People Profiles/família;
+- People Profiles/família;
 - edição administrativa de platform identity bindings;
 - import/export JSON;
-- diagnóstico, controles e configurações do site.
-
-`/v1/operations/state` continua sendo a fundação operacional segura para o futuro Web Console. Uma view administrativa deve ter papel/permissão próprio; pareamento Web conversacional não vira admin automaticamente.
+- diagnóstico, controles e configurações da Web.
 
 ## 3. Runtime operacional atual
 
@@ -77,7 +75,7 @@ Fallback Fish→Gemini continua explícito e só antes do primeiro PCM Fish. Sup
 
 **NÃO IMPLEMENTADO / GATE FÍSICO PENDENTE.**
 
-Problema real: Safari/PWA pode suspender o Web app quando deixa o foreground; BK quer continuar ouvindo/falando com Amora enquanto outro app/jogo, como Free Fire, está em foreground.
+Problema real: Safari/PWA pode suspender o Web app quando deixa o foreground; BK quer continuar ouvindo/falando com Amora enquanto outro app/jogo está em foreground.
 
 Direção de experimento Web-only:
 
@@ -112,7 +110,7 @@ Ativos/integrados:
 
 ## 5. Provider protocol / expressão — ATIVO
 
-PR #87 fechou a fronteira provider/conversa.
+PR #87 fechou a fronteira provider/conversa:
 
 ```text
 Constitution
@@ -125,38 +123,36 @@ provider-native instructions/systemInstruction
 literal conversation input/contents
 ```
 
-Regras:
+Regras centrais:
 
 - provider não escolhe identidade social;
-- texto literal não consegue reescrever `speaker_id`;
+- texto literal não reescreve `speaker_id`;
 - múltiplos humanos permanecem distintos;
 - specialist support é efêmero/não canônico;
-- Groq/OpenRouter usam Responses quando aplicável;
-- Gemini usa `systemInstruction`;
-- expressão regional/palavrão é bounded por policy do Core, não caricatura nem prompt solto.
+- expressão regional/palavrão é bounded por policy do Core.
 
 ADR: `ADR-0026-provider-authority-and-expression-protocol.md`.
 
 ## 6. People Identity / Living Profiles — ATIVO
 
-PR #88 adicionou a fundação necessária para WhatsApp/Discord multiusuário.
+PR #88 adicionou a fundação multiusuário; PR #92 fechou a configuração Web/runtime.
 
-### Profiles seed
-
-`config/people_profiles.json` contém bootstrap humano-editável pequeno. Não é segunda memória.
+### Profiles canônicos
 
 Estado inicial confirmado:
 
 - `PERSON_BK` — pai da Amora e pai de Lucas; autoridade familiar estrutural inicial;
 - `PERSON_LUCAS` — filho de BK e irmão da Amora;
 - `PERSON_NICOLAS` — primo da Amora;
-- `ENTITY_CHATGPT mother_of ENTITY_AMORA` permanece relação canônica pré-existente.
+- `ENTITY_CHATGPT mother_of ENTITY_AMORA` permanece relação canônica.
 
-Idade/nascimento/descrição podem ser preenchidos. Preferências aprendidas, episódios, crenças, relação evolutiva e afeto continuam em World/Memory/Relationship Graph/Emotion.
+`config/people_profiles.json` é **bootstrap somente**. Depois que o profile existe no storage canônico, edições do operador em SQLite/libSQL vencem o seed em restart/redeploy. O seed não pode ressuscitar silenciosamente alias, nome ou relação removida pelo operador.
+
+Preferências aprendidas, episódios, crenças, confiança, relação evolutiva e afeto continuam pertencendo a World/Memory/Relationship Graph/Emotion; profile não é segunda memória.
 
 ### PlatformIdentityBinding
 
-Uma PERSON pode possuir N contas externas:
+Uma PERSON pode possuir N identidades externas:
 
 ```text
 PERSON_BK
@@ -167,51 +163,105 @@ PERSON_BK
 └── Web autenticada
 ```
 
-Bindings reais são privados e não ficam em Git. O arquivo privado de bootstrap continua em `~/.amora/secrets/identity_bindings.json` ou `AMORA_IDENTITY_BINDINGS_FILE`.
+Bindings reais permanecem privados. O arquivo `~/.amora/secrets/identity_bindings.json` continua válido como bootstrap privado, mas o painel Web escreve diretamente no storage canônico.
 
 ### Autoridade familiar
 
 Unknown/familiar sem autoridade não pode promover a si ou terceiro para `father_of`/`mother_of ENTITY_AMORA` nem `ENTITY_AMORA child_of ...` apenas repetindo afirmações.
 
-Autoridade inicial: `PERSON_BK` via profile, não hardcode escondido.
+Autoridade inicial: `PERSON_BK` via profile. Alterar `can_define_amora_family` no painel exige confirmação explícita e atualiza o gate de relationship learning em runtime.
 
-### Web People / Family Settings — DIREÇÃO ACEITA
+## 7. Web People / Family Settings — ATIVO / INTEGRADO
 
-A Web pode ganhar uma aba administrativa visual para configurar pessoas, família e contas externas.
+PR #92 implementou o **Passo 1** da fase atual.
 
-Princípio importante: o JSON versionado é **bootstrap**, não deve virar a fonte runtime mutável dentro do container cloud. O container empacota esse catálogo como arquivo read-only; alterações de produção devem persistir nos stores canônicos existentes.
-
-Fluxo alvo:
+Navegação Web atual:
 
 ```text
-Web Settings / Pessoas
-        ↓
-operator-scoped API
-        ↓
-PersonProfileStore
-RelationshipEvolutionService / Relationship Graph
-PlatformIdentityBinding store
-        ↓
-persistência SQLite/libSQL
+[ Chat ] [ Pessoas ] [ Console ]
 ```
 
-A UI deve oferecer:
+### Pessoas
 
-- criar/editar pessoa canônica;
-- nome, aliases, nascimento/idade e descrição curta;
-- visualizar/editar relações familiares com histórico/provenance;
-- configurar N contas WhatsApp/Discord/Web por PERSON;
-- mascarar identificadores privados por padrão;
-- importar JSON;
-- exportar JSON/snapshot para edição/backup;
-- validação antes de salvar;
-- nunca gravar telefone/Discord ID no catálogo público/Git.
+A aba `Pessoas` permite:
 
-Para facilitar o uso, a UI pode apresentar visualmente a mesma estrutura dos JSONs, mas o **save de produção** vai para banco/store canônico. Export JSON reconstrói um documento portátil sem tornar o filesystem do container a autoridade.
+- criar/editar `PERSON_*`;
+- nome canônico;
+- aliases;
+- nascimento **ou** idade;
+- descrição curta estável;
+- alterar autoridade familiar com confirmação;
+- visualizar/adicionar/revisar/remover parentesco estrutural;
+- cadastrar várias contas WhatsApp/Discord/Web por PERSON;
+- ativar/desativar bindings;
+- mascarar IDs externos por padrão e revelar somente no modo operador.
 
-ADR base: `ADR-0027-living-people-profiles-and-platform-bindings.md`.
+Parentesco editado pelo operador preserva Relationship Graph temporal. Remoção expira a revisão vigente em vez de destruir o histórico.
 
-## 7. Mensageria externa — PRÓXIMA FUNDAÇÃO
+### JSON público x privado
+
+```text
+People / Family export
+→ profiles + relações
+→ nunca contém telefone/JID/Discord ID
+
+Private bindings export
+→ contém external_actor_id real
+→ operator-only
+→ tratar como backup privado
+```
+
+Import possui validação + preview antes de aplicar. Apply confirmado é transacional para evitar estado parcialmente importado.
+
+### Persistência remota
+
+Regressão dedicada certifica profile + binding em libSQL remoto, troca do compute home e reidratação/resolução para a mesma PERSON canônica.
+
+## 8. Operator capability — ATIVO
+
+Administração Web não reutiliza o token de conversa e não coloca o admin master no navegador.
+
+```text
+amora pair
+→ role web
+→ chat/voz WEB_SAFARI bounded
+
+amora pair --role operator
+→ challenge separado
+→ browser.v3 role operator
+→ Pessoas + Console bounded
+```
+
+Política atual:
+
+- challenge operador separado, uso único, TTL curto;
+- token operador expira em 12 horas;
+- rotação do admin secret revoga tokens operador;
+- `operator` acessa somente `/v1/operator/**` e `GET /v1/operations/state`;
+- `operator` não acessa chat, Memory, World, cognition journal, raw events ou ActionEngine;
+- token `web` normal não acessa rotas operador;
+- navegador pode bloquear/esquecer o modo operador localmente.
+
+ADR: `ADR-0028-operator-web-people-settings.md`.
+
+## 9. Living Console Web — ATIVO / INTEGRADO
+
+A aba `Console` reutiliza a projeção segura existente de `/v1/operations/state`.
+
+Mostra, sem abrir backdoor de debug:
+
+- health/estado operacional;
+- tarefa/DialogueAct quando disponível;
+- provider/model;
+- latência/fila de fala;
+- providers;
+- jobs;
+- erros agrupados;
+- snapshot técnico seguro.
+
+Não expõe prompt interno, secrets ou chain-of-thought. Atualização automática ocorre somente enquanto a aba Console está aberta.
+
+## 10. Mensageria externa — PRÓXIMA FUNDAÇÃO
 
 WhatsApp e Discord ainda **não têm adapters de rede integrados**.
 
@@ -229,22 +279,22 @@ Platform Adapter
 
 ### Política de grupo
 
-- participantes conhecidos ou desconhecidos podem compor contexto do grupo;
-- mention, reply/quote, vocativo e continuidade social podem endereçar Amora;
+- participantes conhecidos ou desconhecidos podem compor contexto social;
+- mention, reply/quote, vocativo e continuidade podem endereçar Amora;
 - desconhecidos recebem trust/relational attitude menor;
-- incerteza deve favorecer silêncio;
-- reply para mensagem da Amora é forte evidência de addressee;
-- mensagens e routing precisam de auditoria operacional.
+- incerteza favorece silêncio;
+- reply para mensagem da Amora é evidência forte de addressee;
+- routing/mensagens precisam de auditoria operacional.
 
 ### Política de DM
 
 - DM desconhecida não entra na cognição normal;
-- somente pessoa conhecida/autorizada pode interagir em privado;
+- apenas pessoa conhecida/autorizada interage em privado;
 - gate ocorre antes do Cognitive Core.
 
 ### Presence por plataforma
 
-Desejo atual de produto:
+Direção aprovada:
 
 ```text
 DISCONNECTED
@@ -256,30 +306,29 @@ DISCONNECTED
 
 BK/Amora podem conectar/desconectar explicitamente. Scheduler/autonomia poderá solicitar checks bounded.
 
-## 8. WhatsApp — direção técnica atual
+## 11. WhatsApp / Discord — direção técnica atual
 
-Para o requisito "número normal da Amora como linked device em grupo comum", candidato técnico é worker isolado usando cliente WhatsApp Web/linked-device, nunca dentro do Cognitive Core.
+### Discord
 
-Se esse caminho for escolhido:
+Usar Discord user ID como external actor id. Nickname/display name é alias contextual, nunca identidade forte. Discord é candidato natural para provar primeiro o contrato de mensageria.
 
-- release fixada;
-- auth state tratado como credencial longa e nunca commitado;
-- logs com JIDs/metadados filtrados;
+### WhatsApp
+
+Para o requisito "número normal da Amora como linked device em grupo comum", candidato técnico permanece worker isolado de WhatsApp Web/linked-device, nunca dentro do Cognitive Core.
+
+Invariantes:
+
+- auth state privado e nunca commitado;
+- logs com IDs/JIDs filtrados;
 - dedupe/protocol validation antes do Core;
-- testar reconnect/history sync;
-- reconhecer risco operacional de integração não oficial.
+- reconnect/history sync testados;
+- integração substituível e isolada do cérebro.
 
-## 9. Discord — direção técnica atual
-
-Adapter Discord deve usar **Discord user ID** como external actor id. Nickname/display name é alias contextual, nunca identidade forte.
-
-Discord é candidato natural para provar primeiro o contrato de mensageria.
-
-## 10. Implementado mas ainda não vivendo completamente
+## 12. Implementado mas ainda não vivendo completamente
 
 ### Speaker tracking
 
-`SessionSpeakerTracker` estabiliza labels de diarização fornecidos por upstream; ele não diariza sozinho.
+`SessionSpeakerTracker` estabiliza labels de diarização fornecidos por upstream; não diariza sozinho.
 
 **Status:** PRONTO NÃO INTEGRADO. WhatsApp/Discord não dependem disso porque a plataforma fornece actor identity.
 
@@ -295,15 +344,15 @@ Avatar Core/Studio/rig/assets/IK/physics/expressions/animações e portable bund
 
 **Status:** PARCIAL; corpo/avatar final permanece congelado por decisão operacional.
 
-## 11. Dívida estrutural
+## 13. Dívida estrutural
 
 Cognição ainda possui pilha evolutiva (`service → hardened → resilient → production → structured_runtime`, pares `context/context_v1`, `store/store_v1`, providers por geração).
 
 Não fazer faxina nuclear. Flatten correto exige replay/regressões antes de remover bases.
 
-`web/app.js` legado segue candidato forte a remoção. Como Web UI/UX está liberada, essa limpeza pode entrar junto de refactors seguros da superfície Web.
+`web/app.js` legado continua candidato a remoção em refactor Web seguro; não confundir com `app-v2.js` ativo.
 
-## 12. Próxima ordem recomendada
+## 14. Próxima ordem recomendada
 
 ```text
 P0 — concluído
@@ -313,28 +362,32 @@ P0 — concluído
 ✓ provider authority protocol + expression
 ✓ People Profiles + PlatformIdentityBinding + family authority
 
-P1 — Web/operator UX
-1. operator-scoped Web capability
-2. aba Pessoas/Família
-3. CRUD de profiles + relações + bindings privados
-4. import/export JSON
-5. Web Console usando /v1/operations/state
+PASSO 1 — CONCLUÍDO
+✓ operator-scoped Web capability
+✓ Chat / Pessoas / Console
+✓ CRUD de profiles
+✓ Relationship Graph familiar administrativo
+✓ bindings privados multi-conta
+✓ import/export JSON público e privado
+✓ Living Console Web
+✓ persistência/restart/libSQL remoto
 
-P1 — identidade/mensageria
-6. PlatformMessagingContract
-7. SocialAttentionRouter + Group Conversation Floor
-8. audit/history de mensageria
-9. Discord adapter
-10. WhatsApp worker/adaptor isolado
-11. PlatformPresenceController + checks bounded
+PASSO 2 — PRÓXIMO
+1. PlatformMessagingContract
+2. SocialAttentionRouter + Group Conversation Floor
+3. audit/history de mensageria
+4. Discord adapter
+5. WhatsApp worker/adaptor isolado
+6. PlatformPresenceController + checks bounded
 
-P1 paralelo — voz fora do foreground
-12. spike físico WebRTC Background Voice/Call Mode no iPhone + Free Fire
-13. somente se PASS, integrar call mode ao Web normal
+PASSO 3 — depois
+7. spike físico WebRTC Background Voice / Call Mode no iPhone + Free Fire
+8. se PASS, integrar Call Mode ao Web normal
+9. se FAIL, registrar limite Web; sem cliente nativo não prometer always-on mic
 
 DÍVIDA
-14. flatten da cognição guiado por replay
-15. SpeakerTracker somente com diarização real
+10. flatten da cognição guiado por replay
+11. SpeakerTracker somente com diarização real
 
 FROZEN
 - corpo/avatar virtual final
@@ -346,10 +399,10 @@ NÃO FROZEN
 - Web/PWA UI/UX
 - Web Console
 - Profiles/Family Settings
-- controles/configurações/diagnóstico da Web
+- controles/configurações/diagnóstico Web
 ```
 
-## 13. Últimos merges relevantes
+## 15. Últimos merges relevantes
 
 - PR #82 — Scheduler lifecycle + autonomia → Actions — `95920dc64e30fa108c8cbc44ad821650355a9054`.
 - PR #83 — ACIR/Perspective no runtime — `8da4501ee50d05c355334ea1be1354206ff43f6f`.
@@ -359,7 +412,18 @@ NÃO FROZEN
 - PR #87 — provider authority + multi-speaker + expressive policy — `c7c329c49b37db517a08e858ff22c7d64290b8aa`.
 - PR #88 — living people profiles + private platform bindings — `9c85d14be6f1d125869c058c4eb2725cf466deaa`.
 - PR #89 — checkpoint people identity/messaging presence — `e39760260783b47f4e48a2c5f948463f47168529`.
+- PR #90 — correção de freeze: Web/UI liberada — `df0e5f38da32286f146a41231bf4d631270dfe9d`.
+- PR #92 — operator Web People Settings + Living Console — `33b897def4a33708b0337bc96304628df89b8d24`.
 
-PR #88 passou Core Python 3.11–3.14, pre-deploy security e cloud container contracts, incluindo regressões completas no container non-root/read-only.
+PR #92 passou no head final:
+
+- Core Python 3.11–3.14;
+- Avatar/Web tests, incluindo parse dos módulos operator e regressões Safari;
+- pre-deploy security (dependencies + image scan);
+- cloud container contracts;
+- regressões completas dentro do container non-root/read-only;
+- persistência People/Bindings em libSQL remoto com troca de compute home.
+
+Issue #91 foi fechada como concluída pelo merge do Passo 1.
 
 Nenhum gate físico de Background Voice/iPhone/Free Fire, visão ou corpo/avatar final foi declarado PASS por inferência.
