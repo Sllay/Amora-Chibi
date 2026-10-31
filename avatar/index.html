@@ -7,6 +7,10 @@
   <title>Amora Avatar Studio</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="stylesheet" href="./styles.css">
+  <style>
+    /* O backup portátil substitui o antigo export JSON do painel Projeto. */
+    button[data-act="export"] { display: none !important; }
+  </style>
 </head>
 <body>
   <div id="app" class="app">
@@ -18,7 +22,8 @@
       <div class="top-actions studio-only">
         <button id="undoBtn" class="icon-btn" title="Desfazer">↶</button>
         <button id="redoBtn" class="icon-btn" title="Refazer">↷</button>
-        <button id="importProjectBtn" title="Restaurar projeto a partir de um JSON exportado">Importar JSON</button>
+        <button id="exportBundleBtn" title="Salvar projeto, animações e texturas em um ZIP portátil">Exportar ZIP</button>
+        <button id="importProjectBtn" title="Restaurar um ZIP portátil ou um JSON legado">Importar ZIP/JSON</button>
         <button id="saveBtn" class="primary">Salvar</button>
       </div>
       <div id="connectionPill" class="pill">offline</div>
@@ -65,7 +70,7 @@
     </section>
 
     <input id="assetInput" type="file" accept="image/png,image/webp,image/jpeg" multiple hidden>
-    <input id="projectInput" type="file" accept="application/json,.json" hidden>
+    <input id="projectInput" type="file" accept="application/zip,application/x-zip-compressed,.zip,application/json,.json" hidden>
 
     <div id="toast" class="toast"></div>
 
@@ -82,6 +87,7 @@
   <script type="module" src="./app.js"></script>
   <script type="module" src="./rig-v2.js"></script>
   <script type="module">
+    const exportButton = document.querySelector('#exportBundleBtn');
     const importButton = document.querySelector('#importProjectBtn');
     const projectInput = document.querySelector('#projectInput');
     const toast = document.querySelector('#toast');
@@ -90,8 +96,18 @@
       if (!toast) return;
       toast.textContent = text;
       toast.classList.add('show');
-      clearTimeout(toast._importTimer);
-      toast._importTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+      clearTimeout(toast._bundleTimer);
+      toast._bundleTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+    }
+
+    function token() {
+      return sessionStorage.getItem('amora.avatar.token') || '';
+    }
+
+    async function responseError(response) {
+      let detail = `${response.status}`;
+      try { detail = (await response.json()).detail || detail; } catch (_) {}
+      return detail;
     }
 
     function looksLikeAvatarProject(value) {
@@ -106,41 +122,87 @@
       );
     }
 
+    function patchLegacyProjectCopy() {
+      for (const node of document.querySelectorAll('.section small')) {
+        if ((node.textContent || '').includes('JSON é só a serialização automática do Studio')) {
+          node.textContent = 'Backup portátil usa ZIP com manifest, projeto completo e assets/texturas. JSON antigo continua aceito apenas para restauração legada.';
+        }
+      }
+    }
+    new MutationObserver(patchLegacyProjectCopy).observe(document.body, { childList: true, subtree: true });
+    patchLegacyProjectCopy();
+
+    exportButton?.addEventListener('click', async () => {
+      const auth = token();
+      if (!auth) return notify('Pareie o Avatar Studio antes de exportar');
+      exportButton.disabled = true;
+      try {
+        const response = await fetch('/v1/avatar/bundle', {
+          headers: { 'Authorization': `Bearer ${auth}` },
+          cache: 'no-store',
+        });
+        if (!response.ok) throw new Error(await responseError(response));
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'amora_avatar.zip';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        notify('ZIP do Avatar exportado com projeto + texturas');
+      } catch (error) {
+        notify(`Exportar ZIP: ${error?.message || 'falha ao gerar backup'}`);
+      } finally {
+        exportButton.disabled = false;
+      }
+    });
+
     importButton?.addEventListener('click', () => projectInput?.click());
 
     projectInput?.addEventListener('change', async () => {
       const file = projectInput.files?.[0];
       projectInput.value = '';
       if (!file) return;
+      const auth = token();
+      if (!auth) return notify('Pareie o Avatar Studio antes de importar');
 
+      importButton.disabled = true;
       try {
-        const imported = JSON.parse(await file.text());
-        if (!looksLikeAvatarProject(imported)) {
-          throw new Error('arquivo não parece um projeto exportado pelo Avatar Studio');
+        const legacyJson = file.name.toLowerCase().endsWith('.json') || file.type === 'application/json';
+        let response;
+        if (legacyJson) {
+          const imported = JSON.parse(await file.text());
+          if (!looksLikeAvatarProject(imported)) {
+            throw new Error('arquivo não parece um projeto exportado pelo Avatar Studio');
+          }
+          response = await fetch('/v1/avatar/project', {
+            method: 'PUT',
+            headers: {
+              'Authorization': `Bearer ${auth}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(imported),
+          });
+        } else {
+          response = await fetch('/v1/avatar/bundle', {
+            method: 'PUT',
+            headers: {
+              'Authorization': `Bearer ${auth}`,
+              'Content-Type': 'application/zip',
+            },
+            body: await file.arrayBuffer(),
+          });
         }
 
-        const token = sessionStorage.getItem('amora.avatar.token') || '';
-        if (!token) throw new Error('pareie o Avatar Studio antes de importar');
-
-        const response = await fetch('/v1/avatar/project', {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(imported),
-        });
-
-        if (!response.ok) {
-          let detail = `${response.status}`;
-          try { detail = (await response.json()).detail || detail; } catch (_) {}
-          throw new Error(detail);
-        }
-
-        notify('Projeto JSON restaurado. Recarregando…');
-        setTimeout(() => location.reload(), 250);
+        if (!response.ok) throw new Error(await responseError(response));
+        notify(legacyJson ? 'JSON legado restaurado. Recarregando…' : 'ZIP restaurado com projeto + texturas. Recarregando…');
+        setTimeout(() => location.reload(), 300);
       } catch (error) {
-        notify(`Importar JSON: ${error?.message || 'falha ao ler o arquivo'}`);
+        notify(`Importar backup: ${error?.message || 'falha ao ler o arquivo'}`);
+      } finally {
+        importButton.disabled = false;
       }
     });
   </script>
