@@ -66,13 +66,14 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
             # source bytes are never modified in place.
             from .migrations_v101 import MIGRATION_V101
             from .migrations_v102 import MIGRATION_V102
+            from .migrations_v103 import MIGRATION_V103
             from .remote import statements
 
             version = target.execute(
                 "SELECT MAX(version) FROM schema_migrations"
             ).fetchone()[0]
-            if version not in {10, 11, 12}:
-                raise ValueError("only audited schema 10/11/12 snapshots can be imported")
+            if version not in {10, 11, 12, 13}:
+                raise ValueError("only audited schema 10/11/12/13 snapshots can be imported")
             if version == 10:
                 for sql in statements(MIGRATION_V101[1]):
                     target.execute(sql)
@@ -82,6 +83,11 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
                 for sql in statements(MIGRATION_V102[1]):
                     target.execute(sql)
                 target.execute("INSERT INTO schema_migrations(version) VALUES (12)")
+                version = 12
+            if version == 12:
+                for sql in statements(MIGRATION_V103[1]):
+                    target.execute(sql)
+                target.execute("INSERT INTO schema_migrations(version) VALUES (13)")
 
             assets = source.execute("SELECT * FROM avatar_assets").fetchall()
             archive_path = Path(str(snapshot) + ".avatar.zip")

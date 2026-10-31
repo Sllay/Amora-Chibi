@@ -1,0 +1,277 @@
+from __future__ import annotations
+
+import hashlib
+from uuid import uuid4
+
+from amora.cognition import CognitiveRequest
+from amora.events import PrivacyScope
+
+from .attention import SocialAttentionRouter
+from .models import (
+    AttentionDecision,
+    AuditDirection,
+    ChannelType,
+    InboundMessage,
+    InboundResult,
+    MessagingAuditRecord,
+    OutboundMessage,
+    RoutingAction,
+)
+from .store import MessagingStore
+
+
+class PlatformMessagingService:
+    """Common messaging pipeline between platform workers and Cognitive Core.
+
+    Platform workers normalize transport facts. Core owns identity resolution,
+    DM authorization, group attention, cognition and outbound intent. No adapter
+    is allowed to decide canonical speaker identity or family truth.
+    """
+
+    def __init__(
+        self,
+        *,
+        store: MessagingStore,
+        attention: SocialAttentionRouter,
+        cognition,
+        conversation,
+        clock,
+    ) -> None:
+        self.store = store
+        self.attention = attention
+        self.cognition = cognition
+        self.conversation = conversation
+        self.clock = clock
+
+    async def receive(self, message: InboundMessage) -> InboundResult:
+        if self.store.has_audit(
+            platform=message.platform,
+            account_scope=message.account_scope,
+            conversation_id=message.conversation_id,
+            message_id=message.message_id,
+        ):
+            return InboundResult(
+                decision=AttentionDecision(
+                    action=RoutingAction.SILENCE,
+                    score=0.0,
+                    speaker_actor_ref="DUPLICATE",
+                    reason_codes=["DUPLICATE_PLATFORM_MESSAGE", "NO_REPROCESS"],
+                ),
+                duplicate=True,
+            )
+
+        decision = self.attention.route(message)
+        actor_id = decision.speaker_entity_id or decision.speaker_actor_ref
+        cognitive_text = self._cognitive_text(message)
+        first_external = message.sender_identifiers[0].external_actor_id
+        inbound_audit = MessagingAuditRecord(
+            platform=message.platform,
+            account_scope=message.account_scope,
+            conversation_id=message.conversation_id,
+            message_id=message.message_id,
+            direction=AuditDirection.INBOUND,
+            channel_type=message.channel_type,
+            sender_external_id=first_external,
+            speaker_entity_id=decision.speaker_entity_id,
+            text=message.text,
+            reply_to_message_id=message.reply_to_message_id,
+            mentions=list(message.mentioned_actor_ids),
+            routing_action=decision.action,
+            reason_codes=list(decision.reason_codes),
+            responded=False,
+            timestamp=message.timestamp,
+            metadata={
+                "sender_display_name": message.sender_display_name,
+                "sender_username": message.sender_username,
+                "mentions_amora": message.mentions_amora,
+                "reply_to_amora": message.reply_to_amora,
+                "attachment_count": len(message.attachments),
+                "floor_generation": decision.floor_generation,
+            },
+        )
+        if not self.store.append_audit(inbound_audit):
+            return InboundResult(
+                decision=decision.model_copy(
+                    update={"reason_codes": [*decision.reason_codes, "AUDIT_DEDUPE_RACE"]}
+                ),
+                duplicate=True,
+            )
+
+        # Critical privacy boundary: unknown DM content is retained only in the
+        # private operator audit. It is never persisted into CognitiveStore and
+        # never reaches a provider.
+        if decision.action in {RoutingAction.BLOCK, RoutingAction.QUARANTINE, RoutingAction.SILENCE}:
+            return InboundResult(decision=decision)
+
+        request = CognitiveRequest(
+            text=cognitive_text,
+            speaker_id=actor_id,
+            target_id=("ENTITY_AMORA" if decision.action == RoutingAction.RESPOND else None),
+            source_event_id=None,
+            session_id=self._session_ref(message),
+            privacy_scope=message.privacy_scope,
+            remote_processing_allowed=message.remote_processing_allowed,
+            metadata={
+                "surface": "platform_messaging",
+                "platform": message.platform.value,
+                "channel_type": message.channel_type.value,
+                "conversation_ref": self._conversation_ref(message),
+                "platform_message_id_hash": self._hash(message.message_id),
+                "social_attention_score": decision.score,
+                "social_attention_reasons": list(decision.reason_codes),
+                "floor_generation": decision.floor_generation,
+                # Messaging audit is intentionally not automatic long-term memory.
+                "memory_consolidation": False,
+                "relationship_learning": False,
+                "messaging_audit": True,
+            },
+        )
+        self.cognition.observe_input(request)
+
+        if decision.action == RoutingAction.CONTEXT_ONLY:
+            self.cognition.record_turn_decision(
+                request,
+                "LISTEN",
+                [*decision.reason_codes, "MESSAGING_CONTEXT_ONLY"],
+                decision.score,
+            )
+            return InboundResult(decision=decision)
+
+        if decision.action != RoutingAction.RESPOND:
+            return InboundResult(decision=decision)
+
+        self.cognition.record_turn_decision(
+            request,
+            "TAKE_TURN",
+            [*decision.reason_codes, "MESSAGING_REPLY_AUTHORIZED"],
+            decision.score,
+        )
+
+        # Reuse the established interaction appraisal so direct platform speech
+        # influences emotion consistently. Unknown group actors cannot acquire
+        # directed affect because they are not canonical registry entities.
+        appraise = getattr(self.conversation, "_appraise_interaction", None)
+        if callable(appraise):
+            await appraise(
+                cognitive_text,
+                speaker_id=actor_id,
+                addressee_id="ENTITY_AMORA",
+                source_event_id=None,
+                privacy_scope=message.privacy_scope,
+                metadata=request.metadata,
+            )
+
+        fallback = self.conversation.composer.fallback_dialogue(cognitive_text, speaker_id=actor_id)
+        plan = await self.cognition.respond(request, on_segment=None, fallback_text=fallback)
+        await self.cognition.emit_event(plan)
+
+        # A group may turn away from Amora while the model is generating. The
+        # original attention lease is revalidated immediately before enqueue.
+        if message.channel_type == ChannelType.GROUP and not self.attention.floor.validate_reply(message, decision):
+            self.store.add_inbound_reason(
+                platform=message.platform,
+                account_scope=message.account_scope,
+                conversation_id=message.conversation_id,
+                message_id=message.message_id,
+                reason="REPLY_LEASE_INVALIDATED",
+            )
+            return InboundResult(
+                decision=decision.model_copy(
+                    update={
+                        "action": RoutingAction.SILENCE,
+                        "reason_codes": [*decision.reason_codes, "REPLY_LEASE_INVALIDATED"],
+                    }
+                )
+            )
+
+        text = (plan.display_text or plan.speech_text or fallback).strip()
+        if not text:
+            self.store.add_inbound_reason(
+                platform=message.platform,
+                account_scope=message.account_scope,
+                conversation_id=message.conversation_id,
+                message_id=message.message_id,
+                reason="EMPTY_REALIZATION_SUPPRESSED",
+            )
+            return InboundResult(decision=decision)
+
+        outbound = OutboundMessage(
+            platform=message.platform,
+            account_scope=message.account_scope,
+            conversation_id=message.conversation_id,
+            target_entity_id=decision.speaker_entity_id,
+            text=text,
+            # Native quote/reply to the exact triggering message is preferred on
+            # both Discord and WhatsApp and removes ambiguity in busy groups.
+            reply_to_message_id=message.message_id,
+            source_message_id=message.message_id,
+            created_at=self.clock.now(),
+            metadata={
+                "cognitive_turn_id": str(plan.turn_id),
+                "provider": plan.provider,
+                "model": plan.model,
+                "floor_generation": decision.floor_generation,
+                "attention_score": decision.score,
+            },
+        )
+        self.store.put_outbound(outbound)
+        self.store.append_audit(
+            MessagingAuditRecord(
+                platform=message.platform,
+                account_scope=message.account_scope,
+                conversation_id=message.conversation_id,
+                message_id=str(outbound.id),
+                direction=AuditDirection.OUTBOUND,
+                channel_type=message.channel_type,
+                speaker_entity_id="ENTITY_AMORA",
+                text=text,
+                reply_to_message_id=message.message_id,
+                routing_action=RoutingAction.RESPOND,
+                reason_codes=["CORE_OUTBOUND_ENQUEUED", *plan.reason_codes],
+                responded=True,
+                timestamp=outbound.created_at,
+                metadata={
+                    "outbound_id": str(outbound.id),
+                    "source_message_id": message.message_id,
+                    "target_entity_id": decision.speaker_entity_id,
+                },
+            )
+        )
+        self.store.mark_inbound_responded(
+            platform=message.platform,
+            account_scope=message.account_scope,
+            conversation_id=message.conversation_id,
+            message_id=message.message_id,
+        )
+        return InboundResult(decision=decision, outbound=[outbound])
+
+    def state(self) -> dict[str, object]:
+        return {
+            "messaging_audit_count": self.store.count_audit(),
+            "messaging_outbound_pending_count": self.store.pending_outbound_count(),
+        }
+
+    @staticmethod
+    def _cognitive_text(message: InboundMessage) -> str:
+        if message.text.strip():
+            return message.text.strip()
+        labels = []
+        for attachment in message.attachments[:4]:
+            label = attachment.media_type or "arquivo"
+            if attachment.filename:
+                label += f" ({attachment.filename})"
+            labels.append(label)
+        joined = ", ".join(labels) if labels else "anexo"
+        return f"[Mensagem contém anexo não analisado: {joined}]"
+
+    @staticmethod
+    def _hash(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()[:20]
+
+    @classmethod
+    def _conversation_ref(cls, message: InboundMessage) -> str:
+        return f"{message.platform.value}:{cls._hash(message.conversation_id)}"
+
+    @classmethod
+    def _session_ref(cls, message: InboundMessage) -> str:
+        return f"MSG_{message.platform.value.upper()}_{cls._hash(message.account_scope + '|' + message.conversation_id)}"

@@ -44,7 +44,7 @@ def test_backup_restore_preserves_action_state(tmp_path: Path, monkeypatch) -> N
     restored_db = AmoraDatabase(restored_path)
     try:
         assert restored_db.integrity_check() == "ok"
-        assert restored_db.schema_version() == 12
+        assert restored_db.schema_version() == 13
     finally: restored_db.close()
     store = ActionStore(restored_path, SystemClock())
     try:
