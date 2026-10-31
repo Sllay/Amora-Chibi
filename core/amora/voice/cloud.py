@@ -28,6 +28,10 @@ CLOUD_AUDIO_POSTPROCESSING = "none"
 MAX_CLOUD_AUDIO_BYTES = 16 * 1024 * 1024
 FISH_STREAM_SAMPLE_RATE = 44_100
 FISH_STREAM_CHUNK_LENGTH = 200
+FISH_TEMPERATURE = 0.55
+FISH_TOP_P = 0.70
+FISH_EMOTION_TAG_THRESHOLD = 0.50
+FISH_MAX_STYLE_TAGS = 2
 PCM_STREAM_CHUNK_BYTES = 8192
 
 _FISH_EMOTION_TAGS = {
@@ -97,6 +101,9 @@ class FishGeminiVoiceBackend:
         self._last_model: str | None = None
         self._last_error: str | None = None
         self._last_sample_rate: int | None = None
+        self._last_fish_headers_ms: float | None = None
+        self._last_fish_first_byte_ms: float | None = None
+        self._last_fish_first_pcm_ms: float | None = None
 
     @property
     def fish_configured(self) -> bool:
@@ -112,6 +119,9 @@ class FishGeminiVoiceBackend:
             last_model = self._last_model
             last_error = self._last_error
             last_sample_rate = self._last_sample_rate
+            last_fish_headers_ms = self._last_fish_headers_ms
+            last_fish_first_byte_ms = self._last_fish_first_byte_ms
+            last_fish_first_pcm_ms = self._last_fish_first_pcm_ms
         gemini_state = self._gemini.state() if hasattr(self._gemini, "state") else {}
         return {
             "provider": "fish_s2_1_pro_free_then_gemini",
@@ -130,7 +140,15 @@ class FishGeminiVoiceBackend:
             "stream_format": "pcm_s16le",
             "stream_sample_rate": FISH_STREAM_SAMPLE_RATE if self.fish_configured else None,
             "fish_latency": "balanced",
+            "fish_chunk_length": FISH_STREAM_CHUNK_LENGTH,
+            "fish_temperature": FISH_TEMPERATURE,
+            "fish_top_p": FISH_TOP_P,
+            "fish_emotion_tag_threshold": FISH_EMOTION_TAG_THRESHOLD,
+            "fish_max_style_tags": FISH_MAX_STYLE_TAGS,
             "fish_expressive_tags": True,
+            "fish_headers_ms": last_fish_headers_ms,
+            "fish_first_byte_ms": last_fish_first_byte_ms,
+            "fish_first_pcm_ms": last_fish_first_pcm_ms,
             "last_provider": last_provider,
             "last_model": last_model,
             "last_error": last_error,
@@ -143,7 +161,7 @@ class FishGeminiVoiceBackend:
         fish_error: str | None = None
         if self.fish_configured:
             try:
-                audio = self._render_fish(self._fish_text(item))
+                audio = self._render_fish(item)
             except _ProviderFailure as exc:
                 fish_error = str(exc)
                 self._remember(error=fish_error)
@@ -215,28 +233,36 @@ class FishGeminiVoiceBackend:
         self._remember(error=fish_error or "VOICE_CLOUD_TTS_NOT_CONFIGURED")
         raise LocalVoiceUnavailable("VOICE_CLOUD_TTS_UNAVAILABLE")
 
+    def _fish_payload(self, item: SpeechUtterance, *, audio_format: str) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "text": self._fish_text(item),
+            "reference_id": self.reference_id,
+            "format": audio_format,
+            "latency": "balanced",
+            "chunk_length": FISH_STREAM_CHUNK_LENGTH,
+            "normalize": True,
+            "temperature": FISH_TEMPERATURE,
+            "top_p": FISH_TOP_P,
+        }
+        if audio_format == "pcm":
+            payload["sample_rate"] = FISH_STREAM_SAMPLE_RATE
+        expression = item.style.expression
+        if expression is not None and abs(expression.rate_scale - 1.0) >= 0.005:
+            payload["prosody"] = {"speed": round(expression.rate_scale, 3), "volume": 0.0}
+        return payload
+
     def _stream_fish(self, item: SpeechUtterance, session: VoiceSession) -> Iterator[VoiceChunk]:
         key = self.secrets.get("FISH_API_KEY")
         if not key or not self.reference_id:
             raise _ProviderFailure("FISH_NOT_CONFIGURED")
 
-        payload: dict[str, object] = {
-            "text": self._fish_text(item),
-            "reference_id": self.reference_id,
-            "format": "pcm",
-            "sample_rate": FISH_STREAM_SAMPLE_RATE,
-            "latency": "balanced",
-            "chunk_length": FISH_STREAM_CHUNK_LENGTH,
-            "normalize": True,
-        }
-        expression = item.style.expression
-        if expression is not None and abs(expression.rate_scale - 1.0) >= 0.005:
-            payload["prosody"] = {"speed": round(expression.rate_scale, 3), "volume": 0.0}
-
+        payload = self._fish_payload(item, audio_format="pcm")
         sequence = 0
         total = 0
         pending = bytearray()
         emitted = False
+        started = perf_counter()
+        self._begin_fish_request()
         try:
             with self._client.stream(
                 "POST",
@@ -248,15 +274,20 @@ class FishGeminiVoiceBackend:
                 },
                 json=payload,
             ) as response:
+                self._remember(fish_headers_ms=self._elapsed_ms(started))
                 if response.status_code >= 400:
                     body = response.read().decode("utf-8", errors="replace")
                     compact = " ".join(body.split())[:160]
                     suffix = f": {compact}" if compact else ""
                     raise _ProviderFailure(f"FISH_HTTP_{response.status_code}{suffix}")
 
+                first_byte_seen = False
                 for network_chunk in response.iter_bytes():
                     if not network_chunk:
                         continue
+                    if not first_byte_seen:
+                        first_byte_seen = True
+                        self._remember(fish_first_byte_ms=self._elapsed_ms(started))
                     total += len(network_chunk)
                     if total > MAX_CLOUD_AUDIO_BYTES:
                         raise _ProviderFailure("FISH_AUDIO_TOO_LARGE")
@@ -270,6 +301,7 @@ class FishGeminiVoiceBackend:
                                 model=FISH_FREE_MODEL,
                                 error=None,
                                 sample_rate=FISH_STREAM_SAMPLE_RATE,
+                                fish_first_pcm_ms=self._elapsed_ms(started),
                             )
                         emitted = True
                         yield VoiceChunk(session, sequence, pcm, FISH_STREAM_SAMPLE_RATE, 1)
@@ -284,6 +316,7 @@ class FishGeminiVoiceBackend:
                             model=FISH_FREE_MODEL,
                             error=None,
                             sample_rate=FISH_STREAM_SAMPLE_RATE,
+                            fish_first_pcm_ms=self._elapsed_ms(started),
                         )
                     emitted = True
                     yield VoiceChunk(session, sequence, bytes(pending), FISH_STREAM_SAMPLE_RATE, 1)
@@ -340,12 +373,14 @@ class FishGeminiVoiceBackend:
         if not item.text.strip():
             raise LocalVoiceUnavailable("VOICE_EMPTY_TEXT")
 
-    def _render_fish(self, text: str) -> LocalVoiceAudio:
+    def _render_fish(self, item: SpeechUtterance) -> LocalVoiceAudio:
         key = self.secrets.get("FISH_API_KEY")
         if not key or not self.reference_id:
             raise _ProviderFailure("FISH_NOT_CONFIGURED")
 
         started = perf_counter()
+        first_byte_seen = False
+        self._begin_fish_request()
         try:
             with self._client.stream(
                 "POST",
@@ -355,14 +390,9 @@ class FishGeminiVoiceBackend:
                     "Content-Type": "application/json",
                     "model": FISH_FREE_MODEL,
                 },
-                json={
-                    "text": text,
-                    "reference_id": self.reference_id,
-                    "format": "wav",
-                    "latency": "balanced",
-                    "chunk_length": FISH_STREAM_CHUNK_LENGTH,
-                },
+                json=self._fish_payload(item, audio_format="wav"),
             ) as response:
+                self._remember(fish_headers_ms=self._elapsed_ms(started))
                 if response.status_code >= 400:
                     body = response.read().decode("utf-8", errors="replace")
                     compact = " ".join(body.split())[:160]
@@ -370,6 +400,9 @@ class FishGeminiVoiceBackend:
                     raise _ProviderFailure(f"FISH_HTTP_{response.status_code}{suffix}")
                 body = bytearray()
                 for chunk in response.iter_bytes():
+                    if chunk and not first_byte_seen:
+                        first_byte_seen = True
+                        self._remember(fish_first_byte_ms=self._elapsed_ms(started))
                     body.extend(chunk)
                     if len(body) > MAX_CLOUD_AUDIO_BYTES:
                         raise _ProviderFailure("FISH_AUDIO_TOO_LARGE")
@@ -438,28 +471,27 @@ class FishGeminiVoiceBackend:
     @classmethod
     def _fish_text(cls, item: SpeechUtterance) -> str:
         tags: list[str] = []
+
+        def append_tag(tag: str | None) -> None:
+            if tag and tag not in tags and len(tags) < FISH_MAX_STYLE_TAGS:
+                tags.append(tag)
+
         expression = item.style.expression
         if (
             expression is not None
             and expression.source_emotion
-            and expression.source_intensity >= 0.35
+            and expression.source_intensity >= FISH_EMOTION_TAG_THRESHOLD
         ):
-            tag = _FISH_EMOTION_TAGS.get(str(expression.source_emotion))
-            if tag:
-                tags.append(tag)
+            append_tag(_FISH_EMOTION_TAGS.get(str(expression.source_emotion)))
 
         cues = item.metadata.get("cues", [])
         if isinstance(cues, list):
             for cue in cues:
-                tag = _FISH_CUE_TAGS.get(str(cue))
-                if tag and tag not in tags:
-                    tags.append(tag)
+                append_tag(_FISH_CUE_TAGS.get(str(cue)))
         nonverbal = item.metadata.get("nonverbal_cues", [])
         if isinstance(nonverbal, list):
             for cue in nonverbal:
-                tag = _FISH_NONVERBAL_TAGS.get(str(cue).lower())
-                if tag and tag not in tags:
-                    tags.append(tag)
+                append_tag(_FISH_NONVERBAL_TAGS.get(str(cue).lower()))
         return f"{' '.join(tags)} {item.text}".strip()
 
     @staticmethod
@@ -500,6 +532,16 @@ class FishGeminiVoiceBackend:
         text = " ".join(str(exc).split())[:160]
         return text or fallback
 
+    @staticmethod
+    def _elapsed_ms(started: float) -> float:
+        return round((perf_counter() - started) * 1000.0, 3)
+
+    def _begin_fish_request(self) -> None:
+        with self._lock:
+            self._last_fish_headers_ms = None
+            self._last_fish_first_byte_ms = None
+            self._last_fish_first_pcm_ms = None
+
     def _remember(
         self,
         *,
@@ -507,6 +549,9 @@ class FishGeminiVoiceBackend:
         model: str | None = None,
         error: str | None = None,
         sample_rate: int | None = None,
+        fish_headers_ms: float | None = None,
+        fish_first_byte_ms: float | None = None,
+        fish_first_pcm_ms: float | None = None,
     ) -> None:
         with self._lock:
             if provider is not None:
@@ -516,6 +561,12 @@ class FishGeminiVoiceBackend:
             self._last_error = error
             if sample_rate is not None:
                 self._last_sample_rate = sample_rate
+            if fish_headers_ms is not None:
+                self._last_fish_headers_ms = fish_headers_ms
+            if fish_first_byte_ms is not None:
+                self._last_fish_first_byte_ms = fish_first_byte_ms
+            if fish_first_pcm_ms is not None:
+                self._last_fish_first_pcm_ms = fish_first_pcm_ms
 
     def close(self) -> None:
         self._client.close()
