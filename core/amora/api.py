@@ -29,6 +29,7 @@ from amora.identity import PrivacyContext
 from amora.language import PerspectiveFrame, PerspectiveStack
 from amora.memory.routes import register_memory_routes
 from amora.server_console import ServerConsole
+from amora.time import SchedulerRuntime
 from amora.world.routes import register_world_routes
 
 
@@ -74,11 +75,24 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
 
     @asynccontextmanager
     async def lifespan(app):
+        scheduler_runtime = SchedulerRuntime(
+            core.scheduler,
+            is_idle=lambda: (
+                core.social.scene.current_speaker is None
+                and core.conversation.store.pending_count() == 0
+            ),
+            on_error=lambda exc: core.operations.error("scheduler", "SCHEDULER_RUNTIME_ERROR"),
+        )
+        core.autonomy.schedule_idle(core.scheduler)
+        scheduler_runtime.start()
+        app.state.scheduler_runtime = scheduler_runtime
         app.state.accepting = True
         try:
             yield
         finally:
             app.state.accepting = False
+            core.scheduler.cancel("autonomy.idle")
+            await scheduler_runtime.stop()
             console = getattr(app.state, "server_console", None)
             try:
                 if console is not None:
