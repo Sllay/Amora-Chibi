@@ -11,7 +11,7 @@ from amora.identity.models import Entity, EntityRegistry, EntityType, Relationsh
 from amora.identity.session import DeviceIdentity, DeviceTrust, PrivacyContext, SessionIdentity
 
 from .migrations_v101 import MIGRATION_V101
-from .backend import SQLiteBackend, StorageBackend, is_duplicate_error
+from .backend import SQLiteBackend, StorageBackend, execute_atomic_statement, is_duplicate_error
 from .migrations import MIGRATIONS
 from .migrations_v06 import MIGRATION_V06
 from .migrations_v07 import MIGRATION_V07
@@ -69,8 +69,12 @@ class AmoraDatabase:
         values = (str(event.id), event.schema_version, event.event_type, event.timestamp.isoformat(), event.source, event.actor, event.target, event.confidence, event.importance, int(event.priority), json.dumps(event.payload, ensure_ascii=False, separators=(",", ":")), event.privacy_scope.value, event.session_id, str(event.correlation_id) if event.correlation_id else None, str(event.causation_id) if event.causation_id else None, str(event.causal_parent) if event.causal_parent else None, event.sequence, event.dedupe_key)
         with self._lock:
             try:
-                with self._conn:
-                    self._conn.execute("""INSERT INTO events (id, schema_version, event_type, timestamp, source, actor, target, confidence, importance, priority, payload_json, privacy_scope, session_id, correlation_id, causation_id, causal_parent, sequence, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", values)
+                execute_atomic_statement(
+                    self.backend,
+                    self._conn,
+                    """INSERT INTO events (id, schema_version, event_type, timestamp, source, actor, target, confidence, importance, priority, payload_json, privacy_scope, session_id, correlation_id, causation_id, causal_parent, sequence, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    values,
+                )
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise
@@ -111,8 +115,13 @@ class AmoraDatabase:
         return registry
 
     def upsert_device(self, device: DeviceIdentity) -> None:
-        with self._lock, self._conn:
-            self._conn.execute("""INSERT INTO devices(id, owner_person_id, device_type, trust_level, credential_ref, capabilities_json, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET owner_person_id=excluded.owner_person_id, device_type=excluded.device_type, trust_level=excluded.trust_level, credential_ref=excluded.credential_ref, capabilities_json=excluded.capabilities_json, last_seen=excluded.last_seen""", (device.id, device.owner_person_id, device.device_type, device.trust_level.value, device.credential_ref, json.dumps(sorted(device.capabilities)), device.last_seen.isoformat()))
+        with self._lock:
+            execute_atomic_statement(
+                self.backend,
+                self._conn,
+                """INSERT INTO devices(id, owner_person_id, device_type, trust_level, credential_ref, capabilities_json, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET owner_person_id=excluded.owner_person_id, device_type=excluded.device_type, trust_level=excluded.trust_level, credential_ref=excluded.credential_ref, capabilities_json=excluded.capabilities_json, last_seen=excluded.last_seen""",
+                (device.id, device.owner_person_id, device.device_type, device.trust_level.value, device.credential_ref, json.dumps(sorted(device.capabilities)), device.last_seen.isoformat()),
+            )
 
     def get_device(self, device_id: str) -> DeviceIdentity | None:
         with self._lock:
@@ -122,8 +131,13 @@ class AmoraDatabase:
         return DeviceIdentity(id=row["id"], owner_person_id=row["owner_person_id"], device_type=row["device_type"], trust_level=DeviceTrust(row["trust_level"]), credential_ref=row["credential_ref"], capabilities=set(json.loads(row["capabilities_json"])), last_seen=datetime.fromisoformat(row["last_seen"]))
 
     def save_session(self, session: SessionIdentity) -> None:
-        with self._lock, self._conn:
-            self._conn.execute("""INSERT INTO sessions(id, device_id, authenticated_person_id, privacy_context, auth_method, started_at, last_seen, expires_at, capabilities_json, closed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen, expires_at=excluded.expires_at, privacy_context=excluded.privacy_context, capabilities_json=excluded.capabilities_json, closed_at=excluded.closed_at""", (session.id, session.device_id, session.authenticated_person_id, session.privacy_context.value, session.auth_method, session.started_at.isoformat(), session.last_seen.isoformat(), session.expires_at.isoformat() if session.expires_at else None, json.dumps(sorted(session.capabilities)), session.closed_at.isoformat() if session.closed_at else None))
+        with self._lock:
+            execute_atomic_statement(
+                self.backend,
+                self._conn,
+                """INSERT INTO sessions(id, device_id, authenticated_person_id, privacy_context, auth_method, started_at, last_seen, expires_at, capabilities_json, closed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen, expires_at=excluded.expires_at, privacy_context=excluded.privacy_context, capabilities_json=excluded.capabilities_json, closed_at=excluded.closed_at""",
+                (session.id, session.device_id, session.authenticated_person_id, session.privacy_context.value, session.auth_method, session.started_at.isoformat(), session.last_seen.isoformat(), session.expires_at.isoformat() if session.expires_at else None, json.dumps(sorted(session.capabilities)), session.closed_at.isoformat() if session.closed_at else None),
+            )
 
     def get_session(self, session_id: str) -> SessionIdentity | None:
         with self._lock:
@@ -133,8 +147,13 @@ class AmoraDatabase:
         return SessionIdentity(id=row["id"], device_id=row["device_id"], authenticated_person_id=row["authenticated_person_id"], privacy_context=PrivacyContext(row["privacy_context"]), auth_method=row["auth_method"], started_at=datetime.fromisoformat(row["started_at"]), last_seen=datetime.fromisoformat(row["last_seen"]), expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None, capabilities=set(json.loads(row["capabilities_json"])), closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None)
 
     def close_session(self, session_id: str, closed_at: datetime) -> bool:
-        with self._lock, self._conn:
-            cur = self._conn.execute("UPDATE sessions SET closed_at = ?, last_seen = ? WHERE id = ? AND closed_at IS NULL", (closed_at.isoformat(), closed_at.isoformat(), session_id))
+        with self._lock:
+            cur = execute_atomic_statement(
+                self.backend,
+                self._conn,
+                "UPDATE sessions SET closed_at = ?, last_seen = ? WHERE id = ? AND closed_at IS NULL",
+                (closed_at.isoformat(), closed_at.isoformat(), session_id),
+            )
             return cur.rowcount > 0
 
     def active_session_count(self, now: datetime) -> int:

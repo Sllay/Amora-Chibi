@@ -7,7 +7,7 @@ from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 
-from amora.storage.backend import SQLiteBackend, StorageBackend, is_duplicate_error
+from amora.storage.backend import SQLiteBackend, StorageBackend, execute_atomic_statement, is_duplicate_error
 from amora.time import Clock
 
 from .models import SpeechUtterance, TurnDecision, UtteranceStatus
@@ -27,9 +27,11 @@ class ConversationStore:
 
     def put_turn_decision(self, item: TurnDecision) -> bool:
         payload = json.dumps(item.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"))
-        with self._lock, self._conn:
+        with self._lock:
             try:
-                self._conn.execute(
+                execute_atomic_statement(
+                    self.backend,
+                    self._conn,
                     """INSERT INTO conversation_turn_decisions(id, state, score, result_json, created_at, dedupe_key)
                     VALUES (?, ?, ?, ?, ?, ?)""",
                     (str(item.id), item.state.value, item.score, payload, item.created_at.isoformat(), item.dedupe_key),

@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 from amora.events import PrivacyScope
-from amora.storage.backend import SQLiteBackend, StorageBackend, is_duplicate_error
+from amora.storage.backend import SQLiteBackend, StorageBackend, execute_atomic_statement, is_duplicate_error
 from amora.time import Clock
 
 from .models import (
@@ -41,9 +41,11 @@ class EmotionStore:
         return int(row[0]) if row else 0
 
     def put_event(self, event: EmotionEvent) -> bool:
-        with self._lock, self._conn:
+        with self._lock:
             try:
-                self._conn.execute(
+                execute_atomic_statement(
+                    self.backend,
+                    self._conn,
                     """
                     INSERT INTO emotion_events(
                         id, emotion, intensity, cause_event_id, cause_description,
@@ -101,8 +103,10 @@ class EmotionStore:
         )
 
     def put_mood(self, mood: MoodState) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
+        with self._lock:
+            execute_atomic_statement(
+                self.backend,
+                self._conn,
                 """
                 INSERT INTO mood_state(singleton_id, valence, arousal, dominance, updated_at)
                 VALUES (1, ?, ?, ?, ?)
@@ -123,8 +127,10 @@ class EmotionStore:
         return self._hydrate_affect(row)
 
     def put_affect(self, affect: EntityAffect) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
+        with self._lock:
+            execute_atomic_statement(
+                self.backend,
+                self._conn,
                 """
                 INSERT INTO entity_affect(
                     entity_id, anger, affection, trust, irritation, fear, gratitude, updated_at
@@ -150,8 +156,10 @@ class EmotionStore:
         return [self._hydrate_affect(row) for row in rows]
 
     def put_bid(self, bid: SocialBid) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
+        with self._lock:
+            execute_atomic_statement(
+                self.backend,
+                self._conn,
                 """
                 INSERT INTO social_bids(
                     id, bid_type, target_id, strength, reason, source_emotion_event_id,
@@ -183,8 +191,13 @@ class EmotionStore:
         return [self._hydrate_bid(row) for row in rows]
 
     def set_bid_status(self, bid_id: UUID | str, status: SocialBidStatus) -> bool:
-        with self._lock, self._conn:
-            cur = self._conn.execute("UPDATE social_bids SET status = ? WHERE id = ?", (status.value, str(bid_id)))
+        with self._lock:
+            cur = execute_atomic_statement(
+                self.backend,
+                self._conn,
+                "UPDATE social_bids SET status = ? WHERE id = ?",
+                (status.value, str(bid_id)),
+            )
         return cur.rowcount > 0
 
     def _hydrate_event(self, row: sqlite3.Row) -> EmotionEvent:

@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID
 
 from amora.events import PrivacyScope
-from amora.storage.backend import SQLiteBackend, StorageBackend, is_duplicate_error
+from amora.storage.backend import SQLiteBackend, StorageBackend, execute_atomic_statement, is_duplicate_error
 from amora.time import Clock
 
 from .models import CognitiveJournalEntry, ConversationMessage, MessageSource, MessageStatus, SpeechSegment
@@ -53,15 +53,16 @@ class CognitiveStore:
         )
         with self._lock:
             try:
-                with self._conn:
-                    self._conn.execute(
-                        """INSERT INTO conversation_messages(
-                            id, turn_id, speaker_id, addressee_id, source, raw_text, normalized_text, spoken_text,
-                            privacy_scope, remote_processing_allowed, stt_confidence, provider, model, status, interrupted,
-                            source_event_id, session_id, started_at, finished_at, metadata_json, dedupe_key
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        values,
-                    )
+                execute_atomic_statement(
+                    self.backend,
+                    self._conn,
+                    """INSERT INTO conversation_messages(
+                        id, turn_id, speaker_id, addressee_id, source, raw_text, normalized_text, spoken_text,
+                        privacy_scope, remote_processing_allowed, stt_confidence, provider, model, status, interrupted,
+                        source_event_id, session_id, started_at, finished_at, metadata_json, dedupe_key
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    values,
+                )
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise
@@ -134,8 +135,10 @@ class CognitiveStore:
             str(entry.correlation_id) if entry.correlation_id else None, entry.error_code,
             json.dumps(metadata, ensure_ascii=False, separators=(",", ":")), entry.dedupe_key,
         )
-        with self._lock, self._conn:
-            cursor = self._conn.execute(
+        with self._lock:
+            cursor = execute_atomic_statement(
+                self.backend,
+                self._conn,
                 """INSERT INTO cognitive_journal(
                     id, turn_id, stage, timestamp, source, summary, reason_codes_json, payload_json,
                     privacy_scope, provider, model, duration_ms, correlation_id, error_code, metadata_json, dedupe_key
@@ -145,7 +148,7 @@ class CognitiveStore:
             )
             if cursor.rowcount not in {0, 1}:
                 raise sqlite3.DatabaseError("SQL_UNEXPECTED_ROWCOUNT")
-        # Do not report an inserted/no-op result until COMMIT succeeded.
+        # Do not report an inserted/no-op result until the atomic statement succeeded.
         return cursor.rowcount == 1
 
     def journal_for_turn(self, turn_id: UUID | str) -> list[CognitiveJournalEntry]:
@@ -165,20 +168,21 @@ class CognitiveStore:
     def put_segment(self, segment: SpeechSegment) -> bool:
         with self._lock:
             try:
-                with self._conn:
-                    self._conn.execute(
-                        """INSERT INTO speech_segments(
-                            id, turn_id, ordinal, display_text, speech_text, status, tts_provider, voice_id,
-                            queued_at, started_at, finished_at, interrupted, metadata_json
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (
-                            str(segment.id), str(segment.turn_id), segment.ordinal, segment.display_text, segment.speech_text,
-                            segment.status.value, segment.tts_provider, segment.voice_id, segment.queued_at.isoformat(),
-                            segment.started_at.isoformat() if segment.started_at else None,
-                            segment.finished_at.isoformat() if segment.finished_at else None, int(segment.interrupted),
-                            json.dumps(segment.metadata, ensure_ascii=False, separators=(",", ":")),
-                        ),
-                    )
+                execute_atomic_statement(
+                    self.backend,
+                    self._conn,
+                    """INSERT INTO speech_segments(
+                        id, turn_id, ordinal, display_text, speech_text, status, tts_provider, voice_id,
+                        queued_at, started_at, finished_at, interrupted, metadata_json
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        str(segment.id), str(segment.turn_id), segment.ordinal, segment.display_text, segment.speech_text,
+                        segment.status.value, segment.tts_provider, segment.voice_id, segment.queued_at.isoformat(),
+                        segment.started_at.isoformat() if segment.started_at else None,
+                        segment.finished_at.isoformat() if segment.finished_at else None, int(segment.interrupted),
+                        json.dumps(segment.metadata, ensure_ascii=False, separators=(",", ":")),
+                    ),
+                )
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise
@@ -196,8 +200,10 @@ class CognitiveStore:
         now = self.clock.now().isoformat()
         started = now if status == MessageStatus.SPEAKING else None
         finished = now if status in {MessageStatus.SPOKEN, MessageStatus.INTERRUPTED, MessageStatus.FAILED} else None
-        with self._lock, self._conn:
-            cur = self._conn.execute(
+        with self._lock:
+            cur = execute_atomic_statement(
+                self.backend,
+                self._conn,
                 """UPDATE speech_segments SET status=?, interrupted=?,
                    started_at=COALESCE(started_at, ?), finished_at=COALESCE(finished_at, ?)
                    WHERE id=?""",
@@ -221,6 +227,8 @@ class CognitiveStore:
         remaining_tokens: int | None = None,
         metadata: dict[str, object] | None = None,
     ) -> None:
+        # ADR-0020 keeps the usage ledger as a special fail-closed transaction
+        # boundary, including explicit COMMIT ambiguity and recovery semantics.
         with self._lock, self._conn:
             self._conn.execute(
                 """INSERT INTO model_usage(timestamp, provider, model, task_class, success, input_tokens, output_tokens,

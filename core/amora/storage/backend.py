@@ -47,6 +47,30 @@ class StorageBackend(Protocol):
     def backup(self, connection: SQLConnection, destination: Path) -> Path: ...
 
 
+def execute_atomic_statement(
+    backend: StorageBackend,
+    connection: SQLConnection,
+    sql: str,
+    parameters: Iterable[Any] = (),
+) -> QueryResult:
+    """Persist one SQL statement atomically without unnecessary remote tx control.
+
+    libSQL/Hrana executes an individual statement atomically in autocommit mode, so
+    wrapping a one-statement write in BEGIN/COMMIT only adds two network round-trips.
+    Local sqlite3 still needs an explicit connection context so the implicit write
+    transaction is committed. Existing outer transactions remain authoritative.
+
+    This helper is intentionally limited to one statement. Read-modify-write flows,
+    migrations and any multi-statement invariant must keep an explicit transaction.
+    """
+    if backend.capabilities.name == "libsql":
+        return connection.execute(sql, parameters)
+    if bool(getattr(connection, "in_transaction", False)):
+        return connection.execute(sql, parameters)
+    with connection:
+        return connection.execute(sql, parameters)
+
+
 class AtomicSQLiteConnection(sqlite3.Connection):
     def __enter__(self):
         if not self.in_transaction:
