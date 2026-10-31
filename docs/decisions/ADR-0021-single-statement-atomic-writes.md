@@ -62,6 +62,8 @@ Regras:
 - nenhum SQL/argumento é guardado para replay;
 - duplicate/idempotency/rowcount continuam sendo decididos pelo resultado real do statement.
 
+Em autocommit, perda/corrupção da resposta pode ocorrer **depois** de o statement já ter sido duravelmente aplicado. Portanto o cliente não promete rollback após uma resposta inválida: ele falha fechado, nunca reporta sucesso com metadata inválida e nunca faz replay automático. Para writes idempotentes, uma tentativa explícita posterior deve depender da chave/constraint de dedupe no banco, não da confiança na resposta perdida. Essa é a mesma classe de ambiguidade remota protegida pela regra de não replay da ADR-0020, deslocada do `COMMIT` separado para o próprio statement autocommit.
+
 **Exceção deliberada:** `CognitiveStore.record_usage` permanece com `BEGIN/COMMIT` explícitos exatamente como definido na ADR-0020. O usage ledger possui uma fronteira de recovery especial e testes que certificam inclusive falha ambígua em `COMMIT`; esta ADR não reabre esse contrato.
 
 Primeiros consumidores: mensagens/journals/segmentos cognitivos unitários, Event Store e linhas de sessão/dispositivo, decisão de turno e EmotionStore. O usage ledger fica excluído. Operações multi-statement nesses mesmos Stores permanecem inalteradas.
@@ -72,6 +74,8 @@ Esperado no caminho físico: queda forte de `tx<count>/<ms>` sem exigir reduçã
 
 A política não transforma libSQL em eventual/assíncrono, não relaxa durabilidade e não move estado para browser/provider. Também não elimina a necessidade futura de reduzir reads ou consolidar writes quando houver evidência de volume excessivo.
 
+A diferença operacional é que uma resposta inválida de um write autocommit pode coexistir com o write já persistido. O Store deve tratar esse caso como falha/ambiguidade, e dedupe persistente é a proteção contra duplicação numa repetição explícita do mesmo efeito. Para operações que exigem rollback coordenado ou decisão baseada em leitura anterior, continua obrigatório usar transação explícita.
+
 O helper discrimina explicitamente o backend `libsql`; um backend remoto futuro não herda essa otimização automaticamente sem demonstrar contrato equivalente de statement atomic/autocommit.
 
 ## Critério de validação
@@ -81,7 +85,9 @@ CI deve provar:
 - um write unitário libSQL usa um pipeline;
 - SQLite local persiste o statement após fechar/reabrir;
 - helper dentro de transação SQLite externa respeita rollback externo;
-- regressões existentes de recovery, rowcount, dedupe e container permanecem verdes;
+- resposta perdida de journal autocommit produz `OUTCOME_UNKNOWN`, não replay automático, e retry explícito com mesma dedupe não duplica;
+- resposta de rowcount inválida nunca é reportada como sucesso mesmo se o mock tiver aplicado o autocommit;
+- regressões existentes de recovery, dedupe e container permanecem verdes;
 - a suíte da ADR-0020 para `record_usage` e falha em `COMMIT` permanece inalterada e verde.
 
 Validação física deve comparar a mesma telemetria v3. Sucesso primário: `tx` cair materialmente dos 70 pipelines observados, mantendo resposta/estado corretos. Reavaliar se surgirem requisitos de atomicidade entre múltiplos Stores ou backend remoto com semântica diferente.
