@@ -345,12 +345,12 @@ class SecurityMiddleware:
         try:
             if headers.get(b"content-encoding", b"identity") != b"identity":
                 return await respond(415, "content encoding is not supported")
-            maximum = (
-                12 * 1024 * 1024
-                if path == "/v1/audio/transcribe"
-                or path.startswith("/v1/avatar/assets/")
-                else 256 * 1024
-            )
+            if path == "/v1/avatar/bundle":
+                maximum = 128 * 1024 * 1024
+            elif path == "/v1/audio/transcribe" or path.startswith("/v1/avatar/assets/"):
+                maximum = 12 * 1024 * 1024
+            else:
+                maximum = 256 * 1024
             if path == "/v1/pairing/redeem" or self.worker:
                 maximum = 16384
             content_length = headers.get(b"content-length")
