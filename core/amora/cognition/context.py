@@ -250,6 +250,13 @@ class ContextCompiler:
         )
         dialogue_plan = self.dialogue.plan(context)
         context.dialogue_plan = dialogue_plan.model_dump(mode="json")
+        if context.acir is not None:
+            # Normal providers already consume the authoritative local dialogue
+            # plan. Binding the input ACIR here makes canonical speaker/addressee
+            # semantics part of that existing provider contract without creating a
+            # second platform-specific prompt path.
+            context.dialogue_plan["input_acir"] = context.acir
+            context.reason_codes.append("ACIR_BOUND_TO_DIALOGUE_PLAN")
         context.reason_codes.extend(
             code for code in dialogue_plan.reason_codes if code not in context.reason_codes
         )
