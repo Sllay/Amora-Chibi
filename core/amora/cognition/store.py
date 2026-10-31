@@ -227,10 +227,10 @@ class CognitiveStore:
         remaining_tokens: int | None = None,
         metadata: dict[str, object] | None = None,
     ) -> None:
-        with self._lock:
-            execute_atomic_statement(
-                self.backend,
-                self._conn,
+        # ADR-0020 keeps the usage ledger as a special fail-closed transaction
+        # boundary, including explicit COMMIT ambiguity and recovery semantics.
+        with self._lock, self._conn:
+            self._conn.execute(
                 """INSERT INTO model_usage(timestamp, provider, model, task_class, success, input_tokens, output_tokens,
                    latency_ms, status_code, rate_limit_remaining_requests, rate_limit_remaining_tokens, turn_id, metadata_json)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
