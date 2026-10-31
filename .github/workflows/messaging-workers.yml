@@ -35,9 +35,10 @@ jobs:
           node --check workers/whatsapp/worker.mjs
       - name: Adapter contract tests
         run: node --test tests/messaging_workers.test.mjs
-      - name: Resolve exact Baileys release and audit installed tree
+      - name: Resolve exact Baileys release, import worker and audit installed tree
         working-directory: workers/whatsapp
         run: |
           npm install --ignore-scripts --no-fund --no-audit
           node -e "const p=require('./node_modules/@whiskeysockets/baileys/package.json'); if(p.version!=='7.0.0-rc14') throw new Error('unexpected Baileys version '+p.version)"
+          node -e "import('./worker.mjs').then(()=>process.stdout.write('baileys-worker-import-ok\n'))"
           npm audit --omit=dev --audit-level=high
