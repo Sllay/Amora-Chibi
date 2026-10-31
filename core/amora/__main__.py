@@ -57,17 +57,29 @@ def serve(port: int | None = None, host: str | None = None) -> int:
     return 0
 
 
-def issue_pairing_code() -> int:
+def issue_pairing_code(role: str = "web") -> int:
     from amora.settings import RuntimePaths
     from amora.time import SystemClock
     from amora.pairing import PairingManager
 
     paths = RuntimePaths.from_environment()
     paths.ensure()
-    issued = PairingManager(paths.cache / "pairing.json", SystemClock()).issue()
-    print(f"Código de pareamento: {issued.code}")
+    if role == "operator":
+        manager = PairingManager(
+            paths.cache / "operator-pairing.json",
+            SystemClock(),
+            ttl_seconds=180,
+            max_attempts=5,
+        )
+    else:
+        manager = PairingManager(paths.cache / "pairing.json", SystemClock())
+    issued = manager.issue()
+    print(f"Código de pareamento ({role}): {issued.code}")
     print(f"Expira em: {issued.expires_at.isoformat()}")
-    print("Uso único; máximo de 5 tentativas.")
+    if role == "operator":
+        print("Uso único; desbloqueia somente Pessoas/Console no navegador por tempo limitado.")
+    else:
+        print("Uso único; máximo de 5 tentativas.")
     return 0
 
 
@@ -388,7 +400,8 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("doctor", help="Valida fundações locais do Core")
-    sub.add_parser("pair", help="Gera código local de pareamento de uso único")
+    pair_parser = sub.add_parser("pair", help="Gera código local de pareamento de uso único")
+    pair_parser.add_argument("--role", choices=["web", "operator"], default="web")
 
     backup_parser = sub.add_parser("backup", help="Cria backup consistente do SQLite")
     backup_parser.add_argument("--name", default=None)
@@ -485,7 +498,7 @@ def main() -> int:
     if args.command == "doctor":
         return doctor()
     if args.command == "pair":
-        return issue_pairing_code()
+        return issue_pairing_code(args.role)
     if args.command == "backup":
         return backup(args.name)
     if args.command == "serve":
