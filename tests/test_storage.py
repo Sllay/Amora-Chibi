@@ -7,9 +7,9 @@ from amora.storage import AmoraDatabase
 def test_database_migrates_and_deduplicates_event(tmp_path: Path) -> None:
     db = AmoraDatabase(tmp_path / "amora.db")
     try:
-        assert db.migrate() == 11
+        assert db.migrate() == 12
         assert db.migrate() == 0
-        assert db.schema_version() == 11
+        assert db.schema_version() == 12
         event = AmoraEvent(event_type="test", source="pytest", dedupe_key="abc")
         assert db.append_event(event) is True
         duplicate = AmoraEvent(event_type="test", source="pytest", dedupe_key="abc")
@@ -49,6 +49,6 @@ def test_backup_restore_roundtrip(tmp_path: Path) -> None:
     original = AmoraDatabase(tmp_path / "amora.db"); original.migrate(); original.append_event(AmoraEvent(event_type="backup.test", source="pytest")); backup = original.backup_to(tmp_path / "backup.db"); original.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored = AmoraDatabase(restored_path)
     try:
-        assert restored.integrity_check() == "ok"; assert restored.event_count() == 1; assert restored.schema_version() == 11
+        assert restored.integrity_check() == "ok"; assert restored.event_count() == 1; assert restored.schema_version() == 12
     finally:
         restored.close()
