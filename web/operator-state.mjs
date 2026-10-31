@@ -1,5 +1,14 @@
 export const OPERATOR_KEY = 'amora.web.operator.v1';
 
+// Keep the administrative surface modular instead of growing the chat stylesheet.
+if (typeof document !== 'undefined' && !document.querySelector('link[data-amora-operator-style]')) {
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = './operator.css?v=20261031-91';
+  link.dataset.amoraOperatorStyle = '1';
+  document.head.appendChild(link);
+}
+
 function decodePayload(value) {
   const match = /^browser\.v3\.([A-Za-z0-9_-]{1,256})\.[a-f0-9]{64}$/.exec(value || '');
   if (!match) return null;
