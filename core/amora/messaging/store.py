@@ -111,6 +111,40 @@ class MessagingStore:
                 (platform.value, account_scope, conversation_id, message_id),
             )
 
+    def add_inbound_reason(
+        self,
+        *,
+        platform: MessagingPlatform,
+        account_scope: str,
+        conversation_id: str,
+        message_id: str,
+        reason: str,
+    ) -> None:
+        with self.database._lock, self.database._conn:
+            row = self.database._conn.execute(
+                """SELECT reason_codes_json FROM messaging_audit
+                   WHERE platform=? AND account_scope=? AND conversation_id=?
+                     AND message_id=? AND direction='inbound'""",
+                (platform.value, account_scope, conversation_id, message_id),
+            ).fetchone()
+            if row is None:
+                return
+            reasons = list(json.loads(row["reason_codes_json"] or "[]"))
+            if reason not in reasons:
+                reasons.append(reason[:120])
+            self.database._conn.execute(
+                """UPDATE messaging_audit SET reason_codes_json=?
+                   WHERE platform=? AND account_scope=? AND conversation_id=?
+                     AND message_id=? AND direction='inbound'""",
+                (
+                    json.dumps(reasons, ensure_ascii=False, separators=(",", ":")),
+                    platform.value,
+                    account_scope,
+                    conversation_id,
+                    message_id,
+                ),
+            )
+
     def count_audit(self) -> int:
         with self.database._lock:
             row = self.database._conn.execute("SELECT COUNT(*) FROM messaging_audit").fetchone()
