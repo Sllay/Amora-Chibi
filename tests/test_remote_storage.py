@@ -117,7 +117,7 @@ def remote(tmp_path):
 def test_remote_migration_constraints_rollback_and_restart(remote, tmp_path):
     backend, server = remote
     db = AmoraDatabase(tmp_path / "unused.db", backend=backend)
-    assert db.migrate() == 12
+    assert db.migrate() == 13
     assert server.closed_transaction_streams > 0
     assert db.migrate() == 0
     event = AmoraEvent(event_type="probe", source="test", dedupe_key="persistent")
@@ -134,7 +134,7 @@ def test_remote_migration_constraints_rollback_and_restart(remote, tmp_path):
             db._conn.execute("INSERT INTO aliases VALUES ('missing', 'NOT_AN_ENTITY')")
     db.close()
     db = AmoraDatabase(tmp_path / "unused.db", backend=backend)
-    assert db.schema_version() == 12
+    assert db.schema_version() == 13
     assert not db.append_event(event)
     db.close()
     assert not server.streams
@@ -190,7 +190,7 @@ def test_remote_core_memory_web_and_snapshot_with_sql_blobs(
             restore_empty_remote(restored_backend, backup)
         check = AmoraDatabase(tmp_path / "unused-restored.db", backend=restored_backend)
         assert check.integrity_check() == "ok"
-        assert check.schema_version() == 12
+        assert check.schema_version() == 13
         check.close()
         core.close()
         # New compute home, same remote state and service identity.
