@@ -200,6 +200,25 @@ def _rollback_assets(
         raise RuntimeError("avatar bundle import failed and asset rollback was incomplete") from errors[0]
 
 
+def _restore_previous_state(
+    store: AvatarStore,
+    project: AvatarProject,
+    changed: list[str],
+    previous: dict[str, tuple[object, bytes] | None],
+) -> None:
+    errors: list[Exception] = []
+    try:
+        _rollback_assets(store, changed, previous)
+    except Exception as exc:  # pragma: no cover - catastrophic storage recovery path
+        errors.append(exc)
+    try:
+        store.put_project(project)
+    except Exception as exc:  # pragma: no cover - catastrophic storage recovery path
+        errors.append(exc)
+    if errors:
+        raise RuntimeError("avatar bundle import failed and previous state could not be fully restored") from errors[0]
+
+
 def restore_avatar_bundle(store: AvatarStore, body: bytes) -> AvatarBundleImportResult:
     """Validate a complete archive before mutating the active Avatar project."""
     if not body:
@@ -309,6 +328,7 @@ def restore_avatar_bundle(store: AvatarStore, body: bytes) -> AvatarBundleImport
         if set(members) != expected_members:
             raise ValueError("avatar bundle contains unlisted or unexpected files")
 
+    old_project = store.get_project("default")
     previous: dict[str, tuple[object, bytes] | None] = {}
     changed: list[str] = []
     written = 0
@@ -319,18 +339,18 @@ def restore_avatar_bundle(store: AvatarStore, body: bytes) -> AvatarBundleImport
         if old is not None and getattr(old[0], "content_type") == content_type and getattr(old[0], "sha256") == sha256:
             unchanged += 1
             continue
+        changed.append(asset_id)
         try:
             store.put_asset(asset_id, content_type, payload)
         except Exception:
             _rollback_assets(store, changed, previous)
             raise
-        changed.append(asset_id)
         written += 1
 
     try:
         store.put_project(project)
     except Exception:
-        _rollback_assets(store, changed, previous)
+        _restore_previous_state(store, old_project, changed, previous)
         raise
 
     return AvatarBundleImportResult(project=project, assets_written=written, assets_unchanged=unchanged)
