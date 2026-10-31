@@ -153,19 +153,39 @@ class PersonProfileService:
         self.catalog_fingerprint: str | None = None
         self.private_binding_import_count = 0
 
+    @staticmethod
+    def _entity_from_profile(profile: PersonProfileSeed) -> Entity:
+        return Entity(
+            id=profile.entity_id,
+            canonical_name=profile.canonical_name,
+            aliases=set(profile.aliases),
+            entity_type=EntityType.PERSON,
+        )
+
     def apply_catalog(self, catalog: PeopleProfileCatalog, *, fingerprint: str | None = None) -> None:
+        """Apply the versioned file strictly as bootstrap, never as cloud authority.
+
+        Once a profile exists in persistent storage, operator/runtime edits win on
+        later restarts. Likewise the original relationship catalog is only seeded
+        on the first profile bootstrap (or for a newly-added seed profile), so a
+        deliberate operator revision/removal is not resurrected by redeploy.
+        """
         now = self.clock.now()
-        for profile in catalog.profiles:
-            self.identities.upsert_entity(
-                Entity(
-                    id=profile.entity_id,
-                    canonical_name=profile.canonical_name,
-                    aliases=set(profile.aliases),
-                    entity_type=EntityType.PERSON,
-                )
-            )
+        persisted = {profile.entity_id: profile for profile in self.store.list_person_profiles()}
+        first_profile_bootstrap = not persisted
+        newly_seeded: set[str] = set()
+
+        for seed in catalog.profiles:
+            effective = persisted.get(seed.entity_id)
+            if effective is None:
+                effective = seed
+                newly_seeded.add(seed.entity_id)
+            self.identities.upsert_entity(self._entity_from_profile(effective))
 
         for item in catalog.relationships:
+            should_seed = first_profile_bootstrap or item.source in newly_seeded or item.target in newly_seeded
+            if not should_seed:
+                continue
             self.identities.upsert_relationship(
                 Relationship(
                     source=item.source,
@@ -175,28 +195,46 @@ class PersonProfileService:
                 )
             )
 
-        # New profile entities must exist in SQL before person_profiles rows can
-        # satisfy their foreign key. Registry persistence also keeps aliases and
-        # structural relations restart-safe.
         self.persist_registry(self.identities)
-        for profile in catalog.profiles:
-            self.store.upsert_person_profile(profile, source_revision=catalog.revision, updated_at=now)
+        for seed in catalog.profiles:
+            if seed.entity_id in newly_seeded:
+                self.store.upsert_person_profile(
+                    seed,
+                    source_revision=catalog.revision,
+                    updated_at=now,
+                )
 
         self.catalog_revision = catalog.revision
         self.catalog_fingerprint = fingerprint
+
+    def upsert_profile(self, profile: PersonProfileSeed, *, source_revision: str = "operator:web") -> PersonProfileSeed:
+        current = self.identities.get(profile.entity_id)
+        if current is not None and current.entity_type != EntityType.PERSON:
+            raise ValueError("profile entity_id belongs to a non-person entity")
+        self.identities.upsert_entity(self._entity_from_profile(profile))
+        self.persist_registry(self.identities)
+        self.store.upsert_person_profile(
+            profile,
+            source_revision=source_revision,
+            updated_at=self.clock.now(),
+        )
+        return profile
+
+    def upsert_binding(self, binding: PlatformIdentityBinding) -> PlatformIdentityBinding:
+        entity = self.identities.get(binding.entity_id)
+        if entity is None or entity.entity_type != EntityType.PERSON:
+            raise ValueError(f"binding references unknown person: {binding.entity_id}")
+        self.store.upsert_platform_identity_binding(binding, updated_at=self.clock.now())
+        return binding
 
     def import_private_bindings(self, path: Path) -> int:
         if not path.is_file():
             return 0
         raw = path.read_bytes()
         payload = IdentityBindingsFile.model_validate_json(raw)
-        now = self.clock.now()
         imported = 0
         for binding in payload.bindings:
-            entity = self.identities.get(binding.entity_id)
-            if entity is None or entity.entity_type != EntityType.PERSON:
-                raise ValueError(f"binding references unknown person: {binding.entity_id}")
-            self.store.upsert_platform_identity_binding(binding, updated_at=now)
+            self.upsert_binding(binding)
             imported += 1
         self.private_binding_import_count += imported
         return imported
