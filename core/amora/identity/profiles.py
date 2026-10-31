@@ -164,7 +164,6 @@ class PersonProfileService:
                     entity_type=EntityType.PERSON,
                 )
             )
-            self.store.upsert_person_profile(profile, source_revision=catalog.revision, updated_at=now)
 
         for item in catalog.relationships:
             self.identities.upsert_relationship(
@@ -176,7 +175,13 @@ class PersonProfileService:
                 )
             )
 
+        # New profile entities must exist in SQL before person_profiles rows can
+        # satisfy their foreign key. Registry persistence also keeps aliases and
+        # structural relations restart-safe.
         self.persist_registry(self.identities)
+        for profile in catalog.profiles:
+            self.store.upsert_person_profile(profile, source_revision=catalog.revision, updated_at=now)
+
         self.catalog_revision = catalog.revision
         self.catalog_fingerprint = fingerprint
 
@@ -233,9 +238,10 @@ class PersonProfileService:
         )
 
     def state(self) -> dict[str, object]:
-        bindings = sum(len(self.store.platform_bindings_for(profile.entity_id)) for profile in self.profiles())
+        profiles = self.profiles()
+        bindings = sum(len(self.store.platform_bindings_for(profile.entity_id)) for profile in profiles)
         return {
-            "person_profile_count": len(self.profiles()),
+            "person_profile_count": len(profiles),
             "platform_identity_binding_count": bindings,
             "people_profile_revision": self.catalog_revision,
             "people_profile_fingerprint": self.catalog_fingerprint,
