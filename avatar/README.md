@@ -7,7 +7,7 @@ A V0.9 usa o mesmo `engine.js` nos dois modos:
 - **Studio**: edição por touch de parts, pivôs, layers, bones, IK, cores, expressões, physics e timeline;
 - **Runtime**: carrega o mesmo projeto e traduz o estado semântico do Core em animação visual.
 
-O JSON é apenas a serialização automática do projeto. O fluxo normal não exige editar coordenadas ou hierarchy manualmente.
+O JSON continua sendo a serialização interna do projeto, mas o backup portátil do Studio é um **ZIP autossuficiente**. O fluxo normal não exige editar coordenadas ou hierarchy manualmente.
 
 ## Abrir no A15
 
@@ -159,7 +159,36 @@ Assets ficam no runtime local:
 ~/.amora/avatar/assets/
 ```
 
-## Backup
+## Backup portátil do Studio
+
+`Exportar ZIP` gera um único arquivo transportável:
+
+```text
+amora_avatar.zip
+├── manifest.json
+├── project.json
+└── assets/
+    ├── <asset>.png
+    ├── <asset>.webp
+    └── ...
+```
+
+`project.json` contém todo o modelo não-binário atual: canvas, color slots, parts, transforms, pivôs, sockets/attachments, bones, IK, physics, expressões, animações e metadata.
+
+`manifest.json` versiona o formato e registra projeto/assets com tamanho e SHA-256. O import valida o ZIP inteiro antes de substituir o modelo ativo e recusa arquivo faltando, corrompido, caminho inseguro, conteúdo inesperado ou metadado incompatível.
+
+A interface exporta somente ZIP. `Importar ZIP/JSON` mantém leitura de JSON legado para projetos antigos já exportados, mas JSON legado não consegue recriar texturas que não existam mais no storage.
+
+Endpoints autenticados usados pelo Studio:
+
+```text
+GET /v1/avatar/bundle
+PUT /v1/avatar/bundle
+```
+
+O bundle portátil é diferente do backup operacional do banco: ele existe para levar/restaurar **um Avatar completo** entre instâncias, enquanto o backup do Core preserva o estado persistente inteiro da Amora.
+
+## Backup operacional do Core
 
 A partir da V0.9:
 
@@ -174,7 +203,7 @@ checkpoint.db
 checkpoint.db.avatar.zip
 ```
 
-O sidecar contém os assets binários e é validado por tamanho + SHA-256 contra o snapshot SQLite.
+Esse sidecar é vinculado ao snapshot SQLite e contém os assets binários, validados por tamanho + SHA-256 contra o banco. Ele continua existindo para disaster recovery do Core e não substitui o bundle portátil do Studio.
 
 ## Testes locais do engine
 
