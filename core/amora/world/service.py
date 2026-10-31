@@ -30,6 +30,26 @@ class WorldModelService:
     def __init__(self, store: WorldStore, clock: Clock) -> None:
         self.store = store
         self.clock = clock
+        self._claim_observers: list[Callable[[WorldClaim], object]] = []
+        self._claim_observer_error_count = 0
+        self._last_claim_observer_error: str | None = None
+
+    def subscribe_claim_observer(self, observer: Callable[[WorldClaim], object]) -> None:
+        """Observe persisted claims without making observers part of write atomicity.
+
+        World state is authoritative and is committed first. Derived learners may
+        react afterwards, but an observer bug must never turn a valid world write
+        into a provider/reflection failure or roll back the canonical claim.
+        """
+        if observer not in self._claim_observers:
+            self._claim_observers.append(observer)
+
+    def claim_observer_state(self) -> dict[str, object]:
+        return {
+            "observer_count": len(self._claim_observers),
+            "error_count": self._claim_observer_error_count,
+            "last_error": self._last_claim_observer_error,
+        }
 
     def record(self, draft: WorldClaimDraft) -> WorldWriteResult:
         if draft.privacy_scope == PrivacyScope.AUTH:
@@ -92,6 +112,14 @@ class WorldModelService:
             metadata=draft.metadata,
         )
         self.store.put_claim(claim)
+
+        for observer in tuple(self._claim_observers):
+            try:
+                observer(claim)
+            except Exception as exc:
+                self._claim_observer_error_count += 1
+                self._last_claim_observer_error = f"{type(exc).__name__}: {exc}"
+
         return WorldWriteResult(
             claim=claim,
             reason_codes=reasons,
@@ -229,9 +257,46 @@ class RelationshipEvolutionService:
         self.persist_registry = persist_registry
 
     def seed_registry_relationships(self) -> None:
+        """Synchronize the temporal relationship store and runtime registry.
+
+        The temporal WorldStore is the durable history. On bootstrap, active
+        learned revisions are restored into the in-memory EntityRegistry first;
+        bootstrap/static registry edges are then seeded into WorldStore only when
+        the temporal store does not already own that edge.
+        """
         now = self.clock.now()
-        for relation in self.identities.relationships:
-            if self.store.current_relationship(relation.source, relation.relation_type, relation.target, at=now) is None:
+        restored = False
+        active_keys: set[tuple[str, str, str]] = set()
+
+        for entity in self.identities.entities:
+            for relation in self.store.relationship_history(entity.id):
+                if relation.valid_from > now:
+                    continue
+                if relation.valid_until is not None and relation.valid_until <= now:
+                    continue
+                key = (relation.source_id, relation.relation_type, relation.target_id)
+                if key in active_keys:
+                    continue
+                active_keys.add(key)
+                if self.identities.get(relation.source_id) is None or self.identities.get(relation.target_id) is None:
+                    continue
+                current = self.identities.relationship(*key)
+                if current is None or current.confidence != relation.confidence:
+                    self.identities.upsert_relationship(
+                        Relationship(
+                            source=relation.source_id,
+                            relation_type=relation.relation_type,
+                            target=relation.target_id,
+                            confidence=relation.confidence,
+                        )
+                    )
+                    restored = True
+
+        for relation in tuple(self.identities.relationships):
+            key = (relation.source, relation.relation_type, relation.target)
+            if key in active_keys:
+                continue
+            if self.store.current_relationship(*key, at=now) is None:
                 self.store.put_relationship(
                     RelationshipState(
                         source_id=relation.source,
@@ -243,6 +308,10 @@ class RelationshipEvolutionService:
                         created_at=now,
                     )
                 )
+                active_keys.add(key)
+
+        if restored and self.persist_registry is not None:
+            self.persist_registry(self.identities)
 
     def record(
         self,

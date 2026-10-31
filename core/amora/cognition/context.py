@@ -11,6 +11,8 @@ from amora.memory import MemoryQuery, MemoryService
 from amora.social import SocialSceneTracker
 from amora.time import Clock
 from amora.world import SelfModelService, WorldModelService
+from amora.world.relationship_learning import RelationshipLearningService
+from amora.world.service import RelationshipEvolutionService
 
 from .dialogue import DialogueOrchestrator
 from .models import CognitiveContext, CognitiveRequest, ContextMemory
@@ -80,6 +82,18 @@ class ContextCompiler:
         # compiler is stateless; sharing the canonical EntityRegistry keeps it in
         # lockstep with core.perspective/core.acir without platform-specific wiring.
         self.acir = ACIRCompiler(PerspectiveResolver(identities))
+
+        # Relationship learning is a derived local observer of already-gated
+        # WorldModel hypotheses. It never consumes provider text directly and it
+        # never owns affect/trust; those remain EmotionEngine state.
+        self.relationship_learning = RelationshipLearningService(
+            world=world,
+            relationships=RelationshipEvolutionService(world.store, clock, identities),
+            identities=identities,
+            cognitive_store=store,
+            clock=clock,
+        )
+        world.subscribe_claim_observer(self.relationship_learning.observe_claim)
 
     def compile(self, request: CognitiveRequest, *, token_budget: int = 3200) -> CognitiveContext:
         remote = self.privacy_gate.remote_allowed(request)
