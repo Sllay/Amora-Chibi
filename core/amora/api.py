@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import os
 from contextlib import asynccontextmanager
 import logging
 import sys
@@ -29,6 +30,7 @@ from amora.identity import PrivacyContext
 from amora.identity.admin_routes import register_people_admin_routes
 from amora.language import PerspectiveFrame, PerspectiveStack
 from amora.memory.routes import register_memory_routes
+from amora.messaging.routes import register_messaging_routes
 from amora.operator_auth import issue_operator_token, operator_token_role
 from amora.pairing import PairingManager
 from amora.server_console import ServerConsole
@@ -129,8 +131,18 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             raise RuntimeError("LOCAL_API_TOKEN is missing")
         return value
 
+    messaging_service_token = os.getenv("AMORA_MESSAGING_SERVICE_TOKEN", "").strip()
+    voice_service_token = os.getenv("AMORA_VOICE_SERVICE_TOKEN", "").strip()
+    if messaging_service_token:
+        if token_equal(messaging_service_token, expected_token()):
+            raise ValueError("messaging service token must differ from the Core admin token")
+        if voice_service_token and token_equal(messaging_service_token, voice_service_token):
+            raise ValueError("messaging and voice service tokens must be distinct")
+        if settings.cloud and len(messaging_service_token.encode()) < 32:
+            raise ValueError("cloud messaging service token must contain at least 32 bytes")
+
     def require_auth(request: Request, authorization: str | None = Header(default=None)) -> None:
-        if getattr(request.state, "security_role", None) in {"admin", "web", "avatar", "operator"}:
+        if getattr(request.state, "security_role", None) in {"admin", "web", "avatar", "operator", "messaging"}:
             return
         prefix = "Bearer "
         if authorization is None or not authorization.startswith(prefix):
@@ -196,6 +208,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
     register_cognition_routes(app, core, require_auth)
     register_avatar_routes(app, core, require_auth)
     register_people_admin_routes(app, core, require_auth)
+    register_messaging_routes(app, core, require_auth)
 
     @app.get("/health")
     def health() -> dict[str, object]:
@@ -496,6 +509,8 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         path = scope["path"]
         method = scope["method"]
         import re
+        if role == "messaging":
+            return path.startswith("/v1/messaging/worker/") and method in {"GET", "POST"}
         if role == "operator":
             if path == "/v1/operations/state":
                 return method == "GET"
@@ -540,14 +555,19 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
     async def unexpected_error(request, exc):
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
+    def authenticate(supplied: str):
+        if messaging_service_token and token_equal(supplied, messaging_service_token):
+            return "messaging"
+        return (
+            operator_token_role(supplied, expected_token(), core.clock)
+            or token_role(supplied, expected_token(), core.clock)
+        )
+
     app.add_middleware(
         SecurityMiddleware,
         settings=settings,
         clock=core.clock,
-        authenticate=lambda supplied: (
-            operator_token_role(supplied, expected_token(), core.clock)
-            or token_role(supplied, expected_token(), core.clock)
-        ),
+        authenticate=authenticate,
         web_access=browser_access,
     )
     return app
