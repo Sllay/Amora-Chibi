@@ -8,9 +8,17 @@ from typing import Any
 from uuid import UUID
 
 from amora.events import AmoraEvent, PrivacyScope
+from amora.language import PerspectiveFrame, PerspectiveStack, ReferenceInput, SemanticDraft
 from amora.memory import MemoryCandidate, MemoryProvenance, ProvenanceKind
 from amora.models import TaskClass
-from amora.world import EpistemicKind, EvidenceKind, EvidenceRef, WorldClaimDraft
+from amora.world import (
+    EpistemicKind,
+    EvidenceKind,
+    EvidenceRef,
+    PerspectiveClaimDraft,
+    PerspectiveConsolidationStatus,
+    PerspectiveConsolidator,
+)
 
 from .models import CognitiveJournalEntry, CognitiveRequest, CognitiveResponsePlan, JournalStage, MessageStatus, SpeechSegment
 from .proposals import CognitiveProposalBundle
@@ -80,10 +88,11 @@ class CognitiveEngine(BaseCognitiveEngine):
     async def reflect(self, request: CognitiveRequest) -> CognitiveProposalBundle:
         """Ask a provider for bounded proposals, then apply local gates.
 
-        Memory candidates pass through MemoryWriteGate. Belief-like output is
-        stored only as noncanonical HYPOTHESIS with TTL. Action suggestions are
-        validated and emitted as deferred candidates; they are never executed by
-        the model or promoted directly into a BDI intention.
+        Memory candidates pass through MemoryWriteGate. Belief-like output must
+        pass the local ACIR/PerspectiveConsolidator boundary and is stored only as
+        noncanonical HYPOTHESIS with TTL. Action suggestions are validated and
+        emitted as deferred candidates; they are never executed by the model or
+        promoted directly into a BDI intention.
         """
         reflection_request = request.model_copy(
             update={"metadata": {**request.metadata, "cognitive_mode": "reflection"}}
@@ -195,10 +204,52 @@ class CognitiveEngine(BaseCognitiveEngine):
             if result.memory is not None:
                 bundle.accepted_memory_ids.append(str(result.memory.id))
 
+        perspective_consolidator = PerspectiveConsolidator(self.compiler.world)
+        input_entities = set(context.acir.get("entities", [])) if context.acir is not None else set()
+        deferred_hypothesis_count = 0
         for proposal in bundle.belief_hypotheses:
             subject_id = proposal.subject_id
-            if subject_id is not None and self.compiler.identities.get(subject_id) is None:
-                subject_id = None
+            if context.acir is None:
+                deferred_hypothesis_count += 1
+                self._append_reason(bundle, "PERSPECTIVE_HYPOTHESIS_DEFERRED_NO_INPUT_ACIR")
+                continue
+            if subject_id is None or self.compiler.identities.get(subject_id) is None:
+                deferred_hypothesis_count += 1
+                self._append_reason(bundle, "PERSPECTIVE_HYPOTHESIS_DEFERRED_SUBJECT")
+                continue
+            if subject_id not in input_entities:
+                deferred_hypothesis_count += 1
+                self._append_reason(bundle, "PERSPECTIVE_HYPOTHESIS_OUTSIDE_INPUT_ACIR")
+                continue
+
+            roles: dict[str, Any] = {
+                "subject": ReferenceInput(expression=self._perspective_expression(subject_id, request)),
+            }
+            object_value = proposal.object_value
+            if isinstance(object_value, str) and self.compiler.identities.get(object_value) is not None:
+                if object_value not in input_entities:
+                    deferred_hypothesis_count += 1
+                    self._append_reason(bundle, "PERSPECTIVE_OBJECT_OUTSIDE_INPUT_ACIR")
+                    continue
+                roles["object"] = ReferenceInput(
+                    expression=self._perspective_expression(object_value, request)
+                )
+            else:
+                roles["object"] = object_value
+
+            semantic_acir = self.compiler.acir.compile(
+                SemanticDraft(
+                    intent="infer",
+                    proposition_type="belief_hypothesis",
+                    roles=roles,
+                ),
+                PerspectiveStack(
+                    PerspectiveFrame(
+                        speaker_id=request.speaker_id,
+                        addressee_id=request.target_id,
+                    )
+                ),
+            )
             evidence = []
             if request.source_event_id is not None:
                 evidence.append(
@@ -209,24 +260,35 @@ class CognitiveEngine(BaseCognitiveEngine):
                         note="provider hypothesis derived from observed turn",
                     )
                 )
-            result = self.compiler.world.record(
-                WorldClaimDraft(
+            result = perspective_consolidator.consolidate(
+                semantic_acir,
+                PerspectiveClaimDraft(
                     kind=EpistemicKind.HYPOTHESIS,
                     statement=proposal.statement,
-                    subject_id=subject_id,
                     predicate=proposal.predicate,
-                    object_value=proposal.object_value,
+                    confidence=min(0.89, proposal.confidence),
                     context_key=proposal.context_key,
                     source=f"cognition:{descriptor.name}",
                     source_entity_id="ENTITY_AMORA",
-                    confidence=min(0.89, proposal.confidence),
                     evidence=evidence,
                     privacy_scope=request.privacy_scope,
                     remote_processing_allowed=False,
-                    metadata={"provider": descriptor.name, "model": descriptor.model, "turn_id": str(request.turn_id)},
-                )
+                    metadata={
+                        "provider": descriptor.name,
+                        "model": descriptor.model,
+                        "turn_id": str(request.turn_id),
+                        "input_acir_entities": sorted(input_entities),
+                    },
+                ),
             )
-            bundle.hypothesis_ids.append(str(result.claim.id))
+            if result.status == PerspectiveConsolidationStatus.CONSOLIDATED and result.claim is not None:
+                bundle.hypothesis_ids.append(str(result.claim.id))
+                self._append_reason(bundle, "PERSPECTIVE_HYPOTHESIS_CONSOLIDATED")
+            else:
+                deferred_hypothesis_count += 1
+                self._append_reason(bundle, "PERSPECTIVE_HYPOTHESIS_DEFERRED")
+                for reason in result.reason_codes:
+                    self._append_reason(bundle, reason)
 
         for suggestion in bundle.action_suggestions:
             target_id = suggestion.target_id
@@ -274,17 +336,36 @@ class CognitiveEngine(BaseCognitiveEngine):
             reflection_request,
             JournalStage.PROPOSALS_GATED,
             summary="structured cognitive proposals passed through local gates",
-            reason_codes=["MEMORY_WRITE_GATE", "WORLD_HYPOTHESIS_ONLY", "ACTIONS_NOT_AUTO_EXECUTED"],
+            reason_codes=[
+                "MEMORY_WRITE_GATE",
+                "PERSPECTIVE_CONSOLIDATION_GATE",
+                "WORLD_HYPOTHESIS_ONLY",
+                "ACTIONS_NOT_AUTO_EXECUTED",
+            ],
             provider=descriptor.name,
             model=descriptor.model,
             duration_ms=elapsed,
             payload={
                 "accepted_memory_ids": bundle.accepted_memory_ids,
                 "hypothesis_ids": bundle.hypothesis_ids,
+                "deferred_hypothesis_count": deferred_hypothesis_count,
                 "deferred_action_count": bundle.deferred_action_count,
             },
         )
         return bundle
+
+    @staticmethod
+    def _perspective_expression(entity_id: str, request: CognitiveRequest) -> str:
+        if entity_id == request.speaker_id:
+            return "eu"
+        if request.target_id is not None and entity_id == request.target_id:
+            return "você"
+        return entity_id
+
+    @staticmethod
+    def _append_reason(bundle: CognitiveProposalBundle, reason: str) -> None:
+        if reason not in bundle.reason_codes:
+            bundle.reason_codes.append(reason)
 
     async def _emit_segment(
         self,
