@@ -58,6 +58,7 @@ Superseded by: ADR-NNNN / none
 
 ## Índice
 
+- `ADR-0025-corroborated-local-relationship-learning.md` — Relationship Graph aprende apenas após corroboração local de eventos independentes; provider nunca ganha autoridade direta sobre identidade social.
 - `ADR-0024-portable-avatar-bundle.md` — bundle portátil v1 do Avatar com projeto + assets + manifest/hashes; distinto do backup operacional do Core.
 - `ADR-0023-fish-voice-stability-and-first-audio-telemetry.md` — sampling Fish mais consistente, tags expressivas bounded, payload stream/WAV unificado e telemetria de primeiro áudio.
 - `ADR-0022-turn-level-fish-pcm-streaming-and-expression-tags.md` — Safari entrega um fluxo PCM por turno cognitivo; Fish toca enquanto sintetiza; emoção/cues do Core viram tags bounded do renderer.
