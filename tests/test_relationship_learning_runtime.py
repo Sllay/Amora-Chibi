@@ -14,19 +14,21 @@ def _clock() -> SimulatedClock:
 def _record_relationship_hypothesis(
     core: AmoraCore,
     *,
-    event_id=None,
+    source_event_id=None,
+    evidence_event_id=None,
     metadata: dict[str, object] | None = None,
     predicate: str = "child_of",
     subject_id: str = "ENTITY_AMORA",
     object_value: str = "PERSON_BK",
     confidence: float = 0.84,
 ):
-    source_event_id = event_id or uuid4()
+    observed_event_id = source_event_id or uuid4()
+    evidence_id = evidence_event_id or observed_event_id
     request = CognitiveRequest(
         text="evidência relacional observada",
         speaker_id="PERSON_BK",
         target_id="ENTITY_AMORA",
-        source_event_id=source_event_id,
+        source_event_id=observed_event_id,
         metadata=dict(metadata or {}),
     )
     core.cognition.observe_input(request)
@@ -43,7 +45,7 @@ def _record_relationship_hypothesis(
             evidence=[
                 EvidenceRef(
                     kind=EvidenceKind.EVENT,
-                    ref_id=str(source_event_id),
+                    ref_id=str(evidence_id),
                     confidence=confidence,
                     note="independent observed turn",
                 )
@@ -82,9 +84,9 @@ def test_duplicate_event_does_not_count_as_independent_corroboration(tmp_path, m
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=_clock())
     try:
-        same_event = uuid4()
-        _record_relationship_hypothesis(core, event_id=same_event)
-        _record_relationship_hypothesis(core, event_id=same_event)
+        same_evidence = uuid4()
+        _record_relationship_hypothesis(core, evidence_event_id=same_evidence)
+        _record_relationship_hypothesis(core, evidence_event_id=same_evidence)
 
         assert core.identities.relationship("ENTITY_AMORA", "child_of", "PERSON_BK") is None
         state = core.cognition.compiler.relationship_learning.state()
