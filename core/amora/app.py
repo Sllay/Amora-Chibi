@@ -194,6 +194,7 @@ class AmoraCore:
                 autonomy=autonomy,
                 social=social,
                 store=cognitive_store,
+                family_authority_ids=profiles.family_authorities(),
             ),
             models,
             active_clock,
