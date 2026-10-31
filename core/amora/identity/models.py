@@ -53,6 +53,25 @@ class EntityRegistry:
         for alias in normalized:
             self._aliases[alias] = entity.id
 
+    def upsert_entity(self, entity: Entity) -> None:
+        """Synchronize an operator-owned entity without stealing another alias."""
+        all_aliases = set(entity.aliases) | {entity.canonical_name}
+        normalized = {normalize_alias(alias) for alias in all_aliases}
+        conflicts = {
+            alias: self._aliases[alias]
+            for alias in normalized
+            if alias in self._aliases and self._aliases[alias] != entity.id
+        }
+        if conflicts:
+            raise ValueError(f"alias conflict: {conflicts}")
+
+        for alias, owner in tuple(self._aliases.items()):
+            if owner == entity.id:
+                self._aliases.pop(alias, None)
+        self._entities[entity.id] = entity
+        for alias in normalized:
+            self._aliases[alias] = entity.id
+
     def add_relationship(self, relationship: Relationship) -> None:
         if relationship.source not in self._entities or relationship.target not in self._entities:
             raise ValueError("relationship endpoints must exist in registry")
