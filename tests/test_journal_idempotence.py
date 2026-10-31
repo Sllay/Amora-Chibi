@@ -30,15 +30,23 @@ def journal(request, tmp_path):
             if result["type"] == "error":
                 # Model a server that never reveals a usable constraint message.
                 result["error"]["message"] = "opaque server diagnostic"
-        is_journal = any(
-            "INSERT INTO cognitive_journal" in op.get("stmt", {}).get("sql", "")
-            for op in body["requests"]
-        )
+        journal_indexes = [
+            index
+            for index, op in enumerate(body["requests"])
+            if "INSERT INTO cognitive_journal" in op.get("stmt", {}).get("sql", "")
+        ]
+        is_journal = bool(journal_indexes)
         if is_journal and "rowcount" in faults:
-            payload["results"][0]["response"]["result"]["affected_row_count"] = faults[
-                "rowcount"
-            ]
+            for index in journal_indexes:
+                payload["results"][index]["response"]["result"]["affected_row_count"] = faults[
+                    "rowcount"
+                ]
         replies.append((body, payload))
+        if faults.get("journal_response") and is_journal:
+            # The server already executed the autocommit statement. Losing this
+            # response makes the outcome ambiguous; the client must never replay it.
+            faults["journal_response"] = False
+            raise httpx.ReadTimeout("journal response lost", request=req)
         if faults.get("commit") and any(
             op.get("stmt", {}).get("sql") == "COMMIT" for op in body["requests"]
         ):
@@ -78,6 +86,13 @@ def entry(**updates):
     return item.model_copy(update=updates)
 
 
+def _statement_result(body, reply, needle: str):
+    for index, op in enumerate(body["requests"]):
+        if needle in op.get("stmt", {}).get("sql", ""):
+            return reply["results"][index]
+    raise AssertionError(f"statement not found: {needle}")
+
+
 def test_new_insert_and_same_dedupe_have_exact_boolean_results(journal):
     store, server, replies, _ = journal
     first = entry()
@@ -88,7 +103,7 @@ def test_new_insert_and_same_dedupe_have_exact_boolean_results(journal):
     assert store.put_journal(entry(dedupe_key=None)) is True
     if store.backend.capabilities.remote:
         results = [
-            reply["results"][0]["response"]["result"]["affected_row_count"]
+            _statement_result(body, reply, "INSERT INTO cognitive_journal")["response"]["result"]["affected_row_count"]
             for body, reply in replies
             if any(
                 "INSERT INTO cognitive_journal" in op.get("stmt", {}).get("sql", "")
@@ -101,7 +116,7 @@ def test_new_insert_and_same_dedupe_have_exact_boolean_results(journal):
             for _, reply in replies
             for result in reply["results"]
         )
-        assert server.closed_transaction_streams >= 4
+        assert not server.streams
 
 
 def test_unexpected_primary_key_conflict_is_not_a_dedupe(journal):
@@ -145,20 +160,28 @@ def test_other_schema_constraints_are_not_swallowed(journal, constraint):
 
 
 @pytest.mark.parametrize("journal", ["hrana"], indirect=True)
-def test_journal_commit_unknown_is_not_retried_or_reported_success(journal):
-    store, _, replies, faults = journal
-    faults["commit"] = True
+def test_journal_autocommit_response_unknown_is_not_retried_or_reported_success(journal):
+    store, server, replies, faults = journal
+    faults["journal_response"] = True
     with pytest.raises(
         StorageUnavailable, match="^SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN$"
     ):
         store.put_journal(entry())
-    commits = [
+    inserts = [
         body
         for body, _ in replies
-        if any(op.get("stmt", {}).get("sql") == "COMMIT" for op in body["requests"])
+        if any(
+            "INSERT INTO cognitive_journal" in op.get("stmt", {}).get("sql", "")
+            for op in body["requests"]
+        )
     ]
-    assert len(commits) == 1
+    assert len(inserts) == 1
+    assert server.count_sql("INSERT INTO cognitive_journal") == 1
     assert store._conn._broken
+    # A later independent read may recover the connection, but must not replay
+    # the ambiguous write. The mock server executed it before the response loss.
+    assert store.journal_count() == 1
+    assert server.count_sql("INSERT INTO cognitive_journal") == 1
 
 
 @pytest.mark.parametrize("journal", ["hrana"], indirect=True)
