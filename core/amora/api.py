@@ -26,8 +26,11 @@ from amora.conversation.routes import register_conversation_routes
 from amora.emotion.routes import register_emotion_routes
 from amora.events import AmoraEvent, PrivacyScope
 from amora.identity import PrivacyContext
+from amora.identity.admin_routes import register_people_admin_routes
 from amora.language import PerspectiveFrame, PerspectiveStack
 from amora.memory.routes import register_memory_routes
+from amora.operator_auth import issue_operator_token, operator_token_role
+from amora.pairing import PairingManager
 from amora.server_console import ServerConsole
 from amora.time import SchedulerRuntime
 from amora.world.routes import register_world_routes
@@ -43,7 +46,7 @@ class SessionCreateRequest(BaseModel):
 
 class PairingRedeemRequest(BaseModel):
     code: str = Field(pattern=r"^[0-9]{6}$")
-    client: Literal["web", "avatar"] = "web"
+    client: Literal["web", "avatar", "operator"] = "web"
 
 
 class AddresseeInferRequest(BaseModel):
@@ -113,6 +116,12 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
     app.state.accepting = True
     app.state.server_console = None
     app.state.voice_backend = voice
+    operator_pairing = PairingManager(
+        core.paths.cache / "operator-pairing.json",
+        core.clock,
+        ttl_seconds=180,
+        max_attempts=5,
+    )
 
     def expected_token() -> str:
         value = core.secrets.get("LOCAL_API_TOKEN")
@@ -121,7 +130,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         return value
 
     def require_auth(request: Request, authorization: str | None = Header(default=None)) -> None:
-        if getattr(request.state, "security_role", None) in {"admin", "web", "avatar"}:
+        if getattr(request.state, "security_role", None) in {"admin", "web", "avatar", "operator"}:
             return
         prefix = "Bearer "
         if authorization is None or not authorization.startswith(prefix):
@@ -186,6 +195,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
     register_conversation_routes(app, core, require_auth)
     register_cognition_routes(app, core, require_auth)
     register_avatar_routes(app, core, require_auth)
+    register_people_admin_routes(app, core, require_auth)
 
     @app.get("/health")
     def health() -> dict[str, object]:
@@ -216,9 +226,14 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
 
     @app.post("/v1/pairing/redeem")
     def redeem_pairing(request: PairingRedeemRequest) -> dict[str, str]:
-        if not core.pairing.redeem(request.code):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired pairing code")
-        token = issue_browser_token(expected_token(), core.clock, request.client) if settings.cloud or request.client == "web" else expected_token()
+        if request.client == "operator":
+            if not operator_pairing.redeem(request.code):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired operator pairing code")
+            token = issue_operator_token(expected_token(), core.clock)
+        else:
+            if not core.pairing.redeem(request.code):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired pairing code")
+            token = issue_browser_token(expected_token(), core.clock, request.client) if settings.cloud or request.client == "web" else expected_token()
         return {"token": token, "token_type": "Bearer"}
 
     @app.get("/v1/state", dependencies=[Depends(require_auth)])
@@ -481,6 +496,10 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         path = scope["path"]
         method = scope["method"]
         import re
+        if role == "operator":
+            if path == "/v1/operations/state":
+                return method == "GET"
+            return path.startswith("/v1/operator/") and method in {"GET", "POST", "PUT", "DELETE"}
         if role == "avatar":
             fixed = {
                 "/v1/avatar/state": {"GET"},
@@ -521,7 +540,14 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
     async def unexpected_error(request, exc):
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
-    app.add_middleware(SecurityMiddleware, settings=settings, clock=core.clock,
-                       authenticate=lambda supplied: token_role(supplied, expected_token(), core.clock),
-                       web_access=browser_access)
+    app.add_middleware(
+        SecurityMiddleware,
+        settings=settings,
+        clock=core.clock,
+        authenticate=lambda supplied: (
+            operator_token_role(supplied, expected_token(), core.clock)
+            or token_role(supplied, expected_token(), core.clock)
+        ),
+        web_access=browser_access,
+    )
     return app
