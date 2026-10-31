@@ -32,6 +32,12 @@ from amora.identity import (
 )
 from amora.language import ACIRCompiler, LanguageSocialPipeline, PerspectiveResolver
 from amora.memory import MemoryService, MemoryStore
+from amora.messaging import (
+    MessagingStore,
+    PlatformMessagingService,
+    PlatformPresenceController,
+    SocialAttentionRouter,
+)
 from amora.models import ModelRouter
 from amora.observability import configure_logging
 from amora.operations import OperationMonitor
@@ -41,7 +47,7 @@ from amora.settings import RuntimePaths, ServerSettings
 from amora.social import AddresseeEngine, SocialSceneTracker
 from amora.storage import AmoraDatabase
 from amora.storage.backend import StorageBackend, BootstrapBackend, backend_from_environment
-from amora.storage.migrations_v102 import LATEST_SCHEMA_VERSION
+from amora.storage.migrations_v103 import LATEST_SCHEMA_VERSION
 from amora.time import Clock, Scheduler, SystemClock
 from amora.world import (
     PerspectiveConsolidator,
@@ -79,6 +85,9 @@ class AmoraCore:
     autonomy: AutonomyEngine
     cognition: CognitiveEngine
     conversation: ConversationEngine
+    messaging_store: MessagingStore
+    platform_presence: PlatformPresenceController
+    messaging: PlatformMessagingService
     actions: ActionEngine
     avatar: AvatarEngine
     models: ModelRouter
@@ -114,6 +123,7 @@ class AmoraCore:
         from amora.observability import remember_secret
         remember_secret(os.getenv("AMORA_VOICE_SERVICE_TOKEN"))
         remember_secret(os.getenv("AMORA_SECRET_LIBSQL_AUTH_TOKEN"))
+        remember_secret(os.getenv("AMORA_MESSAGING_SERVICE_TOKEN"))
         secrets = SecretStore(paths.secrets)
         secrets.ensure_token("LOCAL_API_TOKEN")
         database = AmoraDatabase(paths.database, backend=storage)
@@ -232,6 +242,15 @@ class AmoraCore:
             events,
             cognition=cognition,
         )
+        messaging_store = MessagingStore(database, active_clock)
+        platform_presence = PlatformPresenceController(messaging_store, active_clock)
+        messaging = PlatformMessagingService(
+            store=messaging_store,
+            attention=SocialAttentionRouter(profiles=profiles, clock=active_clock),
+            cognition=cognition,
+            conversation=conversation,
+            clock=active_clock,
+        )
         avatar = AvatarEngine(
             AvatarStore(paths.database, paths.avatar_assets, active_clock, backend=storage),
             active_clock,
@@ -272,6 +291,9 @@ class AmoraCore:
             autonomy=autonomy,
             cognition=cognition,
             conversation=conversation,
+            messaging_store=messaging_store,
+            platform_presence=platform_presence,
+            messaging=messaging,
             actions=actions,
             avatar=avatar,
             models=models,
@@ -341,6 +363,8 @@ class AmoraCore:
             "dialogue_provider": conversation["dialogue_provider"],
             "cognition_enabled": conversation["cognition_enabled"],
             **self.profiles.state(),
+            **self.messaging.state(),
+            **self.platform_presence.state(),
             **cognition,
             **avatar,
             "entity_count": len(self.identities.entities),
