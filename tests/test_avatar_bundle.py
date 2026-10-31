@@ -236,7 +236,12 @@ def test_avatar_studio_exposes_zip_backup_controls(tmp_path: Path, monkeypatch) 
         assert studio.status_code == 200
         assert "Exportar ZIP" in studio.text
         assert "Importar ZIP/JSON" in studio.text
-        assert "/v1/avatar/bundle" in studio.text
+        assert 'src="./bundle-ui.js"' in studio.text
         assert 'accept="application/zip,application/x-zip-compressed,.zip,application/json,.json"' in studio.text
+
+        bundle_ui = client.get("/avatar/bundle-ui.js")
+        assert bundle_ui.status_code == 200
+        assert "/v1/avatar/bundle" in bundle_ui.text
+        assert "amora_avatar.zip" in bundle_ui.text
     finally:
         core.close()
