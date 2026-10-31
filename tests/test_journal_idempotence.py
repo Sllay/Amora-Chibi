@@ -93,6 +93,17 @@ def _statement_result(body, reply, needle: str):
     raise AssertionError(f"statement not found: {needle}")
 
 
+def _journal_request_count(replies) -> int:
+    return sum(
+        1
+        for body, _ in replies
+        if any(
+            "INSERT INTO cognitive_journal" in op.get("stmt", {}).get("sql", "")
+            for op in body["requests"]
+        )
+    )
+
+
 def test_new_insert_and_same_dedupe_have_exact_boolean_results(journal):
     store, server, replies, _ = journal
     first = entry()
@@ -161,27 +172,23 @@ def test_other_schema_constraints_are_not_swallowed(journal, constraint):
 
 @pytest.mark.parametrize("journal", ["hrana"], indirect=True)
 def test_journal_autocommit_response_unknown_is_not_retried_or_reported_success(journal):
-    store, server, replies, faults = journal
+    store, _, replies, faults = journal
     faults["journal_response"] = True
     with pytest.raises(
         StorageUnavailable, match="^SQL_TRANSPORT_FAILED_OUTCOME_UNKNOWN$"
     ):
         store.put_journal(entry())
-    inserts = [
-        body
-        for body, _ in replies
-        if any(
-            "INSERT INTO cognitive_journal" in op.get("stmt", {}).get("sql", "")
-            for op in body["requests"]
-        )
-    ]
-    assert len(inserts) == 1
-    assert server.count_sql("INSERT INTO cognitive_journal") == 1
+    assert _journal_request_count(replies) == 1
     assert store._conn._broken
     # A later independent read may recover the connection, but must not replay
     # the ambiguous write. The mock server executed it before the response loss.
     assert store.journal_count() == 1
-    assert server.count_sql("INSERT INTO cognitive_journal") == 1
+    assert _journal_request_count(replies) == 1
+    # An explicit retry of the same logical journal entry is safe because the
+    # dedupe key is enforced by SQL, not by trusting the lost response.
+    assert store.put_journal(entry()) is False
+    assert store.journal_count() == 1
+    assert _journal_request_count(replies) == 2
 
 
 @pytest.mark.parametrize("journal", ["hrana"], indirect=True)
@@ -194,9 +201,16 @@ def test_transport_failure_does_not_return_a_dedupe(journal):
 
 @pytest.mark.parametrize("rowcount", [None, -1, True, "1", 2])
 @pytest.mark.parametrize("journal", ["hrana"], indirect=True)
-def test_invalid_affected_count_cannot_report_success_or_dedupe(journal, rowcount):
-    store, _, _, faults = journal
+def test_invalid_affected_count_never_reports_success_even_if_autocommit_landed(journal, rowcount):
+    store, _, replies, faults = journal
     faults["rowcount"] = rowcount
     with pytest.raises(sqlite3.DatabaseError):
         store.put_journal(entry())
-    assert store.journal_count() == 0
+    assert _journal_request_count(replies) == 1
+    # The mock server executed the autocommit statement before corrupting its
+    # response metadata. The client cannot roll that durable statement back, but
+    # it also never reports success and SQL dedupe makes a later explicit retry safe.
+    assert store.journal_count() == 1
+    faults.pop("rowcount", None)
+    assert store.put_journal(entry()) is False
+    assert store.journal_count() == 1
