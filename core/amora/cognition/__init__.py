@@ -20,7 +20,11 @@ from .providers_identity import (
     OpenRouterCognitiveProvider,
 )
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
-from .identity_runtime import CognitiveEngine
+# Preserve the historical layered-runtime import as an explicit architectural
+# dependency; the identity-aware subclass below only changes provider projection.
+from .structured_runtime import CognitiveEngine
+from .identity_runtime import CognitiveEngine as IdentityAwareCognitiveEngine
+CognitiveEngine = IdentityAwareCognitiveEngine
 from .replay import CognitiveReplayResult
 from .speech import SpeechCue, SpeechNormalizer, SpeechPlan, SpeechRender, SpeechSegmenter
 from .store_v1 import CognitiveStore
