@@ -1,6 +1,6 @@
 # Inventário HTTP — modo cloud
 
-Gerado da composição real da API em 2026-10-30. O gate ASGI protege rotas
+Gerado da composição real da API em 2026-10-31. O gate ASGI protege rotas
 antes da leitura do body, independentemente de Depends. WebSocket e mounts
 estáticos são descritos após a tabela.
 
@@ -60,7 +60,23 @@ estáticos são descritos após a tabela.
 | POST | `/v1/memory/remember` | admin |
 | GET | `/v1/memory/{memory_id}` | admin |
 | POST | `/v1/memory/{memory_id}/forget` | admin |
-| GET | `/v1/operations/state` | admin |
+| GET | `/v1/operations/state` | admin ou operator |
+| GET | `/v1/operator/bindings/export` | admin ou operator |
+| POST | `/v1/operator/bindings/import/apply` | admin ou operator |
+| POST | `/v1/operator/bindings/import/preview` | admin ou operator |
+| GET | `/v1/operator/people` | admin ou operator |
+| GET | `/v1/operator/people/export` | admin ou operator |
+| POST | `/v1/operator/people/import/apply` | admin ou operator |
+| POST | `/v1/operator/people/import/preview` | admin ou operator |
+| GET | `/v1/operator/people/{entity_id}/bindings` | admin ou operator |
+| POST | `/v1/operator/people/{entity_id}/bindings` | admin ou operator |
+| GET | `/v1/operator/people/{entity_id}/bindings/{binding_ref}` | admin ou operator |
+| PUT | `/v1/operator/people/{entity_id}/bindings/{binding_ref}` | admin ou operator |
+| DELETE | `/v1/operator/people/{entity_id}/bindings/{binding_ref}` | admin ou operator |
+| PUT | `/v1/operator/people/{entity_id}` | admin ou operator |
+| GET | `/v1/operator/relationships` | admin ou operator |
+| PUT | `/v1/operator/relationships` | admin ou operator |
+| DELETE | `/v1/operator/relationships` | admin ou operator |
 | POST | `/v1/pairing/redeem` | public |
 | GET | `/v1/relationships/history` | admin |
 | GET | `/v1/self` | admin |
@@ -83,4 +99,14 @@ estáticos são descritos após a tabela.
 `/docs`, `/redoc`, `/openapi.json`: desabilitados.
 `/v1/events/stream`: WebSocket administrativo; Bearer no header, origem validada.
 Worker separado: `/live` público; `/ready` e POST `/v1/render` exigem credencial de serviço.
-As credenciais de browser não acessam /operations, eventos brutos, journal, memória, mundo ou tools administrativas.
+
+## Browser roles
+
+- `web`: conversa/voz somente no contrato `WEB_SAFARI`;
+- `avatar`: superfície Avatar Studio existente;
+- `operator`: somente `/v1/operator/**` e `GET /v1/operations/state`;
+- `admin`: superfície interna completa.
+
+`operator` não acessa `/v1/web/*`, `/v1/state`, memória, mundo, cognition journal, events ou ActionEngine. `web` não acessa `/v1/operator/*` nem `/v1/operations/state`.
+
+O `client=operator` de `/v1/pairing/redeem` consome um challenge separado criado por `amora pair --role operator`; um código comum de `amora pair` não pode ser promovido mudando o campo `client`.

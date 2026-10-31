@@ -10,7 +10,7 @@
   <meta name="format-detection" content="telephone=no" />
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="stylesheet" href="./styles.css" />
-  <title>Amora Web Lab</title>
+  <title>Amora</title>
 </head>
 <body>
   <main class="shell">
@@ -29,7 +29,7 @@
       <div>
         <div class="eyebrow">PAREAMENTO</div>
         <h2>Conectar ao Core</h2>
-        <p>No console do mesmo pod do Core, rode <code>amora pair</code> e digite aqui o código de 6 dígitos.</p>
+        <p>No console do mesmo Core, rode <code>amora pair</code> e digite aqui o código de 6 dígitos.</p>
       </div>
       <form id="pairForm" class="pair-form">
         <input id="pairCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" aria-label="Código de pareamento" />
@@ -38,58 +38,201 @@
       <p id="pairError" class="error"></p>
     </section>
 
-    <section id="appPanel" class="app-grid hidden">
-      <section class="conversation card">
-        <div class="conversation-head">
-          <div>
-            <div class="eyebrow">CONVERSA</div>
-            <div id="voiceLabel" class="subtle">Amora · verificando backend de voz</div>
-          </div>
-          <div class="conversation-actions">
-            <button id="muteVoice" class="ghost" type="button" aria-pressed="false">Voz da Amora: ligada</button>
-            <button id="clearConversation" class="ghost" type="button">Limpar conversa</button>
-            <button id="stopVoice" class="danger ghost" type="button">Parar fala</button>
-          </div>
+    <section id="appPanel" class="hidden">
+      <nav class="surface-tabs" aria-label="Áreas da Amora">
+        <button type="button" class="surface-tab active" data-surface="chatView">Chat</button>
+        <button type="button" class="surface-tab" data-surface="peopleView">Pessoas</button>
+        <button type="button" class="surface-tab" data-surface="consoleView">Console</button>
+      </nav>
+
+      <section id="operatorGate" class="card operator-gate hidden" aria-live="polite">
+        <div>
+          <div class="eyebrow">MODO OPERADOR</div>
+          <h2>Desbloquear configurações</h2>
+          <p>Rode <code>amora pair --role operator</code> no Core e informe o código. O token é limitado a Pessoas/Console e expira automaticamente.</p>
         </div>
-
-        <div id="messages" class="messages" aria-live="polite"></div>
-        <p id="chatNotice" class="subtle" role="status" aria-live="polite"></p>
-
-        <form id="textForm" class="composer">
-          <textarea id="textInput" rows="1" placeholder="Fala com a Amora…" aria-label="Mensagem"></textarea>
-          <button type="submit" class="send">Enviar</button>
+        <form id="operatorPairForm" class="pair-form">
+          <input id="operatorPairCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" aria-label="Código de operador" />
+          <button type="submit">Desbloquear</button>
         </form>
+        <p id="operatorPairError" class="error"></p>
+      </section>
 
-        <div class="mic-row">
-          <button id="micButton" class="mic" type="button">
-            <span id="micIcon">●</span>
-            <span id="micLabel">Ativar microfone</span>
-          </button>
-          <div id="micState" class="subtle">microfone desligado</div>
+      <section id="chatView" class="surface-view">
+        <div class="app-grid">
+          <section class="conversation card">
+            <div class="conversation-head">
+              <div>
+                <div class="eyebrow">CONVERSA</div>
+                <div id="voiceLabel" class="subtle">Amora · verificando backend de voz</div>
+              </div>
+              <div class="conversation-actions">
+                <button id="muteVoice" class="ghost" type="button" aria-pressed="false">Voz da Amora: ligada</button>
+                <button id="clearConversation" class="ghost" type="button">Limpar conversa</button>
+                <button id="stopVoice" class="danger ghost" type="button">Parar fala</button>
+              </div>
+            </div>
+
+            <div id="messages" class="messages" aria-live="polite"></div>
+            <p id="chatNotice" class="subtle" role="status" aria-live="polite"></p>
+
+            <form id="textForm" class="composer">
+              <textarea id="textInput" rows="1" placeholder="Fala com a Amora…" aria-label="Mensagem"></textarea>
+              <button type="submit" class="send">Enviar</button>
+            </form>
+
+            <div class="mic-row">
+              <button id="micButton" class="mic" type="button">
+                <span id="micIcon">●</span>
+                <span id="micLabel">Ativar microfone</span>
+              </button>
+              <div id="micState" class="subtle">microfone desligado</div>
+            </div>
+          </section>
+
+          <aside class="card diagnostics">
+            <div class="eyebrow">LAB</div>
+            <h2>Diagnóstico</h2>
+            <div class="toggle-row">
+              <label><input id="remoteToggle" type="checkbox" checked /> cognição remota</label>
+              <label><input id="testToggle" type="checkbox" checked /> modo teste</label>
+            </div>
+            <dl>
+              <div><dt>Core</dt><dd id="diagCore">—</dd></div>
+              <div><dt>Entrada → resposta</dt><dd id="diagTurn">—</dd></div>
+              <div><dt>Voz</dt><dd id="diagVoice">verificando…</dd></div>
+              <div><dt>RTF voz</dt><dd id="diagRtf">—</dd></div>
+              <div><dt>Último gap</dt><dd id="diagGap">—</dd></div>
+              <div><dt>Fila de voz</dt><dd id="diagQueue">0</dd></div>
+              <div><dt>Microfone</dt><dd id="diagMic">off</dd></div>
+            </dl>
+            <p class="notice">O Safari não sintetiza mais a voz: ele só captura entrada e reproduz saída. O Core mantém identidade/estado; Fish S2.1 Pro Free é a voz cloud primária, Gemini é fallback. A escrita aparece progressivamente enquanto o Qwen gera, mas só vira resposta/voz canônica depois que o frame completo passa pelos gates locais.</p>
+            <button id="forgetPairing" class="ghost" type="button">Esquecer pareamento deste navegador</button>
+          </aside>
         </div>
       </section>
 
-      <aside class="card diagnostics">
-        <div class="eyebrow">LAB</div>
-        <h2>Diagnóstico</h2>
-        <div class="toggle-row">
-          <label><input id="remoteToggle" type="checkbox" checked /> cognição remota</label>
-          <label><input id="testToggle" type="checkbox" checked /> modo teste</label>
+      <section id="peopleView" class="surface-view hidden">
+        <div class="admin-toolbar">
+          <div>
+            <div class="eyebrow">PESSOAS & FAMÍLIA</div>
+            <h2>Identidade canônica</h2>
+            <p class="subtle">Perfis, parentesco e contas externas. Preferências e memórias aprendidas continuam no cérebro da Amora.</p>
+          </div>
+          <div class="toolbar-actions">
+            <button id="newPerson" type="button" class="ghost">+ Pessoa</button>
+            <button id="exportPeople" type="button" class="ghost">Exportar perfis</button>
+            <button id="importPeople" type="button" class="ghost">Importar perfis</button>
+            <button id="exportBindings" type="button" class="ghost">Exportar IDs privados</button>
+            <button id="importBindings" type="button" class="ghost">Importar IDs privados</button>
+            <button id="lockOperatorPeople" type="button" class="danger ghost">Bloquear operador</button>
+          </div>
         </div>
-        <dl>
-          <div><dt>Core</dt><dd id="diagCore">—</dd></div>
-          <div><dt>Entrada → resposta</dt><dd id="diagTurn">—</dd></div>
-          <div><dt>Voz</dt><dd id="diagVoice">verificando…</dd></div>
-          <div><dt>RTF voz</dt><dd id="diagRtf">—</dd></div>
-          <div><dt>Último gap</dt><dd id="diagGap">—</dd></div>
-          <div><dt>Fila de voz</dt><dd id="diagQueue">0</dd></div>
-          <div><dt>Microfone</dt><dd id="diagMic">off</dd></div>
-        </dl>
-        <p class="notice">O Safari não sintetiza mais a voz: ele só captura entrada e reproduz saída. O Core mantém identidade/estado; Fish S2.1 Pro Free é a voz cloud primária, Gemini é fallback. A escrita aparece progressivamente enquanto o Qwen gera, mas só vira resposta/voz canônica depois que o frame completo passa pelos gates locais.</p>
-        <button id="forgetPairing" class="ghost" type="button">Esquecer pareamento deste navegador</button>
-      </aside>
+
+        <div class="people-layout">
+          <aside class="card people-sidebar">
+            <div class="section-title-row">
+              <h2>Pessoas</h2>
+              <span id="peopleCount" class="pill">0</span>
+            </div>
+            <div id="peopleList" class="people-list"></div>
+          </aside>
+
+          <div class="people-main">
+            <section class="card admin-card">
+              <div class="section-title-row">
+                <div>
+                  <div class="eyebrow">PERFIL</div>
+                  <h2 id="profileEditorTitle">Selecione uma pessoa</h2>
+                </div>
+                <span id="profileSaveState" class="subtle"></span>
+              </div>
+              <form id="profileForm" class="form-grid hidden">
+                <label>ID canônico<input id="profileEntityId" pattern="PERSON_[A-Z0-9_]+" autocomplete="off" /></label>
+                <label>Nome<input id="profileName" maxlength="120" autocomplete="off" /></label>
+                <label class="wide">Aliases<input id="profileAliases" maxlength="500" placeholder="Slay, Nick, ..." autocomplete="off" /></label>
+                <label>Nascimento<input id="profileBirthDate" type="date" /></label>
+                <label>Idade<input id="profileAge" type="number" min="0" max="150" inputmode="numeric" /></label>
+                <label class="wide">Descrição<textarea id="profileDescription" rows="3" maxlength="600" placeholder="Informação estável de bootstrap"></textarea></label>
+                <label class="wide checkbox-line"><input id="profileFamilyAuthority" type="checkbox" /> pode definir parentesco estrutural da Amora</label>
+                <div class="wide form-actions"><button type="submit">Salvar perfil</button></div>
+              </form>
+              <p id="profileEmpty" class="empty-state">Escolhe alguém na lista ou cria um novo perfil.</p>
+            </section>
+
+            <section class="card admin-card">
+              <div class="section-title-row">
+                <div><div class="eyebrow">FAMÍLIA</div><h2>Relações estruturais</h2></div>
+              </div>
+              <form id="relationshipForm" class="relationship-form">
+                <select id="relationshipSource" aria-label="Origem"></select>
+                <select id="relationshipType" aria-label="Relação"></select>
+                <select id="relationshipTarget" aria-label="Destino"></select>
+                <label class="compact-field">Confiança<input id="relationshipConfidence" type="number" min="0" max="1" step="0.01" value="1" /></label>
+                <label class="checkbox-line compact"><input id="relationshipMirror" type="checkbox" checked /> espelhar se simétrica</label>
+                <button type="submit">Adicionar / revisar</button>
+              </form>
+              <div id="relationshipList" class="relation-list"></div>
+            </section>
+
+            <section class="card admin-card">
+              <div class="section-title-row">
+                <div><div class="eyebrow">CONTAS</div><h2>WhatsApp, Discord & Web</h2></div>
+                <button id="addBinding" type="button" class="ghost" disabled>+ Conta</button>
+              </div>
+              <p class="notice">Identificadores ficam mascarados por padrão e nunca entram no export público de perfis.</p>
+              <div id="bindingsList" class="bindings-list"></div>
+            </section>
+          </div>
+        </div>
+        <input id="peopleImportFile" class="hidden" type="file" accept="application/json,.json" />
+        <input id="bindingsImportFile" class="hidden" type="file" accept="application/json,.json" />
+      </section>
+
+      <section id="consoleView" class="surface-view hidden">
+        <div class="admin-toolbar">
+          <div>
+            <div class="eyebrow">LIVING CONSOLE</div>
+            <h2>Estado operacional</h2>
+            <p class="subtle">Projeção segura do Core; não mostra prompt interno, segredos ou chain-of-thought.</p>
+          </div>
+          <div class="toolbar-actions">
+            <button id="refreshConsole" type="button" class="ghost">Atualizar</button>
+            <button id="lockOperatorConsole" type="button" class="danger ghost">Bloquear operador</button>
+          </div>
+        </div>
+        <div id="consoleSummary" class="console-grid"></div>
+        <section class="card admin-card"><div class="eyebrow">PROVIDERS</div><div id="consoleProviders" class="console-list"></div></section>
+        <section class="card admin-card"><div class="eyebrow">JOBS</div><div id="consoleJobs" class="console-list"></div></section>
+        <section class="card admin-card"><div class="eyebrow">ERROS AGRUPADOS</div><div id="consoleErrors" class="console-list"></div></section>
+        <details class="card raw-console"><summary>Snapshot técnico</summary><pre id="consoleRaw"></pre></details>
+      </section>
     </section>
   </main>
+
+  <dialog id="bindingDialog" aria-labelledby="bindingTitle">
+    <div class="section-title-row"><h2 id="bindingTitle">Conta externa</h2><button id="closeBindingDialog" class="ghost" type="button">Fechar</button></div>
+    <form id="bindingForm" class="form-grid">
+      <label>Plataforma<select id="bindingPlatform"><option value="whatsapp">WhatsApp</option><option value="discord">Discord</option><option value="web">Web</option></select></label>
+      <label>Tipo do ID<input id="bindingIdentifierType" value="phone_e164" maxlength="64" /></label>
+      <label class="wide">Número / ID<input id="bindingExternalId" maxlength="256" autocomplete="off" /></label>
+      <label>Escopo<input id="bindingScope" value="primary" maxlength="96" /></label>
+      <label>Confiança<input id="bindingConfidence" type="number" min="0" max="1" step="0.01" value="1" /></label>
+      <label>Trust<select id="bindingTrust"><option value="operator_verified">operator_verified</option><option value="platform_authenticated">platform_authenticated</option><option value="observed">observed</option></select></label>
+      <label class="checkbox-line"><input id="bindingEnabled" type="checkbox" checked /> ativo</label>
+      <div class="wide form-actions"><button type="submit">Salvar conta</button></div>
+    </form>
+    <p id="bindingError" class="error"></p>
+  </dialog>
+
+  <dialog id="jsonPreviewDialog" aria-labelledby="jsonPreviewTitle">
+    <h2 id="jsonPreviewTitle">Prévia da importação</h2>
+    <pre id="jsonPreview"></pre>
+    <form method="dialog">
+      <button id="cancelJsonImport" class="ghost" type="button">Cancelar</button>
+      <button id="confirmJsonImport" type="button">Aplicar</button>
+    </form>
+  </dialog>
 
   <dialog id="clearDialog" aria-labelledby="clearTitle" aria-describedby="clearDescription">
     <h2 id="clearTitle">Limpar conversa</h2>
@@ -103,5 +246,6 @@
   <script type="module" src="./fetch-resilience.js?v=20261030-76"></script>
   <script type="module" src="./realtime-preview.js?v=20261030-74"></script>
   <script type="module" src="./app-v2.js?v=20261030-74"></script>
+  <script type="module" src="./operator-panel.js?v=20261031-91"></script>
 </body>
 </html>

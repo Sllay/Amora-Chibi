@@ -1,0 +1,220 @@
+.surface-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(20, 15, 27, .78);
+  position: sticky;
+  top: calc(env(safe-area-inset-top) + 8px);
+  z-index: 10;
+  backdrop-filter: blur(14px);
+}
+
+.surface-tab {
+  min-width: 0;
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+}
+.surface-tab.active {
+  color: #1b1120;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+.surface-view { min-width: 0; }
+
+.operator-gate {
+  padding: 22px;
+  display: grid;
+  gap: 18px;
+  max-width: 720px;
+  margin: 28px auto;
+}
+.operator-gate p { margin: 0; color: var(--muted); line-height: 1.5; }
+
+.admin-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+.admin-toolbar h2 { margin-bottom: 5px; }
+.admin-toolbar p { margin: 0; }
+.toolbar-actions, .row-actions, .form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.people-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, 280px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.people-sidebar {
+  padding: 14px;
+  position: sticky;
+  top: calc(env(safe-area-inset-top) + 72px);
+}
+.people-main { display: grid; gap: 14px; min-width: 0; }
+.people-list { display: grid; gap: 8px; }
+.person-card {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 13px;
+  color: #f8eefb;
+  background: rgba(255,255,255,.045);
+  border: 1px solid var(--border);
+}
+.person-card:hover, .person-card.selected {
+  border-color: rgba(255,147,199,.45);
+  background: rgba(255,147,199,.09);
+}
+.person-card strong { font-size: 14px; }
+.person-card span, .person-card small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.section-title-row h2 { margin: 4px 0 10px; }
+.pill {
+  min-width: 28px;
+  text-align: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: rgba(255,147,199,.10);
+  border: 1px solid rgba(255,147,199,.18);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.admin-card { padding: 17px; }
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.form-grid label, .compact-field {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.form-grid .wide { grid-column: 1 / -1; }
+.form-grid input, .form-grid textarea, .form-grid select,
+.relationship-form input, .relationship-form select {
+  width: 100%;
+  min-width: 0;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.055);
+  color: #fff;
+  outline: none;
+}
+.form-grid input:focus, .form-grid textarea:focus, .form-grid select:focus,
+.relationship-form input:focus, .relationship-form select:focus {
+  border-color: rgba(255,147,199,.55);
+  box-shadow: 0 0 0 3px rgba(255,147,199,.08);
+}
+.form-grid input[readonly] { opacity: .65; }
+.checkbox-line {
+  display: flex !important;
+  align-items: center;
+  gap: 8px !important;
+}
+.checkbox-line input { width: auto !important; }
+.checkbox-line.compact { align-self: center; color: var(--muted); font-size: 11px; }
+
+.relationship-form {
+  display: grid;
+  grid-template-columns: 1.15fr 1.15fr 1.15fr .7fr;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+.relationship-form > button { grid-column: span 2; }
+.relation-list, .bindings-list, .console-list { display: grid; gap: 8px; }
+.relation-row, .binding-row, .console-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 11px;
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 13px;
+  background: rgba(255,255,255,.035);
+}
+.relation-row > div:first-child, .binding-row > div:first-child, .console-row { min-width: 0; }
+.relation-row strong, .binding-row strong, .console-row strong { display: block; font-size: 13px; word-break: break-word; }
+.relation-row small, .binding-row small, .console-row small { display: block; color: var(--muted); font-size: 10px; margin-top: 3px; word-break: break-word; }
+.compact-button { padding: 7px 9px; border-radius: 10px; font-size: 11px; }
+.empty-state { color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+.console-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.console-metric { padding: 14px; min-height: 105px; }
+.console-metric strong { display: block; margin: 12px 0 5px; font-size: 18px; word-break: break-word; }
+.console-metric small { color: var(--muted); font-size: 10px; word-break: break-word; }
+#consoleView > .admin-card { margin-bottom: 12px; }
+.raw-console { padding: 14px; }
+.raw-console summary { cursor: pointer; font-weight: 800; }
+.raw-console pre, #jsonPreview {
+  max-height: 50dvh;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(0,0,0,.28);
+  color: #eadff0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+#bindingDialog { width: min(620px, calc(100vw - 32px)); }
+#jsonPreviewDialog { width: min(680px, calc(100vw - 32px)); }
+#bindingDialog form, #jsonPreviewDialog form { justify-content: initial; }
+#bindingDialog .form-actions { justify-content: flex-end; }
+
+@media (max-width: 840px) {
+  .admin-toolbar { display: grid; }
+  .toolbar-actions { justify-content: flex-start; }
+  .console-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .relationship-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 660px) {
+  .surface-tabs { top: calc(env(safe-area-inset-top) + 4px); }
+  .people-layout { grid-template-columns: 1fr; }
+  .people-sidebar { position: static; }
+  .people-list {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scroll-snap-type: x proximity;
+  }
+  .person-card { min-width: 180px; scroll-snap-align: start; }
+  .form-grid, .relationship-form, .console-grid { grid-template-columns: 1fr; }
+  .form-grid .wide { grid-column: auto; }
+  .relationship-form > button { grid-column: auto; }
+  .admin-card { padding: 14px; }
+  .relation-row, .binding-row { align-items: flex-start; flex-direction: column; }
+  .row-actions { justify-content: flex-start; }
+  .toolbar-actions button { flex: 1 1 calc(50% - 8px); }
+}

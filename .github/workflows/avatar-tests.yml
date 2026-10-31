@@ -38,6 +38,8 @@ jobs:
           node --check web/realtime-preview.js
           node --check web/audio-player.mjs
           node --check web/browser-state.mjs
+          node --check web/operator-state.mjs
+          node --check web/operator-panel.js
       - name: Test Avatar Engine
         run: npm --prefix avatar test
       - name: Test Safari queue diagnostics and text without voice

@@ -23,7 +23,7 @@ export function isWebCredential(value) {
 
 function containsCredential(text) {
   // Never persist recognized credential material even when pasted into chat.
-  return /\bBearer\s+\S+|browser\.v[12]\.[A-Za-z0-9_-]+\.[a-f0-9]{64}|\b(?:gsk_|sk-or-v1-|sk-proj-|AIza)[A-Za-z0-9_-]{16,}|\b(?:LOCAL_API_TOKEN|[A-Z_]*(?:API_KEY|AUTH_TOKEN|SERVICE_TOKEN))\s*[:=]\s*\S+/i.test(text);
+  return /\bBearer\s+\S+|browser\.v[123]\.[A-Za-z0-9_-]+\.[a-f0-9]{64}|\b(?:gsk_|sk-or-v1-|sk-proj-|AIza)[A-Za-z0-9_-]{16,}|\b(?:LOCAL_API_TOKEN|[A-Z_]*(?:API_KEY|AUTH_TOKEN|SERVICE_TOKEN))\s*[:=]\s*\S+/i.test(text);
 }
 
 function validMessage(item) {

@@ -1,6 +1,6 @@
 # AMORA — People Identity / Living Profiles
 
-**Status:** CANÔNICO / EM IMPLEMENTAÇÃO  
+**Status:** CANÔNICO / ATIVO  
 **Atualizado em:** 2026-10-31
 
 ## 1. Princípio
@@ -33,7 +33,9 @@ PERSON
 
 Preferências aprendidas, episódios, fatos observados, crenças, confiança, afeto e histórico continuam pertencendo a World Model, Memory, Relationship Graph e Emotion Engine.
 
-A visão futura de um "perfil vivo" deve ser uma projeção dessas fontes, não um JSON gigante que o provider reescreve.
+A visão de um "perfil vivo" é uma projeção dessas fontes, não um JSON gigante que o provider reescreve.
+
+**Regra de persistência:** o arquivo versionado é bootstrap, não autoridade mutável de produção. Depois que um perfil existe em storage canônico, edições de operador persistidas em SQLite/libSQL vencem o seed em restart/redeploy. Um seed antigo não pode ressuscitar silenciosamente nome, alias ou parentesco removido pelo operador.
 
 ## 3. Perfis seed atuais
 
@@ -61,6 +63,8 @@ fala de PERSON_BK
 ```
 
 A repetição de "sou sua mãe" não transforma um desconhecido em mãe da Amora.
+
+Alterar `can_define_amora_family` pela superfície administrativa exige confirmação explícita e atualiza o gate de relationship learning em runtime. Esse campo não é sugerido nem concedido pelo provider.
 
 ## 5. PlatformIdentityBinding
 
@@ -92,7 +96,7 @@ Nickname/display name pode virar alias candidato, mas nunca é identidade forte 
 
 ## 6. Configuração privada de bindings
 
-O arquivo padrão é:
+O bootstrap privado padrão é:
 
 ```text
 ~/.amora/secrets/identity_bindings.json
@@ -122,9 +126,79 @@ Formato:
 }
 ```
 
-Ao iniciar, bindings do arquivo privado são importados/upsertados no banco canônico e sobrevivem restart. O arquivo pode então funcionar apenas como bootstrap/override privado.
+Ao iniciar, bindings do arquivo privado são importados/upsertados no banco canônico e sobrevivem restart. O arquivo funciona apenas como bootstrap/override privado; o painel Web escreve diretamente no storage canônico.
 
-## 7. Política de mensageria aprovada para adapters futuros
+## 7. Web People / Family Settings
+
+A Web possui superfície administrativa **Pessoas** separada do chat. Ela é UI/UX e não pertence ao freeze do corpo/avatar.
+
+Fluxo:
+
+```text
+Web People UI
+→ operator capability
+→ /v1/operator/*
+→ PersonProfileService / Relationship Graph / platform_identity_bindings
+→ SQLite ou libSQL
+```
+
+A tela permite:
+
+- criar/editar `PERSON_*`;
+- nome canônico, aliases, nascimento **ou** idade, descrição curta;
+- revisar autoridade familiar com confirmação explícita;
+- visualizar/adicionar/revisar/remover parentesco estrutural;
+- cadastrar N contas WhatsApp/Discord/Web para uma pessoa;
+- mascarar identificadores privados por padrão e revelar somente em modo operador;
+- importar/exportar profiles/família em JSON público;
+- importar/exportar bindings em JSON privado separado.
+
+Relações editadas pelo operador passam pelo histórico temporal de Relationship Graph. Remoção expira a revisão vigente em vez de apagar a história cognitiva.
+
+### JSON
+
+Export público e export privado são contratos distintos:
+
+```text
+People/Family export
+→ pode conter profiles + relações
+→ NÃO contém telefone/JID/Discord ID
+
+Private bindings export
+→ contém external_actor_id real
+→ requer operator capability
+→ deve ser tratado como segredo/backup privado
+```
+
+Importação executa validação e preview antes de aplicar. Importação confirmada é transacional para impedir catálogo parcialmente aplicado em erro de aliases, entidade, relação ou binding.
+
+## 8. Operator capability
+
+Pareamento de conversa e administração são separados.
+
+```text
+amora pair
+→ browser role: web
+→ chat/voz Web bounded
+
+amora pair --role operator
+→ challenge separado de uso único
+→ browser role: operator
+→ Pessoas + Living Console bounded
+```
+
+O token `operator`:
+
+- é assinado pelo segredo administrativo sem revelar o segredo ao navegador;
+- expira em 12 horas;
+- é revogado por rotação do segredo administrativo;
+- não pode usar endpoints normais de chat em lugar do token `web`;
+- só acessa `/v1/operator/*` e a projeção segura `/v1/operations/state`;
+- não transforma o pareamento Web normal em admin.
+
+A Web pode esquecer/bloquear a capability localmente a qualquer momento.
+
+## 9. Política de mensageria aprovada para adapters futuros
 
 ### Grupo
 
@@ -144,9 +218,9 @@ Mensageria integrada deve persistir IDs de mensagem, direção, speaker canônic
 
 Isso é histórico operacional/social; não significa consolidar todo texto automaticamente como memória de longo prazo.
 
-## 8. Presença por plataforma
+## 10. Presença por plataforma
 
-WhatsApp e Discord não precisam ficar conectados permanentemente.
+WhatsApp e Discord não precisam ficar cognitivamente ativos permanentemente.
 
 O design alvo inclui `PlatformPresenceController`:
 
@@ -162,8 +236,8 @@ Ação explícita da Amora/BK pode conectar ou desconectar uma plataforma. Sched
 
 Enquanto um adapter estiver realmente desconectado, o Core não deve fingir que sabe imediatamente que chegou uma mensagem; descoberta só ocorre quando a plataforma reconectar/sincronizar ou quando houver um canal oficial de webhook/push independente.
 
-## 9. Web
+## 11. Web
 
-A Web pareada atual é uma superfície privada. Enquanto o produto mantiver a regra atual de acesso, uma sessão Web autenticada/pareada representa `PERSON_BK`; não inferir o speaker a partir do texto digitado.
+A Web pareada atual é uma superfície privada. Enquanto o produto mantiver a regra atual de acesso, uma sessão Web de conversa autenticada/pareada representa `PERSON_BK`; não inferir o speaker a partir do texto digitado.
 
-O futuro Console Web é outra view da mesma superfície autenticada, não outra identidade nem outro Core.
+O Living Console Web é outra view do mesmo produto e usa operator capability, não outra identidade nem outro Core. Ele projeta somente estado operacional seguro; prompt interno, secrets e chain-of-thought não pertencem a essa superfície.
