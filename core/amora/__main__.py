@@ -74,7 +74,10 @@ def issue_pairing_code(role: str = "web") -> int:
     else:
         manager = PairingManager(paths.cache / "pairing.json", SystemClock())
     issued = manager.issue()
-    print(f"Código de pareamento ({role}): {issued.code}")
+    if role == "operator":
+        print(f"Código de pareamento (operator): {issued.code}")
+    else:
+        print(f"Código de pareamento: {issued.code}")
     print(f"Expira em: {issued.expires_at.isoformat()}")
     if role == "operator":
         print("Uso único; desbloqueia somente Pessoas/Console no navegador por tempo limitado.")
