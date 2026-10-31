@@ -108,3 +108,25 @@ def test_reflection_replan_keeps_the_same_input_acir(tmp_path, monkeypatch) -> N
         assert "COGNITIVE_REFLECTION" in context.reason_codes
     finally:
         core.close()
+
+
+def test_autonomous_objective_is_not_mislabeled_as_received_utterance(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=_clock())
+    try:
+        context = core.cognition.compiler.compile(
+            CognitiveRequest(
+                text="Intenção autônoma interna: initiate_contact.",
+                speaker_id="ENTITY_AMORA",
+                target_id="PERSON_BK",
+                privacy_scope=PrivacyScope.PERSONAL,
+                metadata={"cognitive_mode": "autonomous_initiation"},
+            )
+        )
+
+        assert context.acir is None
+        assert "input_acir" not in context.dialogue_plan
+        assert "ACIR_NOT_APPLICABLE_AUTONOMOUS_INITIATION" in context.reason_codes
+        assert "AUTONOMOUS_INITIATION" in context.reason_codes
+    finally:
+        core.close()
