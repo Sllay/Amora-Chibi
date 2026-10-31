@@ -7,6 +7,10 @@
   <title>Amora Avatar Studio</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="stylesheet" href="./styles.css">
+  <style>
+    /* O backup portátil substitui o antigo export JSON do painel Projeto. */
+    button[data-act="export"] { display: none !important; }
+  </style>
 </head>
 <body>
   <div id="app" class="app">
@@ -18,7 +22,8 @@
       <div class="top-actions studio-only">
         <button id="undoBtn" class="icon-btn" title="Desfazer">↶</button>
         <button id="redoBtn" class="icon-btn" title="Refazer">↷</button>
-        <button id="importProjectBtn" title="Restaurar projeto a partir de um JSON exportado">Importar JSON</button>
+        <button id="exportBundleBtn" title="Salvar projeto, animações e texturas em um ZIP portátil">Exportar ZIP</button>
+        <button id="importProjectBtn" title="Restaurar um ZIP portátil ou um JSON legado">Importar ZIP/JSON</button>
         <button id="saveBtn" class="primary">Salvar</button>
       </div>
       <div id="connectionPill" class="pill">offline</div>
@@ -65,7 +70,7 @@
     </section>
 
     <input id="assetInput" type="file" accept="image/png,image/webp,image/jpeg" multiple hidden>
-    <input id="projectInput" type="file" accept="application/json,.json" hidden>
+    <input id="projectInput" type="file" accept="application/zip,application/x-zip-compressed,.zip,application/json,.json" hidden>
 
     <div id="toast" class="toast"></div>
 
@@ -81,68 +86,6 @@
   </div>
   <script type="module" src="./app.js"></script>
   <script type="module" src="./rig-v2.js"></script>
-  <script type="module">
-    const importButton = document.querySelector('#importProjectBtn');
-    const projectInput = document.querySelector('#projectInput');
-    const toast = document.querySelector('#toast');
-
-    function notify(text) {
-      if (!toast) return;
-      toast.textContent = text;
-      toast.classList.add('show');
-      clearTimeout(toast._importTimer);
-      toast._importTimer = setTimeout(() => toast.classList.remove('show'), 2200);
-    }
-
-    function looksLikeAvatarProject(value) {
-      return Boolean(
-        value &&
-        typeof value === 'object' &&
-        !Array.isArray(value) &&
-        value.canvas &&
-        typeof value.canvas === 'object' &&
-        Array.isArray(value.assets) &&
-        Array.isArray(value.parts)
-      );
-    }
-
-    importButton?.addEventListener('click', () => projectInput?.click());
-
-    projectInput?.addEventListener('change', async () => {
-      const file = projectInput.files?.[0];
-      projectInput.value = '';
-      if (!file) return;
-
-      try {
-        const imported = JSON.parse(await file.text());
-        if (!looksLikeAvatarProject(imported)) {
-          throw new Error('arquivo não parece um projeto exportado pelo Avatar Studio');
-        }
-
-        const token = sessionStorage.getItem('amora.avatar.token') || '';
-        if (!token) throw new Error('pareie o Avatar Studio antes de importar');
-
-        const response = await fetch('/v1/avatar/project', {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(imported),
-        });
-
-        if (!response.ok) {
-          let detail = `${response.status}`;
-          try { detail = (await response.json()).detail || detail; } catch (_) {}
-          throw new Error(detail);
-        }
-
-        notify('Projeto JSON restaurado. Recarregando…');
-        setTimeout(() => location.reload(), 250);
-      } catch (error) {
-        notify(`Importar JSON: ${error?.message || 'falha ao ler o arquivo'}`);
-      }
-    });
-  </script>
+  <script type="module" src="./bundle-ui.js"></script>
 </body>
 </html>

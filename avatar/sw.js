@@ -1,10 +1,11 @@
-const CACHE = 'amora-avatar-v09-security-20261023';
+const CACHE = 'amora-avatar-v09-bundle-20261030';
 const SHELL = [
   '/avatar/',
   '/avatar/index.html',
   '/avatar/styles.css',
   '/avatar/app.js',
   '/avatar/rig-v2.js',
+  '/avatar/bundle-ui.js',
   '/avatar/engine.js',
   '/avatar/manifest.webmanifest',
 ];

@@ -468,8 +468,12 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         method = scope["method"]
         import re
         if role == "avatar":
-            fixed = {"/v1/avatar/state": {"GET"}, "/v1/avatar/project": {"GET", "PUT"},
-                     "/v1/avatar/assets": {"GET"}}
+            fixed = {
+                "/v1/avatar/state": {"GET"},
+                "/v1/avatar/project": {"GET", "PUT"},
+                "/v1/avatar/assets": {"GET"},
+                "/v1/avatar/bundle": {"GET", "PUT"},
+            }
             if method in fixed.get(path, set()):
                 return True
             return bool(re.fullmatch(r"/v1/avatar/assets/[A-Za-z0-9_.-]{1,96}", path)) and method in {"GET", "PUT", "DELETE"}

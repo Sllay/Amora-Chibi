@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from amora.web import register_web_routes
 
+from .bundle import MAX_AVATAR_BUNDLE_BYTES, build_avatar_bundle, restore_avatar_bundle
 from .models import AvatarProject
 
 
@@ -29,6 +30,39 @@ def register_avatar_routes(app: FastAPI, core: object, require_auth: Callable[..
     @app.put("/v1/avatar/project", dependencies=[Depends(require_auth)])
     def save_avatar_project(project: AvatarProject) -> dict[str, object]:
         return avatar.save_project(project).model_dump(mode="json")
+
+    @app.get("/v1/avatar/bundle", dependencies=[Depends(require_auth)])
+    def export_avatar_bundle() -> Response:
+        try:
+            body = build_avatar_bundle(avatar.store, avatar.project())
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        return Response(
+            content=body,
+            media_type="application/zip",
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": 'attachment; filename="amora_avatar.zip"',
+            },
+        )
+
+    @app.put("/v1/avatar/bundle", dependencies=[Depends(require_auth)])
+    async def import_avatar_bundle(request: Request) -> dict[str, object]:
+        body = await request.body()
+        if len(body) > MAX_AVATAR_BUNDLE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="avatar portable bundle is too large",
+            )
+        try:
+            result = restore_avatar_bundle(avatar.store, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return {
+            "project": result.project.model_dump(mode="json"),
+            "assets_written": result.assets_written,
+            "assets_unchanged": result.assets_unchanged,
+        }
 
     @app.get("/v1/avatar/assets", dependencies=[Depends(require_auth)])
     def list_avatar_assets() -> list[dict[str, object]]:

@@ -23,6 +23,8 @@ estáticos são descritos após a tabela.
 | DELETE | `/v1/avatar/assets/{asset_id}` | admin ou avatar |
 | GET | `/v1/avatar/assets/{asset_id}` | admin ou avatar |
 | PUT | `/v1/avatar/assets/{asset_id}` | admin ou avatar |
+| GET | `/v1/avatar/bundle` | admin ou avatar |
+| PUT | `/v1/avatar/bundle` | admin ou avatar |
 | GET | `/v1/avatar/project` | admin ou avatar |
 | PUT | `/v1/avatar/project` | admin ou avatar |
 | GET | `/v1/avatar/state` | admin ou avatar |

@@ -31,6 +31,7 @@ jobs:
           node --check avatar/engine.js
           node --check avatar/app.js
           node --check avatar/rig-v2.js
+          node --check avatar/bundle-ui.js
           node --check avatar/sw.js
           node --check web/app-v2.js
           node --check web/fetch-resilience.js
