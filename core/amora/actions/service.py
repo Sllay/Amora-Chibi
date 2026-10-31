@@ -88,17 +88,20 @@ class ActionEngine:
         }
 
     async def handle_autonomy_decision(self, event: AmoraEvent) -> None:
-        """Bridge a newly committed BDI intention into the guarded ActionEngine.
+        """Bridge a runtime BDI decision into the guarded ActionEngine.
 
-        Only fresh SELECTED decisions are auto-executed. KEPT_CURRENT and
-        DEFERRED decisions are deliberately ignored so an idle cycle cannot
-        repeatedly replay an already-running intention. The normal planner,
+        Manual/debug cycles preserve their existing plan/execute contract. Only
+        decisions explicitly marked by the runtime idle lifecycle may execute
+        automatically. Fresh SELECTED decisions are eligible; KEPT_CURRENT and
+        DEFERRED cannot replay an already-running intention. The normal planner,
         permission, privacy, cost, risk, retry and effect-verification gates are
         still used by execute_current().
         """
         if event.event_type != "autonomy.decision":
             return
         if event.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+            return
+        if event.payload.get("runtime_auto_execute") is not True:
             return
         if str(event.payload.get("outcome") or "") != "selected":
             return
