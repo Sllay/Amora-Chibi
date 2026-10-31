@@ -47,11 +47,17 @@ class SchedulerRuntime:
     async def stop(self) -> None:
         task = self._task
         self._task = None
-        if task is None:
-            return
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+        # Jobs are in-memory runtime state. Once the lifecycle runner stops,
+        # leaving them armed can resurrect callbacks if the same Core object is
+        # re-used by a host/test. Cancel after the task is joined so a callback
+        # cancelled mid-flight cannot re-arm itself in a finally block.
+        for job in self.scheduler.snapshot():
+            self.scheduler.cancel(str(job["job_id"]))
 
     async def _run_forever(self) -> None:
         while True:
