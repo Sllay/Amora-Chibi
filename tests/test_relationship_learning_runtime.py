@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from amora.app import AmoraCore
-from amora.cognition import CognitiveRequest
+from amora.cognition import CognitiveRequest, ConversationMessage, MessageSource, MessageStatus
 from amora.time import SimulatedClock
 from amora.world import EpistemicKind, EvidenceKind, EvidenceRef, WorldClaimDraft
 
@@ -104,6 +104,52 @@ def test_relationship_learning_flag_and_test_mode_are_real_gates(tmp_path, monke
         assert core.cognition.compiler.relationship_learning.state()["last_reason_code"] == "RELATIONSHIP_TURN_NOT_ELIGIBLE"
 
         _record_relationship_hypothesis(core, metadata={"test_mode": True, "relationship_learning": True})
+        assert core.cognition.compiler.relationship_learning.state()["last_reason_code"] == "RELATIONSHIP_TURN_NOT_ELIGIBLE"
+        assert core.identities.relationship("ENTITY_AMORA", "child_of", "PERSON_BK") is None
+    finally:
+        core.close()
+
+
+def test_generated_reply_cannot_bypass_disabled_input_gate(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=_clock())
+    try:
+        event_id = uuid4()
+        request = CognitiveRequest(
+            text="não aprenda relação neste turno",
+            speaker_id="PERSON_BK",
+            target_id="ENTITY_AMORA",
+            source_event_id=event_id,
+            metadata={"relationship_learning": False},
+        )
+        core.cognition.observe_input(request)
+        core.cognition.store.put_message(
+            ConversationMessage(
+                turn_id=request.turn_id,
+                speaker_id="ENTITY_AMORA",
+                addressee_id="PERSON_BK",
+                source=MessageSource.COGNITIVE,
+                raw_text="resposta gerada sem a flag do input",
+                normalized_text="resposta gerada sem a flag do input",
+                started_at=core.clock.now(),
+                status=MessageStatus.SPOKEN,
+            )
+        )
+        core.world.record(
+            WorldClaimDraft(
+                kind=EpistemicKind.HYPOTHESIS,
+                statement="ENTITY_AMORA child_of PERSON_BK",
+                subject_id="ENTITY_AMORA",
+                predicate="child_of",
+                object_value="PERSON_BK",
+                source="cognition:test-provider",
+                source_entity_id="ENTITY_AMORA",
+                confidence=0.9,
+                evidence=[EvidenceRef(kind=EvidenceKind.EVENT, ref_id=str(event_id), confidence=0.9)],
+                metadata={"turn_id": str(request.turn_id)},
+            )
+        )
+
         assert core.cognition.compiler.relationship_learning.state()["last_reason_code"] == "RELATIONSHIP_TURN_NOT_ELIGIBLE"
         assert core.identities.relationship("ENTITY_AMORA", "child_of", "PERSON_BK") is None
     finally:
