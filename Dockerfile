@@ -27,8 +27,9 @@ RUN python -m pip uninstall -y pip && \
     else useradd --uid 10001 --create-home amora; fi && \
     mkdir -p /var/lib/amora && chown amora:amora /var/lib/amora
 COPY --from=builder /opt/venv /opt/venv
-# Preserve the existing catalog at the path resolved by the installed package.
+# Preserve editable catalogs at the paths resolved by the installed package.
 COPY --chmod=0444 config/voice_profiles.json /opt/venv/lib/python3.12/config/voice_profiles.json
+COPY --chmod=0444 config/people_profiles.json /opt/venv/lib/python3.12/config/people_profiles.json
 RUN chmod 0755 /opt/venv/lib/python3.12/config
 COPY web ./web
 # Static modules must be readable by the non-root runtime even from a private checkout.

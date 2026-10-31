@@ -8,9 +8,11 @@ from pathlib import Path
 
 from amora.events import AmoraEvent
 from amora.identity.models import Entity, EntityRegistry, EntityType, Relationship, normalize_alias
+from amora.identity.profiles import PersonProfileSeed, PlatformIdentityBinding
 from amora.identity.session import DeviceIdentity, DeviceTrust, PrivacyContext, SessionIdentity
 
 from .migrations_v101 import MIGRATION_V101
+from .migrations_v102 import MIGRATION_V102
 from .backend import SQLiteBackend, StorageBackend, execute_atomic_statement, is_duplicate_error
 from .migrations import MIGRATIONS
 from .migrations_v06 import MIGRATION_V06
@@ -37,7 +39,7 @@ class AmoraDatabase:
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             applied = {row[0] for row in self._conn.execute("SELECT version FROM schema_migrations")}
             count = 0
-            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07, MIGRATION_V08, MIGRATION_V09, MIGRATION_V10, MIGRATION_V101):
+            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07, MIGRATION_V08, MIGRATION_V09, MIGRATION_V10, MIGRATION_V101, MIGRATION_V102):
                 if version in applied:
                     continue
                 if self.backend.capabilities.remote:
@@ -113,6 +115,105 @@ class AmoraDatabase:
         for row in relationship_rows:
             registry.add_relationship(Relationship(source=row["source"], relation_type=row["relation_type"], target=row["target"], confidence=row["confidence"]))
         return registry
+
+    def upsert_person_profile(self, profile: PersonProfileSeed, *, source_revision: str, updated_at: datetime) -> None:
+        payload = json.dumps(profile.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        with self._lock:
+            execute_atomic_statement(
+                self.backend,
+                self._conn,
+                """INSERT INTO person_profiles(entity_id, profile_json, source_revision, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(entity_id) DO UPDATE SET
+                     profile_json=excluded.profile_json,
+                     source_revision=excluded.source_revision,
+                     updated_at=excluded.updated_at""",
+                (profile.entity_id, payload, source_revision, updated_at.isoformat()),
+            )
+
+    def get_person_profile(self, entity_id: str) -> PersonProfileSeed | None:
+        with self._lock:
+            row = self._conn.execute("SELECT profile_json FROM person_profiles WHERE entity_id = ?", (entity_id,)).fetchone()
+        if row is None:
+            return None
+        return PersonProfileSeed.model_validate(json.loads(row["profile_json"]))
+
+    def list_person_profiles(self) -> tuple[PersonProfileSeed, ...]:
+        with self._lock:
+            rows = self._conn.execute("SELECT profile_json FROM person_profiles ORDER BY entity_id").fetchall()
+        return tuple(PersonProfileSeed.model_validate(json.loads(row["profile_json"])) for row in rows)
+
+    def upsert_platform_identity_binding(self, binding: PlatformIdentityBinding, *, updated_at: datetime) -> None:
+        with self._lock:
+            execute_atomic_statement(
+                self.backend,
+                self._conn,
+                """INSERT INTO platform_identity_bindings(
+                       platform, identifier_type, external_actor_id, account_scope,
+                       entity_id, trust, confidence, enabled, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(platform, identifier_type, account_scope, external_actor_id) DO UPDATE SET
+                       entity_id=excluded.entity_id,
+                       trust=excluded.trust,
+                       confidence=excluded.confidence,
+                       enabled=excluded.enabled,
+                       updated_at=excluded.updated_at""",
+                (
+                    binding.platform.value,
+                    binding.identifier_type,
+                    binding.external_actor_id,
+                    binding.account_scope,
+                    binding.entity_id,
+                    binding.trust.value,
+                    binding.confidence,
+                    int(binding.enabled),
+                    updated_at.isoformat(),
+                    updated_at.isoformat(),
+                ),
+            )
+
+    def resolve_platform_identity_binding(
+        self,
+        *,
+        platform: str,
+        identifier_type: str,
+        external_actor_id: str,
+        account_scope: str,
+    ) -> str | None:
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT entity_id FROM platform_identity_bindings
+                   WHERE platform = ? AND identifier_type = ? AND external_actor_id = ?
+                     AND account_scope = ? AND enabled = 1
+                   ORDER BY confidence DESC, updated_at DESC LIMIT 1""",
+                (platform, identifier_type, external_actor_id, account_scope),
+            ).fetchone()
+        return str(row["entity_id"]) if row else None
+
+    def platform_bindings_for(self, entity_id: str) -> tuple[PlatformIdentityBinding, ...]:
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT platform, identifier_type, external_actor_id, account_scope,
+                          entity_id, trust, confidence, enabled
+                   FROM platform_identity_bindings
+                   WHERE entity_id = ? ORDER BY platform, identifier_type, id""",
+                (entity_id,),
+            ).fetchall()
+        return tuple(
+            PlatformIdentityBinding.model_validate(
+                {
+                    "platform": row["platform"],
+                    "identifier_type": row["identifier_type"],
+                    "external_actor_id": row["external_actor_id"],
+                    "account_scope": row["account_scope"],
+                    "entity_id": row["entity_id"],
+                    "trust": row["trust"],
+                    "confidence": row["confidence"],
+                    "enabled": bool(row["enabled"]),
+                }
+            )
+            for row in rows
+        )
 
     def upsert_device(self, device: DeviceIdentity) -> None:
         with self._lock:

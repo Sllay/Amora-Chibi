@@ -34,7 +34,7 @@ def test_backup_restore_preserves_speech_queue(tmp_path: Path, monkeypatch) -> N
     finally: core.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored_db = AmoraDatabase(restored_path)
     try:
-        assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 11
+        assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 12
     finally: restored_db.close()
     store = ConversationStore(restored_path, clock)
     try:

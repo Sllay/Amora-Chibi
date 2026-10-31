@@ -21,7 +21,15 @@ from amora.cognition import (
 from amora.conversation import ConversationEngine, ConversationStore
 from amora.emotion import EmotionEngine, EmotionStore
 from amora.events import AsyncEventBus
-from amora.identity import DeviceIdentity, DeviceTrust, EntityRegistry, SessionService, build_initial_registry
+from amora.identity import (
+    DeviceIdentity,
+    DeviceTrust,
+    EntityRegistry,
+    PeopleProfileCatalogStore,
+    PersonProfileService,
+    SessionService,
+    build_initial_registry,
+)
 from amora.language import ACIRCompiler, LanguageSocialPipeline, PerspectiveResolver
 from amora.memory import MemoryService, MemoryStore
 from amora.models import ModelRouter
@@ -33,7 +41,7 @@ from amora.settings import RuntimePaths, ServerSettings
 from amora.social import AddresseeEngine, SocialSceneTracker
 from amora.storage import AmoraDatabase
 from amora.storage.backend import StorageBackend, BootstrapBackend, backend_from_environment
-from amora.storage.migrations_v101 import LATEST_SCHEMA_VERSION
+from amora.storage.migrations_v102 import LATEST_SCHEMA_VERSION
 from amora.time import Clock, Scheduler, SystemClock
 from amora.world import (
     PerspectiveConsolidator,
@@ -56,6 +64,7 @@ class AmoraCore:
     events: AsyncEventBus
     scheduler: Scheduler
     identities: EntityRegistry
+    profiles: PersonProfileService
     sessions: SessionService
     secrets: SecretStore
     pairing: PairingManager
@@ -113,6 +122,19 @@ class AmoraCore:
         if identities is None:
             identities = build_initial_registry()
             database.save_registry(identities)
+
+        people_catalog, people_fingerprint = PeopleProfileCatalogStore().load()
+        profiles = PersonProfileService(
+            store=database,
+            identities=identities,
+            clock=active_clock,
+            persist_registry=database.save_registry,
+        )
+        profiles.apply_catalog(people_catalog, fingerprint=people_fingerprint)
+        profiles.import_configured_private_bindings(
+            default_path=paths.secrets / "identity_bindings.json"
+        )
+
         sessions = SessionService(database, active_clock)
         if database.get_device("DEVICE_A15") is None:
             sessions.register_device(
@@ -172,6 +194,7 @@ class AmoraCore:
                 autonomy=autonomy,
                 social=social,
                 store=cognitive_store,
+                family_authority_ids=profiles.family_authorities(),
             ),
             models,
             active_clock,
@@ -234,6 +257,7 @@ class AmoraCore:
             events=events,
             scheduler=scheduler,
             identities=identities,
+            profiles=profiles,
             sessions=sessions,
             secrets=secrets,
             pairing=PairingManager(paths.cache / "pairing.json", active_clock),
@@ -316,6 +340,7 @@ class AmoraCore:
             "conversation_floor": conversation["conversation_floor"],
             "dialogue_provider": conversation["dialogue_provider"],
             "cognition_enabled": conversation["cognition_enabled"],
+            **self.profiles.state(),
             **cognition,
             **avatar,
             "entity_count": len(self.identities.entities),

@@ -65,6 +65,7 @@ class ContextCompiler:
         store: CognitiveStore,
         privacy_gate: ProviderPrivacyGate | None = None,
         dialogue: DialogueOrchestrator | None = None,
+        family_authority_ids: frozenset[str] | None = None,
     ) -> None:
         self.clock = clock
         self.identities = identities
@@ -85,13 +86,16 @@ class ContextCompiler:
 
         # Relationship learning is a derived local observer of already-gated
         # WorldModel hypotheses. It never consumes provider text directly and it
-        # never owns affect/trust; those remain EmotionEngine state.
+        # never owns affect/trust; those remain EmotionEngine state. Parenthood
+        # authority is projected from operator-owned people profiles rather than
+        # being inferred from literal conversation text.
         self.relationship_learning = RelationshipLearningService(
             world=world,
             relationships=RelationshipEvolutionService(world.store, clock, identities),
             identities=identities,
             cognitive_store=store,
             clock=clock,
+            family_authority_ids=family_authority_ids,
         )
         world.subscribe_claim_observer(self.relationship_learning.observe_claim)
 

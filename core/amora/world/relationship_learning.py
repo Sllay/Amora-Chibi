@@ -35,6 +35,10 @@ class RelationshipLearningService:
     after multiple independent observed events agree on the same canonical
     endpoints and a bounded, locally-known relationship predicate. Technical
     turns and turns with ``relationship_learning=false`` never contribute.
+
+    Parenthood claims about Amora have an additional authority gate: repetition
+    from an unknown speaker may remain a hypothesis, but cannot promote itself
+    into the canonical Relationship Graph.
     """
 
     LEARNABLE_RELATIONS = frozenset({"father_of", "mother_of", "child_of"})
@@ -50,12 +54,14 @@ class RelationshipLearningService:
         identities: EntityRegistry,
         cognitive_store: CognitiveTurnStore,
         clock: Clock,
+        family_authority_ids: frozenset[str] | None = None,
     ) -> None:
         self.world = world
         self.relationships = relationships
         self.identities = identities
         self.cognitive_store = cognitive_store
         self.clock = clock
+        self.family_authority_ids = family_authority_ids or frozenset({"PERSON_BK"})
         self._learned_count = 0
         self._last_decision: RelationshipLearningDecision | None = None
 
@@ -69,6 +75,7 @@ class RelationshipLearningService:
             "learnable_relations": sorted(self.LEARNABLE_RELATIONS),
             "min_distinct_events": self.MIN_DISTINCT_EVENTS,
             "min_mean_confidence": self.MIN_MEAN_CONFIDENCE,
+            "family_authority_ids": sorted(self.family_authority_ids),
         }
 
     def observe_claim(self, claim: WorldClaim) -> RelationshipLearningDecision:
@@ -93,6 +100,11 @@ class RelationshipLearningService:
         current_turn = self._eligible_turn(claim)
         if current_turn is None:
             return RelationshipLearningDecision(False, "RELATIONSHIP_TURN_NOT_ELIGIBLE")
+
+        if self._defines_amora_parenthood(claim):
+            speaker_id = getattr(current_turn, "speaker_id", None)
+            if speaker_id not in self.family_authority_ids:
+                return RelationshipLearningDecision(False, "AMORA_FAMILY_AUTHORITY_REQUIRED")
 
         # Keep the first implementation deliberately local to the current social
         # pair. This prevents a model from manufacturing third-party family graphs
@@ -175,6 +187,14 @@ class RelationshipLearningService:
             evidence_count=len(scores),
             confidence=learned_confidence,
         )
+
+    @staticmethod
+    def _defines_amora_parenthood(claim: WorldClaim) -> bool:
+        if claim.predicate in {"father_of", "mother_of"}:
+            return claim.object_value == "ENTITY_AMORA"
+        if claim.predicate == "child_of":
+            return claim.subject_id == "ENTITY_AMORA"
+        return False
 
     def _eligible_turn(self, claim: WorldClaim):
         turn_id = str(claim.metadata.get("turn_id") or "")

@@ -6,13 +6,23 @@ def test_bootstrap_survives_restart_with_same_identity(tmp_path: Path, monkeypat
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora")); first = AmoraCore.bootstrap()
     try:
         assert first.identities.resolve_alias("Bad King").id == "PERSON_BK"; token = first.secrets.get("LOCAL_API_TOKEN"); assert token
+        assert first.identities.resolve_alias("Lucas").id == "PERSON_LUCAS"
+        assert first.identities.resolve_alias("Nicolas").id == "PERSON_NICOLAS"
+        assert first.identities.relationship("PERSON_BK", "father_of", "PERSON_LUCAS") is not None
+        assert first.identities.relationship("PERSON_LUCAS", "sibling_of", "ENTITY_AMORA") is not None
+        assert first.identities.relationship("PERSON_NICOLAS", "cousin_of", "ENTITY_AMORA") is not None
     finally: first.close()
     second = AmoraCore.bootstrap()
     try:
         assert second.identities.resolve_alias("Slay").id == "PERSON_BK"
+        assert second.identities.resolve_alias("Lucas").id == "PERSON_LUCAS"
+        assert second.identities.resolve_alias("Nicolas").id == "PERSON_NICOLAS"
         assert second.secrets.get("LOCAL_API_TOKEN") == token
         report = second.health_report()
-        assert report["schema_version"] == 11
+        assert report["schema_version"] == 12
+        assert report["person_profile_count"] == 3
+        assert report["platform_identity_binding_count"] == 0
+        assert report["family_authority_ids"] == ["PERSON_BK"]
         assert report["memory_count"] == 0
         assert report["world_claim_count"] == 0
         assert report["self_core_identity"] == "ENTITY_AMORA"
