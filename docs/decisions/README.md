@@ -66,9 +66,9 @@ Superseded by: ADR-NNNN / none
 - `ADR-0019-turn-display-and-optional-voice-stream.md` — bolha por turno, DisplayText/SpeechPlan, mute/stop vocal, confirmação de limpeza e streaming PCM opcional sem novo renderer.
 - `ADR-0018-private-web-surface-and-browser-continuity.md` — target explícito Web 1:1, journal idempotente em SQL, credencial Web durável limitada e histórico visual 50+50.
 - `ADR-0017-core-runtime-base.md` — base Core/Web Alpine validada sobre musl; gate HIGH/CRITICAL preservado, staging separado.
-- `ADR-0016-cloud-security-boundary.md` — fronteira de segurança cloud, browser roles, auth/origins/limits e pré-deploy fail-closed.
-- `ADR-0015-remote-core-storage-and-voice-boundaries.md` — separação Core/Web, storage e voice backend para hosting remoto substituível.
-- `ADR-0014-shared-amora-voice-worker.md` — implementação local de voz/assinatura compartilhada entre Android e worker Web, hoje preservada como caminho opt-in/laboratório.
+- `ADR-0016-public-cloud-security-boundary.md` — fronteira de segurança cloud, browser roles, auth/origins/limits e pré-deploy fail-closed.
+- `ADR-0015-portable-core-storage-and-voice.md` — separação Core/Web, storage e voice backend para hosting remoto substituível.
+- `ADR-0014-web-local-amora-voice-worker.md` — implementação local de voz/assinatura compartilhada com o worker Web, hoje preservada como caminho opt-in/laboratório.
 - `ADR-0013-web-safari-primary-iteration-surface.md` — Safari/Web como superfície primária de iteração sem mover estado canônico ao navegador.
 - `ADR-0012-hybrid-spoken-cognition.md` — integração de cognição/fala e contratos de delivery preservados nas evoluções posteriores.
 - `ADR-0011-accept-amora-voice-signature-v1-soft.md` — `AMORA_VOICE_SIGNATURE_V1_SOFT` aceita e congelada como assinatura de laboratório.
