@@ -125,6 +125,10 @@ class CognitiveContext(BaseModel):
     speaker_id: str
     target_id: str | None
     user_text: str
+    # Provider-independent canonical interpretation of the current utterance.
+    # It is produced locally by ACIRCompiler and never treated as provider-owned
+    # identity, memory or world state.
+    acir: dict[str, Any] | None = None
     self_model: dict[str, dict[str, Any]] = Field(default_factory=dict)
     relationships: list[dict[str, Any]] = Field(default_factory=list)
     mood: dict[str, float] = Field(default_factory=dict)

@@ -6,6 +6,7 @@ from amora.autonomy import AutonomyEngine
 from amora.emotion import EmotionEngine
 from amora.events import PrivacyScope
 from amora.identity import EntityRegistry
+from amora.language import ACIRCompiler, PerspectiveFrame, PerspectiveResolver, PerspectiveStack
 from amora.memory import MemoryQuery, MemoryService
 from amora.social import SocialSceneTracker
 from amora.time import Clock
@@ -74,6 +75,11 @@ class ContextCompiler:
         self.store = store
         self.privacy_gate = privacy_gate or ProviderPrivacyGate()
         self.dialogue = dialogue or DialogueOrchestrator()
+        # ACIR is compiled from the final CognitiveRequest participants, after the
+        # social/conversation layer has resolved speaker and addressee. The
+        # compiler is stateless; sharing the canonical EntityRegistry keeps it in
+        # lockstep with core.perspective/core.acir without platform-specific wiring.
+        self.acir = ACIRCompiler(PerspectiveResolver(identities))
 
     def compile(self, request: CognitiveRequest, *, token_budget: int = 3200) -> CognitiveContext:
         remote = self.privacy_gate.remote_allowed(request)
@@ -81,6 +87,19 @@ class ContextCompiler:
         reasons.append("REMOTE_CONTEXT_ALLOWED" if remote else "REMOTE_CONTEXT_BLOCKED")
         if bool(request.metadata.get("test_mode", False)):
             reasons.append("TEST_MODE_ACTIVE")
+
+        acir: dict[str, Any] | None = None
+        if request.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+            perspective = PerspectiveStack(
+                PerspectiveFrame(
+                    speaker_id=request.speaker_id,
+                    addressee_id=request.target_id,
+                )
+            )
+            acir = self.acir.compile_utterance(request.text, perspective).model_dump(mode="json")
+            reasons.append("ACIR_COMPILED")
+        else:
+            reasons.append("ACIR_REDACTED_PRIVATE_SCOPE")
 
         mood = self.emotion.current_mood()
         affect: dict[str, float] = {}
@@ -210,6 +229,7 @@ class ContextCompiler:
             speaker_id=request.speaker_id,
             target_id=request.target_id,
             user_text=request.text,
+            acir=acir,
             self_model=self_snapshot,
             relationships=relationships,
             mood={
@@ -230,6 +250,13 @@ class ContextCompiler:
         )
         dialogue_plan = self.dialogue.plan(context)
         context.dialogue_plan = dialogue_plan.model_dump(mode="json")
+        if context.acir is not None:
+            # Normal providers already consume the authoritative local dialogue
+            # plan. Binding the input ACIR here makes canonical speaker/addressee
+            # semantics part of that existing provider contract without creating a
+            # second platform-specific prompt path.
+            context.dialogue_plan["input_acir"] = context.acir
+            context.reason_codes.append("ACIR_BOUND_TO_DIALOGUE_PLAN")
         context.reason_codes.extend(
             code for code in dialogue_plan.reason_codes if code not in context.reason_codes
         )

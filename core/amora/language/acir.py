@@ -42,10 +42,33 @@ class ACIR(BaseModel):
 
 
 class ACIRCompiler:
-    """Compile a typed semantic draft into provider-independent canonical form."""
+    """Compile typed semantic input into provider-independent canonical form."""
 
     def __init__(self, resolver: PerspectiveResolver) -> None:
         self.resolver = resolver
+
+    def compile_utterance(self, text: str, stack: PerspectiveStack) -> ACIR:
+        """Compile the conservative ACIR envelope available for every utterance.
+
+        This deliberately does not pretend that the Core already has a general
+        semantic parser. The raw utterance remains raw content while the deictic
+        participants (speaker/addressee) are resolved through the same canonical
+        PerspectiveResolver used by richer typed SemanticDraft callers.
+        """
+        roles: dict[str, Any] = {
+            "speaker": ReferenceInput(expression="eu"),
+            "content": text,
+        }
+        if stack.current.addressee_id is not None:
+            roles["addressee"] = ReferenceInput(expression="você")
+        return self.compile(
+            SemanticDraft(
+                intent="communicate",
+                proposition_type="utterance",
+                roles=roles,
+            ),
+            stack,
+        )
 
     def compile(self, draft: SemanticDraft, stack: PerspectiveStack) -> ACIR:
         frame = stack.current
