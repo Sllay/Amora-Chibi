@@ -17,8 +17,8 @@ from .providers_identity import (
     CloudflareCognitiveProvider,
     GeminiCognitiveProvider,
     GroqCognitiveProvider,
-    OpenRouterCognitiveProvider,
 )
+from .providers_openrouter import OpenRouterCognitiveProvider
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
 # Preserve the historical layered-runtime import as an explicit architectural
 # dependency; the identity-aware subclass below only changes provider projection.
