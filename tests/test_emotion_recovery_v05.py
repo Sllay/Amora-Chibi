@@ -50,7 +50,7 @@ async def test_backup_restore_contains_emotion_mood_affect_and_bids(tmp_path: Pa
     finally: core.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored_db = AmoraDatabase(restored_path)
     try:
-        assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 11
+        assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 12
     finally: restored_db.close()
     store = EmotionStore(restored_path, clock)
     try:
