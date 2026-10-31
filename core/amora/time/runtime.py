@@ -12,7 +12,8 @@ class SchedulerRuntime:
 
     The Scheduler itself stays clock-driven and test-friendly. This runner only
     provides the production event-loop lifecycle: poll due jobs, respect the
-    caller's idle predicate, and stop cleanly during application shutdown.
+    caller's idle predicate, keep running after a job failure, and stop cleanly
+    during application shutdown.
     """
 
     def __init__(
@@ -21,12 +22,14 @@ class SchedulerRuntime:
         *,
         is_idle: Callable[[], bool],
         poll_interval_seconds: float = 0.5,
+        on_error: Callable[[Exception], None] | None = None,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
         self.scheduler = scheduler
         self.is_idle = is_idle
         self.poll_interval_seconds = float(poll_interval_seconds)
+        self.on_error = on_error
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -52,5 +55,11 @@ class SchedulerRuntime:
 
     async def _run_forever(self) -> None:
         while True:
-            await self.run_once()
+            try:
+                await self.run_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if self.on_error is not None:
+                    self.on_error(exc)
             await asyncio.sleep(self.poll_interval_seconds)
