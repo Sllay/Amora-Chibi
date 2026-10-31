@@ -25,30 +25,33 @@ def safari(tmp_path, monkeypatch):
         import json
 
         body = json.loads(request.content)
+        response = server(request)
         table = getattr(server, "reject_table", None)
-        if table and any(
-            op.get("stmt", {})
-            .get("sql", "")
-            .lstrip()
-            .startswith("INSERT INTO " + table)
-            for op in body["requests"]
-        ):
-            return httpx.Response(
-                200,
-                json={
-                    "baton": body["baton"],
-                    "results": [
-                        {
-                            "type": "error",
-                            "error": {
-                                "code": "SQLITE_CONSTRAINT",
-                                "message": "FOREIGN KEY constraint failed: private-body groq-stt-test-only database-test-only",
-                            },
-                        }
-                    ],
-                },
-            )
-        return server(request)
+        if table:
+            payload = response.json()
+            matched = [
+                index
+                for index, op in enumerate(body["requests"])
+                if op.get("stmt", {})
+                .get("sql", "")
+                .lstrip()
+                .startswith("INSERT INTO " + table)
+            ]
+            if matched:
+                # Preserve the full Hrana pipeline response shape (including a
+                # bootstrap PRAGMA or close result) and replace only the result
+                # belonging to the statement under test. This keeps the fixture
+                # valid for both explicit transactions and one-shot autocommit.
+                for index in matched:
+                    payload["results"][index] = {
+                        "type": "error",
+                        "error": {
+                            "code": "SQLITE_CONSTRAINT",
+                            "message": "FOREIGN KEY constraint failed: private-body groq-stt-test-only database-test-only",
+                        },
+                    }
+                return httpx.Response(200, json=payload)
+        return response
 
     backend = LibSQLBackend(
         "https://database.example",
