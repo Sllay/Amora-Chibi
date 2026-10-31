@@ -62,7 +62,9 @@ Regras:
 - nenhum SQL/argumento é guardado para replay;
 - duplicate/idempotency/rowcount continuam sendo decididos pelo resultado real do statement.
 
-Primeiros consumidores: writes unitários de CognitiveStore, Event Store/identidade de sessão, decisão de turno e EmotionStore. Operações multi-statement nesses mesmos Stores permanecem inalteradas.
+**Exceção deliberada:** `CognitiveStore.record_usage` permanece com `BEGIN/COMMIT` explícitos exatamente como definido na ADR-0020. O usage ledger possui uma fronteira de recovery especial e testes que certificam inclusive falha ambígua em `COMMIT`; esta ADR não reabre esse contrato.
+
+Primeiros consumidores: mensagens/journals/segmentos cognitivos unitários, Event Store e linhas de sessão/dispositivo, decisão de turno e EmotionStore. O usage ledger fica excluído. Operações multi-statement nesses mesmos Stores permanecem inalteradas.
 
 ## Consequências
 
@@ -79,6 +81,7 @@ CI deve provar:
 - um write unitário libSQL usa um pipeline;
 - SQLite local persiste o statement após fechar/reabrir;
 - helper dentro de transação SQLite externa respeita rollback externo;
-- regressões existentes de recovery, rowcount, dedupe e container permanecem verdes.
+- regressões existentes de recovery, rowcount, dedupe e container permanecem verdes;
+- a suíte da ADR-0020 para `record_usage` e falha em `COMMIT` permanece inalterada e verde.
 
 Validação física deve comparar a mesma telemetria v3. Sucesso primário: `tx` cair materialmente dos 70 pipelines observados, mantendo resposta/estado corretos. Reavaliar se surgirem requisitos de atomicidade entre múltiplos Stores ou backend remoto com semântica diferente.
