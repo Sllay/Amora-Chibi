@@ -19,7 +19,7 @@ def test_bootstrap_survives_restart_with_same_identity(tmp_path: Path, monkeypat
         assert second.identities.resolve_alias("Nicolas").id == "PERSON_NICOLAS"
         assert second.secrets.get("LOCAL_API_TOKEN") == token
         report = second.health_report()
-        assert report["schema_version"] == 12
+        assert report["schema_version"] == 13
         assert report["person_profile_count"] == 3
         assert report["platform_identity_binding_count"] == 0
         assert report["family_authority_ids"] == ["PERSON_BK"]
@@ -44,6 +44,9 @@ def test_bootstrap_survives_restart_with_same_identity(tmp_path: Path, monkeypat
         assert report["cognition_enabled"] is True
         assert report["cognitive_message_count"] == 0
         assert report["cognitive_journal_count"] == 0
+        assert report["messaging_audit_count"] == 0
+        assert report["messaging_outbound_pending_count"] == 0
+        assert report["platform_presence"] == []
         assert report["avatar_project_count"] == 0
         assert report["avatar_asset_count"] == 0
         assert report["avatar_expression"] == "neutral"
