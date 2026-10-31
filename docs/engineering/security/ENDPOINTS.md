@@ -60,10 +60,18 @@ estáticos são descritos após a tabela.
 | POST | `/v1/memory/remember` | admin |
 | GET | `/v1/memory/{memory_id}` | admin |
 | POST | `/v1/memory/{memory_id}/forget` | admin |
+| POST | `/v1/messaging/worker/inbound` | admin ou messaging |
+| GET | `/v1/messaging/worker/outbound` | admin ou messaging |
+| POST | `/v1/messaging/worker/outbound/{message_id}/ack` | admin ou messaging |
+| GET | `/v1/messaging/worker/presence/{platform}` | admin ou messaging |
+| POST | `/v1/messaging/worker/presence/{platform}/report` | admin ou messaging |
 | GET | `/v1/operations/state` | admin ou operator |
 | GET | `/v1/operator/bindings/export` | admin ou operator |
 | POST | `/v1/operator/bindings/import/apply` | admin ou operator |
 | POST | `/v1/operator/bindings/import/preview` | admin ou operator |
+| GET | `/v1/operator/messaging/audit` | admin ou operator |
+| GET | `/v1/operator/messaging/presence` | admin ou operator |
+| POST | `/v1/operator/messaging/presence/{platform}` | admin ou operator |
 | GET | `/v1/operator/people` | admin ou operator |
 | GET | `/v1/operator/people/export` | admin ou operator |
 | POST | `/v1/operator/people/import/apply` | admin ou operator |
@@ -98,15 +106,18 @@ estáticos são descritos após a tabela.
 `/web/**` e `/avatar/**`: GET/HEAD públicos, assets sem estado privado.
 `/docs`, `/redoc`, `/openapi.json`: desabilitados.
 `/v1/events/stream`: WebSocket administrativo; Bearer no header, origem validada.
-Worker separado: `/live` público; `/ready` e POST `/v1/render` exigem credencial de serviço.
+Voice Worker separado: `/live` público; `/ready` e POST `/v1/render` exigem credencial de serviço própria.
 
-## Browser roles
+## Roles
 
 - `web`: conversa/voz somente no contrato `WEB_SAFARI`;
 - `avatar`: superfície Avatar Studio existente;
 - `operator`: somente `/v1/operator/**` e `GET /v1/operations/state`;
+- `messaging`: somente `GET/POST /v1/messaging/worker/**`;
 - `admin`: superfície interna completa.
 
-`operator` não acessa `/v1/web/*`, `/v1/state`, memória, mundo, cognition journal, events ou ActionEngine. `web` não acessa `/v1/operator/*` nem `/v1/operations/state`.
+`operator` não acessa `/v1/web/*`, `/v1/state`, memória, mundo, cognition journal, events ou ActionEngine. `web` não acessa `/v1/operator/*`, `/v1/messaging/worker/*` nem `/v1/operations/state`.
+
+`messaging` usa `AMORA_MESSAGING_SERVICE_TOKEN`, que deve ser distinto do admin e do voice service token; em cloud exige no mínimo 32 bytes. Um worker Discord/WhatsApp comprometido não recebe acesso a Memory, World, Actions, People Settings ou Console.
 
 O `client=operator` de `/v1/pairing/redeem` consome um challenge separado criado por `amora pair --role operator`; um código comum de `amora pair` não pode ser promovido mudando o campo `client`.
