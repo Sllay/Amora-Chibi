@@ -40,6 +40,7 @@ class RelationshipLearningService:
     LEARNABLE_RELATIONS = frozenset({"father_of", "mother_of", "child_of"})
     MIN_DISTINCT_EVENTS = 2
     MIN_MEAN_CONFIDENCE = 0.78
+    INPUT_SOURCES = frozenset({"stt", "text"})
 
     def __init__(
         self,
@@ -181,12 +182,19 @@ class RelationshipLearningService:
             return None
         messages = self.cognitive_store.list_messages(limit=8, turn_id=turn_id)
         for message in messages:
+            source = getattr(message, "source", None)
+            source_value = str(getattr(source, "value", source) or "")
+            # Only the observed inbound utterance may authorize relationship
+            # learning. Generated cognitive/TTS messages from the same turn must
+            # never bypass a disabled/test input gate.
+            if source_value not in self.INPUT_SOURCES:
+                continue
+            if getattr(message, "speaker_id", None) in {None, "ENTITY_AMORA"}:
+                continue
             metadata = dict(getattr(message, "metadata", {}) or {})
             if metadata.get("test_mode") is True:
-                continue
+                return None
             if metadata.get("relationship_learning") is False:
-                continue
-            if getattr(message, "speaker_id", None) is None:
-                continue
+                return None
             return message
         return None
