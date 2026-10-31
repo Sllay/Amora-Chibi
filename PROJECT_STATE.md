@@ -1,8 +1,8 @@
 # PROJECT_STATE — Amora-Chibi
 
 **Última atualização:** 2026-10-31  
-**Base operacional:** `main` após PR #85 (`90ddd0869e8af55ef02f29b00f8a652120ee19dc`)  
-**Objetivo:** checkpoint operacional curto; para a auditoria estrutural detalhada ler `docs/engineering/reviews/PROJECT_REMAP_2026-10-31.md`.
+**Base operacional:** `main` após PR #88 (`9c85d14be6f1d125869c058c4eb2725cf466deaa`)  
+**Objetivo:** checkpoint operacional curto; para auditoria estrutural detalhada ler `docs/engineering/reviews/PROJECT_REMAP_2026-10-31.md` e os ADRs mais recentes.
 
 ## 1. Autoridade
 
@@ -13,18 +13,19 @@ Ordem de leitura:
 3. `docs/canon/GDD.md`;
 4. `docs/canon/DIALOGUE_EMOTION.md`;
 5. `docs/canon/PROVIDER_MESH.md`;
-6. `docs/canon/VOICE_IDENTITY.md`;
-7. `docs/roadmap/VERSIONS.md`;
-8. ADRs relevantes;
-9. `docs/engineering/reviews/PROJECT_REMAP_2026-10-31.md`;
-10. este snapshot;
-11. código/testes/CI atuais.
+6. `docs/canon/PEOPLE_IDENTITY.md`;
+7. `docs/canon/VOICE_IDENTITY.md`;
+8. `docs/roadmap/VERSIONS.md`;
+9. ADRs relevantes;
+10. `docs/engineering/reviews/PROJECT_REMAP_2026-10-31.md`;
+11. este snapshot;
+12. código/testes/CI atuais.
 
-Quando um documento antigo contradizer o código + ADR mais recente, não restaurar silenciosamente o método antigo.
+Quando documento antigo contradizer código + ADR/canon mais recente, não restaurar silenciosamente o método antigo.
 
 ## 2. Decisão operacional atual: visual congelado
 
-BK congelou temporariamente a frente visual para priorizar wiring/consolidação do cérebro já implementado.
+BK congelou temporariamente a frente visual para priorizar wiring, identidade social, integrações e consolidação do cérebro.
 
 **Congelado por enquanto, não cancelado:**
 
@@ -32,328 +33,289 @@ BK congelou temporariamente a frente visual para priorizar wiring/consolidação
 - visual perception;
 - screen mapping;
 - OCR/keyframes/scene-change perception;
-- Android visual/Living Console;
+- Living Console visual final;
 - V1.2 estética/self-image/roupa/aparência.
 
-Não abrir implementação visual até BK reabrir explicitamente essa frente.
-
-Isso não altera o roadmap canônico: é prioridade de execução atual, não remoção de feature.
+A ideia de apresentar o futuro Living Console dentro da Web pareada é válida, mas ainda não reabre a implementação visual. `/v1/operations/state` continua sendo a fundação operacional segura; uma view Web administrativa exigirá papel/permissão próprio.
 
 ## 3. Runtime operacional atual
 
-### Core/Web
+### Core / persistência
 
 - Core + Web/PWA rodam em container Linux remoto.
-- Safari/Web permanece a superfície conversacional principal de iteração.
-- Android atual é cliente legado funcional, não o cliente final.
+- Safari/Web permanece superfície conversacional principal de iteração.
 - `WEB_SAFARI != DEVICE_A15` permanece invariante.
-
-### Persistência
-
 - `StorageBackend` suporta SQLite local e libSQL remoto.
-- O caminho cloud usa storage remoto libSQL.
-- SQLite local permanece válido para desenvolvimento/offline; não remover.
-- transactions/recovery/atomic writes remotos estão endurecidos.
-- migrations são histórico de schema necessário, não duplicação descartável.
+- schema atual: **12**.
+- migrations/recovery/atomic writes remotos estão endurecidos.
+- snapshots auditados schema 10/11 podem ser promovidos aditivamente até 12 durante restore vazio; snapshot original não é reescrito.
 
-### Voz Web
-
-Caminho normal atual:
+### Voz Web normal
 
 ```text
 WEB_SAFARI
 → Core
 → Fish Audio s2.1-pro-free + clone da Amora
-→ PCM s16le incremental por turno cognitivo
+→ PCM s16le incremental
 → Safari PcmStreamPlayer
 ```
 
-Fallback:
+Fallback Fish→Gemini continua explícito e só antes do primeiro PCM Fish. Supertonic/FINAL_B/VoiceSignature permanecem preservados como laboratório/offline/opt-in.
+
+### Background Voice / Free Fire
+
+**NÃO IMPLEMENTADO / GATE FÍSICO PENDENTE.**
+
+Problema real: Safari/PWA pode suspender o Web app quando deixa o foreground; BK quer continuar ouvindo/falando com Amora enquanto outro app/jogo, como Free Fire, está em foreground.
+
+Direção de experimento Web-only:
 
 ```text
-Fish falha antes do primeiro PCM
-→ Gemini TTS explícito
+Safari normal inicia Call Mode
+↕ WebRTC audio
+VoicePresenceBridge remoto
+→ VAD/STT/Core/TTS no servidor
+↕ WebRTC audio
+Safari em background
 ```
 
-Depois do primeiro PCM Fish não misturar Gemini na mesma fala.
+Safari 27/WebKit melhorou manutenção da AudioSession enquanto captura de microfone está ativa, mas isso não certifica concorrência real com Free Fire, lock screen ou jogo usando microfone. Antes de integrar ao caminho normal, executar spike físico no iPhone de BK.
 
-Supertonic/FINAL_B/VoiceSignature e RemoteVoiceBackend continuam preservados como laboratório/offline/opt-in, não default Web.
+Web Push serve para notificação/reentrada, não para processo invisível 24/7.
 
-## 4. Wiring cognitivo/autônomo fechado após o remapeamento
+## 4. Loops cognitivos/autônomos ativos
 
-### Scheduler + autonomia idle — ATIVO / INTEGRADO
+Ativos/integrados:
 
-PR #82 adicionou lifecycle assíncrono real ao `Scheduler` dentro do lifespan da API.
+- Scheduler runtime + autonomia idle;
+- autonomia → ActionEngine bounded;
+- ACIR/Perspective no caminho normal;
+- PerspectiveConsolidator em reflection estruturada;
+- relationship learning corroborado;
+- Emotion Engine + Interaction Appraiser;
+- Memory / World / Self;
+- DialoguePlan + RealizationFrame validator;
+- provider mesh + usage/health/failover;
+- STT Groq;
+- Fish/Gemini voice chain;
+- Web/PWA;
+- observability/operations/CI/container.
 
-Fluxo normal:
+## 5. Provider protocol / expressão — ATIVO
 
-```text
-API lifespan
-→ SchedulerRuntime
-→ AutonomyEngine.schedule_idle()
-→ Scheduler.run_due()
-→ autonomy.cycle(runtime_auto_execute=true)
-```
-
-Regras importantes:
-
-- job idle respeita atividade de fala/entrega;
-- falha isolada de job não mata o scheduler;
-- shutdown cancela/join o runner e drena jobs em memória;
-- ciclo manual/debug continua manual.
-
-### Autonomia → ActionEngine — ATIVO / INTEGRADO / BOUNDED
-
-PR #82 também fechou:
+PR #87 fechou a fronteira provider/conversa.
 
 ```text
-AutonomyEngine
-→ autonomy.decision
-→ ActionEngine
-→ planner
-→ permission/privacy/cost/risk/retry/effect verification
-→ execution result
-```
-
-Somente decisão de runtime explicitamente marcada e com outcome `SELECTED` pode autoexecutar.
-
-`KEPT_CURRENT`, `DEFERRED`, `AUTH` e `SECRET` não atravessam automaticamente para execução.
-
-O wiring reutiliza os gates existentes do ActionEngine; não existe bypass autônomo especial.
-
-### ACIR + Perspective no caminho normal — ATIVO / INTEGRADO
-
-PR #83 integrou ACIR no `ContextCompiler`, depois da resolução social do turno e antes do provider.
-
-Fluxo normal:
-
-```text
-texto/STT
-→ social/addressee
-→ CognitiveRequest final
-→ PerspectiveResolver
-→ ACIR local
-→ DialoguePlan
-→ provider
-```
-
-A integração é deliberadamente conservadora:
-
-- utterance comum recebe envelope ACIR com speaker/addressee canônicos + conteúdo bruto;
-- não existe parser semântico geral de texto livre e nenhum foi inventado;
-- `AUTH`/`SECRET` não constroem/exportam ACIR;
-- objetivo interno de iniciação autônoma não é rotulado falsamente como utterance recebida.
-
-### Relationship learning — ATIVO / BOUNDED
-
-PR #84 fechou o ciclo de aprendizagem relacional local.
-
-O provider nunca escreve diretamente na Relationship Graph.
-
-Fluxo:
-
-```text
-provider/reflection
-→ proposal não canônica
-→ WorldClaim HYPOTHESIS
-→ RelationshipLearningService
-→ corroboração local
-→ RelationshipEvolutionService
-→ Relationship Graph temporal
-```
-
-Política vigente está registrada em `ADR-0025-corroborated-local-relationship-learning.md`.
-
-Gates atuais:
-
-- predicados automáticos inicialmente limitados a `father_of`, `mother_of`, `child_of`;
-- endpoints precisam ser entidades canônicas;
-- endpoints precisam pertencer ao par social do input observado;
-- somente input `stt`/`text` autoriza learning;
-- `test_mode=true` e `relationship_learning=false` bloqueiam mutação;
-- resposta gerada pela própria Amora não pode reabrir um turno bloqueado;
-- mínimo de 2 IDs de evento observados distintos;
-- confiança média mínima 0.78;
-- relação existente mais forte nunca é rebaixada;
-- provenance registra eventos, hipóteses e confiança;
-- relações aprendidas são reidratadas no `EntityRegistry` após restart.
-
-Directed affect (`affection`, `trust`, `anger`, `irritation`, `fear`, `gratitude`) continua pertencendo ao Emotion Engine e não é confundido com relação estrutural.
-
-### PerspectiveConsolidator — ATIVO / INTEGRADO EM REFLECTION ESTRUTURADA
-
-PR #85 removeu o write direto de `BeliefHypothesisProposal` para `WorldModel`.
-
-Agora:
-
-```text
-structured reflection proposal
-→ typed semantic ACIR
-→ PerspectiveResolver
-→ PerspectiveConsolidator
-→ WorldModel HYPOTHESIS
+Constitution
++ LivingProfile
++ TurnFrame
++ RealizationContract
+        ↓
+provider-native instructions/systemInstruction
+        ║ autoridade separada
+literal conversation input/contents
 ```
 
 Regras:
 
-- subject precisa ser entidade canônica ancorada no ACIR do input;
-- object que for entidade canônica também precisa estar ancorado na perspectiva atual;
-- subject desconhecido, terceiro fora da perspectiva ou referência não resolvida fica `DEFERRED`;
-- hipótese aceita permanece não canônica e mantém TTL/gates do World Model;
-- evidence, privacy, provider/model, turn e source entity são preservados;
-- hipóteses relacionais consolidadas continuam alimentando o corroboration gate do PR #84.
+- provider não escolhe identidade social;
+- texto literal não consegue reescrever `speaker_id`;
+- múltiplos humanos permanecem distintos;
+- specialist support é efêmero/não canônico;
+- Groq/OpenRouter usam Responses quando aplicável;
+- Gemini usa `systemInstruction`;
+- expressão regional/palavrão é bounded por policy do Core, não caricatura nem prompt solto.
 
-## 5. Módulos realmente ativos
+ADR: `ADR-0026-provider-authority-and-expression-protocol.md`.
 
-Ativos no runtime normal ou em contratos operacionais usados:
+## 6. People Identity / Living Profiles — ATIVO
 
-- API/auth/pairing/security;
-- Event Bus;
-- identity/device/session/secrets;
-- storage SQLite/libSQL, migrations e backup;
-- Memory retrieval e reflection gated;
-- World Model e Self Model;
-- Addressee/Social Scene;
-- ACIR/Perspective no contexto cognitivo normal;
-- PerspectiveConsolidator em reflexão estruturada;
-- Relationship learning bounded;
-- Emotion Engine + Interaction Appraiser;
-- Scheduler runtime + Autonomy Engine idle lifecycle;
-- Autonomy → ActionEngine bounded;
-- Conversation + DialoguePlan + RealizationFrame validator;
-- provider mesh;
-- STT Groq;
-- Web/PWA atual;
-- Fish/Gemini voice chain;
-- Avatar Core/Studio — motor existente, mas frente visual congelada;
-- observability/operations/CI/container.
+PR #88 adicionou a fundação necessária para WhatsApp/Discord multiusuário.
 
-## 6. Implementado mas ainda não vivendo completamente
+### Profiles seed
+
+`config/people_profiles.json` contém bootstrap humano-editável pequeno. Não é segunda memória.
+
+Estado inicial confirmado:
+
+- `PERSON_BK` — pai da Amora e pai de Lucas; autoridade familiar estrutural inicial;
+- `PERSON_LUCAS` — filho de BK e irmão da Amora;
+- `PERSON_NICOLAS` — primo da Amora;
+- `ENTITY_CHATGPT mother_of ENTITY_AMORA` permanece relação canônica pré-existente.
+
+Idade/nascimento/descrição de BK/Lucas/Nicolas podem ser preenchidos no catálogo. Preferências aprendidas, episódios, crenças, relação evolutiva e afeto continuam em World/Memory/Relationship Graph/Emotion.
+
+### PlatformIdentityBinding
+
+Uma PERSON pode possuir N contas externas:
+
+```text
+PERSON_BK
+├── WhatsApp A
+├── WhatsApp B
+├── Discord A
+├── Discord B
+└── Web autenticada
+```
+
+Bindings reais são privados e não ficam em Git:
+
+```text
+~/.amora/secrets/identity_bindings.json
+```
+
+ou `AMORA_IDENTITY_BINDINGS_FILE`.
+
+Existe apenas `config/identity_bindings.example.json` versionado.
+
+### Autoridade familiar
+
+Unknown/familiar sem autoridade não pode promover a si ou terceiro para `father_of`/`mother_of ENTITY_AMORA` nem `ENTITY_AMORA child_of ...` apenas repetindo afirmações.
+
+Autoridade inicial: `PERSON_BK` via profile, não hardcode escondido.
+
+ADR: `ADR-0027-living-people-profiles-and-platform-bindings.md`.
+
+## 7. Mensageria externa — PRÓXIMA FUNDAÇÃO
+
+WhatsApp e Discord ainda **não têm adapters de rede integrados**.
+
+Arquitetura alvo:
+
+```text
+Platform Adapter
+→ normalized inbound message
+→ PlatformIdentityBinding
+→ SocialAttentionRouter / Conversation Floor
+→ Cognitive Core
+→ OutboundMessage
+→ Platform Adapter
+```
+
+### Política de grupo
+
+- participantes conhecidos ou desconhecidos podem compor contexto do grupo;
+- mention, reply/quote, vocativo e continuidade social podem endereçar Amora;
+- desconhecidos recebem trust/relational attitude menor;
+- incerteza deve favorecer silêncio;
+- reply para mensagem da Amora é forte evidência de addressee;
+- mensagens e routing precisam de auditoria operacional.
+
+### Política de DM
+
+- DM desconhecida não entra na cognição normal;
+- somente pessoa conhecida/autorizada pode interagir em privado;
+- gate ocorre antes do Cognitive Core.
+
+### Presence por plataforma
+
+Desejo atual de produto:
+
+```text
+DISCONNECTED
+→ CONNECTING
+→ CONNECTED
+→ IDLE/CHECKING
+→ DISCONNECTING
+```
+
+BK/Amora podem conectar/desconectar explicitamente. Scheduler/autonomia poderá solicitar checks bounded (ex.: ~30 min).
+
+Regra física: se o transporte estiver realmente desconectado e não houver webhook/push independente, o Core não sabe instantaneamente que chegou mensagem. Para resposta imediata, transporte precisa permanecer conectado ou possuir canal oficial assíncrono.
+
+## 8. WhatsApp — direção técnica atual
+
+A Cloud API oficial possui Groups API, mas seus grupos são próprios da API, limitados e não equivalem automaticamente ao grupo comum de família existente.
+
+Para o requisito "número normal da Amora como linked device em grupo comum", candidato técnico é worker isolado usando cliente WhatsApp Web/linked-device (ex.: Baileys), nunca dentro do Cognitive Core.
+
+Se esse caminho for escolhido:
+
+- usar somente linha 7.x suportada e release fixada;
+- auth state tratado como credencial longa e nunca commitado;
+- logs com JIDs/metadados filtrados;
+- dedupe/protocol validation antes do Core;
+- testar reconnect/history sync;
+- reconhecer que é integração não oficial e existe risco operacional/bloqueio.
+
+## 9. Discord — direção técnica atual
+
+Adapter Discord deve usar **Discord user ID** como external actor id. Nickname/display name é alias contextual, nunca identidade forte.
+
+Discord é candidato natural para provar primeiro o contrato de mensageria porque mentions/replies/DMs/IDs são mais diretos e o risco de protocolo é menor que no WhatsApp linked-device.
+
+## 10. Implementado mas ainda não vivendo completamente
 
 ### Speaker tracking
 
-`SessionSpeakerTracker` estabiliza labels de diarização por sessão e pode aceitar match contextual de pessoa conhecida.
+`SessionSpeakerTracker` estabiliza labels de diarização fornecidos por upstream; ele não diariza sozinho.
 
-Ele **não executa diarização sozinho**.
-
-As superfícies atuais ainda usam principalmente speaker declarado; não há upstream normal fornecendo diarization labels reais ao Core.
-
-**Status:** PRONTO NÃO INTEGRADO. Não fingir que diarização/voice identification já existe.
+**Status:** PRONTO NÃO INTEGRADO. WhatsApp/Discord não dependem disso porque a plataforma já fornece actor identity. Áudio compartilhado físico ainda precisa fonte real de diarização.
 
 ### Core EnergyVad
 
-Existe, mas o caminho Web atual usa VAD da superfície e não foi encontrado consumidor normal do `core.vad`.
+Existe, mas Web atual usa VAD da superfície.
 
-**Status:** DORMENTE/LEGADO. Não remover até definir plataforma consumidora.
+**Status:** DORMENTE/LEGADO até existir consumidor claro.
 
-### Avatar runtime no produto
+### Avatar runtime
 
-Avatar Core/Studio/rig/assets/IK/physics/expressions/animações e portable ZIP são reais.
+Avatar Core/Studio/rig/assets/IK/physics/expressions/animações e portable bundle existem.
 
-O runtime visual ainda não é a presença normal dentro da superfície de conversa.
+**Status:** PARCIAL; frente visual congelada.
 
-**Status:** PARCIAL, porém frente visual congelada por decisão atual de BK.
+## 11. Dívida estrutural
 
-## 7. Dívida / duplicação
+Cognição ainda possui pilha evolutiva (`service → hardened → resilient → production → structured_runtime`, pares `context/context_v1`, `store/store_v1`, providers por geração).
 
-### Cognição
+Não fazer faxina nuclear. Flatten correto exige replay/regressões antes de remover bases.
 
-Caminho vigente continua uma pilha evolutiva:
+`web/app.js` legado segue candidato forte a remoção, mas não priorizar enquanto a frente Web visual estiver congelada.
 
-```text
-service
-→ hardened
-→ resilient
-→ production
-→ structured_runtime
-```
-
-Além de pares `context/context_v1`, `store/store_v1` e gerações de providers.
-
-Não apagar bases isoladamente: a implementação final ainda herda comportamento.
-
-Refactor correto:
-
-```text
-identificar comportamento vigente
-→ cobrir com replay/regressões
-→ achatar implementação
-→ remover apenas base realmente sem consumidor
-```
-
-Nada de faxina nuclear.
-
-### Web legado
-
-`web/app.js` antigo não é carregado pelo HTML atual e não foram encontradas referências normais. Ele usa `speechSynthesis` superseded.
-
-**Status:** MORTO / candidato forte a remoção.
-
-Como a frente Web/visual está congelada, não priorizar essa limpeza agora sem decisão específica.
-
-### ADR duplicado — RESOLVIDO
-
-A duplicação antiga de ADR-0022 foi corrigida no PR #81:
-
-- ADR-0022 — Fish streaming;
-- ADR-0023 — Fish stability/TTFS;
-- ADR-0024 — Portable Avatar Bundle.
-
-ADR-0025 registra agora a política de relationship learning local corroborado.
-
-## 8. Não implementado / não integrado ainda
-
-### Visual — congelado
-
-- visual perception;
-- screen mapping;
-- OCR/keyframes/scene changes;
-- presença visual final na superfície principal;
-- Android Living Console visual;
-- V1.2 estética/self-image.
-
-### Não visual restante
-
-- integração de `SessionSpeakerTracker` depende de uma fonte real de diarization labels; o Core já sabe estabilizá-las, mas não deve fabricar diarização;
-- plugins externos reais continuam backlog e devem seguir roadmap/canon antes de implementação;
-- flatten da pilha cognitiva continua dívida técnica e exige replay/regressões antes de remoção de bases;
-- observabilidade e testes devem acompanhar qualquer nova integração.
-
-## 9. Próxima ordem recomendada enquanto o visual estiver congelado
+## 12. Próxima ordem recomendada
 
 ```text
 P0 — concluído
-✓ Scheduler lifecycle + autonomia idle
-✓ autonomia → ActionEngine bounded
-✓ ACIR/Perspective no caminho normal
-✓ relationship learning + test isolation efetivo
-✓ PerspectiveConsolidator em reflection estruturada
+✓ scheduler/autonomia/actions wiring
+✓ ACIR/Perspective
+✓ relationship learning + PerspectiveConsolidator
+✓ provider authority protocol + expression
+✓ People Profiles + PlatformIdentityBinding + family authority
 
-P1 — não visual
-1. manter/expandir regressões dos loops recém-integrados
-2. planejar flatten da cognição com replay antes de qualquer remoção
-3. integrar SpeakerTracker somente quando existir diarization label real da superfície
-4. avaliar plugins externos conforme roadmap/canon, sem acoplamento precoce
-5. limpeza de código morto apenas fora de área congelada ou quando explicitamente autorizada
+P1 — identidade/mensageria
+1. PlatformMessagingContract
+2. SocialAttentionRouter + Group Conversation Floor
+3. audit/history de mensageria
+4. Discord adapter
+5. WhatsApp worker/adaptor isolado
+6. PlatformPresenceController + checks bounded
+
+P1 paralelo — voz fora do foreground
+7. spike físico WebRTC Background Voice/Call Mode no iPhone + Free Fire
+8. somente se PASS, integrar call mode ao Web normal
+9. se FAIL, registrar limite Web; sem cliente nativo não prometer always-on mic
+
+DÍVIDA
+10. flatten da cognição guiado por replay
+11. SpeakerTracker somente com diarização real
 
 FROZEN
-- percepção/presença visual
-- Android visual/Living Console
+- percepção visual / screen mapping / OCR
+- presença/avatar visual final
+- Living Console visual final / Web Console presentation
 - V1.2 estética/self-image
 ```
 
-Regra atual: **conectar e consolidar o cérebro existente; não abrir visual até BK reabrir a frente.**
+## 13. Últimos merges relevantes
 
-## 10. Últimos merges relevantes
+- PR #82 — Scheduler lifecycle + autonomia → Actions — `95920dc64e30fa108c8cbc44ad821650355a9054`.
+- PR #83 — ACIR/Perspective no runtime — `8da4501ee50d05c355334ea1be1354206ff43f6f`.
+- PR #84 — relationship learning corroborado — `435b2f0245eebf18cab738fe511209dfb17b2c8a`.
+- PR #85 — PerspectiveConsolidator — `90ddd0869e8af55ef02f29b00f8a652120ee19dc`.
+- PR #86 — checkpoint/docs do remapeamento — `2667058d9e3d55dae9027119529510a28b553ca4`.
+- PR #87 — provider authority + multi-speaker + expressive policy — `c7c329c49b37db517a08e858ff22c7d64290b8aa`.
+- PR #88 — living people profiles + private platform bindings — `9c85d14be6f1d125869c058c4eb2725cf466deaa`.
 
-- PR #79 — Portable Avatar ZIP bundle — merge `693538453a17e3eaf05b16543be01a3a68365647`.
-- PR #80 — Fish voice stability + first-audio telemetry — merge `ca8fcf6d803657d99f323573cf482eb2d830a8a1`.
-- PR #81 — runtime remap + PROJECT_STATE + correção de numeração ADR — merge `0071aa6b5cf17fd5e8a96164f0c2215032554f43`.
-- PR #82 — Scheduler lifecycle + autonomia → Actions — merge `95920dc64e30fa108c8cbc44ad821650355a9054`.
-- PR #83 — ACIR/Perspective no runtime cognitivo — merge `8da4501ee50d05c355334ea1be1354206ff43f6f`.
-- PR #84 — relationship learning corroborado + gates reais — merge `435b2f0245eebf18cab738fe511209dfb17b2c8a`.
-- PR #85 — PerspectiveConsolidator no fluxo de reflexão estruturada — merge `90ddd0869e8af55ef02f29b00f8a652120ee19dc`.
+PR #88 passou Core Python 3.11–3.14, pre-deploy security e cloud container contracts, incluindo regressões completas no container non-root/read-only.
 
-CI dos PRs #82–#85 passou em Core Python 3.11–3.14, pre-deploy security e cloud container contracts, incluindo regressões completas no container non-root/read-only.
-
-Esses resultados certificam implementação/CI. Nenhum novo gate físico de Galaxy A15 foi declarado concluído por inferência.
+Nenhum gate físico de Background Voice/iPhone/Free Fire, visão ou Living Console visual foi declarado PASS por inferência.
