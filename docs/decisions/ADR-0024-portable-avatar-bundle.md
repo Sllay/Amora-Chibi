@@ -1,4 +1,4 @@
-# ADR-0022 — Portable Avatar Bundle
+# ADR-0024 — Portable Avatar Bundle
 
 **Status:** ACCEPTED  
 **Data:** 2026-10-30
