@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
+from amora.events import PrivacyScope
 from amora.language import ACIR
 
 from .models import (
     EpistemicKind,
+    EvidenceRef,
     PerspectiveConsolidationResult,
     PerspectiveConsolidationStatus,
     WorldClaimDraft,
@@ -22,10 +26,21 @@ class PerspectiveClaimDraft(BaseModel):
     context_key: str = ""
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source: str = "acir:perspective_consolidation"
+    source_entity_id: str | None = None
+    evidence: list[EvidenceRef] = Field(default_factory=list)
+    privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
+    remote_processing_allowed: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class PerspectiveConsolidator:
-    """Promotes only perspective-resolved ACIR propositions into epistemic records."""
+    """Promote only perspective-resolved ACIR propositions into epistemic records.
+
+    The consolidator is intentionally a persistence boundary, not a parser. The
+    caller must first build a typed ACIR proposition whose references were
+    resolved locally. Unresolved or non-canonical subjects are deferred rather
+    than silently rewritten into subject-less durable claims.
+    """
 
     def __init__(self, world: WorldModelService) -> None:
         self.world = world
@@ -62,9 +77,13 @@ class PerspectiveConsolidator:
                 object_value=object_value,
                 context_key=draft.context_key,
                 source=draft.source,
-                source_entity_id=acir.speaker,
+                source_entity_id=draft.source_entity_id or acir.speaker,
                 confidence=confidence,
+                evidence=draft.evidence,
+                privacy_scope=draft.privacy_scope,
+                remote_processing_allowed=draft.remote_processing_allowed,
                 metadata={
+                    **draft.metadata,
                     "acir_intent": acir.intent,
                     "acir_proposition_type": acir.proposition.type,
                     "perspective_consolidated": True,
