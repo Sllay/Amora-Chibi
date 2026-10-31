@@ -42,6 +42,10 @@ class ContextCompiler(BaseContextCompiler):
 
             dialogue_plan = self.dialogue.plan(context)
             context.dialogue_plan = dialogue_plan.model_dump(mode="json")
+            if context.acir is not None:
+                context.dialogue_plan["input_acir"] = context.acir
+                if "ACIR_BOUND_TO_DIALOGUE_PLAN" not in context.reason_codes:
+                    context.reason_codes.append("ACIR_BOUND_TO_DIALOGUE_PLAN")
             context.reason_codes.extend(
                 code for code in dialogue_plan.reason_codes if code not in context.reason_codes
             )
