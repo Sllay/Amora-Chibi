@@ -7,16 +7,14 @@ import json
 from uuid import uuid4
 
 from fastapi import Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from amora.identity.models import Entity, EntityRegistry, EntityType, Relationship, normalize_alias
 from amora.identity.profiles import (
-    BindingTrust,
     IdentityBindingsFile,
     PeopleProfileCatalog,
     PersonProfileSeed,
     PlatformIdentityBinding,
-    PlatformKind,
     SeedRelationship,
 )
 
@@ -46,10 +44,10 @@ class ProfileMutation(BaseModel):
 
 
 class RelationshipMutation(BaseModel):
-    source_id: str
-    relation_type: str
-    target_id: str
-    confidence: float = 1.0
+    source_id: str = Field(min_length=1, max_length=96)
+    relation_type: str = Field(min_length=1, max_length=80)
+    target_id: str = Field(min_length=1, max_length=96)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     mirror: bool = True
     confirm_revision: bool = False
 
@@ -133,8 +131,13 @@ def _validate_family_relation(core, source_id: str, relation_type: str, target_i
         raise HTTPException(status_code=422, detail="unsupported family relation type")
     if source_id == target_id:
         raise HTTPException(status_code=422, detail="relationship endpoints must differ")
-    if core.identities.get(source_id) is None or core.identities.get(target_id) is None:
+    source = core.identities.get(source_id)
+    target = core.identities.get(target_id)
+    if source is None or target is None:
         raise HTTPException(status_code=422, detail="relationship endpoints must be canonical entities")
+    allowed = {EntityType.PERSON, EntityType.AI_PERSONA, EntityType.EXTERNAL_AI}
+    if source.entity_type not in allowed or target.entity_type not in allowed:
+        raise HTTPException(status_code=422, detail="family relationships require person/persona endpoints")
 
 
 def _retire_relation(core, source_id: str, relation_type: str, target_id: str) -> bool:
@@ -144,8 +147,8 @@ def _retire_relation(core, source_id: str, relation_type: str, target_id: str) -
     if current is not None:
         changed = core.world_store.expire_relationship(current.id, now) or changed
     changed = core.identities.remove_relationship(source_id, relation_type, target_id) or changed
-    # EntityRegistry persistence is a projection table. Remove the retired edge
-    # explicitly so a later restart cannot resurrect it before temporal restore.
+    # The registry table is a projection. Remove the retired edge explicitly so
+    # bootstrap cannot see and resurrect it before temporal restoration.
     with core.database._lock, core.database._conn:
         cursor = core.database._conn.execute(
             "DELETE FROM relationships WHERE source = ? AND relation_type = ? AND target = ?",
@@ -179,7 +182,13 @@ def _active_family_relationships(core) -> list[dict[str, object]]:
                 "valid_from": revision.valid_from.isoformat() if revision else None,
             }
         )
-    rows.sort(key=lambda item: (str(item["source_name"]), str(item["relation_type"]), str(item["target_name"])))
+    rows.sort(
+        key=lambda item: (
+            str(item["source_name"]),
+            str(item["relation_type"]),
+            str(item["target_name"]),
+        )
+    )
     return rows
 
 
@@ -192,7 +201,7 @@ def _catalog_diff(core, catalog: PeopleProfileCatalog, *, replace: bool) -> dict
         for entity_id in set(incoming_profiles) & set(current_profiles)
         if incoming_profiles[entity_id] != current_profiles[entity_id]
     )
-    unchanged = sorted(set(incoming_profiles) & set(current_profiles) - set(changed))
+    unchanged = sorted((set(incoming_profiles) & set(current_profiles)) - set(changed))
 
     current_relations = {
         (item.source, item.relation_type, item.target): item.confidence
@@ -210,7 +219,7 @@ def _catalog_diff(core, catalog: PeopleProfileCatalog, *, replace: bool) -> dict
         if key in current_relations and incoming_relations[key] != current_relations[key]
     )
     managed = set(incoming_profiles) | {"ENTITY_AMORA", "ENTITY_CHATGPT"}
-    relation_remove = []
+    relation_remove: list[tuple[str, str, str]] = []
     if replace:
         relation_remove = sorted(
             key
@@ -250,6 +259,13 @@ def _stage_catalog(core, catalog: PeopleProfileCatalog, *, replace: bool) -> Ent
     for item in catalog.relationships:
         if item.relation_type not in FAMILY_RELATION_TYPES:
             raise ValueError(f"unsupported family relation type: {item.relation_type}")
+        if item.source == item.target:
+            raise ValueError("relationship endpoints must differ")
+        source = staged.get(item.source)
+        target = staged.get(item.target)
+        allowed = {EntityType.PERSON, EntityType.AI_PERSONA, EntityType.EXTERNAL_AI}
+        if source is None or target is None or source.entity_type not in allowed or target.entity_type not in allowed:
+            raise ValueError("family relationships require canonical person/persona endpoints")
         staged.upsert_relationship(
             Relationship(
                 source=item.source,
@@ -262,14 +278,14 @@ def _stage_catalog(core, catalog: PeopleProfileCatalog, *, replace: bool) -> Ent
 
 
 def _apply_catalog_atomic(core, catalog: PeopleProfileCatalog, *, replace: bool) -> None:
-    """Commit profiles + family registry + temporal revisions in one SQL transaction.
+    """Commit profiles + family state in one SQL transaction.
 
-    Semantic validation is performed against a staged EntityRegistry first. The
-    SQL transaction then updates all persistent tables using the database's one
-    authoritative connection, including relationship_revisions. Only after commit
-    is the shared in-memory registry synchronized.
+    Semantic validation happens against a staged EntityRegistry first. The SQL
+    transaction then writes profile/alias projections and temporal relationship
+    revisions on the database's authoritative connection. Only after commit is
+    the shared in-memory registry synchronized.
     """
-    staged = _stage_catalog(core, catalog, replace=replace)
+    _stage_catalog(core, catalog, replace=replace)
     now: datetime = core.clock.now()
     now_text = now.isoformat()
     managed = {profile.entity_id for profile in catalog.profiles} | {"ENTITY_AMORA", "ENTITY_CHATGPT"}
@@ -296,7 +312,7 @@ def _apply_catalog_atomic(core, catalog: PeopleProfileCatalog, *, replace: bool)
                     "INSERT INTO aliases(normalized_alias, entity_id) VALUES (?, ?)",
                     (normalize_alias(alias), profile.entity_id),
                 )
-            payload = json.dumps(
+            profile_json = json.dumps(
                 profile.model_dump(mode="json"),
                 ensure_ascii=False,
                 separators=(",", ":"),
@@ -309,11 +325,11 @@ def _apply_catalog_atomic(core, catalog: PeopleProfileCatalog, *, replace: bool)
                      profile_json=excluded.profile_json,
                      source_revision=excluded.source_revision,
                      updated_at=excluded.updated_at""",
-                (profile.entity_id, payload, source_revision, now_text),
+                (profile.entity_id, profile_json, source_revision, now_text),
             )
 
         active_rows = db._conn.execute(
-            """SELECT id, source_id, relation_type, target_id, confidence, source_of_truth
+            """SELECT id, source_id, relation_type, target_id, confidence
                FROM relationship_revisions
                WHERE valid_from <= ? AND (valid_until IS NULL OR valid_until > ?)""",
             (now_text, now_text),
@@ -337,14 +353,15 @@ def _apply_catalog_atomic(core, catalog: PeopleProfileCatalog, *, replace: bool)
                     )
 
         for key, confidence in desired.items():
-            row = active.get(key)
-            if row is not None and float(row["confidence"]) != float(confidence):
+            current = active.get(key)
+            supersedes_id = current["id"] if current is not None else None
+            needs_revision = current is None or float(current["confidence"]) != float(confidence)
+            if current is not None and needs_revision:
                 db._conn.execute(
                     "UPDATE relationship_revisions SET valid_until = ? WHERE id = ?",
-                    (now_text, row["id"]),
+                    (now_text, current["id"]),
                 )
-                row = None
-            if row is None:
+            if needs_revision:
                 db._conn.execute(
                     """INSERT INTO relationship_revisions(
                            id, source_id, relation_type, target_id, confidence,
@@ -360,7 +377,7 @@ def _apply_catalog_atomic(core, catalog: PeopleProfileCatalog, *, replace: bool)
                         "operator:web:import",
                         now_text,
                         now_text,
-                        row["id"] if row is not None else None,
+                        supersedes_id,
                         json.dumps({"catalog_revision": catalog.revision}, separators=(",", ":")),
                     ),
                 )
@@ -372,8 +389,7 @@ def _apply_catalog_atomic(core, catalog: PeopleProfileCatalog, *, replace: bool)
                 (key[0], key[1], key[2], confidence),
             )
 
-    # Update the shared registry in place so every already-wired module sees the
-    # same committed state without replacing its object reference.
+    # Keep existing object references valid for cognition/social modules.
     for profile in catalog.profiles:
         core.identities.upsert_entity(
             Entity(
@@ -385,13 +401,14 @@ def _apply_catalog_atomic(core, catalog: PeopleProfileCatalog, *, replace: bool)
         )
     if replace:
         for relation in tuple(core.identities.relationships):
+            key = (relation.source, relation.relation_type, relation.target)
             if (
                 relation.relation_type in FAMILY_RELATION_TYPES
                 and relation.source in managed
                 and relation.target in managed
-                and (relation.source, relation.relation_type, relation.target) not in desired
+                and key not in desired
             ):
-                core.identities.remove_relationship(relation.source, relation.relation_type, relation.target)
+                core.identities.remove_relationship(*key)
     for key, confidence in desired.items():
         core.identities.upsert_relationship(
             Relationship(source=key[0], relation_type=key[1], target=key[2], confidence=confidence)
@@ -401,7 +418,11 @@ def _apply_catalog_atomic(core, catalog: PeopleProfileCatalog, *, replace: bool)
 
 def _private_import_diff(core, payload: IdentityBindingsFile, *, replace: bool) -> dict[str, object]:
     incoming_refs = {_binding_ref(item) for item in payload.bindings}
-    current = [binding for profile in core.profiles.profiles() for binding in core.profiles.bindings_for(profile.entity_id)]
+    current = [
+        binding
+        for profile in core.profiles.profiles()
+        for binding in core.profiles.bindings_for(profile.entity_id)
+    ]
     current_refs = {_binding_ref(item) for item in current}
     return {
         "incoming_count": len(payload.bindings),
@@ -411,11 +432,15 @@ def _private_import_diff(core, payload: IdentityBindingsFile, *, replace: bool) 
     }
 
 
-def _apply_private_bindings_atomic(core, payload: IdentityBindingsFile, *, replace: bool) -> None:
+def _validate_private_bindings(core, payload: IdentityBindingsFile) -> None:
     for binding in payload.bindings:
         entity = core.identities.get(binding.entity_id)
         if entity is None or entity.entity_type != EntityType.PERSON:
             raise ValueError(f"binding references unknown person: {binding.entity_id}")
+
+
+def _apply_private_bindings_atomic(core, payload: IdentityBindingsFile, *, replace: bool) -> None:
+    _validate_private_bindings(core, payload)
     now = core.clock.now().isoformat()
     db = core.database
     with db._lock, db._conn:
@@ -454,14 +479,13 @@ def register_people_admin_routes(app, core, require_auth) -> None:
 
     @app.get("/v1/operator/people", dependencies=protected)
     def operator_people() -> dict[str, object]:
-        profiles = []
-        for profile in core.profiles.profiles():
-            profiles.append(
-                {
-                    **profile.model_dump(mode="json"),
-                    "binding_count": len(core.profiles.bindings_for(profile.entity_id)),
-                }
-            )
+        profiles = [
+            {
+                **profile.model_dump(mode="json"),
+                "binding_count": len(core.profiles.bindings_for(profile.entity_id)),
+            }
+            for profile in core.profiles.profiles()
+        ]
         entities = [
             _entity_payload(core, entity.id)
             for entity in core.identities.entities
@@ -580,8 +604,7 @@ def register_people_admin_routes(app, core, require_auth) -> None:
         if previous is None:
             raise HTTPException(status_code=404, detail="binding not found")
         if _binding_ref(previous) != _binding_ref(binding):
-            disabled = previous.model_copy(update={"enabled": False})
-            core.profiles.upsert_binding(disabled)
+            core.profiles.upsert_binding(previous.model_copy(update={"enabled": False}))
         saved = core.profiles.upsert_binding(binding)
         return _binding_summary(saved)
 
@@ -643,29 +666,28 @@ def register_people_admin_routes(app, core, require_auth) -> None:
     def operator_people_import_apply(request: PublicImportRequest) -> dict[str, object]:
         if not request.confirm:
             raise HTTPException(status_code=409, detail="people import requires explicit confirmation")
+        diff = _catalog_diff(core, request.catalog, replace=request.replace_family_relationships)
         try:
             _apply_catalog_atomic(core, request.catalog, replace=request.replace_family_relationships)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {
-            "applied": True,
-            "diff": _catalog_diff(core, request.catalog, replace=request.replace_family_relationships),
-        }
+        return {"applied": True, "diff": diff}
 
     @app.post("/v1/operator/bindings/import/preview", dependencies=protected)
     def operator_bindings_import_preview(request: PrivateImportRequest) -> dict[str, object]:
-        for binding in request.payload.bindings:
-            entity = core.identities.get(binding.entity_id)
-            if entity is None or entity.entity_type != EntityType.PERSON:
-                raise HTTPException(status_code=422, detail=f"binding references unknown person: {binding.entity_id}")
+        try:
+            _validate_private_bindings(core, request.payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return _private_import_diff(core, request.payload, replace=request.replace)
 
     @app.post("/v1/operator/bindings/import/apply", dependencies=protected)
     def operator_bindings_import_apply(request: PrivateImportRequest) -> dict[str, object]:
         if not request.confirm:
             raise HTTPException(status_code=409, detail="private bindings import requires explicit confirmation")
+        diff = _private_import_diff(core, request.payload, replace=request.replace)
         try:
             _apply_private_bindings_atomic(core, request.payload, replace=request.replace)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {"applied": True, "binding_count": len(request.payload.bindings)}
+        return {"applied": True, "diff": diff, "binding_count": len(request.payload.bindings)}
