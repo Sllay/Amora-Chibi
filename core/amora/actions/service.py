@@ -60,6 +60,7 @@ class ActionEngine:
         self.planner = planner or Planner(clock, self.skills)
         self.bus = ActionBus(self.registry, clock)
         self.monitor = ExecutionMonitor()
+        self.events.subscribe_bootstrap("autonomy.decision", self.handle_autonomy_decision)
 
     def close(self) -> None:
         self.store.close()
@@ -85,6 +86,36 @@ class ActionEngine:
             "plugins": [item.model_dump(mode="json") for item in self.registry.manifests()],
             "skills": [item.model_dump(mode="json") for item in self.skills.list()],
         }
+
+    async def handle_autonomy_decision(self, event: AmoraEvent) -> None:
+        """Bridge a newly committed BDI intention into the guarded ActionEngine.
+
+        Only fresh SELECTED decisions are auto-executed. KEPT_CURRENT and
+        DEFERRED decisions are deliberately ignored so an idle cycle cannot
+        repeatedly replay an already-running intention. The normal planner,
+        permission, privacy, cost, risk, retry and effect-verification gates are
+        still used by execute_current().
+        """
+        if event.event_type != "autonomy.decision":
+            return
+        if event.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+            return
+        if str(event.payload.get("outcome") or "") != "selected":
+            return
+
+        intention_id = str(event.payload.get("intention_id") or "")
+        decision_id = str(event.payload.get("decision_id") or event.id)
+        if not intention_id:
+            return
+
+        current = self.autonomy.store.current_intention()
+        if current is None or str(current.id) != intention_id:
+            return
+
+        await self.execute_current(
+            dedupe_key=f"autonomy-decision:{decision_id}",
+            context=self.default_context(event.privacy_scope),
+        )
 
     async def plan_current(self, *, dedupe_key: str | None = None) -> ActionPlan | None:
         if dedupe_key:
