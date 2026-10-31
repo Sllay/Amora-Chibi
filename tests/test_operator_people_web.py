@@ -15,6 +15,8 @@ def _cloud(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     monkeypatch.setenv("AMORA_MODE", "cloud")
     monkeypatch.setenv("AMORA_PUBLIC_ORIGINS", "https://amora.example")
+    monkeypatch.setenv("AMORA_DURABLE_FILESYSTEM", "true")
+    monkeypatch.setenv("AMORA_SECRET_LOCAL_API_TOKEN", "test-operator-admin-token-32-bytes-minimum")
     core = AmoraCore.bootstrap(clock=SimulatedClock())
     client = TestClient(create_api(core), base_url="https://amora.example")
     return core, client
@@ -245,6 +247,7 @@ def test_people_import_is_confirmed_and_preserves_relationship_revision_history(
         )
         relation["confidence"] = 0.91
         exported["revision"] = "test-import-revision"
+        core.clock.advance(timedelta(seconds=1))
 
         preview = client.post(
             "/v1/operator/people/import/preview",
