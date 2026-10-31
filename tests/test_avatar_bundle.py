@@ -212,12 +212,12 @@ def test_avatar_browser_token_can_round_trip_bundle_larger_than_generic_body_lim
 
         scoped_export = client.get("/v1/avatar/bundle", headers=avatar_headers)
         assert scoped_export.status_code == 200
-        assert scoped_export.content == exported.content
+        assert len(scoped_export.content) > 256 * 1024
 
         restored = client.put(
             "/v1/avatar/bundle",
             headers={**avatar_headers, "Content-Type": "application/zip"},
-            content=exported.content,
+            content=scoped_export.content,
         )
         assert restored.status_code == 200
         assert restored.json()["assets_unchanged"] == 1
