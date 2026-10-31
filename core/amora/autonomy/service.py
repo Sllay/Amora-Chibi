@@ -251,6 +251,7 @@ class AutonomyEngine:
                     "selected_utility": selected_utility,
                     "silence_utility": silence_utility,
                     "reason_codes": reasons,
+                    "runtime_auto_execute": active_context.metadata.get("runtime_auto_execute") is True,
                 },
                 privacy_scope=PrivacyScope.PERSONAL,
                 dedupe_key=f"autonomy.decision:{decision.id}",
@@ -260,8 +261,16 @@ class AutonomyEngine:
 
     def schedule_idle(self, scheduler: Scheduler, *, delay_seconds: float = 300.0) -> None:
         async def _idle_cycle() -> None:
-            await self.cycle(DecisionContext(is_idle=True, can_interrupt=True))
-            self.schedule_idle(scheduler, delay_seconds=delay_seconds)
+            try:
+                await self.cycle(
+                    DecisionContext(
+                        is_idle=True,
+                        can_interrupt=True,
+                        metadata={"runtime_auto_execute": True},
+                    )
+                )
+            finally:
+                self.schedule_idle(scheduler, delay_seconds=delay_seconds)
 
         scheduler.schedule_idle("autonomy.idle", delay_seconds, _idle_cycle)
 
