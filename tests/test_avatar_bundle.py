@@ -5,12 +5,14 @@ import hashlib
 from io import BytesIO
 import json
 from pathlib import Path
+import random
 import zipfile
 
 from fastapi.testclient import TestClient
 
 from amora.api import create_api
 from amora.app import AmoraCore
+from amora.security import issue_browser_token
 from amora.time import SimulatedClock
 
 
@@ -188,6 +190,41 @@ def test_avatar_bundle_rejects_unsafe_zip_paths(tmp_path: Path, monkeypatch) -> 
         )
         assert response.status_code == 400
         assert "unsafe paths" in response.json()["detail"]
+    finally:
+        core.close()
+
+
+def test_avatar_browser_token_can_round_trip_bundle_larger_than_generic_body_limit(tmp_path: Path, monkeypatch) -> None:
+    core, client, admin_headers = _core_client(tmp_path, monkeypatch)
+    try:
+        # Deliberately incompressible enough that the HTTP ZIP stays above the
+        # generic 256 KiB security body limit used by ordinary API requests.
+        asset_body = b"\x89PNG\r\n\x1a\n" + random.Random(20261030).randbytes(360_000)
+        _seed_project_with_asset(client, admin_headers, asset_body=asset_body)
+        exported = client.get("/v1/avatar/bundle", headers=admin_headers)
+        assert exported.status_code == 200
+        assert len(exported.content) > 256 * 1024
+
+        admin_token = core.secrets.get("LOCAL_API_TOKEN")
+        assert admin_token
+        avatar_token = issue_browser_token(admin_token, core.clock, "avatar")
+        avatar_headers = {"Authorization": f"Bearer {avatar_token}"}
+
+        scoped_export = client.get("/v1/avatar/bundle", headers=avatar_headers)
+        assert scoped_export.status_code == 200
+        assert scoped_export.content == exported.content
+
+        restored = client.put(
+            "/v1/avatar/bundle",
+            headers={**avatar_headers, "Content-Type": "application/zip"},
+            content=exported.content,
+        )
+        assert restored.status_code == 200
+        assert restored.json()["assets_unchanged"] == 1
+
+        # The Avatar browser credential remains scoped: gaining bundle restore
+        # never grants administrative Core surfaces.
+        assert client.get("/v1/state", headers=avatar_headers).status_code == 403
     finally:
         core.close()
 
