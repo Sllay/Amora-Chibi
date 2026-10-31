@@ -61,19 +61,28 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
                     "tbl_name"
                 ].startswith("memory_fts_"):
                     target.execute(row["sql"])
-            # Version 10 snapshots are upgraded additively, never edited in place.
+
+            # Audited older snapshots are upgraded additively in the empty target;
+            # source bytes are never modified in place.
             from .migrations_v101 import MIGRATION_V101
+            from .migrations_v102 import MIGRATION_V102
             from .remote import statements
 
             version = target.execute(
                 "SELECT MAX(version) FROM schema_migrations"
             ).fetchone()[0]
-            if version not in {10, 11}:
-                raise ValueError("only audited schema 10/11 snapshots can be imported")
+            if version not in {10, 11, 12}:
+                raise ValueError("only audited schema 10/11/12 snapshots can be imported")
             if version == 10:
                 for sql in statements(MIGRATION_V101[1]):
                     target.execute(sql)
                 target.execute("INSERT INTO schema_migrations(version) VALUES (11)")
+                version = 11
+            if version == 11:
+                for sql in statements(MIGRATION_V102[1]):
+                    target.execute(sql)
+                target.execute("INSERT INTO schema_migrations(version) VALUES (12)")
+
             assets = source.execute("SELECT * FROM avatar_assets").fetchall()
             archive_path = Path(str(snapshot) + ".avatar.zip")
             for info in assets:
