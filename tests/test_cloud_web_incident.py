@@ -181,7 +181,7 @@ def test_valid_wav_groq_transcript_conversation_queue_ack_and_restart(
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / "replacement"))
     again = AmoraCore.bootstrap(storage=backend)
     try:
-        assert again.database.schema_version() == 12
+        assert again.database.schema_version() == 13
         assert again.conversation.store.get_utterance(item["id"]).text == item["text"]
         assert (
             again.conversation.store.get_utterance(item["id"]).status.value == "spoken"
