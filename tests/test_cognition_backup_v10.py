@@ -64,7 +64,7 @@ async def test_backup_restore_preserves_history_journal_replay_snapshot_and_usag
     database = AmoraDatabase(restored_path)
     try:
         assert database.integrity_check() == "ok"
-        assert database.schema_version() == 12
+        assert database.schema_version() == 13
     finally:
         database.close()
 
