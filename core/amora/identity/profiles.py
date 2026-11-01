@@ -208,10 +208,38 @@ class PersonProfileService:
         self.catalog_revision = catalog.revision
         self.catalog_fingerprint = fingerprint
 
-    def upsert_profile(self, profile: PersonProfileSeed, *, source_revision: str = "operator:web") -> PersonProfileSeed:
-        current = self.identities.get(profile.entity_id)
-        if current is not None and current.entity_type != EntityType.PERSON:
+    def upsert_profile(
+        self,
+        profile: PersonProfileSeed,
+        *,
+        source_revision: str = "operator:web",
+        allow_platform_presence_authority_change: bool = False,
+    ) -> PersonProfileSeed:
+        current_entity = self.identities.get(profile.entity_id)
+        if current_entity is not None and current_entity.entity_type != EntityType.PERSON:
             raise ValueError("profile entity_id belongs to a non-person entity")
+
+        persisted = self.store.get_person_profile(profile.entity_id)
+        field_was_explicit = "can_control_platform_presence" in profile.model_fields_set
+        if persisted is not None:
+            if not field_was_explicit:
+                profile = profile.model_copy(
+                    update={
+                        "can_control_platform_presence": persisted.can_control_platform_presence,
+                    }
+                )
+            elif (
+                profile.can_control_platform_presence != persisted.can_control_platform_presence
+                and not allow_platform_presence_authority_change
+            ):
+                raise ValueError(
+                    "platform presence authority change requires dedicated confirmed mutation"
+                )
+        elif profile.can_control_platform_presence and not allow_platform_presence_authority_change:
+            raise ValueError(
+                "platform presence authority grant requires dedicated confirmed mutation"
+            )
+
         self.identities.upsert_entity(self._entity_from_profile(profile))
         self.persist_registry(self.identities)
         self.store.upsert_person_profile(
