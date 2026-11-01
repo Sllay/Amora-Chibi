@@ -11,6 +11,7 @@ from .models import (
     MessagingPlatform,
     PresenceCommand,
     PresenceState,
+    TransportInvalidation,
 )
 
 
@@ -20,6 +21,12 @@ class OutboundAckRequest(BaseModel):
     sent: bool
     external_message_id: str | None = Field(default=None, max_length=512)
     error_code: str | None = Field(default=None, max_length=120)
+
+
+class OutboundCancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=120)
 
 
 class PresenceReportRequest(BaseModel):
@@ -44,6 +51,10 @@ def register_messaging_routes(app, core, require_auth) -> None:
     @app.post("/v1/messaging/worker/inbound", dependencies=[Depends(require_auth)])
     async def messaging_inbound(message: InboundMessage):
         return await core.messaging.receive(message)
+
+    @app.post("/v1/messaging/worker/invalidate", dependencies=[Depends(require_auth)])
+    def messaging_transport_invalidate(payload: TransportInvalidation):
+        return core.messaging.invalidate_transport(payload)
 
     @app.get("/v1/messaging/worker/outbound", dependencies=[Depends(require_auth)])
     def messaging_outbound_claim(
@@ -71,6 +82,12 @@ def register_messaging_routes(app, core, require_auth) -> None:
             error_code=payload.error_code,
         ):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="outbound message not claimable")
+        return {"status": "ok"}
+
+    @app.post("/v1/messaging/worker/outbound/{message_id}/cancel", dependencies=[Depends(require_auth)])
+    def messaging_outbound_cancel(message_id: UUID, payload: OutboundCancelRequest):
+        if not core.messaging_store.cancel_outbound(message_id, reason=payload.reason):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="outbound message not cancellable")
         return {"status": "ok"}
 
     @app.get("/v1/messaging/worker/presence/{platform}", dependencies=[Depends(require_auth)])
