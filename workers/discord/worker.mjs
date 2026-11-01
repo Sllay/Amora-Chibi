@@ -1,13 +1,24 @@
 import { MessagingCoreClient, workerConfig } from '../common/core-client.mjs';
 import {
+  discordAmoraCommandDefinition,
+  discordDeferredInteractionResponse,
+  discordInteractionEdit,
+  parseDiscordAmoraInteraction,
+} from './commands.mjs';
+import { DiscordRestClient } from './http.mjs';
+import {
   DISCORD_INTENTS,
+  discordEditMessageId,
   discordReplyPayload,
   normalizeDiscordMessage,
+  normalizeDiscordReaction,
   splitDiscordText,
 } from './normalize.mjs';
+import { DiscordSocialRuntime } from './social-runtime.mjs';
 
-const API = 'https://discord.com/api/v10';
 const TRUE = new Set(['1', 'true', 'yes', 'on']);
+const TERMINAL_GATEWAY_CLOSE_CODES = new Set([4004, 4010, 4011, 4013, 4014]);
+const NON_RESUMABLE_GATEWAY_CLOSE_CODES = new Set([4007, 4009]);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const enabled = (name, fallback = false) => {
   const value = process.env[name];
@@ -19,61 +30,27 @@ function safeLog(code, detail = '') {
   process.stderr.write(`[amora-discord] ${code}${suffix}\n`);
 }
 
-async function discordRequest(token, path, { method = 'GET', body, timeoutMs = 15_000 } = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    let response = await fetch(`${API}${path}`, {
-      method,
-      redirect: 'error',
-      headers: {
-        Authorization: `Bot ${token}`,
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: controller.signal,
-    });
-    if (response.status === 429) {
-      let waitMs = 1000;
-      try {
-        const limited = await response.json();
-        waitMs = Math.min(15_000, Math.max(250, Number(limited.retry_after || 1) * 1000));
-      } catch {}
-      await sleep(waitMs);
-      response = await fetch(`${API}${path}`, {
-        method,
-        redirect: 'error',
-        headers: {
-          Authorization: `Bot ${token}`,
-          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal,
-      });
-    }
-    const text = await response.text();
-    let payload = null;
-    if (text) {
-      try { payload = JSON.parse(text); } catch {}
-    }
-    if (!response.ok) {
-      const error = new Error(`Discord HTTP ${response.status}`);
-      error.status = response.status;
-      throw error;
-    }
-    return payload;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export class DiscordWorker {
-  constructor({ token, core, accountScope = 'primary', remoteProcessingAllowed = false }) {
+  constructor({
+    token,
+    core,
+    accountScope = 'primary',
+    remoteProcessingAllowed = false,
+    applicationId = null,
+    testGuildId = null,
+    rest = null,
+    runtime = null,
+  }) {
     if (!token) throw new Error('DISCORD_BOT_TOKEN is required');
     this.token = token;
     this.core = core;
     this.accountScope = accountScope;
     this.remoteProcessingAllowed = remoteProcessingAllowed;
+    this.applicationId = applicationId ? String(applicationId) : null;
+    this.testGuildId = testGuildId ? String(testGuildId) : null;
+    this.registeredCommandGuild = null;
+    this.rest = rest || new DiscordRestClient({ token });
+    this.runtime = runtime || new DiscordSocialRuntime();
     this.socket = null;
     this.ready = false;
     this.stopped = false;
@@ -82,10 +59,12 @@ export class DiscordWorker {
     this.resumeGatewayUrl = null;
     this.botUserId = null;
     this.heartbeatTimer = null;
+    this.heartbeatStartTimer = null;
     this.heartbeatAcked = true;
     this.connectionGeneration = 0;
     this.reconnectRequested = false;
     this.processingOutbound = false;
+    this.terminalGatewayError = null;
   }
 
   async run() {
@@ -93,17 +72,30 @@ export class DiscordWorker {
     while (!this.stopped) {
       try {
         const presence = await this.core.getPresence();
-        this.connectionGeneration = presence.generation;
-        const shouldConnect = presence.desired_connected || presence.check_requested;
-        if (shouldConnect && !this.socket) await this.connect(presence);
-        if (!shouldConnect && this.socket) await this.disconnect('CORE_DESIRED_DISCONNECTED');
-        if (this.ready) await this.flushOutbound();
+        await this.syncPresence(presence);
       } catch (error) {
-        safeLog('LOOP_ERROR', error?.name || 'Error');
+        safeLog('LOOP_ERROR', error?.code || error?.name || 'Error');
       }
       await sleep(this.ready ? 800 : 2500);
     }
     await this.disconnect('WORKER_STOP');
+  }
+
+  async syncPresence(presence) {
+    this.connectionGeneration = presence.generation;
+    const shouldConnect = presence.desired_connected || presence.check_requested;
+    if (shouldConnect && !this.socket && !this.terminalGatewayError) {
+      await this.connect(presence);
+    }
+    if (!shouldConnect && this.socket) {
+      // A natural/slash disconnect command may have queued its confirmation in
+      // Core immediately before desired_connected flipped false. Drain valid
+      // output while the transport still exists, then close intentionally.
+      if (this.ready) await this.flushOutbound();
+      await this.disconnect('CORE_DESIRED_DISCONNECTED');
+      return;
+    }
+    if (this.ready) await this.flushOutbound();
   }
 
   stop() {
@@ -111,11 +103,11 @@ export class DiscordWorker {
   }
 
   async connect(presence) {
-    if (this.socket) return;
+    if (this.socket || this.terminalGatewayError) return;
     await this.core.reportPresence('connecting', { generation: presence.generation }).catch(() => {});
     let gatewayUrl = this.resumeGatewayUrl;
     if (!gatewayUrl) {
-      const gateway = await discordRequest(this.token, '/gateway/bot');
+      const gateway = await this.rest.request('/gateway/bot');
       gatewayUrl = gateway?.url;
     }
     if (!gatewayUrl) throw new Error('Discord gateway URL unavailable');
@@ -127,16 +119,40 @@ export class DiscordWorker {
     const socket = new WebSocket(url);
     this.socket = socket;
     socket.addEventListener('message', (event) => {
-      this.handleGatewayData(event.data).catch((error) => safeLog('GATEWAY_EVENT_ERROR', error?.name || 'Error'));
+      this.handleGatewayData(event.data).catch((error) => safeLog('GATEWAY_EVENT_ERROR', error?.code || error?.name || 'Error'));
     });
-    socket.addEventListener('close', () => {
-      if (this.socket !== socket) return;
-      this.clearHeartbeat();
-      this.socket = null;
-      this.ready = false;
-      this.core.reportPresence('disconnected', { generation: this.connectionGeneration }).catch(() => {});
+    socket.addEventListener('close', (event) => {
+      this.handleGatewayClose(socket, event).catch(() => {});
     });
     socket.addEventListener('error', () => safeLog('GATEWAY_SOCKET_ERROR'));
+  }
+
+  async handleGatewayClose(socket, event) {
+    if (this.socket !== socket) return;
+    this.clearHeartbeat();
+    this.socket = null;
+    this.ready = false;
+    const code = Number(event?.code || 0);
+
+    if (NON_RESUMABLE_GATEWAY_CLOSE_CODES.has(code)) this.clearResumeState();
+    if (TERMINAL_GATEWAY_CLOSE_CODES.has(code)) {
+      this.clearResumeState();
+      this.terminalGatewayError = `GATEWAY_CLOSE_${code}`;
+      safeLog('GATEWAY_TERMINAL', code);
+      await this.core.reportPresence('error', {
+        generation: this.connectionGeneration,
+        errorCode: this.terminalGatewayError,
+      }).catch(() => {});
+      return;
+    }
+
+    await this.core.reportPresence('disconnected', { generation: this.connectionGeneration }).catch(() => {});
+  }
+
+  clearResumeState() {
+    this.sessionId = null;
+    this.resumeGatewayUrl = null;
+    this.sequence = null;
   }
 
   async disconnect(reason) {
@@ -176,11 +192,7 @@ export class DiscordWorker {
       return;
     }
     if (payload.op === 9) {
-      if (!payload.d) {
-        this.sessionId = null;
-        this.resumeGatewayUrl = null;
-        this.sequence = null;
-      }
+      if (!payload.d) this.clearResumeState();
       await sleep(1000 + Math.floor(Math.random() * 1500));
       await this.forceReconnect('INVALID_SESSION');
       return;
@@ -191,21 +203,49 @@ export class DiscordWorker {
       this.sessionId = payload.d?.session_id || null;
       this.resumeGatewayUrl = payload.d?.resume_gateway_url || this.resumeGatewayUrl;
       this.botUserId = payload.d?.user?.id ? String(payload.d.user.id) : this.botUserId;
+      this.applicationId = this.applicationId || (payload.d?.application?.id ? String(payload.d.application.id) : null);
       this.ready = true;
+      this.terminalGatewayError = null;
       const presence = await this.core.reportPresence('connected', { generation: this.connectionGeneration });
+      await this.ensureStagingCommand().catch((error) => safeLog('COMMAND_REGISTER_ERROR', error?.code || error?.status || error?.name || 'Error'));
       await this.completeRequestedCheck(presence);
       safeLog('READY');
       return;
     }
     if (payload.t === 'RESUMED') {
       this.ready = true;
+      this.terminalGatewayError = null;
       const presence = await this.core.reportPresence('connected', { generation: this.connectionGeneration });
       await this.completeRequestedCheck(presence);
       safeLog('RESUMED');
       return;
     }
-    if (payload.t === 'MESSAGE_CREATE' && this.ready) {
-      await this.handleMessageCreate(payload.d);
+    if (!this.ready) return;
+
+    switch (payload.t) {
+      case 'MESSAGE_CREATE':
+        await this.handleMessageCreate(payload.d);
+        break;
+      case 'MESSAGE_UPDATE':
+        await this.handleMessageUpdate(payload.d);
+        break;
+      case 'MESSAGE_DELETE':
+        await this.handleMessageDelete(payload.d);
+        break;
+      case 'MESSAGE_DELETE_BULK':
+        await this.handleMessageBulkDelete(payload.d);
+        break;
+      case 'MESSAGE_REACTION_ADD':
+        this.handleReaction(payload.d, true);
+        break;
+      case 'MESSAGE_REACTION_REMOVE':
+        this.handleReaction(payload.d, false);
+        break;
+      case 'INTERACTION_CREATE':
+        await this.handleInteraction(payload.d);
+        break;
+      default:
+        break;
     }
   }
 
@@ -236,7 +276,8 @@ export class DiscordWorker {
     this.clearHeartbeat();
     this.heartbeatAcked = true;
     const first = Math.floor(Math.random() * Math.max(1, intervalMs));
-    setTimeout(() => {
+    this.heartbeatStartTimer = setTimeout(() => {
+      this.heartbeatStartTimer = null;
       if (!this.socket) return;
       this.sendHeartbeat();
       this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), intervalMs);
@@ -244,7 +285,9 @@ export class DiscordWorker {
   }
 
   clearHeartbeat() {
+    if (this.heartbeatStartTimer) clearTimeout(this.heartbeatStartTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatStartTimer = null;
     this.heartbeatTimer = null;
   }
 
@@ -288,27 +331,152 @@ export class DiscordWorker {
     }
   }
 
-  async handleMessageCreate(message) {
+  async ensureStagingCommand() {
+    if (!this.applicationId || !this.testGuildId || this.registeredCommandGuild === this.testGuildId) return;
+    await this.rest.request(
+      `/applications/${encodeURIComponent(this.applicationId)}/guilds/${encodeURIComponent(this.testGuildId)}/commands`,
+      {
+        method: 'POST',
+        body: discordAmoraCommandDefinition(),
+      },
+    );
+    this.registeredCommandGuild = this.testGuildId;
+    safeLog('STAGING_COMMAND_READY');
+  }
+
+  async handleInteraction(interaction) {
+    const command = parseDiscordAmoraInteraction(interaction);
+    if (!command) return;
+
+    // Gateway interactions must receive an initial HTTP response within Discord's
+    // deadline. Defer immediately, then resolve canonical identity/authority in
+    // Core and edit the ephemeral original response.
+    try {
+      await this.rest.request(
+        `/interactions/${encodeURIComponent(command.interactionId)}/${encodeURIComponent(command.interactionToken)}/callback`,
+        {
+          method: 'POST',
+          auth: false,
+          maxAttempts: 1,
+          timeoutMs: 1500,
+          body: discordDeferredInteractionResponse({ ephemeral: true }),
+        },
+      );
+    } catch (error) {
+      safeLog('INTERACTION_DEFER_FAILED', error?.code || error?.status || error?.name || 'Error');
+      return;
+    }
+
+    let responseText = 'Controle temporariamente indisponível.';
+    try {
+      const result = await this.core.presenceControl({
+        action: command.action,
+        senderIdentifiers: [
+          {
+            identifier_type: 'discord_user_id',
+            external_actor_id: command.actorId,
+            confidence: 1.0,
+          },
+        ],
+        timeoutMs: 1800,
+      });
+      responseText = result?.response_text || responseText;
+    } catch (error) {
+      safeLog('INTERACTION_CORE_FAILED', error?.status || error?.name || 'Error');
+    }
+
+    try {
+      await this.rest.request(
+        `/webhooks/${encodeURIComponent(command.applicationId)}/${encodeURIComponent(command.interactionToken)}/messages/@original`,
+        {
+          method: 'PATCH',
+          auth: false,
+          maxAttempts: 2,
+          timeoutMs: 2500,
+          body: discordInteractionEdit(responseText),
+        },
+      );
+    } catch (error) {
+      safeLog('INTERACTION_EDIT_FAILED', error?.code || error?.status || error?.name || 'Error');
+    }
+  }
+
+  async referencedAuthorId(message) {
     let referencedAuthorId = message?.referenced_message?.author?.id || null;
     const referenceId = message?.message_reference?.message_id;
     if (!referencedAuthorId && referenceId && message?.channel_id) {
       try {
-        const referenced = await discordRequest(
-          this.token,
+        const referenced = await this.rest.request(
           `/channels/${encodeURIComponent(message.channel_id)}/messages/${encodeURIComponent(referenceId)}`,
           { timeoutMs: 5000 },
         );
         referencedAuthorId = referenced?.author?.id || null;
       } catch {}
     }
+    return referencedAuthorId;
+  }
+
+  async deliverNormalized(message, { revision = 1, syntheticMessageId = null } = {}) {
     const normalized = normalizeDiscordMessage(message, {
       botUserId: this.botUserId,
       accountScope: this.accountScope,
-      referencedAuthorId,
+      referencedAuthorId: await this.referencedAuthorId(message),
       remoteProcessingAllowed: this.remoteProcessingAllowed,
+      transportRevision: revision,
+      syntheticMessageId,
     });
-    if (!normalized) return;
-    await this.core.inbound(normalized);
+    if (!normalized) return null;
+    return this.core.inbound(normalized);
+  }
+
+  async handleMessageCreate(message) {
+    const entry = this.runtime.recordCreate(message);
+    if (!entry) return;
+    await this.deliverNormalized(entry.message, { revision: entry.revision });
+  }
+
+  async handleMessageUpdate(partial) {
+    const entry = this.runtime.recordUpdate(partial);
+    if (!entry) return;
+    await this.core.invalidateSource({
+      conversationId: partial.channel_id,
+      nativeMessageId: partial.id,
+      reason: 'DISCORD_MESSAGE_UPDATED',
+      transportRevision: entry.revision,
+    }).catch(() => {});
+
+    if (!entry.contentChanged) return;
+    await this.deliverNormalized(entry.message, {
+      revision: entry.revision,
+      syntheticMessageId: discordEditMessageId(partial.id, entry.revision),
+    });
+  }
+
+  async handleMessageDelete(event) {
+    const entry = this.runtime.recordDelete(event);
+    if (!entry) return;
+    await this.core.invalidateSource({
+      conversationId: event.channel_id,
+      nativeMessageId: event.id,
+      reason: 'DISCORD_MESSAGE_DELETED',
+      transportRevision: entry.revision,
+    }).catch(() => {});
+  }
+
+  async handleMessageBulkDelete(event) {
+    const entries = this.runtime.recordBulkDelete(event);
+    await Promise.all(entries.map((entry) => this.core.invalidateSource({
+      conversationId: event.channel_id,
+      nativeMessageId: entry.id,
+      reason: 'DISCORD_MESSAGE_BULK_DELETED',
+      transportRevision: entry.revision,
+    }).catch(() => {})));
+  }
+
+  handleReaction(event, added) {
+    const normalized = normalizeDiscordReaction(event, { added });
+    if (!normalized || normalized.actor_id === this.botUserId) return;
+    this.runtime.recordReaction(event, added);
   }
 
   async flushOutbound() {
@@ -317,13 +485,18 @@ export class DiscordWorker {
     try {
       const claimed = await this.core.claimOutbound(8);
       for (const item of claimed?.messages || []) {
+        const validation = this.runtime.validateOutbound(item);
+        if (!validation.ok) {
+          await this.core.cancelOutbound(item.id, `DISCORD_${validation.reason}`).catch(() => {});
+          continue;
+        }
         try {
           const externalMessageId = await this.sendOutbound(item);
           await this.core.ackOutbound(item.id, { sent: true, externalMessageId });
         } catch (error) {
           await this.core.ackOutbound(item.id, {
             sent: false,
-            errorCode: `DISCORD_${error?.status || error?.name || 'SEND_FAILED'}`.slice(0, 120),
+            errorCode: `DISCORD_${error?.code || error?.status || error?.name || 'SEND_FAILED'}`.slice(0, 120),
           }).catch(() => {});
         }
       }
@@ -337,8 +510,7 @@ export class DiscordWorker {
     if (!chunks.length) throw new Error('EMPTY_OUTBOUND');
     let firstMessageId = null;
     for (let index = 0; index < chunks.length; index += 1) {
-      const created = await discordRequest(
-        this.token,
+      const created = await this.rest.request(
         `/channels/${encodeURIComponent(item.conversation_id)}/messages`,
         {
           method: 'POST',
@@ -348,6 +520,7 @@ export class DiscordWorker {
           }),
         },
       );
+      if (created?.id && created?.channel_id) this.runtime.rememberBotMessage(created);
       if (!firstMessageId) firstMessageId = created?.id || null;
     }
     return firstMessageId;
@@ -363,6 +536,8 @@ async function main() {
     core,
     accountScope: config.accountScope,
     remoteProcessingAllowed: enabled('AMORA_PLATFORM_REMOTE_PROCESSING', false),
+    applicationId: process.env.DISCORD_APPLICATION_ID || null,
+    testGuildId: process.env.DISCORD_TEST_GUILD_ID || null,
   });
   process.on('SIGTERM', () => worker.stop());
   process.on('SIGINT', () => worker.stop());
@@ -371,7 +546,7 @@ async function main() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((error) => {
-    safeLog('FATAL', error?.name || 'Error');
+    safeLog('FATAL', error?.code || error?.name || 'Error');
     process.exitCode = 1;
   });
 }

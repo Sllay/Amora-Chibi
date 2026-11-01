@@ -7,6 +7,7 @@ on:
       - 'workers/discord/**'
       - 'workers/whatsapp/**'
       - 'tests/messaging_workers.test.mjs'
+      - 'tests/discord_worker_runtime.test.mjs'
       - '.github/workflows/messaging-workers.yml'
   pull_request:
     paths:
@@ -14,6 +15,7 @@ on:
       - 'workers/discord/**'
       - 'workers/whatsapp/**'
       - 'tests/messaging_workers.test.mjs'
+      - 'tests/discord_worker_runtime.test.mjs'
       - '.github/workflows/messaging-workers.yml'
 
 jobs:
@@ -29,12 +31,15 @@ jobs:
       - name: Parse worker modules
         run: |
           node --check workers/common/core-client.mjs
+          node --check workers/discord/commands.mjs
+          node --check workers/discord/http.mjs
           node --check workers/discord/normalize.mjs
+          node --check workers/discord/social-runtime.mjs
           node --check workers/discord/worker.mjs
           node --check workers/whatsapp/normalize.mjs
           node --check workers/whatsapp/worker.mjs
       - name: Adapter contract tests
-        run: node --test tests/messaging_workers.test.mjs
+        run: node --test tests/messaging_workers.test.mjs tests/discord_worker_runtime.test.mjs
       - name: Resolve exact Baileys release, import worker and audit installed tree
         working-directory: workers/whatsapp
         run: |

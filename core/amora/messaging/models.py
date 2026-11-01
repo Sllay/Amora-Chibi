@@ -82,8 +82,9 @@ class AttachmentRef(BaseModel):
 class InboundMessage(BaseModel):
     """Provider/platform-independent inbound envelope.
 
-    Adapters may inspect platform-native payloads, but Cognitive Core only sees
-    this normalized contract after identity and social-attention gates pass.
+    `message_id` is the immutable delivery/dedupe id presented to Core. A platform
+    adapter may use a synthetic revision id for edits while preserving the actual
+    platform object in `native_message_id`. Core never derives identity from either.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -92,6 +93,8 @@ class InboundMessage(BaseModel):
     account_scope: str = Field(default="primary", min_length=1, max_length=96)
     conversation_id: str = Field(min_length=1, max_length=512)
     message_id: str = Field(min_length=1, max_length=512)
+    native_message_id: str | None = Field(default=None, max_length=512)
+    transport_revision: int = Field(default=1, ge=1, le=1_000_000)
     channel_type: ChannelType
     sender_identifiers: list[ExternalActorRef] = Field(min_length=1, max_length=6)
     sender_display_name: str | None = Field(default=None, max_length=160)
@@ -114,6 +117,23 @@ class InboundMessage(BaseModel):
         if not self.text.strip() and not self.attachments:
             raise ValueError("inbound message requires text or attachment metadata")
         return self
+
+    @property
+    def native_source_message_id(self) -> str:
+        return self.native_message_id or self.message_id
+
+
+class TransportInvalidation(BaseModel):
+    """A native platform object changed while Core may be generating a reply."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    platform: MessagingPlatform
+    account_scope: str = Field(default="primary", min_length=1, max_length=96)
+    conversation_id: str = Field(min_length=1, max_length=512)
+    native_message_id: str = Field(min_length=1, max_length=512)
+    reason: str = Field(min_length=1, max_length=120)
+    transport_revision: int | None = Field(default=None, ge=1, le=1_000_000)
 
 
 class AttentionDecision(BaseModel):

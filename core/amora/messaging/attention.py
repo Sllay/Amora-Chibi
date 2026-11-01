@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from amora.identity import PersonProfileService
 from amora.time import Clock
 
-from .models import AttentionDecision, ChannelType, InboundMessage, RoutingAction
+from .models import AttentionDecision, ChannelType, InboundMessage, MessagingPlatform, RoutingAction
 
 
 _GROUP_FLOOR_SECONDS = 35
@@ -31,12 +31,7 @@ class _Floor:
 
 
 class ConversationFloor:
-    """Short group-conversation lease owned by Core, never by a platform adapter.
-
-    An inferred continuation consumes the original lease and cannot renew it. Any
-    clear turn-away by another participant increments generation, invalidating an
-    in-flight reply before it is handed back to the platform worker.
-    """
+    """Short group-conversation lease owned by Core, never by a platform adapter."""
 
     def __init__(self, clock: Clock) -> None:
         self.clock = clock
@@ -46,6 +41,15 @@ class ConversationFloor:
     @staticmethod
     def key(message: InboundMessage) -> tuple[str, str, str]:
         return (message.platform.value, message.account_scope, message.conversation_id)
+
+    @staticmethod
+    def raw_key(
+        platform: MessagingPlatform | str,
+        account_scope: str,
+        conversation_id: str,
+    ) -> tuple[str, str, str]:
+        platform_value = platform.value if isinstance(platform, MessagingPlatform) else str(platform)
+        return (platform_value, account_scope, conversation_id)
 
     def generation(self, message: InboundMessage) -> int:
         return self._generation.get(self.key(message), 0)
@@ -78,14 +82,26 @@ class ConversationFloor:
             speaker_entity_id=speaker_entity_id,
             opened_at=now,
             expires_at=now + timedelta(seconds=_GROUP_FLOOR_SECONDS),
-            anchor_message_id=message.message_id,
+            anchor_message_id=message.native_source_message_id,
             reason=reason,
         )
         self._floors[key] = floor
         return floor
 
     def shift_away(self, message: InboundMessage) -> int:
-        key = self.key(message)
+        return self.invalidate(
+            message.platform,
+            message.account_scope,
+            message.conversation_id,
+        )
+
+    def invalidate(
+        self,
+        platform: MessagingPlatform | str,
+        account_scope: str,
+        conversation_id: str,
+    ) -> int:
+        key = self.raw_key(platform, account_scope, conversation_id)
         generation = self._generation.get(key, 0) + 1
         self._generation[key] = generation
         self._floors.pop(key, None)
@@ -157,8 +173,6 @@ class SocialAttentionRouter:
                 reason_codes=["DM_KNOWN_PERSON", "IDENTITY_BINDING_RESOLVED"],
             )
 
-        # A native mention of somebody else is strong evidence that the floor moved
-        # away from Amora. A simultaneous Amora mention remains direct to her.
         if message.mentioned_actor_ids and not message.mentions_amora:
             generation = self.floor.shift_away(message)
             return AttentionDecision(

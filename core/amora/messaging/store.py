@@ -278,6 +278,34 @@ class MessagingStore:
             )
         return getattr(cursor, "rowcount", 1) > 0
 
+    def cancel_outbound_by_source(
+        self,
+        *,
+        platform: MessagingPlatform,
+        account_scope: str,
+        conversation_id: str,
+        source_message_id: str,
+        reason: str,
+    ) -> int:
+        """Cancel queued/claimed replies anchored to a native platform message."""
+        with self.database._lock:
+            cursor = execute_atomic_statement(
+                self.database.backend,
+                self.database._conn,
+                """UPDATE messaging_outbound_queue
+                   SET status='cancelled', error_code=?, claim_expires_at=NULL
+                   WHERE platform=? AND account_scope=? AND conversation_id=?
+                     AND source_message_id=? AND status IN ('queued','claimed')""",
+                (
+                    reason[:120],
+                    platform.value,
+                    account_scope,
+                    conversation_id,
+                    source_message_id,
+                ),
+            )
+        return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+
     def pending_outbound_count(self) -> int:
         with self.database._lock:
             row = self.database._conn.execute(

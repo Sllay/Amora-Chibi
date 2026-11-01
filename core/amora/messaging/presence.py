@@ -20,14 +20,23 @@ class PlatformPresenceController:
     """Core-owned intent for platform connectivity, reported by isolated workers.
 
     A persisted `desired_connected` survives compute replacement. The physical
-    transport state does not: bootstrap resets transient worker-reported state to
-    DISCONNECTED so Amora never pretends a socket survived a process restart.
+    transport state does not: the primary bootstrap controller resets transient
+    worker-reported state to DISCONNECTED so Amora never pretends a socket
+    survived a process restart. Secondary policy facades may opt out of repeating
+    that startup reset while sharing the same canonical store.
     """
 
-    def __init__(self, store: MessagingStore, clock: Clock) -> None:
+    def __init__(
+        self,
+        store: MessagingStore,
+        clock: Clock,
+        *,
+        reset_transient: bool = True,
+    ) -> None:
         self.store = store
         self.clock = clock
-        self._reset_transient_states()
+        if reset_transient:
+            self._reset_transient_states()
 
     def _reset_transient_states(self) -> None:
         now = self.clock.now()

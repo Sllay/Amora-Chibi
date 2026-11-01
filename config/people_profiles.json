@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": "people-2026-10-31-a",
+  "revision": "people-2026-10-31-b",
   "profiles": [
     {
       "entity_id": "PERSON_BK",
@@ -9,7 +9,8 @@
       "birth_date": null,
       "age_years": null,
       "short_description": null,
-      "can_define_amora_family": true
+      "can_define_amora_family": true,
+      "can_control_platform_presence": true
     },
     {
       "entity_id": "PERSON_LUCAS",
@@ -18,7 +19,8 @@
       "birth_date": null,
       "age_years": null,
       "short_description": null,
-      "can_define_amora_family": false
+      "can_define_amora_family": false,
+      "can_control_platform_presence": false
     },
     {
       "entity_id": "PERSON_NICOLAS",
@@ -27,7 +29,8 @@
       "birth_date": null,
       "age_years": null,
       "short_description": null,
-      "can_define_amora_family": false
+      "can_define_amora_family": false,
+      "can_control_platform_presence": false
     }
   ],
   "relationships": [

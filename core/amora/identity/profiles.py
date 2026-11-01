@@ -30,9 +30,9 @@ class BindingTrust(StrEnum):
 class PersonProfileSeed(BaseModel):
     """Small operator-owned bootstrap surface for one canonical person.
 
-    This is deliberately not a second memory store. Stable facts that BK wants to
-    pre-seed live here; learned preferences, episodes, beliefs and affect continue
-    to belong to World/Memory/Emotion and are projected into a living view later.
+    This is deliberately not a second memory store. Stable facts and explicit
+    operator capabilities live here; learned preferences, episodes, beliefs and
+    affect continue to belong to World/Memory/Emotion.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -44,6 +44,7 @@ class PersonProfileSeed(BaseModel):
     age_years: int | None = Field(default=None, ge=0, le=150)
     short_description: str | None = Field(default=None, max_length=600)
     can_define_amora_family: bool = False
+    can_control_platform_presence: bool = False
 
     @model_validator(mode="after")
     def validate_age_source(self) -> "PersonProfileSeed":
@@ -207,10 +208,38 @@ class PersonProfileService:
         self.catalog_revision = catalog.revision
         self.catalog_fingerprint = fingerprint
 
-    def upsert_profile(self, profile: PersonProfileSeed, *, source_revision: str = "operator:web") -> PersonProfileSeed:
-        current = self.identities.get(profile.entity_id)
-        if current is not None and current.entity_type != EntityType.PERSON:
+    def upsert_profile(
+        self,
+        profile: PersonProfileSeed,
+        *,
+        source_revision: str = "operator:web",
+        allow_platform_presence_authority_change: bool = False,
+    ) -> PersonProfileSeed:
+        current_entity = self.identities.get(profile.entity_id)
+        if current_entity is not None and current_entity.entity_type != EntityType.PERSON:
             raise ValueError("profile entity_id belongs to a non-person entity")
+
+        persisted = self.store.get_person_profile(profile.entity_id)
+        field_was_explicit = "can_control_platform_presence" in profile.model_fields_set
+        if persisted is not None:
+            if not field_was_explicit:
+                profile = profile.model_copy(
+                    update={
+                        "can_control_platform_presence": persisted.can_control_platform_presence,
+                    }
+                )
+            elif (
+                profile.can_control_platform_presence != persisted.can_control_platform_presence
+                and not allow_platform_presence_authority_change
+            ):
+                raise ValueError(
+                    "platform presence authority change requires dedicated confirmed mutation"
+                )
+        elif profile.can_control_platform_presence and not allow_platform_presence_authority_change:
+            raise ValueError(
+                "platform presence authority grant requires dedicated confirmed mutation"
+            )
+
         self.identities.upsert_entity(self._entity_from_profile(profile))
         self.persist_registry(self.identities)
         self.store.upsert_person_profile(
@@ -275,6 +304,16 @@ class PersonProfileService:
             if profile.can_define_amora_family
         )
 
+    def platform_presence_authorities(self) -> frozenset[str]:
+        return frozenset(
+            profile.entity_id
+            for profile in self.store.list_person_profiles()
+            if profile.can_control_platform_presence
+        )
+
+    def can_control_platform_presence(self, entity_id: str | None) -> bool:
+        return bool(entity_id and entity_id in self.platform_presence_authorities())
+
     def state(self) -> dict[str, object]:
         profiles = self.profiles()
         bindings = sum(len(self.store.platform_bindings_for(profile.entity_id)) for profile in profiles)
@@ -285,6 +324,7 @@ class PersonProfileService:
             "people_profile_fingerprint": self.catalog_fingerprint,
             "private_binding_import_count": self.private_binding_import_count,
             "family_authority_ids": sorted(self.family_authorities()),
+            "platform_presence_authority_ids": sorted(self.platform_presence_authorities()),
         }
 
 
