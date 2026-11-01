@@ -1,4 +1,10 @@
 import { MessagingCoreClient, workerConfig } from '../common/core-client.mjs';
+import {
+  discordAmoraCommandDefinition,
+  discordDeferredInteractionResponse,
+  discordInteractionEdit,
+  parseDiscordAmoraInteraction,
+} from './commands.mjs';
 import { DiscordRestClient } from './http.mjs';
 import {
   DISCORD_INTENTS,
@@ -30,6 +36,8 @@ export class DiscordWorker {
     core,
     accountScope = 'primary',
     remoteProcessingAllowed = false,
+    applicationId = null,
+    testGuildId = null,
     rest = null,
     runtime = null,
   }) {
@@ -38,6 +46,9 @@ export class DiscordWorker {
     this.core = core;
     this.accountScope = accountScope;
     this.remoteProcessingAllowed = remoteProcessingAllowed;
+    this.applicationId = applicationId ? String(applicationId) : null;
+    this.testGuildId = testGuildId ? String(testGuildId) : null;
+    this.registeredCommandGuild = null;
     this.rest = rest || new DiscordRestClient({ token });
     this.runtime = runtime || new DiscordSocialRuntime();
     this.socket = null;
@@ -179,9 +190,11 @@ export class DiscordWorker {
       this.sessionId = payload.d?.session_id || null;
       this.resumeGatewayUrl = payload.d?.resume_gateway_url || this.resumeGatewayUrl;
       this.botUserId = payload.d?.user?.id ? String(payload.d.user.id) : this.botUserId;
+      this.applicationId = this.applicationId || (payload.d?.application?.id ? String(payload.d.application.id) : null);
       this.ready = true;
       this.terminalGatewayError = null;
       const presence = await this.core.reportPresence('connected', { generation: this.connectionGeneration });
+      await this.ensureStagingCommand().catch((error) => safeLog('COMMAND_REGISTER_ERROR', error?.code || error?.status || error?.name || 'Error'));
       await this.completeRequestedCheck(presence);
       safeLog('READY');
       return;
@@ -214,6 +227,9 @@ export class DiscordWorker {
         break;
       case 'MESSAGE_REACTION_REMOVE':
         this.handleReaction(payload.d, false);
+        break;
+      case 'INTERACTION_CREATE':
+        await this.handleInteraction(payload.d);
         break;
       default:
         break;
@@ -302,6 +318,76 @@ export class DiscordWorker {
     }
   }
 
+  async ensureStagingCommand() {
+    if (!this.applicationId || !this.testGuildId || this.registeredCommandGuild === this.testGuildId) return;
+    await this.rest.request(
+      `/applications/${encodeURIComponent(this.applicationId)}/guilds/${encodeURIComponent(this.testGuildId)}/commands`,
+      {
+        method: 'POST',
+        body: discordAmoraCommandDefinition(),
+      },
+    );
+    this.registeredCommandGuild = this.testGuildId;
+    safeLog('STAGING_COMMAND_READY');
+  }
+
+  async handleInteraction(interaction) {
+    const command = parseDiscordAmoraInteraction(interaction);
+    if (!command) return;
+
+    // Gateway interactions must receive an initial HTTP response within Discord's
+    // deadline. Defer immediately, then resolve canonical identity/authority in
+    // Core and edit the ephemeral original response.
+    try {
+      await this.rest.request(
+        `/interactions/${encodeURIComponent(command.interactionId)}/${encodeURIComponent(command.interactionToken)}/callback`,
+        {
+          method: 'POST',
+          auth: false,
+          maxAttempts: 1,
+          timeoutMs: 1500,
+          body: discordDeferredInteractionResponse({ ephemeral: true }),
+        },
+      );
+    } catch (error) {
+      safeLog('INTERACTION_DEFER_FAILED', error?.code || error?.status || error?.name || 'Error');
+      return;
+    }
+
+    let responseText = 'Controle temporariamente indisponível.';
+    try {
+      const result = await this.core.presenceControl({
+        action: command.action,
+        senderIdentifiers: [
+          {
+            identifier_type: 'discord_user_id',
+            external_actor_id: command.actorId,
+            confidence: 1.0,
+          },
+        ],
+        timeoutMs: 1800,
+      });
+      responseText = result?.response_text || responseText;
+    } catch (error) {
+      safeLog('INTERACTION_CORE_FAILED', error?.status || error?.name || 'Error');
+    }
+
+    try {
+      await this.rest.request(
+        `/webhooks/${encodeURIComponent(command.applicationId)}/${encodeURIComponent(command.interactionToken)}/messages/@original`,
+        {
+          method: 'PATCH',
+          auth: false,
+          maxAttempts: 2,
+          timeoutMs: 2500,
+          body: discordInteractionEdit(responseText),
+        },
+      );
+    } catch (error) {
+      safeLog('INTERACTION_EDIT_FAILED', error?.code || error?.status || error?.name || 'Error');
+    }
+  }
+
   async referencedAuthorId(message) {
     let referencedAuthorId = message?.referenced_message?.author?.id || null;
     const referenceId = message?.message_reference?.message_id;
@@ -346,8 +432,6 @@ export class DiscordWorker {
       transportRevision: entry.revision,
     }).catch(() => {});
 
-    // Discord sends partial MESSAGE_UPDATE objects. Only re-run cognition when the
-    // content itself changed and the cache can reconstruct a normal message.
     if (!entry.contentChanged) return;
     await this.deliverNormalized(entry.message, {
       revision: entry.revision,
@@ -380,9 +464,6 @@ export class DiscordWorker {
     const normalized = normalizeDiscordReaction(event, { added });
     if (!normalized || normalized.actor_id === this.botUserId) return;
     this.runtime.recordReaction(event, added);
-    // Reactions are transport-social evidence, not a synthetic human utterance.
-    // They remain in the bounded channel session until a dedicated Core signal
-    // contract needs them; do not fabricate text and feed it to cognition.
   }
 
   async flushOutbound() {
@@ -442,6 +523,8 @@ async function main() {
     core,
     accountScope: config.accountScope,
     remoteProcessingAllowed: enabled('AMORA_PLATFORM_REMOTE_PROCESSING', false),
+    applicationId: process.env.DISCORD_APPLICATION_ID || null,
+    testGuildId: process.env.DISCORD_TEST_GUILD_ID || null,
   });
   process.on('SIGTERM', () => worker.stop());
   process.on('SIGINT', () => worker.stop());
