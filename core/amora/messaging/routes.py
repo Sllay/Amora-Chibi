@@ -78,7 +78,8 @@ def register_messaging_routes(app, core, require_auth) -> None:
     def messaging_outbound_claim(
         platform: MessagingPlatform,
         account_scope: str = Query(default="primary", min_length=1, max_length=96),
-        limit: int = Query(default=8, ge=1, le=32),
+        limit: int = Query(default=1, ge=1, le=32),
+        lease_seconds: int = Query(default=120, ge=5, le=120),
     ):
         return {
             "messages": [
@@ -87,6 +88,7 @@ def register_messaging_routes(app, core, require_auth) -> None:
                     platform=platform,
                     account_scope=account_scope,
                     limit=limit,
+                    lease_seconds=lease_seconds,
                 )
             ]
         }
