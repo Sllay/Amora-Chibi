@@ -61,8 +61,10 @@ estáticos são descritos após a tabela.
 | GET | `/v1/memory/{memory_id}` | admin |
 | POST | `/v1/memory/{memory_id}/forget` | admin |
 | POST | `/v1/messaging/worker/inbound` | admin ou messaging |
+| POST | `/v1/messaging/worker/invalidate` | admin ou messaging |
 | GET | `/v1/messaging/worker/outbound` | admin ou messaging |
 | POST | `/v1/messaging/worker/outbound/{message_id}/ack` | admin ou messaging |
+| POST | `/v1/messaging/worker/outbound/{message_id}/cancel` | admin ou messaging |
 | GET | `/v1/messaging/worker/presence/{platform}` | admin ou messaging |
 | POST | `/v1/messaging/worker/presence/{platform}/report` | admin ou messaging |
 | GET | `/v1/operations/state` | admin ou operator |
@@ -72,6 +74,7 @@ estáticos são descritos após a tabela.
 | GET | `/v1/operator/messaging/audit` | admin ou operator |
 | GET | `/v1/operator/messaging/presence` | admin ou operator |
 | POST | `/v1/operator/messaging/presence/{platform}` | admin ou operator |
+| PUT | `/v1/operator/messaging/presence-authority/{entity_id}` | admin ou operator |
 | GET | `/v1/operator/people` | admin ou operator |
 | GET | `/v1/operator/people/export` | admin ou operator |
 | POST | `/v1/operator/people/import/apply` | admin ou operator |
@@ -118,6 +121,8 @@ Voice Worker separado: `/live` público; `/ready` e POST `/v1/render` exigem cre
 
 `operator` não acessa `/v1/web/*`, `/v1/state`, memória, mundo, cognition journal, events ou ActionEngine. `web` não acessa `/v1/operator/*`, `/v1/messaging/worker/*` nem `/v1/operations/state`.
 
-`messaging` usa `AMORA_MESSAGING_SERVICE_TOKEN`, que deve ser distinto do admin e do voice service token; em cloud exige no mínimo 32 bytes. Um worker Discord/WhatsApp comprometido não recebe acesso a Memory, World, Actions, People Settings ou Console.
+`messaging` usa `AMORA_MESSAGING_SERVICE_TOKEN`, distinto do admin e do voice service token; em cloud exige no mínimo 32 bytes. O worker pode entregar envelopes, invalidar source nativa, claim/cancel/ack outbound e reportar presença física. Isso **não** lhe concede autoridade para mudar People Profiles, conceder capability, ler Memory/World ou executar Actions.
+
+A capability `can_control_platform_presence` pertence ao profile canônico e só pode ser concedida/revogada pela superfície operator/admin. Uma ordem recebida pelo Discord precisa primeiro resolver external actor → PERSON; Discord role/guild admin não equivale a autoridade Amora.
 
 O `client=operator` de `/v1/pairing/redeem` consome um challenge separado criado por `amora pair --role operator`; um código comum de `amora pair` não pode ser promovido mudando o campo `client`.
