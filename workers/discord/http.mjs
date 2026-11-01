@@ -27,7 +27,7 @@ export class DiscordHttpError extends Error {
  * 429 obeys Discord-provided retry timing; 5xx/network failures receive bounded
  * exponential retry. 401/403/404 are terminal so permission/config problems do
  * not become a hot retry loop. Interaction callback webhooks can explicitly
- * disable Bot authorization while preserving the same timeout/rate-limit logic.
+ * disable Bot authorization and lower attempts to respect Discord's 3s ACK gate.
  */
 export class DiscordRestClient {
   constructor({ token, fetchImpl = fetch, sleep = sleepDefault, random = Math.random, maxAttempts = 4 } = {}) {
@@ -39,9 +39,16 @@ export class DiscordRestClient {
     this.maxAttempts = Math.max(1, Math.min(6, Number(maxAttempts) || 4));
   }
 
-  async request(path, { method = 'GET', body, timeoutMs = 15_000, auth = true } = {}) {
+  async request(path, {
+    method = 'GET',
+    body,
+    timeoutMs = 15_000,
+    auth = true,
+    maxAttempts = this.maxAttempts,
+  } = {}) {
+    const attempts = Math.max(1, Math.min(this.maxAttempts, Number(maxAttempts) || 1));
     let lastError = null;
-    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -71,7 +78,7 @@ export class DiscordRestClient {
             code: 'RATE_LIMITED',
             retryable: true,
           });
-          if (attempt < this.maxAttempts) {
+          if (attempt < attempts) {
             await this.sleep(waitMs);
             continue;
           }
@@ -84,7 +91,7 @@ export class DiscordRestClient {
             code: 'UPSTREAM_5XX',
             retryable: true,
           });
-          if (attempt < this.maxAttempts) {
+          if (attempt < attempts) {
             const waitMs = Math.min(8000, 350 * (2 ** (attempt - 1)) + Math.floor(this.random() * 250));
             await this.sleep(waitMs);
             continue;
@@ -103,7 +110,7 @@ export class DiscordRestClient {
           code: error?.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR',
           retryable: true,
         });
-        if (attempt < this.maxAttempts) {
+        if (attempt < attempts) {
           const waitMs = Math.min(8000, 350 * (2 ** (attempt - 1)) + Math.floor(this.random() * 250));
           await this.sleep(waitMs);
           continue;
