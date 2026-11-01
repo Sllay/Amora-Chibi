@@ -3,7 +3,7 @@ function byId(id) {
 }
 
 function credential(operatorKey) {
-  try { return sessionStorage.getItem(operatorKey) || ''; } catch (_) { return ''; }
+  try { return localStorage.getItem(operatorKey) || ''; } catch (_) { return ''; }
 }
 
 async function operatorApi(operatorKey, path, init = {}) {
