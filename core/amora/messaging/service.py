@@ -16,6 +16,7 @@ from .models import (
     RoutingAction,
     TransportInvalidation,
 )
+from .presence import PlatformPresenceController
 from .presence_control import PlatformPresenceControlService, PresenceControlOutcome
 from .store import MessagingStore
 
@@ -44,7 +45,10 @@ class PlatformMessagingService:
         self.cognition = cognition
         self.conversation = conversation
         self.clock = clock
-        self.presence_control = presence_control
+        self.presence_control = presence_control or PlatformPresenceControlService(
+            profiles=attention.profiles,
+            presence=PlatformPresenceController(store, clock, reset_transient=False),
+        )
 
     async def receive(self, message: InboundMessage) -> InboundResult:
         if self.store.has_audit(
@@ -102,17 +106,10 @@ class PlatformMessagingService:
                 duplicate=True,
             )
 
-        # Critical privacy boundary: unknown DM content is retained only in the
-        # private operator audit. It is never persisted into CognitiveStore and
-        # never reaches a provider or a transport-control parser.
         if decision.action in {RoutingAction.BLOCK, RoutingAction.QUARANTINE, RoutingAction.SILENCE}:
             return InboundResult(decision=decision)
 
-        # Explicit transport commands are Core-owned deterministic control, not
-        # provider prompt interpretation. Only a direct/authorized response turn
-        # may mutate presence, and the canonical PersonProfile capability decides
-        # authority. Ambiguous phrases remain ordinary conversation.
-        if decision.action == RoutingAction.RESPOND and self.presence_control is not None:
+        if decision.action == RoutingAction.RESPOND:
             control = self.presence_control.handle(
                 message.text,
                 speaker_entity_id=decision.speaker_entity_id,
@@ -316,7 +313,11 @@ class PlatformMessagingService:
                     "source_message_id_hash": self._hash(native_source_id),
                     "target_entity_id": decision.speaker_entity_id,
                     "transport_revision": message.transport_revision,
-                    **{key: value for key, value in metadata.items() if key.startswith("presence_control_") or key == "local_control"},
+                    **{
+                        key: value
+                        for key, value in metadata.items()
+                        if key.startswith("presence_control_") or key == "local_control"
+                    },
                 },
             )
         )
@@ -329,12 +330,6 @@ class PlatformMessagingService:
         return outbound
 
     def invalidate_transport(self, invalidation: TransportInvalidation) -> dict[str, object]:
-        """Revoke an in-flight/queued reply when the native source mutates.
-
-        This endpoint intentionally carries no message body. The platform worker
-        can therefore cancel stale output without promoting transport state into
-        canonical memory or identity.
-        """
         generation = self.attention.floor.invalidate(
             invalidation.platform,
             invalidation.account_scope,
