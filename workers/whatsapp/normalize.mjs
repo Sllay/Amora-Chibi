@@ -151,7 +151,7 @@ export function normalizeWhatsAppMessage(message, {
     reply_to_author_identifiers: quotedAuthor ? actorRefs(quotedAuthor) : [],
     attachments,
     timestamp: timestampIso(message),
-    privacy_scope: 'personal',
+    privacy_scope: 'PERSONAL',
     remote_processing_allowed: Boolean(remoteProcessingAllowed),
     native_thread_id: null,
     guild_or_group_id: isGroup ? normalizeJidForCompare(key.remoteJid) : null,
