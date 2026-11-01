@@ -1,5 +1,7 @@
 const DEFAULT_TIMEOUT_MS = 20_000;
+const INBOUND_TIMEOUT_MS = 30_000;
 const MIN_PRESENCE_CONTROL_TIMEOUT_MS = 5_000;
+const DEFAULT_OUTBOUND_LEASE_SECONDS = 120;
 
 function cleanBaseUrl(value) {
   const url = new URL(value);
@@ -82,7 +84,13 @@ export class MessagingCoreClient {
   }
 
   inbound(message) {
-    return this.request('/v1/messaging/worker/inbound', { method: 'POST', body: message });
+    // Core owns a <=24s hard messaging budget. The worker waits slightly longer
+    // so a valid local fallback can cross the HTTP boundary before transport abort.
+    return this.request('/v1/messaging/worker/inbound', {
+      method: 'POST',
+      body: message,
+      timeoutMs: INBOUND_TIMEOUT_MS,
+    });
   }
 
   invalidateSource({ conversationId, nativeMessageId, reason, transportRevision = null }) {
@@ -100,9 +108,6 @@ export class MessagingCoreClient {
   }
 
   presenceControl({ action, senderIdentifiers, timeoutMs = MIN_PRESENCE_CONTROL_TIMEOUT_MS }) {
-    // Discord interactions are already deferred before this call. Keep the
-    // Core round-trip bounded, but do not abort so aggressively that a normal
-    // remote Core/libSQL hop turns a valid slash command into CORE_TIMEOUT.
     const effectiveTimeoutMs = Math.max(
       MIN_PRESENCE_CONTROL_TIMEOUT_MS,
       Number(timeoutMs) || MIN_PRESENCE_CONTROL_TIMEOUT_MS,
@@ -119,11 +124,12 @@ export class MessagingCoreClient {
     });
   }
 
-  claimOutbound(limit = 8) {
+  claimOutbound(limit = 1, leaseSeconds = DEFAULT_OUTBOUND_LEASE_SECONDS) {
     const query = new URLSearchParams({
       platform: this.platform,
       account_scope: this.accountScope,
       limit: String(limit),
+      lease_seconds: String(leaseSeconds),
     });
     return this.request(`/v1/messaging/worker/outbound?${query}`);
   }

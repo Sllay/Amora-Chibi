@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import timedelta
 
 from amora.app import AmoraCore
-from amora.messaging import ChannelType, ExternalActorRef, InboundMessage, MessagingPlatform, RoutingAction
+from amora.messaging import (
+    ChannelType,
+    ExternalActorRef,
+    InboundMessage,
+    MessagingPlatform,
+    RoutingAction,
+    TransportInvalidation,
+)
 from amora.time import SimulatedClock
 
 
@@ -28,6 +35,17 @@ def _group_message(
         mentions_amora=mention,
         timestamp=core.clock.now(),
         remote_processing_allowed=False,
+    )
+
+
+def _invalidation(message_id: str) -> TransportInvalidation:
+    return TransportInvalidation(
+        platform=MessagingPlatform.DISCORD,
+        account_scope="primary",
+        conversation_id="discord-channel-lease",
+        native_message_id=message_id,
+        reason="DISCORD_MESSAGE_UPDATED",
+        transport_revision=2,
     )
 
 
@@ -117,5 +135,59 @@ def test_inferred_same_speaker_continuity_keeps_short_reply_lease(tmp_path, monk
 
         clock.advance(timedelta(seconds=11))
         assert not core.messaging.attention.floor.validate_reply(continuation, followup)
+    finally:
+        core.close()
+
+
+def test_unrelated_transport_edit_does_not_cancel_active_direct_reply(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        direct = _group_message(
+            core,
+            message_id="direct-source-1",
+            actor_id="111111111111111111",
+            text="Amora, pensa nisso",
+            mention=True,
+        )
+        decision = core.messaging.attention.route(direct)
+        before = decision.floor_generation
+
+        result = core.messaging.invalidate_transport(_invalidation("unrelated-message"))
+
+        assert result["floor_invalidated"] is False
+        assert result["floor_generation"] == before
+        assert core.messaging.attention.floor.validate_reply(direct, decision)
+    finally:
+        core.close()
+
+
+def test_edit_of_actual_response_source_invalidates_direct_and_continuation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        direct = _group_message(
+            core,
+            message_id="direct-source-2",
+            actor_id="111111111111111111",
+            text="Amora, conversa comigo",
+            mention=True,
+        )
+        direct_decision = core.messaging.attention.route(direct)
+        continuation = _group_message(
+            core,
+            message_id="continuation-source-2",
+            actor_id="111111111111111111",
+            text="e continua aqui",
+        )
+        continuation_decision = core.messaging.attention.route(continuation)
+        assert continuation_decision.action == RoutingAction.RESPOND
+
+        result = core.messaging.invalidate_transport(_invalidation("continuation-source-2"))
+
+        assert result["floor_invalidated"] is True
+        assert result["floor_generation"] > continuation_decision.floor_generation
+        assert not core.messaging.attention.floor.validate_reply(direct, direct_decision)
+        assert not core.messaging.attention.floor.validate_reply(continuation, continuation_decision)
     finally:
         core.close()

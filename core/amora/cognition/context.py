@@ -180,7 +180,14 @@ class ContextCompiler:
             if len(claims) >= 10:
                 break
 
-        persisted_messages = self.store.list_messages(limit=24)
+        # Literal transcript is local to one conversation session. Cross-session
+        # continuity must come through canonical Memory/World state, never by
+        # silently copying raw Web/DM/channel turns into another surface.
+        persisted_messages = self.store.list_messages(limit=24, session_id=request.session_id)
+        if request.session_id is not None:
+            reasons.append("RECENT_HISTORY_SESSION_SCOPED")
+        else:
+            reasons.append("RECENT_HISTORY_UNSCOPED_LEGACY")
         test_turn_ids = {
             str(message.turn_id)
             for message in persisted_messages

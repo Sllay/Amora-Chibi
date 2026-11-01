@@ -99,11 +99,19 @@ export function splitDiscordText(text, limit = 2000) {
   return chunks;
 }
 
-export function discordReplyPayload(text, { replyToMessageId = null, firstChunk = true } = {}) {
+export function discordReplyPayload(text, {
+  replyToMessageId = null,
+  firstChunk = true,
+  nonce = null,
+} = {}) {
   const payload = {
     content: text,
     allowed_mentions: { parse: [], replied_user: false },
   };
+  if (nonce) {
+    payload.nonce = String(nonce).slice(0, 25);
+    payload.enforce_nonce = true;
+  }
   if (firstChunk && replyToMessageId) {
     payload.message_reference = {
       message_id: String(replyToMessageId),

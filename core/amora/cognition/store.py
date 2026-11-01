@@ -74,7 +74,14 @@ class CognitiveStore:
             row = self._conn.execute("SELECT * FROM conversation_messages WHERE dedupe_key = ?", (dedupe_key,)).fetchone()
         return self._message_from_row(row) if row else None
 
-    def list_messages(self, *, limit: int = 40, speaker_id: str | None = None, turn_id: UUID | str | None = None) -> list[ConversationMessage]:
+    def list_messages(
+        self,
+        *,
+        limit: int = 40,
+        speaker_id: str | None = None,
+        turn_id: UUID | str | None = None,
+        session_id: str | None = None,
+    ) -> list[ConversationMessage]:
         clauses: list[str] = []
         args: list[object] = []
         if speaker_id is not None:
@@ -83,6 +90,9 @@ class CognitiveStore:
         if turn_id is not None:
             clauses.append("turn_id = ?")
             args.append(str(turn_id))
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            args.append(session_id)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         args.append(max(1, min(500, int(limit))))
         with self._lock:
@@ -148,7 +158,6 @@ class CognitiveStore:
             )
             if cursor.rowcount not in {0, 1}:
                 raise sqlite3.DatabaseError("SQL_UNEXPECTED_ROWCOUNT")
-        # Do not report an inserted/no-op result until the atomic statement succeeded.
         return cursor.rowcount == 1
 
     def journal_for_turn(self, turn_id: UUID | str) -> list[CognitiveJournalEntry]:
@@ -227,8 +236,6 @@ class CognitiveStore:
         remaining_tokens: int | None = None,
         metadata: dict[str, object] | None = None,
     ) -> None:
-        # ADR-0020 keeps the usage ledger as a special fail-closed transaction
-        # boundary, including explicit COMMIT ambiguity and recovery semantics.
         with self._lock, self._conn:
             self._conn.execute(
                 """INSERT INTO model_usage(timestamp, provider, model, task_class, success, input_tokens, output_tokens,

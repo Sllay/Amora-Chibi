@@ -39,12 +39,20 @@ class _Floor:
 
 
 class ConversationFloor:
-    """Short group-conversation lease owned by Core, never by a platform adapter."""
+    """Short group-conversation lease owned by Core, never by a platform adapter.
+
+    The generation is the authority token for one pending response turn. Native
+    transport edits/deletes invalidate that generation only when they touch the
+    source message that currently authorizes a response. A same-speaker
+    continuation advances generation without extending the original floor expiry,
+    so the latest pending turn wins without creating an infinite conversation.
+    """
 
     def __init__(self, clock: Clock) -> None:
         self.clock = clock
         self._floors: dict[tuple[str, str, str], _Floor] = {}
         self._generation: dict[tuple[str, str, str], int] = {}
+        self._response_sources: dict[tuple[str, str, str], set[str]] = {}
 
     @staticmethod
     def key(message: InboundMessage) -> tuple[str, str, str]:
@@ -94,7 +102,28 @@ class ConversationFloor:
             reason=reason,
         )
         self._floors[key] = floor
+        self._response_sources[key] = {message.native_source_message_id}
         return floor
+
+    def continue_floor(self, message: InboundMessage, floor: _Floor, *, reason: str) -> _Floor:
+        key = self.key(message)
+        current_generation = self._generation.get(key, 0)
+        if current_generation != floor.generation:
+            return floor
+        generation = current_generation + 1
+        continued = _Floor(
+            generation=generation,
+            speaker_actor_ref=floor.speaker_actor_ref,
+            speaker_entity_id=floor.speaker_entity_id,
+            opened_at=floor.opened_at,
+            expires_at=floor.expires_at,
+            anchor_message_id=message.native_source_message_id,
+            reason=reason,
+        )
+        self._generation[key] = generation
+        self._floors[key] = continued
+        self._response_sources[key] = {message.native_source_message_id}
+        return continued
 
     def shift_away(self, message: InboundMessage) -> int:
         return self.invalidate(
@@ -113,7 +142,21 @@ class ConversationFloor:
         generation = self._generation.get(key, 0) + 1
         self._generation[key] = generation
         self._floors.pop(key, None)
+        self._response_sources.pop(key, None)
         return generation
+
+    def invalidate_source(
+        self,
+        platform: MessagingPlatform | str,
+        account_scope: str,
+        conversation_id: str,
+        source_message_id: str,
+    ) -> tuple[int, bool]:
+        key = self.raw_key(platform, account_scope, conversation_id)
+        generation = self._generation.get(key, 0)
+        if source_message_id not in self._response_sources.get(key, set()):
+            return generation, False
+        return self.invalidate(platform, account_scope, conversation_id), True
 
     def reply_lease(
         self,
@@ -140,7 +183,7 @@ class ConversationFloor:
             # Explicit native mention/reply/vocative is authority to answer that
             # concrete message. Provider latency must not make it stale merely
             # because the short conversational floor expired; a generation
-            # change (other speaker, edit/delete invalidation, newer direct turn)
+            # change (other speaker, relevant source edit/delete, newer turn)
             # still cancels it deterministically.
             return True
         floor = self.active(message)
@@ -241,15 +284,24 @@ class SocialAttentionRouter:
 
         active = self.floor.active(message)
         if active is not None and active.speaker_actor_ref == actor_ref:
+            continued = self.floor.continue_floor(
+                message,
+                active,
+                reason="GROUP_ACTIVE_FLOOR_SAME_SPEAKER",
+            )
             return AttentionDecision(
                 action=RoutingAction.RESPOND,
                 score=0.82,
                 speaker_entity_id=speaker_entity_id,
                 speaker_actor_ref=actor_ref,
                 addressee_id="ENTITY_AMORA",
-                reason_codes=["GROUP_ACTIVE_FLOOR_SAME_SPEAKER", "BOUNDED_CONTINUITY"],
-                floor_generation=active.generation,
-                reply_lease_until=self.floor.reply_lease(active),
+                reason_codes=[
+                    "GROUP_ACTIVE_FLOOR_SAME_SPEAKER",
+                    "BOUNDED_CONTINUITY",
+                    "FLOOR_GENERATION_ADVANCED",
+                ],
+                floor_generation=continued.generation,
+                reply_lease_until=self.floor.reply_lease(continued),
             )
 
         if active is not None and active.speaker_actor_ref != actor_ref:

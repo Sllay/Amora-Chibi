@@ -19,6 +19,25 @@ function cloneMessage(value) {
   return structuredClone(value);
 }
 
+function semanticFingerprint(message) {
+  if (!message || typeof message !== 'object') return '';
+  const mentions = (message.mentions || []).map((item) => String(item?.id || '')).filter(Boolean).sort();
+  const attachments = (message.attachments || []).map((item) => ({
+    id: String(item?.id || ''),
+    content_type: item?.content_type || null,
+    filename: item?.filename || null,
+    size: Number(item?.size || 0),
+  })).sort((left, right) => left.id.localeCompare(right.id));
+  return JSON.stringify({
+    content: String(message.content || ''),
+    mentions,
+    attachments,
+    reply_to_message_id: message.message_reference?.message_id || null,
+    reply_to_channel_id: message.message_reference?.channel_id || null,
+    referenced_author_id: message.referenced_message?.author?.id || null,
+  });
+}
+
 class ChannelSession {
   constructor({ id, guildId = null, parentId = null, now }) {
     this.id = id;
@@ -36,7 +55,8 @@ class ChannelSession {
  *
  * It never decides canonical identity, memory, emotion or whether Amora should
  * answer. Its job is to know whether the exact Discord object that triggered a
- * Core reply still exists and still has the same revision before bytes are sent.
+ * Core reply still exists and still has the same semantic revision before bytes
+ * are sent.
  */
 export class DiscordSocialRuntime {
   constructor({
@@ -78,7 +98,10 @@ export class DiscordSocialRuntime {
       parentId: message.message_reference?.channel_id || null,
     });
     const id = messageKey(message.id);
-    const previous = session.messages.get(id);
+    const previous = session.messages.get(id) || null;
+    if (previous && !previous.deleted) {
+      return { ...previous, duplicate: true, sessionGeneration: session.generation };
+    }
     const revision = previous ? previous.revision + 1 : 1;
     const entry = {
       id,
@@ -90,7 +113,7 @@ export class DiscordSocialRuntime {
     session.messages.set(id, entry);
     session.generation += 1;
     this.trimMessages(session);
-    return { ...entry, sessionGeneration: session.generation };
+    return { ...entry, duplicate: false, sessionGeneration: session.generation };
   }
 
   recordUpdate(partial) {
@@ -111,6 +134,23 @@ export class DiscordSocialRuntime {
     const previousContent = previous?.message?.content ?? null;
     const nextContent = merged.content ?? null;
     const contentChanged = partial.content !== undefined && previousContent !== nextContent;
+    const semanticChanged = previous ? semanticFingerprint(previous.message) !== semanticFingerprint(merged) : true;
+    if (previous && !previous.deleted && !semanticChanged) {
+      const entry = {
+        ...previous,
+        message: merged,
+        updatedAt: nowMs(this.clock),
+      };
+      session.messages.set(id, entry);
+      return {
+        ...entry,
+        duplicate: true,
+        contentChanged,
+        semanticChanged: false,
+        knownBefore: true,
+        sessionGeneration: session.generation,
+      };
+    }
     const revision = (previous?.revision || 0) + 1;
     const entry = {
       id,
@@ -124,7 +164,9 @@ export class DiscordSocialRuntime {
     this.trimMessages(session);
     return {
       ...entry,
+      duplicate: false,
       contentChanged,
+      semanticChanged,
       knownBefore: Boolean(previous),
       sessionGeneration: session.generation,
     };
@@ -135,6 +177,9 @@ export class DiscordSocialRuntime {
     const session = this.session(event.channel_id, { guildId: event.guild_id || null });
     const id = messageKey(event.id);
     const previous = session.messages.get(id) || null;
+    if (previous?.deleted) {
+      return { ...previous, duplicate: true, sessionGeneration: session.generation };
+    }
     const entry = {
       id,
       revision: (previous?.revision || 0) + 1,
@@ -144,7 +189,7 @@ export class DiscordSocialRuntime {
     };
     session.messages.set(id, entry);
     session.generation += 1;
-    return { ...entry, sessionGeneration: session.generation };
+    return { ...entry, duplicate: false, sessionGeneration: session.generation };
   }
 
   recordBulkDelete(event) {
