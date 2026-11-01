@@ -20,11 +20,12 @@ from .providers_identity import (
 )
 from .providers_openrouter import OpenRouterCognitiveProvider
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
-# Preserve the historical layered-runtime import as an explicit architectural
-# dependency; the identity-aware subclass below only changes provider projection.
-from .structured_runtime import CognitiveEngine
+# Preserve the historical layered-runtime imports as explicit architectural
+# dependencies. The resilience layer decorates the final identity-aware provider
+# adapters without moving canonical state or identity into remote providers.
+from .structured_runtime import CognitiveEngine as StructuredCognitiveEngine
 from .identity_runtime import CognitiveEngine as IdentityAwareCognitiveEngine
-CognitiveEngine = IdentityAwareCognitiveEngine
+from .resilience_runtime import CognitiveEngine
 from .replay import CognitiveReplayResult
 from .speech import SpeechCue, SpeechNormalizer, SpeechPlan, SpeechRender, SpeechSegmenter
 from .store_v1 import CognitiveStore
