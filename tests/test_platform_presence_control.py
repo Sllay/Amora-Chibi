@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 
+from amora.api import create_api
 from amora.app import AmoraCore
 from amora.identity import BindingTrust, PlatformIdentityBinding, PlatformKind
 from amora.messaging import (
@@ -9,7 +11,6 @@ from amora.messaging import (
     ExternalActorRef,
     InboundMessage,
     MessagingPlatform,
-    PresenceState,
     RoutingAction,
 )
 from amora.time import SimulatedClock
@@ -151,5 +152,41 @@ def test_presence_control_parser_rejects_voice_call_phrases_and_ambiguous_platfo
         assert parser.parse("o Discord tá uma desgraça hoje") is None
         assert parser.parse("Amora, conecta no Discord").action.value == "connect"
         assert parser.parse("desconecta do WhatsApp").platform.value == "whatsapp"
+    finally:
+        core.close()
+
+
+def test_operator_can_explicitly_grant_and_revoke_presence_authority(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        lucas = core.profiles.profile("PERSON_LUCAS")
+        assert lucas is not None and not lucas.can_control_platform_presence
+        admin = {"Authorization": "Bearer " + core.secrets.get("LOCAL_API_TOKEN")}
+        with TestClient(create_api(core)) as client:
+            denied = client.put(
+                "/v1/operator/messaging/presence-authority/PERSON_LUCAS",
+                headers=admin,
+                json={"enabled": True, "confirm": False},
+            )
+            assert denied.status_code == 409
+
+            granted = client.put(
+                "/v1/operator/messaging/presence-authority/PERSON_LUCAS",
+                headers=admin,
+                json={"enabled": True, "confirm": True},
+            )
+            assert granted.status_code == 200, granted.text
+            assert granted.json()["can_control_platform_presence"] is True
+            assert core.profiles.can_control_platform_presence("PERSON_LUCAS")
+
+            revoked = client.put(
+                "/v1/operator/messaging/presence-authority/PERSON_LUCAS",
+                headers=admin,
+                json={"enabled": False, "confirm": True},
+            )
+            assert revoked.status_code == 200
+            assert revoked.json()["can_control_platform_presence"] is False
+            assert not core.profiles.can_control_platform_presence("PERSON_LUCAS")
     finally:
         core.close()
