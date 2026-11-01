@@ -15,6 +15,7 @@ from .models import (
     PresenceSnapshot,
     PresenceState,
     RoutingAction,
+    TransportInvalidation,
 )
 from .presence import PlatformPresenceController
 from .routes import register_messaging_routes
@@ -42,5 +43,6 @@ __all__ = [
     "PresenceState",
     "RoutingAction",
     "SocialAttentionRouter",
+    "TransportInvalidation",
     "register_messaging_routes",
 ]
