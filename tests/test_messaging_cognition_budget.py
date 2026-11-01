@@ -31,7 +31,7 @@ def _direct_group_message(core: AmoraCore, *, message_id: str = "budget-1") -> I
 
 
 @pytest.mark.asyncio
-async def test_messaging_cognition_timeout_queues_local_fallback_instead_of_silence(
+async def test_messaging_cognition_hard_timeout_queues_local_fallback_instead_of_silence(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -52,6 +52,7 @@ async def test_messaging_cognition_timeout_queues_local_fallback_instead_of_sile
         monkeypatch.setattr(core.conversation, "_appraise_interaction", no_appraise)
         monkeypatch.setattr(core.cognition, "respond", slow_respond)
         core.messaging.cognition_timeout_seconds = 0.01
+        core.messaging.provider_total_budget_seconds = 0.005
 
         result = await core.messaging.receive(_direct_group_message(core))
 
@@ -63,6 +64,6 @@ async def test_messaging_cognition_timeout_queues_local_fallback_instead_of_sile
         assert outbound.metadata["fallback_used"] is True
         assert outbound.metadata["provider"] is None
         assert outbound.metadata["remote_processing_allowed"] is True
-        assert "MESSAGING_COGNITION_TIMEOUT" in outbound.metadata["cognitive_reason_codes"]
+        assert "MESSAGING_COGNITION_HARD_TIMEOUT" in outbound.metadata["cognitive_reason_codes"]
     finally:
         core.close()
