@@ -71,12 +71,18 @@ class LocalSpeechComposer:
         return "Hmm."
 
     def fallback_dialogue(self, text: str, *, speaker_id: str | None = None) -> str:
-        normalized = text.strip().lower()
-        if "amora" in normalized and any(token in normalized for token in ("oi", "ei", "alô", "alo")):
-            return "Oi, papis. Tô aqui."
-        if normalized.endswith("?"):
-            return "Uhum, tô ouvindo."
-        return "Uhum."
+        """Visible emergency response used only when normal cognition cannot answer.
+
+        This must never look like an ordinary Amora utterance: operators need to
+        recognize degraded execution directly on the messaging surface without
+        opening infrastructure logs.
+        """
+        return "Oxe, deu ruim aqui e eu não consegui pensar na resposta. Tenta de novo? [AMORA:E_PROVIDER]"
+
+    @staticmethod
+    def operational_timeout_fallback() -> str:
+        """Visible emergency response for a Core cognition hard timeout."""
+        return "Oxe, meu cérebro travou e a resposta demorou demais. Tenta de novo? [AMORA:E_TIMEOUT]"
 
     @staticmethod
     def kind_for_action(action_kind: str) -> UtteranceKind:
