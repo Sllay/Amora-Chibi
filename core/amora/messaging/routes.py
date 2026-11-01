@@ -7,12 +7,14 @@ from fastapi import Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from .models import (
+    ExternalActorRef,
     InboundMessage,
     MessagingPlatform,
     PresenceCommand,
     PresenceState,
     TransportInvalidation,
 )
+from .presence_control import PresenceControlAction, PresenceControlIntent
 
 
 class OutboundAckRequest(BaseModel):
@@ -43,6 +45,15 @@ class PresenceCommandRequest(BaseModel):
 
     command: PresenceCommand
     account_scope: str = Field(default="primary", min_length=1, max_length=96)
+
+
+class WorkerPresenceControlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    platform: MessagingPlatform
+    account_scope: str = Field(default="primary", min_length=1, max_length=96)
+    action: PresenceControlAction
+    sender_identifiers: list[ExternalActorRef] = Field(min_length=1, max_length=6)
 
 
 class PresenceAuthorityRequest(BaseModel):
@@ -122,6 +133,34 @@ def register_messaging_routes(app, core, require_auth) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         return snapshot.model_dump(mode="json")
+
+    @app.post("/v1/messaging/worker/presence-control", dependencies=[Depends(require_auth)])
+    def messaging_worker_presence_control(payload: WorkerPresenceControlRequest):
+        speaker_entity_id = None
+        for ref in sorted(payload.sender_identifiers, key=lambda item: item.confidence, reverse=True):
+            entity = core.profiles.resolve_actor(
+                platform=payload.platform.value,
+                identifier_type=ref.identifier_type,
+                external_actor_id=ref.external_actor_id,
+                account_scope=payload.account_scope,
+            )
+            if entity is not None:
+                speaker_entity_id = entity.id
+                break
+        outcome = core.messaging.presence_control.execute_intent(
+            PresenceControlIntent(platform=payload.platform, action=payload.action),
+            speaker_entity_id=speaker_entity_id,
+            account_scope=payload.account_scope,
+        )
+        return {
+            "authorized": outcome.authorized,
+            "executed": outcome.executed,
+            "response_text": outcome.response_text,
+            "platform": outcome.intent.platform.value,
+            "action": outcome.intent.action.value,
+            "speaker_entity_id": speaker_entity_id,
+            "snapshot": outcome.snapshot.model_dump(mode="json") if outcome.snapshot else None,
+        }
 
     @app.get("/v1/operator/messaging/audit", dependencies=[Depends(require_auth)])
     def messaging_operator_audit(
