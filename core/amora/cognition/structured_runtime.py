@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from time import perf_counter
 from typing import Any
 
@@ -32,9 +33,6 @@ class CognitiveEngine(ProductionCognitiveEngine):
 
     def register_provider(self, provider) -> None:
         super().register_provider(provider)
-        # ResilientCognitiveEngine historically bootstraps the V1 Gemini adapter.
-        # Replace that transport-compatible fallback with the structured adapter
-        # so every production provider follows the same realization contract.
         if provider.descriptor.name == "groq":
             secrets = getattr(provider, "secrets", None)
             if secrets is not None:
@@ -44,7 +42,6 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     self.router.register(structured.descriptor)
 
     async def reflect(self, request: CognitiveRequest) -> CognitiveProposalBundle:
-        """Never consolidate provider proposals from technical test turns."""
         if bool(request.metadata.get("test_mode", False)) or request.metadata.get("memory_consolidation") is False:
             self._journal(
                 request,
@@ -169,6 +166,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 started=started,
             )
 
+        total_budget = _positive_float(request.metadata.get("provider_total_budget_seconds"))
+        attempt_budget = _positive_float(request.metadata.get("provider_attempt_budget_seconds"))
         last_failure = "NO_STRUCTURED_REALIZATION_PROVIDER"
         for provider_index, descriptor in enumerate(candidates):
             provider = self._providers.get(descriptor.name)
@@ -190,6 +189,23 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 )
                 continue
 
+            remaining_budget = None
+            if total_budget is not None:
+                remaining_budget = total_budget - (perf_counter() - started)
+                if remaining_budget <= 0:
+                    last_failure = "PROVIDER_TOTAL_BUDGET_EXHAUSTED"
+                    self._journal(
+                        request,
+                        JournalStage.ERROR,
+                        summary="provider failover budget exhausted before next attempt",
+                        reason_codes=[last_failure, "NO_SPEECH_EMITTED"],
+                        provider=descriptor.name,
+                        model=descriptor.model,
+                        error_code=last_failure,
+                        payload={"candidate_index": provider_index},
+                    )
+                    break
+
             self._journal(
                 request,
                 JournalStage.PROVIDER_SELECTED,
@@ -201,7 +217,12 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 ],
                 provider=descriptor.name,
                 model=descriptor.model,
-                payload={"candidate_index": provider_index, "candidate_count": len(candidates)},
+                payload={
+                    "candidate_index": provider_index,
+                    "candidate_count": len(candidates),
+                    "provider_total_budget_seconds": total_budget,
+                    "provider_attempt_budget_seconds": attempt_budget,
+                },
             )
             self._journal(
                 request,
@@ -213,9 +234,43 @@ class CognitiveEngine(ProductionCognitiveEngine):
 
             provider_started = perf_counter()
             try:
-                raw = dict(await realize(context))
+                timeout = attempt_budget
+                if remaining_budget is not None:
+                    timeout = min(timeout, remaining_budget) if timeout is not None else remaining_budget
+                if timeout is not None:
+                    raw_result = await asyncio.wait_for(realize(context), timeout=max(0.05, timeout))
+                else:
+                    raw_result = await realize(context)
+                raw = dict(raw_result)
                 usage = raw.pop("_usage", {}) if isinstance(raw.get("_usage"), dict) else {}
                 validated = RealizationValidator.parse_and_validate(context, raw)
+            except asyncio.TimeoutError:
+                last_failure = "PROVIDER_ATTEMPT_TIMEOUT"
+                self._last_realization_rejection = {
+                    "provider": descriptor.name,
+                    "model": descriptor.model,
+                    "code": last_failure,
+                    "turn_id": str(request.turn_id),
+                }
+                self._record_provider_failure(
+                    request,
+                    descriptor,
+                    error_code=last_failure,
+                    status_code=None,
+                    started=provider_started,
+                )
+                self._backoff(descriptor, status_code=None)
+                self._journal(
+                    request,
+                    JournalStage.ERROR,
+                    summary="provider attempt exceeded turn budget",
+                    reason_codes=[last_failure, "FAILOVER_ELIGIBLE", "NO_SPEECH_EMITTED"],
+                    provider=descriptor.name,
+                    model=descriptor.model,
+                    error_code=last_failure,
+                    payload={"candidate_index": provider_index, "timeout_seconds": timeout},
+                )
+                continue
             except RealizationError as exc:
                 last_failure = exc.code
                 self._last_realization_rejection = {
@@ -402,6 +457,16 @@ class CognitiveEngine(ProductionCognitiveEngine):
 def _execution_metadata(metadata: dict[str, Any]) -> dict[str, object]:
     keys = ("test_mode", "memory_consolidation", "relationship_learning", "emotion_persistence")
     return {key: metadata[key] for key in keys if key in metadata}
+
+
+def _positive_float(value: object) -> float | None:
+    try:
+        parsed = float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed
 
 
 def _optional_int(value: object) -> int | None:
