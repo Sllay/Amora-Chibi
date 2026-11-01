@@ -40,6 +40,10 @@ jobs:
           node --check workers/whatsapp/worker.mjs
       - name: Adapter contract tests
         run: node --test tests/messaging_workers.test.mjs tests/discord_worker_runtime.test.mjs
+      - name: Build Discord worker container
+        run: |
+          docker build -f workers/discord/Dockerfile -t amora-discord:test .
+          docker run --rm --entrypoint sh amora-discord:test -c 'test "$(id -u)" = "10001" && node --check workers/discord/worker.mjs'
       - name: Resolve exact Baileys release, import worker and audit installed tree
         working-directory: workers/whatsapp
         run: |
