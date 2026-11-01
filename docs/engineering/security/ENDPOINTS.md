@@ -67,6 +67,7 @@ estáticos são descritos após a tabela.
 | POST | `/v1/messaging/worker/outbound/{message_id}/cancel` | admin ou messaging |
 | GET | `/v1/messaging/worker/presence/{platform}` | admin ou messaging |
 | POST | `/v1/messaging/worker/presence/{platform}/report` | admin ou messaging |
+| POST | `/v1/messaging/worker/presence-control` | admin ou messaging |
 | GET | `/v1/operations/state` | admin ou operator |
 | GET | `/v1/operator/bindings/export` | admin ou operator |
 | POST | `/v1/operator/bindings/import/apply` | admin ou operator |
@@ -121,7 +122,7 @@ Voice Worker separado: `/live` público; `/ready` e POST `/v1/render` exigem cre
 
 `operator` não acessa `/v1/web/*`, `/v1/state`, memória, mundo, cognition journal, events ou ActionEngine. `web` não acessa `/v1/operator/*`, `/v1/messaging/worker/*` nem `/v1/operations/state`.
 
-`messaging` usa `AMORA_MESSAGING_SERVICE_TOKEN`, distinto do admin e do voice service token; em cloud exige no mínimo 32 bytes. O worker pode entregar envelopes, invalidar source nativa, claim/cancel/ack outbound e reportar presença física. Isso **não** lhe concede autoridade para mudar People Profiles, conceder capability, ler Memory/World ou executar Actions.
+`messaging` usa `AMORA_MESSAGING_SERVICE_TOKEN`, distinto do admin e do voice service token; em cloud exige no mínimo 32 bytes. O worker pode entregar envelopes, invalidar source nativa, claim/cancel/ack outbound, reportar presença física e apresentar um pedido estruturado de controle junto dos external actor IDs. O Core sempre resolve esses IDs novamente para PERSON e aplica `can_control_platform_presence`; o worker não recebe autoridade canônica. Isso **não** lhe concede poder para mudar People Profiles, conceder capability, ler Memory/World ou executar Actions.
 
 A capability `can_control_platform_presence` pertence ao profile canônico e só pode ser concedida/revogada pela superfície operator/admin. Uma ordem recebida pelo Discord precisa primeiro resolver external actor → PERSON; Discord role/guild admin não equivale a autoridade Amora.
 
