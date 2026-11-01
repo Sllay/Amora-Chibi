@@ -12,7 +12,15 @@ from .models import AttentionDecision, ChannelType, InboundMessage, MessagingPla
 
 
 _GROUP_FLOOR_SECONDS = 35
-_REPLY_LEASE_SECONDS = 10
+_CONTINUITY_REPLY_LEASE_SECONDS = 10
+_DIRECT_REPLY_LEASE_SECONDS = 90
+_DIRECT_ATTENTION_REASONS = frozenset(
+    {
+        "GROUP_NATIVE_REPLY_TO_AMORA",
+        "GROUP_NATIVE_MENTION_AMORA",
+        "GROUP_EXPLICIT_VOCATIVE_AMORA",
+    }
+)
 _AMORA_VOCATIVE = re.compile(
     r"(?:^|[\s(\[])@?amora\b(?:\s*[,!?:;\-–—]|\s+)",
     re.IGNORECASE,
@@ -107,11 +115,15 @@ class ConversationFloor:
         self._floors.pop(key, None)
         return generation
 
-    def reply_lease(self, floor: _Floor) -> datetime:
-        return min(
-            floor.expires_at,
-            self.clock.now() + timedelta(seconds=_REPLY_LEASE_SECONDS),
-        )
+    def reply_lease(
+        self,
+        floor: _Floor,
+        *,
+        seconds: int = _CONTINUITY_REPLY_LEASE_SECONDS,
+        cap_to_floor: bool = True,
+    ) -> datetime:
+        expires_at = self.clock.now() + timedelta(seconds=seconds)
+        return min(floor.expires_at, expires_at) if cap_to_floor else expires_at
 
     def validate_reply(
         self,
@@ -122,6 +134,15 @@ class ConversationFloor:
             return decision.action == RoutingAction.RESPOND
         if decision.reply_lease_until is not None and self.clock.now() > decision.reply_lease_until:
             return False
+        if self.generation(message) != decision.floor_generation:
+            return False
+        if any(reason in _DIRECT_ATTENTION_REASONS for reason in decision.reason_codes):
+            # Explicit native mention/reply/vocative is authority to answer that
+            # concrete message. Provider latency must not make it stale merely
+            # because the short conversational floor expired; a generation
+            # change (other speaker, edit/delete invalidation, newer direct turn)
+            # still cancels it deterministically.
+            return True
         floor = self.active(message)
         if floor is None:
             return False
@@ -211,7 +232,11 @@ class SocialAttentionRouter:
                 addressee_id="ENTITY_AMORA",
                 reason_codes=[direct_reason, "GROUP_DIRECT_ATTENTION"],
                 floor_generation=floor.generation,
-                reply_lease_until=self.floor.reply_lease(floor),
+                reply_lease_until=self.floor.reply_lease(
+                    floor,
+                    seconds=_DIRECT_REPLY_LEASE_SECONDS,
+                    cap_to_floor=False,
+                ),
             )
 
         active = self.floor.active(message)
