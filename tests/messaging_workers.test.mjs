@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import {
+  discordAmoraCommandDefinition,
+  discordDeferredInteractionResponse,
+  discordInteractionEdit,
+  parseDiscordAmoraInteraction,
+} from '../workers/discord/commands.mjs';
 import { DiscordRestClient } from '../workers/discord/http.mjs';
 import {
   DISCORD_INTENTS,
@@ -132,6 +138,44 @@ test('Discord social runtime keeps reactions as bounded transport evidence inste
 });
 
 
+test('Discord staging slash command is deterministic and actor id comes from the invoking user', () => {
+  const definition = discordAmoraCommandDefinition();
+  assert.equal(definition.name, 'amora');
+  assert.equal(definition.type, 1);
+  assert.deepEqual(definition.options[0].choices.map((item) => item.value), ['status', 'connect', 'disconnect', 'check']);
+
+  const guild = parseDiscordAmoraInteraction({
+    id: 'interaction-1',
+    application_id: 'app-1',
+    token: 'private-interaction-token',
+    type: 2,
+    guild_id: 'guild-1',
+    channel_id: 'channel-1',
+    member: { user: { id: 'user-1' } },
+    data: { name: 'amora', options: [{ name: 'acao', value: 'disconnect' }] },
+  });
+  assert.equal(guild.actorId, 'user-1');
+  assert.equal(guild.action, 'disconnect');
+  assert.equal(guild.applicationId, 'app-1');
+
+  const dm = parseDiscordAmoraInteraction({
+    id: 'interaction-2', application_id: 'app-1', token: 't2', type: 2,
+    user: { id: 'user-2' }, data: { name: 'amora', options: [{ name: 'acao', value: 'status' }] },
+  });
+  assert.equal(dm.actorId, 'user-2');
+  assert.equal(parseDiscordAmoraInteraction({ type: 2, data: { name: 'other' } }), null);
+});
+
+
+test('Discord interaction fallback defers ephemerally and edits without mention expansion', () => {
+  const deferred = discordDeferredInteractionResponse({ ephemeral: true });
+  assert.deepEqual(deferred, { type: 5, data: { flags: 64 } });
+  const edited = discordInteractionEdit('@everyone estado interno');
+  assert.equal(edited.content, '@everyone estado interno');
+  assert.deepEqual(edited.allowed_mentions.parse, []);
+});
+
+
 test('Discord REST client obeys 429 retry_after and succeeds without a hot retry loop', async () => {
   const waits = [];
   let calls = 0;
@@ -166,6 +210,28 @@ test('Discord REST client treats missing permission as terminal and does not ret
     (error) => error.status === 403 && error.code === 'MISSING_PERMISSION' && error.retryable === false,
   );
   assert.equal(calls, 1);
+});
+
+
+test('Discord interaction callback may omit Bot authorization and force one strict attempt', async () => {
+  const requests = [];
+  const client = new DiscordRestClient({
+    token: 'test-token',
+    maxAttempts: 4,
+    sleep: async () => { throw new Error('callback must not retry'); },
+    fetchImpl: async (_url, init) => {
+      requests.push(init);
+      return new Response('{}', { status: 503 });
+    },
+  });
+  await assert.rejects(
+    () => client.request('/interactions/i/t/callback', {
+      method: 'POST', auth: false, maxAttempts: 1, body: { type: 5 },
+    }),
+    (error) => error.status === 503 && error.code === 'UPSTREAM_5XX',
+  );
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].headers.Authorization, undefined);
 });
 
 
