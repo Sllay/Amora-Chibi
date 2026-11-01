@@ -226,6 +226,7 @@ def register_messaging_routes(app, core, require_auth) -> None:
         saved = core.profiles.upsert_profile(
             profile.model_copy(update={"can_control_platform_presence": payload.enabled}),
             source_revision="operator:web:platform-presence-authority",
+            allow_platform_presence_authority_change=True,
         )
         return saved.model_dump(mode="json")
 
