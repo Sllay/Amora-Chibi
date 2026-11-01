@@ -47,7 +47,7 @@ from amora.settings import RuntimePaths, ServerSettings
 from amora.social import AddresseeEngine, SocialSceneTracker
 from amora.storage import AmoraDatabase
 from amora.storage.backend import StorageBackend, BootstrapBackend, backend_from_environment
-from amora.storage.migrations_v103 import LATEST_SCHEMA_VERSION
+from amora.storage.migrations_v104 import LATEST_SCHEMA_VERSION
 from amora.time import Clock, Scheduler, SystemClock
 from amora.world import (
     PerspectiveConsolidator,
@@ -246,7 +246,7 @@ class AmoraCore:
         platform_presence = PlatformPresenceController(messaging_store, active_clock)
         messaging = PlatformMessagingService(
             store=messaging_store,
-            attention=SocialAttentionRouter(profiles=profiles, clock=active_clock),
+            attention=SocialAttentionRouter(profiles=profiles, clock=active_clock, store=messaging_store),
             cognition=cognition,
             conversation=conversation,
             clock=active_clock,
@@ -358,79 +358,27 @@ class AmoraCore:
             "skill_count": self.actions.skills.count,
             "turn_decision_count": conversation["turn_decision_count"],
             "speech_pending_count": conversation["speech_pending_count"],
-            "speech_spoken_count": conversation["speech_spoken_count"],
-            "conversation_floor": conversation["conversation_floor"],
-            "dialogue_provider": conversation["dialogue_provider"],
-            "cognition_enabled": conversation["cognition_enabled"],
-            **self.profiles.state(),
-            **self.messaging.state(),
-            **self.platform_presence.state(),
-            **cognition,
-            **avatar,
-            "entity_count": len(self.identities.entities),
-            "relationship_count": len(self.identities.relationships),
-            "active_sessions": self.database.active_session_count(self.clock.now()),
-            "primary_person": bk.id if bk else None,
-            "model_providers_registered": self.models.provider_count,
-            "model_provider_names": [item.name for item in self.models.descriptors()],
-            "social_participant_count": len(self.social.scene.participants),
-            "social_active_addressee": self.social.scene.active_addressee,
-            "groq_stt_configured": self.secrets.get("GROQ_API_KEY") is not None,
-            "groq_cognition_configured": self.secrets.get("GROQ_API_KEY") is not None,
+            "cognitive_turn_count": cognition["turn_count"],
+            "cognitive_pending_count": cognition["pending_count"],
+            "cognitive_provider_count": cognition["provider_count"],
+            "cognitive_fallback_count": cognition["fallback_count"],
+            "cognitive_last_provider": cognition["last_provider"],
+            "cognitive_last_fallback_used": cognition["last_fallback_used"],
+            "cognitive_last_reason_codes": cognition["last_reason_codes"],
+            "messaging_audit_count": self.messaging_store.count_audit(),
+            "messaging_outbound_pending_count": self.messaging_store.count_pending_outbound(),
+            "bk_entity_present": bk is not None,
             "cloudflare_cognition_configured": cloudflare_configured,
-            "cloudflare_zero_cost_confirmed": _env_true("AMORA_CLOUDFLARE_ZERO_COST_CONFIRMED"),
-            "cloudflare_cognition_registered": self.models.descriptor("cloudflare") is not None,
-            "gemini_cognition_configured": self.secrets.get("GEMINI_API_KEY") is not None,
-            "openrouter_cognition_configured": self.secrets.get("OPENROUTER_API_KEY") is not None,
-            "openrouter_zero_cost_route": bool(
-                openrouter_provider and openrouter_provider.metadata.get("zero_cost_route") is True
-            ),
-            "openrouter_cognition_registered": openrouter_provider is not None,
+            "openrouter_model": openrouter_provider.model if openrouter_provider else None,
+            "schema_latest": LATEST_SCHEMA_VERSION,
         }
-
-    def create_backup(self, name: str | None = None) -> Path:
-        stamp = self.clock.now().strftime("%Y%m%dT%H%M%SZ")
-        filename = name or f"amora-{stamp}.db"
-        if Path(filename).name != filename or not filename.endswith(".db"):
-            raise ValueError("backup name must be a simple .db filename")
-        destination = self.paths.backups / filename
-        self.database.backup_to(destination)
-        try:
-            self.avatar.store.backup_assets(destination)
-        except Exception:
-            destination.unlink(missing_ok=True)
-            AvatarStore.asset_backup_path(destination).unlink(missing_ok=True)
-            raise
-        return destination
-
-    def readiness(self) -> dict[str, object]:
-        if self._closed:
-            return {"status": "not_ready", "error_code": "CORE_CLOSED"}
-        try:
-            if not self.secrets.get("LOCAL_API_TOKEN"):
-                return {"status": "not_ready", "error_code": "AUTH_NOT_CONFIGURED"}
-            if self.database.schema_version() != LATEST_SCHEMA_VERSION:
-                return {"status": "not_ready", "error_code": "SCHEMA_NOT_CURRENT"}
-            with self.database._lock, self.database._conn:
-                self.database._conn.execute("UPDATE schema_migrations SET version=version WHERE version=(SELECT MAX(version) FROM schema_migrations)")
-            return {"status": "ready", "storage": self.database.backend.capabilities.name}
-        except Exception:
-            return {"status": "not_ready", "error_code": "STORAGE_UNAVAILABLE"}
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        errors = []
-        for resource in (self.actions, self.avatar, self.conversation, self.cognition,
-                         self.autonomy, self.emotion, self.world_store, self.memory, self.database):
-            try:
-                resource.close()
-            except Exception as exc:
-                errors.append(exc)
-        if errors:
-            raise ExceptionGroup("Core shutdown failed", errors)
+        self.database.close()
 
 
 def _env_true(name: str) -> bool:
-    return os.getenv(name, "0").strip().casefold() in _TRUE_VALUES
+    return str(os.getenv(name, "")).strip().lower() in _TRUE_VALUES
