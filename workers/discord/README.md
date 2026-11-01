@@ -21,6 +21,7 @@ DiscordWorker
 ├── bounded ChannelSession cache
 ├── MESSAGE_CREATE/UPDATE/DELETE/BULK_DELETE
 ├── reaction transport evidence
+├── guild /amora staging fallback
 ├── DiscordRestClient / rate-limit controller
 └── stale-reply validation
         │
@@ -46,10 +47,12 @@ AMORA_CORE_URL=https://core.example
 AMORA_MESSAGING_SERVICE_TOKEN=<secret distinto do admin/operator>
 AMORA_PLATFORM_ACCOUNT_SCOPE=primary
 DISCORD_BOT_TOKEN=<bot token privado>
+DISCORD_APPLICATION_ID=<application id; recomendado no staging>
+DISCORD_TEST_GUILD_ID=<guild id para registrar /amora; staging somente>
 AMORA_PLATFORM_REMOTE_PROCESSING=false
 ```
 
-Nunca colocar `DISCORD_BOT_TOKEN` no Git, log, screenshot público ou arquivo versionado.
+Nunca colocar `DISCORD_BOT_TOKEN` no Git, log, screenshot público ou arquivo versionado. Interaction tokens também são tratados como secretos transitórios e nunca entram em logs normais.
 
 ## Criar o bot de staging
 
@@ -60,11 +63,14 @@ Nunca colocar `DISCORD_BOT_TOKEN` no Git, log, screenshot público ou arquivo ve
 5. Gerar o install/invite da Application para uma guild de teste.
 6. Conceder somente permissões necessárias nos canais usados; evitar `Administrator`.
 7. Guardar o bot token como secret `DISCORD_BOT_TOKEN` no ambiente do worker.
-8. Cadastrar o Discord user ID de BK/Lucas/etc. em `PlatformIdentityBinding` pela Web Pessoas/operador.
-9. Para uma pessoa poder ordenar connect/disconnect/check/status por linguagem natural, o profile precisa de `can_control_platform_presence=true`.
-10. Solicitar `desired_connected=true` pelo operador ou enviar uma frase explícita autorizada, por exemplo `Amora, conecta no Discord`.
+8. Informar `DISCORD_APPLICATION_ID` e `DISCORD_TEST_GUILD_ID` para o worker registrar o comando guild `/amora` de staging.
+9. Cadastrar o Discord user ID de BK/Lucas/etc. em `PlatformIdentityBinding` pela Web Pessoas/operador.
+10. Para uma pessoa poder ordenar connect/disconnect/check/status, o profile precisa de `can_control_platform_presence=true`.
+11. Solicitar `desired_connected=true` pela Web/operator para a primeira conexão física.
 
 Em 2026 o Discord classifica Message Content como privileged intent. Apps acessíveis a menos de 10.000 usuários podem habilitá-lo no Developer Portal sem processo de revisão; acima do limiar vigente, o Discord exige revisão/renovação conforme a política atual. Revalidar a documentação antes de qualquer expansão pública.
+
+Guild application commands são usados só no staging porque aparecem imediatamente na guild de teste. O worker registra/atualiza `/amora` uma vez por processo após `READY`; comando global fica para eventual uso público posterior.
 
 ## Gateway intents usados
 
@@ -182,6 +188,47 @@ Palavras de voice/call (`call`, `chamada`, `voz`, `voice`, `canal de voz`) são 
 
 O controle determinístico não passa pelo provider e não vira Memory automaticamente.
 
+### Limite físico de connect vindo do próprio Discord
+
+Se o Gateway Discord estiver **realmente desconectado**, nenhuma mensagem ou slash command enviado dentro do Discord chega ao worker. Portanto:
+
+```text
+worker Discord já conectado
+→ mensagem natural ou /amora pode status/check/disconnect/connect-idempotente
+
+worker Discord totalmente offline
+→ wake/connect deve vir de Web/operator ou outra superfície ainda conectada
+```
+
+O sistema não finge conhecer comandos recebidos enquanto o transporte estava offline.
+
+## `/amora` — fallback determinístico de staging
+
+Com `DISCORD_APPLICATION_ID` + `DISCORD_TEST_GUILD_ID`, o worker registra um guild command:
+
+```text
+/amora acao: Status
+/amora acao: Conectar
+/amora acao: Desconectar
+/amora acao: Checar
+```
+
+Esse comando **não** concede autoridade por role Discord. Fluxo:
+
+```text
+INTERACTION_CREATE
+→ worker ACK/defer efêmero imediatamente
+→ Discord user ID do invocador
+→ POST /v1/messaging/worker/presence-control
+→ PlatformIdentityBinding
+→ PERSON_*
+→ can_control_platform_presence?
+→ resultado local
+→ editar resposta efêmera
+```
+
+O defer inicial existe porque Gateway interactions precisam de resposta HTTP inicial dentro do deadline do Discord. O callback inicial usa uma única tentativa curta; a decisão de autorização não depende do Discord.
+
 ### Instalação existente
 
 O catálogo de pessoas é bootstrap-only. Portanto um banco já existente não recebe capability nova silenciosamente só porque o seed mudou.
@@ -230,7 +277,8 @@ Core restart nunca presume que o socket antigo sobreviveu.
 - `429`: respeita `retry_after` / headers de rate limit;
 - `5xx`: backoff exponencial bounded;
 - timeout/network: retry bounded;
-- `401/403/404`: terminal, sem hot loop.
+- `401/403/404`: terminal, sem hot loop;
+- callback inicial de interaction pode reduzir `maxAttempts` por deadline.
 
 O código nunca tenta contornar rate limits do Discord.
 
@@ -241,6 +289,8 @@ O código nunca tenta contornar rate limits do Discord.
 - [ ] Application/Bot real criado;
 - [ ] Message Content habilitado;
 - [ ] bot instalado sem Administrator;
+- [ ] `DISCORD_APPLICATION_ID` e `DISCORD_TEST_GUILD_ID` configurados;
+- [ ] `/amora` aparece na guild de staging;
 - [ ] worker READY;
 - [ ] presence do Core chega a CONNECTED;
 - [ ] restart do worker faz Resume ou nova sessão válida;
@@ -266,13 +316,16 @@ O código nunca tenta contornar rate limits do Discord.
 - [ ] Lucas/Nicolas resolvem por seus próprios IDs quando cadastrados;
 - [ ] unknown DM é barrada antes da cognição;
 - [ ] unknown em grupo não vira familiar automaticamente;
-- [ ] logs não exibem conteúdo, bot token ou user IDs crus.
+- [ ] logs não exibem conteúdo, bot token, interaction token ou user IDs crus.
 
 ### Controle
 
-- [ ] BK autorizado: `conecta no Discord` altera desired presence;
+- [ ] BK autorizado: `conecta no Discord` altera desired presence enquanto o worker está acessível;
+- [ ] `/amora status` resolve BK pela binding e retorna resposta efêmera;
+- [ ] `/amora desconectar` funciona e o worker encerra transporte depois da resposta;
 - [ ] pessoa conhecida sem capability não altera;
 - [ ] desconhecido não altera;
+- [ ] worker credential não consegue conceder capability;
 - [ ] `entra na call do Discord` **não** é confundido com connect textual.
 
 Somente depois desta matriz passar com rede real o status muda de `STAGING PENDING` para `LIVE CERTIFIED`.
