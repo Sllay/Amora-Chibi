@@ -10,4 +10,4 @@ COPY --chown=10001:10001 workers/discord ./workers/discord
 
 USER 10001:10001
 
-CMD ["node", "workers/discord/worker.mjs"]
+CMD ["node", "workers/discord/entrypoint.mjs"]
