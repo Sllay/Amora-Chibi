@@ -47,6 +47,10 @@ function isRetryableCoreError(error) {
   return RETRYABLE_CORE_STATUS.has(Number(error?.status || 0));
 }
 
+function isDefinitiveDiscordSendFailure(error) {
+  return error?.retryable === false;
+}
+
 function boundedRetryDelay(attempt) {
   const base = Math.min(5_000, 350 * (2 ** Math.min(5, Math.max(0, attempt - 1))));
   return base + Math.floor(Math.random() * 250);
@@ -91,6 +95,7 @@ export class DiscordWorker {
     this.connectionGeneration = 0;
     this.reconnectRequested = false;
     this.processingOutbound = false;
+    this.terminalGatewayError = null;
   }
 
   async run() {
@@ -619,16 +624,36 @@ export class DiscordWorker {
           await this.core.cancelOutbound(item.id, `DISCORD_${validation.reason}`).catch(() => {});
           continue;
         }
+
+        let externalMessageId = null;
         try {
-          const externalMessageId = await this.sendOutbound(item);
+          externalMessageId = await this.sendOutbound(item);
+        } catch (error) {
+          const label = errorLabel(error);
+          safeLog('OUTBOUND_SEND_FAILED', label);
+          if (isDefinitiveDiscordSendFailure(error)) {
+            await this.core.ackOutbound(item.id, {
+              sent: false,
+              errorCode: `DISCORD_${label}`.slice(0, 120),
+            }).catch(() => {});
+            continue;
+          }
+          // 429/5xx/network/timeout can have unknown final delivery outcome. Keep
+          // the row claimed; after lease expiry the same deterministic Discord
+          // nonce is retried and Discord can return the already-created message.
+          safeLog('OUTBOUND_SEND_OUTCOME_UNKNOWN', label);
+          break;
+        }
+
+        try {
           await this.core.ackOutbound(item.id, { sent: true, externalMessageId });
           safeLog('OUTBOUND_SENT');
         } catch (error) {
-          safeLog('OUTBOUND_SEND_FAILED', errorLabel(error));
-          await this.core.ackOutbound(item.id, {
-            sent: false,
-            errorCode: `DISCORD_${errorLabel(error)}`.slice(0, 120),
-          }).catch(() => {});
+          // Discord already accepted the message. Never convert an ACK transport
+          // failure into sent=false. Leave it claimed and recover by nonce after
+          // lease expiry if necessary.
+          safeLog('OUTBOUND_ACK_FAILED', errorLabel(error));
+          break;
         }
       }
     } finally {
