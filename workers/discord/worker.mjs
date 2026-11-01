@@ -72,17 +72,30 @@ export class DiscordWorker {
     while (!this.stopped) {
       try {
         const presence = await this.core.getPresence();
-        this.connectionGeneration = presence.generation;
-        const shouldConnect = presence.desired_connected || presence.check_requested;
-        if (shouldConnect && !this.socket && !this.terminalGatewayError) await this.connect(presence);
-        if (!shouldConnect && this.socket) await this.disconnect('CORE_DESIRED_DISCONNECTED');
-        if (this.ready) await this.flushOutbound();
+        await this.syncPresence(presence);
       } catch (error) {
         safeLog('LOOP_ERROR', error?.code || error?.name || 'Error');
       }
       await sleep(this.ready ? 800 : 2500);
     }
     await this.disconnect('WORKER_STOP');
+  }
+
+  async syncPresence(presence) {
+    this.connectionGeneration = presence.generation;
+    const shouldConnect = presence.desired_connected || presence.check_requested;
+    if (shouldConnect && !this.socket && !this.terminalGatewayError) {
+      await this.connect(presence);
+    }
+    if (!shouldConnect && this.socket) {
+      // A natural/slash disconnect command may have queued its confirmation in
+      // Core immediately before desired_connected flipped false. Drain valid
+      // output while the transport still exists, then close intentionally.
+      if (this.ready) await this.flushOutbound();
+      await this.disconnect('CORE_DESIRED_DISCONNECTED');
+      return;
+    }
+    if (this.ready) await this.flushOutbound();
   }
 
   stop() {
