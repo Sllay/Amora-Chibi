@@ -106,7 +106,7 @@ async def test_transport_edit_cancels_old_outbound_and_revision_replies_to_nativ
         core.close()
 
 
-def test_worker_can_invalidate_and_cancel_but_messaging_token_remains_narrow(
+def test_worker_invalidation_is_source_scoped_and_messaging_token_remains_narrow(
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
@@ -128,7 +128,9 @@ def test_worker_can_invalidate_and_cancel_but_messaging_token_remains_narrow(
                 },
             )
             assert invalidated.status_code == 200, invalidated.text
-            assert invalidated.json()["floor_generation"] == 1
+            # An unrelated edit/delete must not advance the Core social floor.
+            assert invalidated.json()["floor_generation"] == 0
+            assert invalidated.json()["cancelled_outbound"] == 0
             assert client.get("/v1/state", headers=headers).status_code == 403
             assert client.get("/v1/operator/messaging/audit", headers=headers).status_code == 403
     finally:
