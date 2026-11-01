@@ -26,7 +26,8 @@ export class DiscordHttpError extends Error {
  *
  * 429 obeys Discord-provided retry timing; 5xx/network failures receive bounded
  * exponential retry. 401/403/404 are terminal so permission/config problems do
- * not become a hot retry loop.
+ * not become a hot retry loop. Interaction callback webhooks can explicitly
+ * disable Bot authorization while preserving the same timeout/rate-limit logic.
  */
 export class DiscordRestClient {
   constructor({ token, fetchImpl = fetch, sleep = sleepDefault, random = Math.random, maxAttempts = 4 } = {}) {
@@ -38,7 +39,7 @@ export class DiscordRestClient {
     this.maxAttempts = Math.max(1, Math.min(6, Number(maxAttempts) || 4));
   }
 
-  async request(path, { method = 'GET', body, timeoutMs = 15_000 } = {}) {
+  async request(path, { method = 'GET', body, timeoutMs = 15_000, auth = true } = {}) {
     let lastError = null;
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
       const controller = new AbortController();
@@ -48,7 +49,7 @@ export class DiscordRestClient {
           method,
           redirect: 'error',
           headers: {
-            Authorization: `Bot ${this.token}`,
+            ...(auth ? { Authorization: `Bot ${this.token}` } : {}),
             ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
           },
           body: body === undefined ? undefined : JSON.stringify(body),
