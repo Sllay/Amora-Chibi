@@ -18,6 +18,12 @@ from .models import (
     TransportInvalidation,
 )
 from .presence import PlatformPresenceController
+from .presence_control import (
+    PlatformPresenceControlService,
+    PresenceControlAction,
+    PresenceControlIntent,
+    PresenceControlOutcome,
+)
 from .routes import register_messaging_routes
 from .service import PlatformMessagingService
 from .store import MessagingStore
@@ -38,7 +44,11 @@ __all__ = [
     "OutboundStatus",
     "PlatformMessagingService",
     "PlatformPresenceController",
+    "PlatformPresenceControlService",
     "PresenceCommand",
+    "PresenceControlAction",
+    "PresenceControlIntent",
+    "PresenceControlOutcome",
     "PresenceSnapshot",
     "PresenceState",
     "RoutingAction",
