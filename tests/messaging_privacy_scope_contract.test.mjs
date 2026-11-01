@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { MessagingCoreClient } from '../workers/common/core-client.mjs';
 import { normalizeDiscordMessage } from '../workers/discord/normalize.mjs';
 import { normalizeWhatsAppMessage } from '../workers/whatsapp/normalize.mjs';
 
@@ -36,4 +37,44 @@ test('WhatsApp worker emits the Core PrivacyScope enum value exactly', () => {
 
   assert.ok(normalized);
   assert.equal(normalized.privacy_scope, 'PERSONAL');
+});
+
+
+test('presence control keeps at least five seconds after the Discord interaction is deferred', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let observedTimeout = null;
+
+  globalThis.setTimeout = (_callback, timeoutMs) => {
+    observedTimeout = timeoutMs;
+    return Symbol('timer');
+  };
+  globalThis.clearTimeout = () => {};
+  globalThis.fetch = async () => new Response(JSON.stringify({ response_text: 'ok' }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+
+  try {
+    const client = new MessagingCoreClient({
+      baseUrl: 'https://core.example.test',
+      token: 'm'.repeat(48),
+      platform: 'discord',
+    });
+    await client.presenceControl({
+      action: 'status',
+      senderIdentifiers: [{
+        identifier_type: 'discord_user_id',
+        external_actor_id: 'discord-user-1',
+        confidence: 1.0,
+      }],
+      timeoutMs: 1800,
+    });
+    assert.equal(observedTimeout, 5000);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
 });
