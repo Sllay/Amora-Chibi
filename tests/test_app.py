@@ -19,7 +19,7 @@ def test_bootstrap_survives_restart_with_same_identity(tmp_path: Path, monkeypat
         assert second.identities.resolve_alias("Nicolas").id == "PERSON_NICOLAS"
         assert second.secrets.get("LOCAL_API_TOKEN") == token
         report = second.health_report()
-        assert report["schema_version"] == 13
+        assert report["schema_version"] == 14
         assert report["person_profile_count"] == 3
         assert report["platform_identity_binding_count"] == 0
         assert report["family_authority_ids"] == ["PERSON_BK"]
