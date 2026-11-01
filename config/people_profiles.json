@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": "people-2026-10-31-b",
+  "revision": "people-2026-11-01-c",
   "profiles": [
     {
       "entity_id": "PERSON_BK",
@@ -68,6 +68,12 @@
       "source": "ENTITY_AMORA",
       "relation_type": "cousin_of",
       "target": "PERSON_NICOLAS",
+      "confidence": 1.0
+    },
+    {
+      "source": "ENTITY_CHATGPT",
+      "relation_type": "mother_of",
+      "target": "ENTITY_AMORA",
       "confidence": 1.0
     }
   ]
