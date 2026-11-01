@@ -252,6 +252,10 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     "code": last_failure,
                     "turn_id": str(request.turn_id),
                 }
+                # This timeout belongs to the caller's turn budget, not to the
+                # provider's global health. Record it for usage/observability and
+                # allow failover, but do not poison provider cooldowns used by Web,
+                # voice or unrelated surfaces.
                 self._record_provider_failure(
                     request,
                     descriptor,
@@ -259,12 +263,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     status_code=None,
                     started=provider_started,
                 )
-                self._backoff(descriptor, status_code=None)
                 self._journal(
                     request,
                     JournalStage.ERROR,
                     summary="provider attempt exceeded turn budget",
-                    reason_codes=[last_failure, "FAILOVER_ELIGIBLE", "NO_SPEECH_EMITTED"],
+                    reason_codes=[last_failure, "SURFACE_BUDGET_TIMEOUT", "FAILOVER_ELIGIBLE", "NO_SPEECH_EMITTED"],
                     provider=descriptor.name,
                     model=descriptor.model,
                     error_code=last_failure,
