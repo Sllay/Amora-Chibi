@@ -1,27 +1,35 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { DiscordRestClient } from '../workers/discord/http.mjs';
 import {
   DISCORD_INTENTS,
+  discordEditMessageId,
   discordReplyPayload,
   normalizeDiscordMessage,
+  normalizeDiscordReaction,
   splitDiscordText,
 } from '../workers/discord/normalize.mjs';
+import { DiscordSocialRuntime } from '../workers/discord/social-runtime.mjs';
 import {
   normalizeWhatsAppMessage,
   shouldAcceptUpsert,
 } from '../workers/whatsapp/normalize.mjs';
 
 
-test('Discord worker requests only guild/direct message and message-content intents', () => {
-  assert.equal(DISCORD_INTENTS, 37377);
+test('Discord worker requests messages, reactions and message-content intents without privileged presence/member intents', () => {
+  assert.equal(DISCORD_INTENTS, 46593);
   assert.ok(DISCORD_INTENTS & (1 << 9));
+  assert.ok(DISCORD_INTENTS & (1 << 10));
   assert.ok(DISCORD_INTENTS & (1 << 12));
+  assert.ok(DISCORD_INTENTS & (1 << 13));
   assert.ok(DISCORD_INTENTS & (1 << 15));
+  assert.equal(DISCORD_INTENTS & (1 << 1), 0);
+  assert.equal(DISCORD_INTENTS & (1 << 8), 0);
 });
 
 
-test('Discord normalization preserves stable user id, native mention and reply evidence', () => {
+test('Discord normalization preserves stable user id, native mention, reply and transport revision evidence', () => {
   const normalized = normalizeDiscordMessage({
     id: 'm1',
     channel_id: 'c1',
@@ -34,9 +42,17 @@ test('Discord normalization preserves stable user id, native mention and reply e
     attachments: [],
     message_reference: { message_id: 'old1' },
     referenced_message: { author: { id: 'bot1' } },
-  }, { botUserId: 'bot1', accountScope: 'primary' });
+  }, {
+    botUserId: 'bot1',
+    accountScope: 'primary',
+    transportRevision: 3,
+    syntheticMessageId: discordEditMessageId('m1', 3),
+  });
 
   assert.equal(normalized.channel_type, 'group');
+  assert.equal(normalized.message_id, 'm1#edit:3');
+  assert.equal(normalized.native_message_id, 'm1');
+  assert.equal(normalized.transport_revision, 3);
   assert.equal(normalized.sender_identifiers[0].identifier_type, 'discord_user_id');
   assert.equal(normalized.sender_identifiers[0].external_actor_id, 'u1');
   assert.equal(normalized.sender_display_name, 'Pai');
@@ -57,8 +73,99 @@ test('Discord ignores bot/self messages and outbound reply suppresses accidental
   assert.ok(chunks.every((item) => item.length <= 2000));
   const payload = discordReplyPayload('@everyone oi', { replyToMessageId: 'abc' });
   assert.deepEqual(payload.allowed_mentions.parse, []);
+  assert.equal(payload.allowed_mentions.replied_user, false);
   assert.equal(payload.message_reference.message_id, 'abc');
   assert.equal(payload.message_reference.fail_if_not_exists, false);
+});
+
+
+test('Discord social runtime invalidates outbound after edit or delete while unknown cache state degrades open', () => {
+  let clock = 1000;
+  const runtime = new DiscordSocialRuntime({ clock: () => clock });
+  const created = runtime.recordCreate({
+    id: 'm1', channel_id: 'c1', guild_id: 'g1', content: 'Amora, oi',
+    author: { id: 'u1', bot: false }, mentions: [], attachments: [],
+  });
+  assert.equal(created.revision, 1);
+  assert.deepEqual(runtime.validateOutbound({
+    conversation_id: 'c1', source_message_id: 'm1', metadata: { transport_revision: 1 },
+  }).ok, true);
+
+  clock += 1;
+  const edited = runtime.recordUpdate({ id: 'm1', channel_id: 'c1', content: 'Amora, pera' });
+  assert.equal(edited.revision, 2);
+  assert.equal(edited.contentChanged, true);
+  const stale = runtime.validateOutbound({
+    conversation_id: 'c1', source_message_id: 'm1', metadata: { transport_revision: 1 },
+  });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.reason, 'SOURCE_REVISION_CHANGED');
+
+  runtime.recordDelete({ id: 'm1', channel_id: 'c1', guild_id: 'g1' });
+  assert.equal(runtime.validateOutbound({
+    conversation_id: 'c1', source_message_id: 'm1', metadata: { transport_revision: 2 },
+  }).reason, 'SOURCE_DELETED');
+
+  assert.equal(runtime.validateOutbound({
+    conversation_id: 'c2', source_message_id: 'unknown', metadata: { transport_revision: 1 },
+  }).reason, 'SOURCE_STATE_UNKNOWN');
+});
+
+
+test('Discord social runtime keeps reactions as bounded transport evidence instead of fake utterances', () => {
+  const runtime = new DiscordSocialRuntime();
+  const signal = runtime.recordReaction({
+    message_id: 'm1', channel_id: 'c1', guild_id: 'g1', user_id: 'u1', emoji: { name: '❤️' },
+  }, true);
+  assert.equal(signal.added, true);
+  assert.equal(runtime.snapshot('c1').reactionCount, 1);
+  runtime.recordReaction({
+    message_id: 'm1', channel_id: 'c1', guild_id: 'g1', user_id: 'u1', emoji: { name: '❤️' },
+  }, false);
+  assert.equal(runtime.snapshot('c1').reactionCount, 0);
+  assert.deepEqual(normalizeDiscordReaction({
+    message_id: 'm1', channel_id: 'c1', user_id: 'u1', emoji: { name: '👍' },
+  }), {
+    platform: 'discord', conversation_id: 'c1', message_id: 'm1', guild_or_group_id: null,
+    actor_id: 'u1', emoji: 'name:👍', added: true,
+  });
+});
+
+
+test('Discord REST client obeys 429 retry_after and succeeds without a hot retry loop', async () => {
+  const waits = [];
+  let calls = 0;
+  const client = new DiscordRestClient({
+    token: 'test-token',
+    random: () => 0,
+    sleep: async (ms) => { waits.push(ms); },
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return new Response(JSON.stringify({ retry_after: 0.5 }), { status: 429, headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify({ id: 'ok' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  assert.deepEqual(await client.request('/test'), { id: 'ok' });
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [500]);
+});
+
+
+test('Discord REST client treats missing permission as terminal and does not retry', async () => {
+  let calls = 0;
+  const client = new DiscordRestClient({
+    token: 'test-token',
+    sleep: async () => { throw new Error('must not sleep'); },
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response('{}', { status: 403 });
+    },
+  });
+  await assert.rejects(
+    () => client.request('/channels/c1/messages'),
+    (error) => error.status === 403 && error.code === 'MISSING_PERMISSION' && error.retryable === false,
+  );
+  assert.equal(calls, 1);
 });
 
 
