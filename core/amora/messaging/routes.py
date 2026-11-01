@@ -45,6 +45,13 @@ class PresenceCommandRequest(BaseModel):
     account_scope: str = Field(default="primary", min_length=1, max_length=96)
 
 
+class PresenceAuthorityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    confirm: bool = False
+
+
 def register_messaging_routes(app, core, require_auth) -> None:
     """Register a narrow worker boundary plus operator audit/presence controls."""
 
@@ -144,7 +151,8 @@ def register_messaging_routes(app, core, require_auth) -> None:
         return {
             "platforms": [
                 item.model_dump(mode="json") for item in core.messaging_store.list_presence()
-            ]
+            ],
+            "authority_ids": sorted(core.profiles.platform_presence_authorities()),
         }
 
     @app.post("/v1/operator/messaging/presence/{platform}", dependencies=[Depends(require_auth)])
@@ -157,6 +165,30 @@ def register_messaging_routes(app, core, require_auth) -> None:
             payload.command,
             account_scope=payload.account_scope,
         ).model_dump(mode="json")
+
+    @app.put(
+        "/v1/operator/messaging/presence-authority/{entity_id}",
+        dependencies=[Depends(require_auth)],
+    )
+    def messaging_operator_presence_authority(
+        entity_id: str,
+        payload: PresenceAuthorityRequest,
+    ):
+        if not payload.confirm:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="platform presence authority change requires explicit confirmation",
+            )
+        profile = core.profiles.profile(entity_id)
+        if profile is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="person profile not found")
+        if profile.can_control_platform_presence == payload.enabled:
+            return profile.model_dump(mode="json")
+        saved = core.profiles.upsert_profile(
+            profile.model_copy(update={"can_control_platform_presence": payload.enabled}),
+            source_revision="operator:web:platform-presence-authority",
+        )
+        return saved.model_dump(mode="json")
 
 
 def _mask_identifier(value: str | None) -> str | None:
