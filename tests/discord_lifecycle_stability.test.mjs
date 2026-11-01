@@ -150,3 +150,77 @@ test('Discord send uses stable unique nonces per chunk so a retry cannot duplica
   assert.deepEqual(secondRun, firstRun);
   assert.ok(bodies.every((body) => body.enforce_nonce === true));
 });
+
+
+test('Discord ACK transport failure never rewrites an already delivered message as failed', async () => {
+  const acknowledgements = [];
+  let claims = 0;
+  const item = {
+    id: 'outbound-ack-unknown',
+    conversation_id: 'c1',
+    reply_to_message_id: 'source-1',
+    source_message_id: 'source-1',
+    text: 'resposta entregue',
+    metadata: {},
+  };
+  const core = {
+    reportPresence: async () => ({}),
+    claimOutbound: async () => ({ messages: claims++ === 0 ? [item] : [] }),
+    ackOutbound: async (_id, payload) => {
+      acknowledgements.push(payload);
+      throw Object.assign(new Error('core network failed'), { code: 'CORE_NETWORK_ERROR' });
+    },
+    cancelOutbound: async () => {},
+  };
+  const worker = new DiscordWorker({
+    token: 'test-token',
+    core,
+    rest: {
+      request: async () => ({ id: 'discord-created', channel_id: 'c1', author: { id: 'bot1', bot: true } }),
+    },
+    runtime: new DiscordSocialRuntime(),
+  });
+
+  await worker.flushOutbound();
+
+  assert.equal(acknowledgements.length, 1);
+  assert.equal(acknowledgements[0].sent, true);
+  assert.equal(acknowledgements.some((payload) => payload.sent === false), false);
+});
+
+
+test('Discord ambiguous send failure stays claimable for nonce recovery instead of being marked failed', async () => {
+  const acknowledgements = [];
+  let claims = 0;
+  const item = {
+    id: 'outbound-ambiguous-send',
+    conversation_id: 'c1',
+    reply_to_message_id: 'source-1',
+    source_message_id: 'source-1',
+    text: 'resposta com resultado de transporte desconhecido',
+    metadata: {},
+  };
+  const core = {
+    reportPresence: async () => ({}),
+    claimOutbound: async () => ({ messages: claims++ === 0 ? [item] : [] }),
+    ackOutbound: async (_id, payload) => { acknowledgements.push(payload); },
+    cancelOutbound: async () => {},
+  };
+  const worker = new DiscordWorker({
+    token: 'test-token',
+    core,
+    rest: {
+      request: async () => {
+        throw Object.assign(new Error('network outcome unknown'), {
+          code: 'NETWORK_ERROR',
+          retryable: true,
+        });
+      },
+    },
+    runtime: new DiscordSocialRuntime(),
+  });
+
+  await worker.flushOutbound();
+
+  assert.deepEqual(acknowledgements, []);
+});
