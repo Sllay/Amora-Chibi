@@ -11,6 +11,24 @@ function cleanBaseUrl(value) {
   return url.toString().replace(/\/$/, '');
 }
 
+export class MessagingCoreError extends Error {
+  constructor(message, {
+    code = 'CORE_REQUEST_FAILED',
+    status = null,
+    payload = null,
+    method = null,
+    path = null,
+  } = {}) {
+    super(message);
+    this.name = 'MessagingCoreError';
+    this.code = code;
+    this.status = status;
+    this.payload = payload;
+    this.method = method;
+    this.path = path;
+  }
+}
+
 export class MessagingCoreClient {
   constructor({ baseUrl, token, platform, accountScope = 'primary', timeoutMs = DEFAULT_TIMEOUT_MS }) {
     if (!token || token.length < 32) throw new Error('AMORA_MESSAGING_SERVICE_TOKEN must be at least 32 chars');
@@ -41,12 +59,22 @@ export class MessagingCoreClient {
         try { payload = JSON.parse(text); } catch { payload = null; }
       }
       if (!response.ok) {
-        const error = new Error(`Core HTTP ${response.status}`);
-        error.status = response.status;
-        error.payload = payload;
-        throw error;
+        throw new MessagingCoreError(`Core HTTP ${response.status}`, {
+          code: `CORE_HTTP_${response.status}`,
+          status: response.status,
+          payload,
+          method,
+          path,
+        });
       }
       return payload;
+    } catch (error) {
+      if (error instanceof MessagingCoreError) throw error;
+      throw new MessagingCoreError('Core transport failed', {
+        code: error?.name === 'AbortError' ? 'CORE_TIMEOUT' : 'CORE_NETWORK_ERROR',
+        method,
+        path,
+      });
     } finally {
       clearTimeout(timer);
     }
