@@ -9,6 +9,7 @@ on:
       - 'tests/messaging_workers.test.mjs'
       - 'tests/messaging_privacy_scope_contract.test.mjs'
       - 'tests/discord_worker_runtime.test.mjs'
+      - 'tests/discord_lifecycle_stability.test.mjs'
       - 'tests/discord_entrypoint.test.mjs'
       - '.github/workflows/messaging-workers.yml'
   pull_request:
@@ -19,6 +20,7 @@ on:
       - 'tests/messaging_workers.test.mjs'
       - 'tests/messaging_privacy_scope_contract.test.mjs'
       - 'tests/discord_worker_runtime.test.mjs'
+      - 'tests/discord_lifecycle_stability.test.mjs'
       - 'tests/discord_entrypoint.test.mjs'
       - '.github/workflows/messaging-workers.yml'
 
@@ -44,7 +46,7 @@ jobs:
           node --check workers/whatsapp/normalize.mjs
           node --check workers/whatsapp/worker.mjs
       - name: Adapter contract tests
-        run: node --test tests/messaging_workers.test.mjs tests/messaging_privacy_scope_contract.test.mjs tests/discord_worker_runtime.test.mjs tests/discord_entrypoint.test.mjs
+        run: node --test tests/messaging_workers.test.mjs tests/messaging_privacy_scope_contract.test.mjs tests/discord_worker_runtime.test.mjs tests/discord_lifecycle_stability.test.mjs tests/discord_entrypoint.test.mjs
       - name: Build Discord worker container
         run: |
           docker build -f workers/discord/Dockerfile -t amora-discord:test .
