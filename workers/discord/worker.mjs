@@ -30,6 +30,12 @@ function safeLog(code, detail = '') {
   process.stderr.write(`[amora-discord] ${code}${suffix}\n`);
 }
 
+function errorLabel(error) {
+  if (error?.code) return String(error.code);
+  if (error?.status) return `HTTP_${error.status}`;
+  return String(error?.name || 'Error');
+}
+
 export class DiscordWorker {
   constructor({
     token,
@@ -74,7 +80,7 @@ export class DiscordWorker {
         const presence = await this.core.getPresence();
         await this.syncPresence(presence);
       } catch (error) {
-        safeLog('LOOP_ERROR', error?.code || error?.name || 'Error');
+        safeLog('LOOP_ERROR', errorLabel(error));
       }
       await sleep(this.ready ? 800 : 2500);
     }
@@ -119,7 +125,7 @@ export class DiscordWorker {
     const socket = new WebSocket(url);
     this.socket = socket;
     socket.addEventListener('message', (event) => {
-      this.handleGatewayData(event.data).catch((error) => safeLog('GATEWAY_EVENT_ERROR', error?.code || error?.name || 'Error'));
+      this.handleGatewayData(event.data).catch((error) => safeLog('GATEWAY_EVENT_ERROR', errorLabel(error)));
     });
     socket.addEventListener('close', (event) => {
       this.handleGatewayClose(socket, event).catch(() => {});
@@ -207,7 +213,7 @@ export class DiscordWorker {
       this.ready = true;
       this.terminalGatewayError = null;
       const presence = await this.core.reportPresence('connected', { generation: this.connectionGeneration });
-      await this.ensureStagingCommand().catch((error) => safeLog('COMMAND_REGISTER_ERROR', error?.code || error?.status || error?.name || 'Error'));
+      await this.ensureStagingCommand().catch((error) => safeLog('COMMAND_REGISTER_ERROR', errorLabel(error)));
       await this.completeRequestedCheck(presence);
       safeLog('READY');
       return;
@@ -363,7 +369,7 @@ export class DiscordWorker {
         },
       );
     } catch (error) {
-      safeLog('INTERACTION_DEFER_FAILED', error?.code || error?.status || error?.name || 'Error');
+      safeLog('INTERACTION_DEFER_FAILED', errorLabel(error));
       return;
     }
 
@@ -382,7 +388,7 @@ export class DiscordWorker {
       });
       responseText = result?.response_text || responseText;
     } catch (error) {
-      safeLog('INTERACTION_CORE_FAILED', error?.status || error?.name || 'Error');
+      safeLog('INTERACTION_CORE_FAILED', errorLabel(error));
     }
 
     try {
@@ -397,7 +403,7 @@ export class DiscordWorker {
         },
       );
     } catch (error) {
-      safeLog('INTERACTION_EDIT_FAILED', error?.code || error?.status || error?.name || 'Error');
+      safeLog('INTERACTION_EDIT_FAILED', errorLabel(error));
     }
   }
 
@@ -426,7 +432,16 @@ export class DiscordWorker {
       syntheticMessageId,
     });
     if (!normalized) return null;
-    return this.core.inbound(normalized);
+    try {
+      const result = await this.core.inbound(normalized);
+      const action = result?.decision?.action || 'unknown';
+      const outboundCount = Array.isArray(result?.outbound) ? result.outbound.length : 0;
+      safeLog('CORE_INBOUND_OK', `action=${action} outbound=${outboundCount}`);
+      return result;
+    } catch (error) {
+      safeLog('CORE_INBOUND_FAILED', errorLabel(error));
+      throw error;
+    }
   }
 
   async handleMessageCreate(message) {
@@ -484,19 +499,25 @@ export class DiscordWorker {
     this.processingOutbound = true;
     try {
       const claimed = await this.core.claimOutbound(8);
-      for (const item of claimed?.messages || []) {
+      const messages = claimed?.messages || [];
+      if (messages.length) safeLog('OUTBOUND_CLAIMED', messages.length);
+      for (const item of messages) {
         const validation = this.runtime.validateOutbound(item);
         if (!validation.ok) {
           await this.core.cancelOutbound(item.id, `DISCORD_${validation.reason}`).catch(() => {});
           continue;
         }
+        let sentToDiscord = false;
         try {
           const externalMessageId = await this.sendOutbound(item);
+          sentToDiscord = true;
           await this.core.ackOutbound(item.id, { sent: true, externalMessageId });
+          safeLog('OUTBOUND_SENT');
         } catch (error) {
+          safeLog(sentToDiscord ? 'OUTBOUND_ACK_FAILED' : 'OUTBOUND_SEND_FAILED', errorLabel(error));
           await this.core.ackOutbound(item.id, {
             sent: false,
-            errorCode: `DISCORD_${error?.code || error?.status || error?.name || 'SEND_FAILED'}`.slice(0, 120),
+            errorCode: `DISCORD_${errorLabel(error)}`.slice(0, 120),
           }).catch(() => {});
         }
       }
@@ -546,7 +567,7 @@ async function main() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((error) => {
-    safeLog('FATAL', error?.code || error?.name || 'Error');
+    safeLog('FATAL', errorLabel(error));
     process.exitCode = 1;
   });
 }

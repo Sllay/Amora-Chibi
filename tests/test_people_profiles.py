@@ -76,6 +76,11 @@ def test_private_bindings_map_multiple_accounts_to_one_person_and_survive_restar
             identifier_type="user_id",
             external_actor_id="123456789012345678",
         ).id == "PERSON_LUCAS"
+        assert first.profiles.resolve_actor(
+            platform="discord",
+            identifier_type="discord_user_id",
+            external_actor_id="123456789012345678",
+        ).id == "PERSON_LUCAS"
         assert len(first.profiles.bindings_for("PERSON_BK")) == 2
         report_text = json.dumps(first.health_report(), ensure_ascii=False)
         assert "5581999990001" not in report_text
@@ -92,6 +97,11 @@ def test_private_bindings_map_multiple_accounts_to_one_person_and_survive_restar
             external_actor_id="5581999990002",
             account_scope="amora-primary",
         ).id == "PERSON_BK"
+        assert second.profiles.resolve_actor(
+            platform="discord",
+            identifier_type="discord_user_id",
+            external_actor_id="123456789012345678",
+        ).id == "PERSON_LUCAS"
         assert second.health_report()["platform_identity_binding_count"] == 3
     finally:
         second.close()

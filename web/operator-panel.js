@@ -486,7 +486,7 @@ function renderBindings(bindings) {
 }
 
 $("bindingPlatform").addEventListener("change", () => {
-  const defaults = { whatsapp: "phone_e164", discord: "user_id", web: "account_id" };
+  const defaults = { whatsapp: "phone_e164", discord: "discord_user_id", web: "account_id" };
   $("bindingIdentifierType").value = defaults[$("bindingPlatform").value] || "external_id";
 });
 

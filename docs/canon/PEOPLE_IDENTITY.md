@@ -1,7 +1,7 @@
 # AMORA — People Identity / Living Profiles
 
 **Status:** CANÔNICO / ATIVO  
-**Atualizado em:** 2026-10-31
+**Atualizado em:** 2026-11-01
 
 ## 1. Princípio
 
@@ -77,10 +77,12 @@ PERSON_BK
 ├── whatsapp phone_e164 A
 ├── whatsapp phone_e164 B
 ├── whatsapp lid C
-├── discord user_id 1
-├── discord user_id 2
+├── discord discord_user_id 1
+├── discord discord_user_id 2
 └── web authenticated session
 ```
+
+Para Discord, o contrato atual do worker usa `identifier_type=discord_user_id`. O valor histórico `user_id`, salvo por versões anteriores da UI/arquivos privados, continua aceito somente como alias de compatibilidade na resolução do Core. Novos bindings devem usar `discord_user_id`.
 
 O identificador externo é dado privado de runtime. Ele não deve aparecer em prompt, health report, log humano normal ou no catálogo público de profiles.
 

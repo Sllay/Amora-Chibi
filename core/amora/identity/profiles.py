@@ -163,6 +163,24 @@ class PersonProfileService:
             entity_type=EntityType.PERSON,
         )
 
+    @staticmethod
+    def _identifier_type_candidates(platform: str, identifier_type: str) -> tuple[str, ...]:
+        """Return exact-first identifier aliases accepted at the Core boundary.
+
+        The early People Web UI stored Discord snowflakes as ``user_id`` while
+        the Discord worker contract emits ``discord_user_id``. Both represent the
+        same native Discord user id. Keep the fallback scoped to Discord so old
+        operator-owned bindings remain valid without weakening identity matching
+        for other platforms or identifier classes.
+        """
+        if platform != PlatformKind.DISCORD.value:
+            return (identifier_type,)
+        if identifier_type == "discord_user_id":
+            return ("discord_user_id", "user_id")
+        if identifier_type == "user_id":
+            return ("user_id", "discord_user_id")
+        return (identifier_type,)
+
     def apply_catalog(self, catalog: PeopleProfileCatalog, *, fingerprint: str | None = None) -> None:
         """Apply the versioned file strictly as bootstrap, never as cloud authority.
 
@@ -280,13 +298,17 @@ class PersonProfileService:
         external_actor_id: str,
         account_scope: str = "primary",
     ) -> Entity | None:
-        entity_id = self.store.resolve_platform_identity_binding(
-            platform=str(getattr(platform, "value", platform)),
-            identifier_type=identifier_type,
-            external_actor_id=external_actor_id,
-            account_scope=account_scope,
-        )
-        return self.identities.get(entity_id) if entity_id else None
+        platform_value = str(getattr(platform, "value", platform))
+        for candidate in self._identifier_type_candidates(platform_value, identifier_type):
+            entity_id = self.store.resolve_platform_identity_binding(
+                platform=platform_value,
+                identifier_type=candidate,
+                external_actor_id=external_actor_id,
+                account_scope=account_scope,
+            )
+            if entity_id:
+                return self.identities.get(entity_id)
+        return None
 
     def profile(self, entity_id: str) -> PersonProfileSeed | None:
         return self.store.get_person_profile(entity_id)
