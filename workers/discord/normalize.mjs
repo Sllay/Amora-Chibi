@@ -63,7 +63,7 @@ export function normalizeDiscordMessage(message, {
       size_bytes: Number.isFinite(item.size) ? item.size : null,
     })),
     timestamp: message.edited_timestamp || message.timestamp || new Date().toISOString(),
-    privacy_scope: 'personal',
+    privacy_scope: 'PERSONAL',
     remote_processing_allowed: Boolean(remoteProcessingAllowed),
     native_thread_id: message.thread?.id || null,
     guild_or_group_id: message.guild_id ? String(message.guild_id) : null,
