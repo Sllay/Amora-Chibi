@@ -19,6 +19,12 @@ import { DiscordSocialRuntime } from './social-runtime.mjs';
 const TRUE = new Set(['1', 'true', 'yes', 'on']);
 const TERMINAL_GATEWAY_CLOSE_CODES = new Set([4004, 4010, 4011, 4013, 4014]);
 const NON_RESUMABLE_GATEWAY_CLOSE_CODES = new Set([4007, 4009]);
+const RETRYABLE_CORE_STATUS = new Set([502, 503, 504]);
+const READY_POLL_MS = 2_000;
+const IDLE_POLL_MS = 2_500;
+const LOOP_BACKOFF_MAX_MS = 15_000;
+const INBOUND_RETRY_WINDOW_MS = 30_000;
+const OUTBOUND_CLAIM_LEASE_SECONDS = 120;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const enabled = (name, fallback = false) => {
   const value = process.env[name];
@@ -26,7 +32,7 @@ const enabled = (name, fallback = false) => {
 };
 
 function safeLog(code, detail = '') {
-  const suffix = detail ? ` ${String(detail).slice(0, 160)}` : '';
+  const suffix = detail ? ` ${String(detail).slice(0, 220)}` : '';
   process.stderr.write(`[amora-discord] ${code}${suffix}\n`);
 }
 
@@ -34,6 +40,21 @@ function errorLabel(error) {
   if (error?.code) return String(error.code);
   if (error?.status) return `HTTP_${error.status}`;
   return String(error?.name || 'Error');
+}
+
+function isRetryableCoreError(error) {
+  if (error?.code === 'CORE_NETWORK_ERROR') return true;
+  return RETRYABLE_CORE_STATUS.has(Number(error?.status || 0));
+}
+
+function boundedRetryDelay(attempt) {
+  const base = Math.min(5_000, 350 * (2 ** Math.min(5, Math.max(0, attempt - 1))));
+  return base + Math.floor(Math.random() * 250);
+}
+
+function discordNonce(outboundId, chunkIndex) {
+  const stable = String(outboundId || '').replace(/-/g, '').slice(0, 22).padEnd(22, '0');
+  return `${stable}${Math.max(0, Number(chunkIndex) || 0).toString(36).padStart(2, '0')}`.slice(0, 25);
 }
 
 export class DiscordWorker {
@@ -70,19 +91,24 @@ export class DiscordWorker {
     this.connectionGeneration = 0;
     this.reconnectRequested = false;
     this.processingOutbound = false;
-    this.terminalGatewayError = null;
   }
 
   async run() {
-    safeLog('START');
+    safeLog('START', `remote_processing=${this.remoteProcessingAllowed}`);
+    let consecutiveFailures = 0;
     while (!this.stopped) {
+      let delay = this.ready ? READY_POLL_MS : IDLE_POLL_MS;
       try {
         const presence = await this.core.getPresence();
+        consecutiveFailures = 0;
         await this.syncPresence(presence);
       } catch (error) {
+        consecutiveFailures += 1;
         safeLog('LOOP_ERROR', errorLabel(error));
+        const exponential = 1_000 * (2 ** Math.min(4, consecutiveFailures - 1));
+        delay = Math.min(LOOP_BACKOFF_MAX_MS, exponential) + Math.floor(Math.random() * 300);
       }
-      await sleep(this.ready ? 800 : 2500);
+      await sleep(delay);
     }
     await this.disconnect('WORKER_STOP');
   }
@@ -94,14 +120,21 @@ export class DiscordWorker {
       await this.connect(presence);
     }
     if (!shouldConnect && this.socket) {
-      // A natural/slash disconnect command may have queued its confirmation in
-      // Core immediately before desired_connected flipped false. Drain valid
-      // output while the transport still exists, then close intentionally.
       if (this.ready) await this.flushOutbound();
       await this.disconnect('CORE_DESIRED_DISCONNECTED');
       return;
     }
-    if (this.ready) await this.flushOutbound();
+
+    if (this.ready && this.socket) {
+      let current = presence;
+      if (current.desired_connected && !['connected', 'checking'].includes(current.state)) {
+        current = await this.reconcileReadyPresence(current);
+      }
+      if (current.check_requested) {
+        await this.completeRequestedCheck(current);
+      }
+      if (this.ready) await this.flushOutbound();
+    }
   }
 
   stop() {
@@ -169,7 +202,10 @@ export class DiscordWorker {
     this.clearHeartbeat();
     try { socket.close(1000, 'amora presence'); } catch {}
     if (this.socket === socket) this.socket = null;
-    await this.core.reportPresence('disconnected', { generation: this.connectionGeneration }).catch(() => {});
+    const snapshot = await this.core.reportPresence('disconnected', {
+      generation: this.connectionGeneration,
+    }).catch(() => null);
+    if (snapshot?.generation !== undefined) this.connectionGeneration = snapshot.generation;
   }
 
   async handleGatewayData(raw) {
@@ -212,17 +248,19 @@ export class DiscordWorker {
       this.applicationId = this.applicationId || (payload.d?.application?.id ? String(payload.d.application.id) : null);
       this.ready = true;
       this.terminalGatewayError = null;
-      const presence = await this.core.reportPresence('connected', { generation: this.connectionGeneration });
       await this.ensureStagingCommand().catch((error) => safeLog('COMMAND_REGISTER_ERROR', errorLabel(error)));
-      await this.completeRequestedCheck(presence);
+      await this.reconcileReadyPresence()
+        .then((presence) => presence?.check_requested ? this.completeRequestedCheck(presence) : null)
+        .catch((error) => safeLog('PRESENCE_RECONCILE_FAILED', errorLabel(error)));
       safeLog('READY');
       return;
     }
     if (payload.t === 'RESUMED') {
       this.ready = true;
       this.terminalGatewayError = null;
-      const presence = await this.core.reportPresence('connected', { generation: this.connectionGeneration });
-      await this.completeRequestedCheck(presence);
+      await this.reconcileReadyPresence()
+        .then((presence) => presence?.check_requested ? this.completeRequestedCheck(presence) : null)
+        .catch((error) => safeLog('PRESENCE_RECONCILE_FAILED', errorLabel(error)));
       safeLog('RESUMED');
       return;
     }
@@ -319,22 +357,61 @@ export class DiscordWorker {
     await this.core.reportPresence('disconnected', { generation: this.connectionGeneration }).catch(() => {});
   }
 
-  async completeRequestedCheck(presence) {
-    if (!presence.check_requested) return;
-    await this.core.reportPresence('checking', { generation: presence.generation }).catch(() => {});
-    await sleep(500);
-    if (presence.desired_connected) {
-      await this.core.reportPresence('connected', {
-        generation: presence.generation,
-        checkComplete: true,
-      }).catch(() => {});
-    } else {
-      await this.core.reportPresence('disconnecting', {
-        generation: presence.generation,
-        checkComplete: true,
-      }).catch(() => {});
-      await this.disconnect('BOUNDED_CHECK_COMPLETE');
+  async reconcileReadyPresence(presence = null, { refreshOnConflict = true } = {}) {
+    if (!this.ready || !this.socket) return presence;
+    let current = presence || await this.core.getPresence();
+    this.connectionGeneration = current.generation;
+    try {
+      if (current.state === 'disconnecting' && current.desired_connected) {
+        current = await this.core.reportPresence('disconnected', { generation: current.generation });
+      }
+      if (['disconnected', 'error'].includes(current.state) && (current.desired_connected || current.check_requested)) {
+        current = await this.core.reportPresence('connecting', { generation: current.generation });
+      }
+      if (current.state === 'connecting') {
+        current = await this.core.reportPresence('connected', { generation: current.generation });
+      }
+      if (current.state === 'checking' && !current.check_requested) {
+        current = await this.core.reportPresence('connected', { generation: current.generation });
+      }
+      this.connectionGeneration = current.generation;
+      return current;
+    } catch (error) {
+      if (refreshOnConflict && error?.code === 'CORE_HTTP_409') {
+        safeLog('PRESENCE_GENERATION_REFRESH');
+        const fresh = await this.core.getPresence();
+        return this.reconcileReadyPresence(fresh, { refreshOnConflict: false });
+      }
+      throw error;
     }
+  }
+
+  async completeRequestedCheck(presence) {
+    if (!presence?.check_requested || !this.ready || !this.socket) return presence;
+    let current = presence;
+    if (!['connected', 'checking'].includes(current.state)) {
+      current = await this.reconcileReadyPresence(current);
+    }
+    if (current.state !== 'checking') {
+      current = await this.core.reportPresence('checking', { generation: current.generation });
+    }
+    this.connectionGeneration = current.generation;
+    await sleep(500);
+    if (current.desired_connected) {
+      current = await this.core.reportPresence('connected', {
+        generation: current.generation,
+        checkComplete: true,
+      });
+      this.connectionGeneration = current.generation;
+      return current;
+    }
+    current = await this.core.reportPresence('disconnecting', {
+      generation: current.generation,
+      checkComplete: true,
+    });
+    this.connectionGeneration = current.generation;
+    await this.disconnect('BOUNDED_CHECK_COMPLETE');
+    return current;
   }
 
   async ensureStagingCommand() {
@@ -354,9 +431,6 @@ export class DiscordWorker {
     const command = parseDiscordAmoraInteraction(interaction);
     if (!command) return;
 
-    // Gateway interactions must receive an initial HTTP response within Discord's
-    // deadline. Defer immediately, then resolve canonical identity/authority in
-    // Core and edit the ephemeral original response.
     try {
       await this.rest.request(
         `/interactions/${encodeURIComponent(command.interactionId)}/${encodeURIComponent(command.interactionToken)}/callback`,
@@ -384,7 +458,7 @@ export class DiscordWorker {
             confidence: 1.0,
           },
         ],
-        timeoutMs: 1800,
+        timeoutMs: 5000,
       });
       responseText = result?.response_text || responseText;
     } catch (error) {
@@ -432,35 +506,65 @@ export class DiscordWorker {
       syntheticMessageId,
     });
     if (!normalized) return null;
-    try {
-      const result = await this.core.inbound(normalized);
-      const action = result?.decision?.action || 'unknown';
-      const outboundCount = Array.isArray(result?.outbound) ? result.outbound.length : 0;
-      safeLog('CORE_INBOUND_OK', `action=${action} outbound=${outboundCount}`);
-      return result;
-    } catch (error) {
-      safeLog('CORE_INBOUND_FAILED', errorLabel(error));
-      throw error;
+
+    const started = Date.now();
+    let attempt = 0;
+    while (true) {
+      attempt += 1;
+      try {
+        const result = await this.core.inbound(normalized);
+        const action = result?.decision?.action || 'unknown';
+        const outboundCount = Array.isArray(result?.outbound) ? result.outbound.length : 0;
+        const reasons = Array.isArray(result?.decision?.reason_codes)
+          ? result.decision.reason_codes.slice(0, 6).join(',')
+          : 'none';
+        safeLog('CORE_INBOUND_OK', `action=${action} outbound=${outboundCount} duplicate=${Boolean(result?.duplicate)} reasons=${reasons}`);
+        if (outboundCount > 0 && this.ready) await this.flushOutbound();
+        return result;
+      } catch (error) {
+        const label = errorLabel(error);
+        if (!isRetryableCoreError(error)) {
+          safeLog('CORE_INBOUND_FAILED', label);
+          throw error;
+        }
+        const delay = boundedRetryDelay(attempt);
+        if ((Date.now() - started) + delay >= INBOUND_RETRY_WINDOW_MS) {
+          safeLog('CORE_INBOUND_FAILED', `${label} retry_window_exhausted`);
+          throw error;
+        }
+        safeLog('CORE_INBOUND_RETRY', `${label} attempt=${attempt + 1}`);
+        await sleep(delay);
+      }
     }
   }
 
+  isBotAuthored(message, previous = null) {
+    const author = message?.author || previous?.message?.author || null;
+    if (!author) return false;
+    return Boolean(author.bot) || Boolean(this.botUserId && String(author.id) === String(this.botUserId));
+  }
+
   async handleMessageCreate(message) {
+    if (this.isBotAuthored(message)) return;
     const entry = this.runtime.recordCreate(message);
-    if (!entry) return;
+    if (!entry || entry.duplicate) return;
     await this.deliverNormalized(entry.message, { revision: entry.revision });
   }
 
   async handleMessageUpdate(partial) {
+    const previous = this.runtime.state(partial?.channel_id, partial?.id);
+    if (this.isBotAuthored(partial, previous)) {
+      this.runtime.recordUpdate(partial);
+      return;
+    }
     const entry = this.runtime.recordUpdate(partial);
-    if (!entry) return;
+    if (!entry || entry.duplicate || !entry.semanticChanged) return;
     await this.core.invalidateSource({
       conversationId: partial.channel_id,
       nativeMessageId: partial.id,
       reason: 'DISCORD_MESSAGE_UPDATED',
       transportRevision: entry.revision,
     }).catch(() => {});
-
-    if (!entry.contentChanged) return;
     await this.deliverNormalized(entry.message, {
       revision: entry.revision,
       syntheticMessageId: discordEditMessageId(partial.id, entry.revision),
@@ -468,8 +572,10 @@ export class DiscordWorker {
   }
 
   async handleMessageDelete(event) {
+    const previous = this.runtime.state(event?.channel_id, event?.id);
+    const botAuthored = this.isBotAuthored(null, previous);
     const entry = this.runtime.recordDelete(event);
-    if (!entry) return;
+    if (!entry || entry.duplicate || botAuthored) return;
     await this.core.invalidateSource({
       conversationId: event.channel_id,
       nativeMessageId: event.id,
@@ -479,8 +585,12 @@ export class DiscordWorker {
   }
 
   async handleMessageBulkDelete(event) {
+    const botIds = new Set(
+      (event?.ids || []).filter((id) => this.isBotAuthored(null, this.runtime.state(event.channel_id, id))).map(String),
+    );
     const entries = this.runtime.recordBulkDelete(event);
-    await Promise.all(entries.map((entry) => this.core.invalidateSource({
+    const relevant = entries.filter((entry) => !entry.duplicate && !botIds.has(String(entry.id)));
+    await Promise.all(relevant.map((entry) => this.core.invalidateSource({
       conversationId: event.channel_id,
       nativeMessageId: entry.id,
       reason: 'DISCORD_MESSAGE_BULK_DELETED',
@@ -498,23 +608,23 @@ export class DiscordWorker {
     if (this.processingOutbound) return;
     this.processingOutbound = true;
     try {
-      const claimed = await this.core.claimOutbound(8);
-      const messages = claimed?.messages || [];
-      if (messages.length) safeLog('OUTBOUND_CLAIMED', messages.length);
-      for (const item of messages) {
+      for (let drained = 0; drained < 8; drained += 1) {
+        const claimed = await this.core.claimOutbound(1, OUTBOUND_CLAIM_LEASE_SECONDS);
+        const messages = claimed?.messages || [];
+        if (!messages.length) break;
+        safeLog('OUTBOUND_CLAIMED', messages.length);
+        const item = messages[0];
         const validation = this.runtime.validateOutbound(item);
         if (!validation.ok) {
           await this.core.cancelOutbound(item.id, `DISCORD_${validation.reason}`).catch(() => {});
           continue;
         }
-        let sentToDiscord = false;
         try {
           const externalMessageId = await this.sendOutbound(item);
-          sentToDiscord = true;
           await this.core.ackOutbound(item.id, { sent: true, externalMessageId });
           safeLog('OUTBOUND_SENT');
         } catch (error) {
-          safeLog(sentToDiscord ? 'OUTBOUND_ACK_FAILED' : 'OUTBOUND_SEND_FAILED', errorLabel(error));
+          safeLog('OUTBOUND_SEND_FAILED', errorLabel(error));
           await this.core.ackOutbound(item.id, {
             sent: false,
             errorCode: `DISCORD_${errorLabel(error)}`.slice(0, 120),
@@ -538,6 +648,7 @@ export class DiscordWorker {
           body: discordReplyPayload(chunks[index], {
             replyToMessageId: item.reply_to_message_id,
             firstChunk: index === 0,
+            nonce: discordNonce(item.id, index),
           }),
         },
       );
