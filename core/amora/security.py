@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 
 from starlette.responses import JSONResponse
 
+from amora.dev_auth import signing_secrets, validate_dev_master_key
+
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; "
@@ -56,6 +58,10 @@ class SecuritySettings:
     @classmethod
     def from_environment(cls, *, worker=False):
         cloud = os.getenv("AMORA_MODE", "local") == "cloud"
+        validate_dev_master_key(
+            os.getenv("AMORA_SECRET_LOCAL_API_TOKEN", ""),
+            cloud=cloud,
+        )
         values = [
             value.strip()
             for value in os.getenv("AMORA_PUBLIC_ORIGINS", "").split(",")
@@ -105,10 +111,15 @@ def token_role(token: str, secret: str, clock) -> str | None:
         prefix, version, payload, signature = token.split(".")
         if prefix != "browser" or version not in {"v1", "v2"} or len(payload) > 256:
             return None
-        expected = hmac.new(
-            secret.encode(), (f"browser.{version}." + payload).encode(), hashlib.sha256
-        ).hexdigest()
-        if not token_equal(expected, signature):
+        signed = (f"browser.{version}." + payload).encode("utf-8")
+        valid_signature = any(
+            token_equal(
+                hmac.new(candidate.encode("utf-8"), signed, hashlib.sha256).hexdigest(),
+                signature,
+            )
+            for candidate in signing_secrets(secret)
+        )
+        if not valid_signature:
             return None
         fields = (
             base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
@@ -116,8 +127,8 @@ def token_role(token: str, secret: str, clock) -> str | None:
             .split(":")
         )
         if version == "v2":
-            # Durable, client-scoped Web credential. Rotation of the signing
-            # admin secret revokes it; it never gains administrative access.
+            # Durable, client-scoped Web credential. Rotation of whichever
+            # signing root issued it (admin or dev master) revokes it.
             role, nonce = fields
             if role != "web":
                 return None
