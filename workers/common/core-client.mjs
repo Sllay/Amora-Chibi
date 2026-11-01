@@ -56,6 +56,20 @@ export class MessagingCoreClient {
     return this.request('/v1/messaging/worker/inbound', { method: 'POST', body: message });
   }
 
+  invalidateSource({ conversationId, nativeMessageId, reason, transportRevision = null }) {
+    return this.request('/v1/messaging/worker/invalidate', {
+      method: 'POST',
+      body: {
+        platform: this.platform,
+        account_scope: this.accountScope,
+        conversation_id: String(conversationId),
+        native_message_id: String(nativeMessageId),
+        reason: String(reason).slice(0, 120),
+        transport_revision: transportRevision,
+      },
+    });
+  }
+
   claimOutbound(limit = 8) {
     const query = new URLSearchParams({
       platform: this.platform,
@@ -73,6 +87,13 @@ export class MessagingCoreClient {
         external_message_id: externalMessageId,
         error_code: errorCode,
       },
+    });
+  }
+
+  cancelOutbound(id, reason) {
+    return this.request(`/v1/messaging/worker/outbound/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      body: { reason: String(reason).slice(0, 120) },
     });
   }
 
