@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 
 from amora.cognition import CognitiveRequest
 
@@ -21,6 +23,10 @@ from .presence_control import PlatformPresenceControlService, PresenceControlOut
 from .store import MessagingStore
 
 
+_LOG = logging.getLogger("amora.messaging")
+_MESSAGING_COGNITION_TIMEOUT_SECONDS = 60.0
+
+
 class PlatformMessagingService:
     """Common messaging pipeline between platform workers and Cognitive Core.
 
@@ -39,12 +45,14 @@ class PlatformMessagingService:
         conversation,
         clock,
         presence_control: PlatformPresenceControlService | None = None,
+        cognition_timeout_seconds: float = _MESSAGING_COGNITION_TIMEOUT_SECONDS,
     ) -> None:
         self.store = store
         self.attention = attention
         self.cognition = cognition
         self.conversation = conversation
         self.clock = clock
+        self.cognition_timeout_seconds = max(1.0, float(cognition_timeout_seconds))
         self.presence_control = presence_control or PlatformPresenceControlService(
             profiles=attention.profiles,
             presence=PlatformPresenceController(store, clock, reset_transient=False),
@@ -57,7 +65,7 @@ class PlatformMessagingService:
             conversation_id=message.conversation_id,
             message_id=message.message_id,
         ):
-            return InboundResult(
+            result = InboundResult(
                 decision=AttentionDecision(
                     action=RoutingAction.SILENCE,
                     score=0.0,
@@ -66,6 +74,8 @@ class PlatformMessagingService:
                 ),
                 duplicate=True,
             )
+            self._log_result(result)
+            return result
 
         decision = self.attention.route(message)
         actor_id = decision.speaker_entity_id or decision.speaker_actor_ref
@@ -99,15 +109,19 @@ class PlatformMessagingService:
             },
         )
         if not self.store.append_audit(inbound_audit):
-            return InboundResult(
+            result = InboundResult(
                 decision=decision.model_copy(
                     update={"reason_codes": [*decision.reason_codes, "AUDIT_DEDUPE_RACE"]}
                 ),
                 duplicate=True,
             )
+            self._log_result(result)
+            return result
 
         if decision.action in {RoutingAction.BLOCK, RoutingAction.QUARANTINE, RoutingAction.SILENCE}:
-            return InboundResult(decision=decision)
+            result = InboundResult(decision=decision)
+            self._log_result(result)
+            return result
 
         if decision.action == RoutingAction.RESPOND:
             control = self.presence_control.handle(
@@ -116,7 +130,9 @@ class PlatformMessagingService:
                 account_scope=message.account_scope,
             )
             if control is not None:
-                return self._presence_control_result(message, decision, control)
+                result = self._presence_control_result(message, decision, control)
+                self._log_result(result, provider="local_control", fallback_used=False)
+                return result
 
         request = CognitiveRequest(
             text=cognitive_text,
@@ -151,10 +167,14 @@ class PlatformMessagingService:
                 [*decision.reason_codes, "MESSAGING_CONTEXT_ONLY"],
                 decision.score,
             )
-            return InboundResult(decision=decision)
+            result = InboundResult(decision=decision)
+            self._log_result(result, remote_processing_allowed=message.remote_processing_allowed)
+            return result
 
         if decision.action != RoutingAction.RESPOND:
-            return InboundResult(decision=decision)
+            result = InboundResult(decision=decision)
+            self._log_result(result, remote_processing_allowed=message.remote_processing_allowed)
+            return result
 
         self.cognition.record_turn_decision(
             request,
@@ -175,8 +195,40 @@ class PlatformMessagingService:
             )
 
         fallback = self.conversation.composer.fallback_dialogue(cognitive_text, speaker_id=actor_id)
-        plan = await self.cognition.respond(request, on_segment=None, fallback_text=fallback)
-        await self.cognition.emit_event(plan)
+        plan = None
+        provider: str | None = None
+        model: str | None = None
+        fallback_used = False
+        cognitive_reasons: list[str] = []
+        cognitive_turn_id = str(request.turn_id)
+        try:
+            plan = await asyncio.wait_for(
+                self.cognition.respond(request, on_segment=None, fallback_text=fallback),
+                timeout=self.cognition_timeout_seconds,
+            )
+            await self.cognition.emit_event(plan)
+            provider = plan.provider
+            model = plan.model
+            fallback_used = bool(plan.fallback_used)
+            cognitive_reasons = list(plan.reason_codes)
+            cognitive_turn_id = str(plan.turn_id)
+            text = (plan.display_text or plan.speech_text or fallback).strip()
+        except TimeoutError:
+            fallback_used = True
+            cognitive_reasons = ["MESSAGING_COGNITION_TIMEOUT", "LOCAL_FALLBACK"]
+            text = fallback.strip() or "Uhum."
+            self.store.add_inbound_reason(
+                platform=message.platform,
+                account_scope=message.account_scope,
+                conversation_id=message.conversation_id,
+                message_id=message.message_id,
+                reason="MESSAGING_COGNITION_TIMEOUT",
+            )
+            _LOG.warning(
+                "messaging_cognition_timeout timeout_seconds=%.1f remote_processing_allowed=%s",
+                self.cognition_timeout_seconds,
+                message.remote_processing_allowed,
+            )
 
         if message.channel_type == ChannelType.GROUP and not self.attention.floor.validate_reply(message, decision):
             self.store.add_inbound_reason(
@@ -186,7 +238,7 @@ class PlatformMessagingService:
                 message_id=message.message_id,
                 reason="REPLY_LEASE_INVALIDATED",
             )
-            return InboundResult(
+            result = InboundResult(
                 decision=decision.model_copy(
                     update={
                         "action": RoutingAction.SILENCE,
@@ -194,8 +246,15 @@ class PlatformMessagingService:
                     }
                 )
             )
+            self._log_result(
+                result,
+                provider=provider,
+                fallback_used=fallback_used,
+                cognitive_reason_codes=cognitive_reasons,
+                remote_processing_allowed=message.remote_processing_allowed,
+            )
+            return result
 
-        text = (plan.display_text or plan.speech_text or fallback).strip()
         if not text:
             self.store.add_inbound_reason(
                 platform=message.platform,
@@ -204,24 +263,49 @@ class PlatformMessagingService:
                 message_id=message.message_id,
                 reason="EMPTY_REALIZATION_SUPPRESSED",
             )
-            return InboundResult(decision=decision)
+            result = InboundResult(
+                decision=decision.model_copy(
+                    update={
+                        "reason_codes": [*decision.reason_codes, "EMPTY_REALIZATION_SUPPRESSED"],
+                    }
+                )
+            )
+            self._log_result(
+                result,
+                provider=provider,
+                fallback_used=fallback_used,
+                cognitive_reason_codes=cognitive_reasons,
+                remote_processing_allowed=message.remote_processing_allowed,
+            )
+            return result
 
         outbound = self._queue_outbound(
             message,
             decision,
             text,
             metadata={
-                "cognitive_turn_id": str(plan.turn_id),
-                "provider": plan.provider,
-                "model": plan.model,
+                "cognitive_turn_id": cognitive_turn_id,
+                "provider": provider,
+                "model": model,
+                "fallback_used": fallback_used,
+                "cognitive_reason_codes": cognitive_reasons,
+                "remote_processing_allowed": message.remote_processing_allowed,
                 "floor_generation": decision.floor_generation,
                 "attention_score": decision.score,
                 "transport_revision": message.transport_revision,
                 "delivery_message_id": message.message_id,
             },
-            reason_codes=["CORE_OUTBOUND_ENQUEUED", *plan.reason_codes],
+            reason_codes=["CORE_OUTBOUND_ENQUEUED", *cognitive_reasons],
         )
-        return InboundResult(decision=decision, outbound=[outbound])
+        result = InboundResult(decision=decision, outbound=[outbound])
+        self._log_result(
+            result,
+            provider=provider,
+            fallback_used=fallback_used,
+            cognitive_reason_codes=cognitive_reasons,
+            remote_processing_allowed=message.remote_processing_allowed,
+        )
+        return result
 
     def _presence_control_result(
         self,
@@ -354,6 +438,27 @@ class PlatformMessagingService:
             "messaging_audit_count": self.store.count_audit(),
             "messaging_outbound_pending_count": self.store.pending_outbound_count(),
         }
+
+    @staticmethod
+    def _log_result(
+        result: InboundResult,
+        *,
+        provider: str | None = None,
+        fallback_used: bool | None = None,
+        cognitive_reason_codes: list[str] | None = None,
+        remote_processing_allowed: bool | None = None,
+    ) -> None:
+        _LOG.info(
+            "messaging_inbound_result action=%s outbound=%d duplicate=%s provider=%s fallback_used=%s remote_processing_allowed=%s attention_reasons=%s cognitive_reasons=%s",
+            result.decision.action.value,
+            len(result.outbound),
+            result.duplicate,
+            provider or "none",
+            fallback_used,
+            remote_processing_allowed,
+            ",".join(result.decision.reason_codes) or "none",
+            ",".join(cognitive_reason_codes or []) or "none",
+        )
 
     @staticmethod
     def _cognitive_text(message: InboundMessage) -> str:
