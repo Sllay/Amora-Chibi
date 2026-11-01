@@ -1,0 +1,1 @@
+Physical staging still benefits from logging `InboundResult.decision.reason_codes` and `duplicate` alongside `action` and outbound count. This is intentionally tracked separately from the reply-lease correctness fix so the runtime policy change remains small and reviewable.
