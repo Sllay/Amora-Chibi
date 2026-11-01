@@ -64,4 +64,7 @@ if (typeof document !== 'undefined') {
   import('./dev-master-key.mjs?v=20261101-101')
     .then((module) => module.installDevMasterKey({ OperatorState }))
     .catch(() => {});
+  import('./operator-recovery-controls.mjs?v=20261101-103')
+    .then((module) => module.installOperatorRecoveryControls({ operatorKey: OPERATOR_KEY }))
+    .catch(() => {});
 }
