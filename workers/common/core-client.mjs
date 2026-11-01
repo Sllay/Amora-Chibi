@@ -1,4 +1,5 @@
 const DEFAULT_TIMEOUT_MS = 20_000;
+const MIN_PRESENCE_CONTROL_TIMEOUT_MS = 5_000;
 
 function cleanBaseUrl(value) {
   const url = new URL(value);
@@ -98,10 +99,17 @@ export class MessagingCoreClient {
     });
   }
 
-  presenceControl({ action, senderIdentifiers, timeoutMs = 1800 }) {
+  presenceControl({ action, senderIdentifiers, timeoutMs = MIN_PRESENCE_CONTROL_TIMEOUT_MS }) {
+    // Discord interactions are already deferred before this call. Keep the
+    // Core round-trip bounded, but do not abort so aggressively that a normal
+    // remote Core/libSQL hop turns a valid slash command into CORE_TIMEOUT.
+    const effectiveTimeoutMs = Math.max(
+      MIN_PRESENCE_CONTROL_TIMEOUT_MS,
+      Number(timeoutMs) || MIN_PRESENCE_CONTROL_TIMEOUT_MS,
+    );
     return this.request('/v1/messaging/worker/presence-control', {
       method: 'POST',
-      timeoutMs,
+      timeoutMs: effectiveTimeoutMs,
       body: {
         platform: this.platform,
         account_scope: this.accountScope,
