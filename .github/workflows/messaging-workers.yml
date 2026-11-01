@@ -29,6 +29,7 @@ jobs:
       - name: Parse worker modules
         run: |
           node --check workers/common/core-client.mjs
+          node --check workers/discord/commands.mjs
           node --check workers/discord/http.mjs
           node --check workers/discord/normalize.mjs
           node --check workers/discord/social-runtime.mjs
