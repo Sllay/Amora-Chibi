@@ -105,5 +105,5 @@ def test_world_state_survives_restart(tmp_path: Path, monkeypatch) -> None:
     second = AmoraCore.bootstrap()
     try:
         state = second.world.current_state(subject_id="PERSON_BK"); assert len(state) == 1 and state[0].predicate == "preferred_drawing_period" and state[0].object_value == "night"
-        assert second.health_report()["schema_version"] == 13
+        assert second.health_report()["schema_version"] == 14
     finally: second.close()

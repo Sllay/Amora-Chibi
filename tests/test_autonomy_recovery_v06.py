@@ -19,8 +19,7 @@ async def test_intention_drives_and_decisions_survive_restart(tmp_path, monkeypa
         adjusted, _ = first.autonomy.adjust_drive(DriveType.SOCIAL, 0.55, reason="long silence", dedupe_key="restart-drive-adjustment")
         result = await first.autonomy.cycle(DecisionContext(is_idle=True, available_entities={"PERSON_BK"}), dedupe_key="restart-cycle")
         assert result.decision.outcome == DecisionOutcome.SELECTED and result.intention is not None
-        intention_id = result.intention.id; social_need = adjusted.need
-        assert first.autonomy.store.decision_count() == 1
+        intention_id = result.intention.id; social_need = adjusted.need; assert first.autonomy.store.decision_count() == 1
     finally: first.close()
     second = AmoraCore.bootstrap(clock=clock)
     try:
@@ -43,7 +42,7 @@ async def test_backup_restore_preserves_autonomy_state(tmp_path, monkeypatch) ->
     finally: core.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored_db = AmoraDatabase(restored_path)
     try:
-        assert restored_db.integrity_check() == "ok"; assert restored_db.schema_version() == 13
+        assert restored_db.integrity_check() == "ok"; assert restored_db.schema_version() == 14
     finally: restored_db.close()
     store = AutonomyStore(restored_path, clock)
     try:

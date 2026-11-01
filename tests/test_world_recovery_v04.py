@@ -37,7 +37,7 @@ def test_world_model_survives_backup_restore_with_history(tmp_path: Path, monkey
     finally: core.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored_db = AmoraDatabase(restored_path)
     try:
-        assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 13
+        assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 14
     finally: restored_db.close()
     store = WorldStore(restored_path, SystemClock()); world = WorldModelService(store, SystemClock())
     try:

@@ -39,17 +39,17 @@ class _Floor:
 
 
 class ConversationFloor:
-    """Short group-conversation lease owned by Core, never by a platform adapter.
+    """Short Core-owned group-conversation lease.
 
-    The generation is the authority token for one pending response turn. Native
-    transport edits/deletes invalidate that generation only when they touch the
-    source message that currently authorizes a response. A same-speaker
-    continuation advances generation without extending the original floor expiry,
-    so the latest pending turn wins without creating an infinite conversation.
+    When a canonical database is available, floor authority is stored there so a
+    follow-up can land on another Core process/container and still inherit the
+    same bounded conversation. The in-memory path remains for isolated unit tests
+    and embedded runtimes without canonical persistence.
     """
 
-    def __init__(self, clock: Clock) -> None:
+    def __init__(self, clock: Clock, database=None) -> None:
         self.clock = clock
+        self.database = database if hasattr(database, "_conn") and hasattr(database, "_lock") else None
         self._floors: dict[tuple[str, str, str], _Floor] = {}
         self._generation: dict[tuple[str, str, str], int] = {}
         self._response_sources: dict[tuple[str, str, str], set[str]] = {}
@@ -67,18 +67,63 @@ class ConversationFloor:
         platform_value = platform.value if isinstance(platform, MessagingPlatform) else str(platform)
         return (platform_value, account_scope, conversation_id)
 
+    @staticmethod
+    def _row_to_floor(row) -> _Floor | None:
+        if row is None or not row["speaker_actor_ref"] or not row["expires_at"]:
+            return None
+        return _Floor(
+            generation=int(row["generation"]),
+            speaker_actor_ref=str(row["speaker_actor_ref"]),
+            speaker_entity_id=str(row["speaker_entity_id"]) if row["speaker_entity_id"] else None,
+            opened_at=datetime.fromisoformat(row["opened_at"]),
+            expires_at=datetime.fromisoformat(row["expires_at"]),
+            anchor_message_id=str(row["anchor_message_id"] or ""),
+            reason=str(row["reason"] or ""),
+        )
+
+    def _db_row(self, key: tuple[str, str, str]):
+        assert self.database is not None
+        return self.database._conn.execute(
+            """SELECT * FROM messaging_conversation_floor
+               WHERE platform=? AND account_scope=? AND conversation_id=?""",
+            key,
+        ).fetchone()
+
     def generation(self, message: InboundMessage) -> int:
-        return self._generation.get(self.key(message), 0)
+        key = self.key(message)
+        if self.database is None:
+            return self._generation.get(key, 0)
+        with self.database._lock:
+            row = self._db_row(key)
+        return int(row["generation"]) if row is not None else 0
 
     def active(self, message: InboundMessage) -> _Floor | None:
         key = self.key(message)
-        floor = self._floors.get(key)
-        if floor is None:
-            return None
-        if self.clock.now() > floor.expires_at:
-            self._floors.pop(key, None)
-            return None
-        return floor
+        if self.database is None:
+            floor = self._floors.get(key)
+            if floor is None:
+                return None
+            if self.clock.now() > floor.expires_at:
+                self._floors.pop(key, None)
+                return None
+            return floor
+
+        with self.database._lock, self.database._conn:
+            row = self._db_row(key)
+            floor = self._row_to_floor(row)
+            if floor is None:
+                return None
+            if self.clock.now() > floor.expires_at:
+                self.database._conn.execute(
+                    """UPDATE messaging_conversation_floor
+                       SET speaker_actor_ref=NULL, speaker_entity_id=NULL, opened_at=NULL,
+                           expires_at=NULL, anchor_message_id=NULL,
+                           response_source_message_id=NULL, reason=NULL
+                       WHERE platform=? AND account_scope=? AND conversation_id=?""",
+                    key,
+                )
+                return None
+            return floor
 
     def open(
         self,
@@ -89,48 +134,92 @@ class ConversationFloor:
         reason: str,
     ) -> _Floor:
         key = self.key(message)
-        generation = self._generation.get(key, 0) + 1
-        self._generation[key] = generation
         now = self.clock.now()
-        floor = _Floor(
-            generation=generation,
-            speaker_actor_ref=actor_ref,
-            speaker_entity_id=speaker_entity_id,
-            opened_at=now,
-            expires_at=now + timedelta(seconds=_GROUP_FLOOR_SECONDS),
-            anchor_message_id=message.native_source_message_id,
-            reason=reason,
-        )
-        self._floors[key] = floor
-        self._response_sources[key] = {message.native_source_message_id}
+        expires_at = now + timedelta(seconds=_GROUP_FLOOR_SECONDS)
+        if self.database is None:
+            generation = self._generation.get(key, 0) + 1
+            self._generation[key] = generation
+            floor = _Floor(
+                generation=generation,
+                speaker_actor_ref=actor_ref,
+                speaker_entity_id=speaker_entity_id,
+                opened_at=now,
+                expires_at=expires_at,
+                anchor_message_id=message.native_source_message_id,
+                reason=reason,
+            )
+            self._floors[key] = floor
+            self._response_sources[key] = {message.native_source_message_id}
+            return floor
+
+        with self.database._lock, self.database._conn:
+            self.database._conn.execute(
+                """INSERT INTO messaging_conversation_floor(
+                       platform, account_scope, conversation_id, generation,
+                       speaker_actor_ref, speaker_entity_id, opened_at, expires_at,
+                       anchor_message_id, response_source_message_id, reason
+                   ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(platform, account_scope, conversation_id) DO UPDATE SET
+                       generation=messaging_conversation_floor.generation + 1,
+                       speaker_actor_ref=excluded.speaker_actor_ref,
+                       speaker_entity_id=excluded.speaker_entity_id,
+                       opened_at=excluded.opened_at,
+                       expires_at=excluded.expires_at,
+                       anchor_message_id=excluded.anchor_message_id,
+                       response_source_message_id=excluded.response_source_message_id,
+                       reason=excluded.reason""",
+                (*key, actor_ref, speaker_entity_id, now.isoformat(), expires_at.isoformat(),
+                 message.native_source_message_id, message.native_source_message_id, reason),
+            )
+            floor = self._row_to_floor(self._db_row(key))
+        assert floor is not None
         return floor
 
     def continue_floor(self, message: InboundMessage, floor: _Floor, *, reason: str) -> _Floor:
         key = self.key(message)
-        current_generation = self._generation.get(key, 0)
-        if current_generation != floor.generation:
-            return floor
-        generation = current_generation + 1
-        continued = _Floor(
-            generation=generation,
-            speaker_actor_ref=floor.speaker_actor_ref,
-            speaker_entity_id=floor.speaker_entity_id,
-            opened_at=floor.opened_at,
-            expires_at=floor.expires_at,
-            anchor_message_id=message.native_source_message_id,
-            reason=reason,
-        )
-        self._generation[key] = generation
-        self._floors[key] = continued
-        self._response_sources[key] = {message.native_source_message_id}
-        return continued
+        if self.database is None:
+            current_generation = self._generation.get(key, 0)
+            if current_generation != floor.generation:
+                return floor
+            generation = current_generation + 1
+            continued = _Floor(
+                generation=generation,
+                speaker_actor_ref=floor.speaker_actor_ref,
+                speaker_entity_id=floor.speaker_entity_id,
+                opened_at=floor.opened_at,
+                expires_at=floor.expires_at,
+                anchor_message_id=message.native_source_message_id,
+                reason=reason,
+            )
+            self._generation[key] = generation
+            self._floors[key] = continued
+            self._response_sources[key] = {message.native_source_message_id}
+            return continued
+
+        with self.database._lock, self.database._conn:
+            cursor = self.database._conn.execute(
+                """UPDATE messaging_conversation_floor
+                   SET generation=generation + 1, anchor_message_id=?,
+                       response_source_message_id=?, reason=?
+                   WHERE platform=? AND account_scope=? AND conversation_id=?
+                     AND generation=? AND speaker_actor_ref=? AND expires_at>=?""",
+                (
+                    message.native_source_message_id,
+                    message.native_source_message_id,
+                    reason,
+                    *key,
+                    floor.generation,
+                    floor.speaker_actor_ref,
+                    self.clock.now().isoformat(),
+                ),
+            )
+            latest = self._row_to_floor(self._db_row(key))
+        if cursor.rowcount == 1 and latest is not None:
+            return latest
+        return latest or floor
 
     def shift_away(self, message: InboundMessage) -> int:
-        return self.invalidate(
-            message.platform,
-            message.account_scope,
-            message.conversation_id,
-        )
+        return self.invalidate(message.platform, message.account_scope, message.conversation_id)
 
     def invalidate(
         self,
@@ -139,11 +228,27 @@ class ConversationFloor:
         conversation_id: str,
     ) -> int:
         key = self.raw_key(platform, account_scope, conversation_id)
-        generation = self._generation.get(key, 0) + 1
-        self._generation[key] = generation
-        self._floors.pop(key, None)
-        self._response_sources.pop(key, None)
-        return generation
+        if self.database is None:
+            generation = self._generation.get(key, 0) + 1
+            self._generation[key] = generation
+            self._floors.pop(key, None)
+            self._response_sources.pop(key, None)
+            return generation
+
+        with self.database._lock, self.database._conn:
+            self.database._conn.execute(
+                """INSERT INTO messaging_conversation_floor(
+                       platform, account_scope, conversation_id, generation
+                   ) VALUES (?, ?, ?, 1)
+                   ON CONFLICT(platform, account_scope, conversation_id) DO UPDATE SET
+                       generation=messaging_conversation_floor.generation + 1,
+                       speaker_actor_ref=NULL, speaker_entity_id=NULL, opened_at=NULL,
+                       expires_at=NULL, anchor_message_id=NULL,
+                       response_source_message_id=NULL, reason=NULL""",
+                key,
+            )
+            row = self._db_row(key)
+        return int(row["generation"])
 
     def invalidate_source(
         self,
@@ -153,9 +258,17 @@ class ConversationFloor:
         source_message_id: str,
     ) -> tuple[int, bool]:
         key = self.raw_key(platform, account_scope, conversation_id)
-        generation = self._generation.get(key, 0)
-        if source_message_id not in self._response_sources.get(key, set()):
-            return generation, False
+        if self.database is None:
+            generation = self._generation.get(key, 0)
+            if source_message_id not in self._response_sources.get(key, set()):
+                return generation, False
+            return self.invalidate(platform, account_scope, conversation_id), True
+
+        with self.database._lock:
+            row = self._db_row(key)
+            generation = int(row["generation"]) if row is not None else 0
+            if row is None or row["response_source_message_id"] != source_message_id:
+                return generation, False
         return self.invalidate(platform, account_scope, conversation_id), True
 
     def reply_lease(
@@ -168,11 +281,7 @@ class ConversationFloor:
         expires_at = self.clock.now() + timedelta(seconds=seconds)
         return min(floor.expires_at, expires_at) if cap_to_floor else expires_at
 
-    def validate_reply(
-        self,
-        message: InboundMessage,
-        decision: AttentionDecision,
-    ) -> bool:
+    def validate_reply(self, message: InboundMessage, decision: AttentionDecision) -> bool:
         if message.channel_type == ChannelType.DM:
             return decision.action == RoutingAction.RESPOND
         if decision.reply_lease_until is not None and self.clock.now() > decision.reply_lease_until:
@@ -180,11 +289,6 @@ class ConversationFloor:
         if self.generation(message) != decision.floor_generation:
             return False
         if any(reason in _DIRECT_ATTENTION_REASONS for reason in decision.reason_codes):
-            # Explicit native mention/reply/vocative is authority to answer that
-            # concrete message. Provider latency must not make it stale merely
-            # because the short conversational floor expired; a generation
-            # change (other speaker, relevant source edit/delete, newer turn)
-            # still cancels it deterministically.
             return True
         floor = self.active(message)
         if floor is None:
@@ -193,16 +297,14 @@ class ConversationFloor:
 
 
 class SocialAttentionRouter:
-    """Deterministic social gate before Cognitive Core.
-
-    DM authorization is identity based. Group response authority is evidence based:
-    native reply and mention outrank text heuristics; uncertainty becomes silence.
-    """
+    """Deterministic social gate before Cognitive Core."""
 
     def __init__(self, *, profiles: PersonProfileService, clock: Clock) -> None:
         self.profiles = profiles
         self.clock = clock
-        self.floor = ConversationFloor(clock)
+        # PersonProfileService already owns the canonical AmoraDatabase in normal
+        # Core bootstrap. Reuse it instead of introducing another storage client.
+        self.floor = ConversationFloor(clock, database=getattr(profiles, "store", None))
 
     def resolve_speaker(self, message: InboundMessage) -> tuple[str | None, str]:
         refs = sorted(message.sender_identifiers, key=lambda item: item.confidence, reverse=True)
@@ -276,18 +378,14 @@ class SocialAttentionRouter:
                 reason_codes=[direct_reason, "GROUP_DIRECT_ATTENTION"],
                 floor_generation=floor.generation,
                 reply_lease_until=self.floor.reply_lease(
-                    floor,
-                    seconds=_DIRECT_REPLY_LEASE_SECONDS,
-                    cap_to_floor=False,
+                    floor, seconds=_DIRECT_REPLY_LEASE_SECONDS, cap_to_floor=False
                 ),
             )
 
         active = self.floor.active(message)
         if active is not None and active.speaker_actor_ref == actor_ref:
             continued = self.floor.continue_floor(
-                message,
-                active,
-                reason="GROUP_ACTIVE_FLOOR_SAME_SPEAKER",
+                message, active, reason="GROUP_ACTIVE_FLOOR_SAME_SPEAKER"
             )
             return AttentionDecision(
                 action=RoutingAction.RESPOND,

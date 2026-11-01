@@ -32,8 +32,7 @@ async def test_dedupe_survives_restart(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora")); clock = _clock()
     item = AppraisalInput(description="evento único", outcome_valence=-0.7, target_id="PERSON_BK", agent_id="PERSON_BK", agency=0.8, control=0.7, intentionality=0.8, norm_violation=0.7, relationship_relevance=0.8, dedupe_key="persistent-emotion-dedupe")
     first = AmoraCore.bootstrap(clock=clock)
-    try:
-        await first.emotion.process(item); first_anger = first.emotion.affect_for("PERSON_BK").anger
+    try: await first.emotion.process(item); first_anger = first.emotion.affect_for("PERSON_BK").anger
     finally: first.close()
     second = AmoraCore.bootstrap(clock=clock)
     try:
@@ -49,8 +48,7 @@ async def test_backup_restore_contains_emotion_mood_affect_and_bids(tmp_path: Pa
         assert result.event is not None; backup = core.create_backup("v05-emotion.db")
     finally: core.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored_db = AmoraDatabase(restored_path)
-    try:
-        assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 13
+    try: assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 14
     finally: restored_db.close()
     store = EmotionStore(restored_path, clock)
     try:
