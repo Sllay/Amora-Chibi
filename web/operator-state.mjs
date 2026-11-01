@@ -61,4 +61,7 @@ if (typeof document !== 'undefined') {
   import('./operator-presence-authority.mjs?v=20261031-98')
     .then((module) => module.installPresenceAuthorityControl({ operatorKey: OPERATOR_KEY }))
     .catch(() => {});
+  import('./dev-master-key.mjs?v=20261101-101')
+    .then((module) => module.installDevMasterKey({ OperatorState }))
+    .catch(() => {});
 }

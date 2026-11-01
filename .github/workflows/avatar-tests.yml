@@ -40,6 +40,7 @@ jobs:
           node --check web/browser-state.mjs
           node --check web/operator-state.mjs
           node --check web/operator-presence-authority.mjs
+          node --check web/dev-master-key.mjs
           node --check web/operator-panel.js
       - name: Test Avatar Engine
         run: npm --prefix avatar test

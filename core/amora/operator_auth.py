@@ -6,6 +6,8 @@ import hmac
 import re
 import secrets
 
+from amora.dev_auth import signing_secrets
+
 
 OPERATOR_TOKEN_TTL_SECONDS = 12 * 60 * 60
 
@@ -13,8 +15,9 @@ OPERATOR_TOKEN_TTL_SECONDS = 12 * 60 * 60
 def issue_operator_token(secret: str, clock, *, ttl_seconds: int = OPERATOR_TOKEN_TTL_SECONDS) -> str:
     """Issue a bounded browser credential for Web settings/console surfaces.
 
-    It is signed by the admin secret so rotating LOCAL_API_TOKEN revokes every
-    operator credential, but the admin secret itself is never sent to the browser.
+    Standard pairing signs with the admin secret. The optional BK dev-master
+    path may sign the same bounded token shape with AMORA_DEV_MASTER_KEY; the
+    raw master key itself is never a Bearer credential.
     """
     if ttl_seconds <= 0:
         raise ValueError("operator token ttl must be positive")
@@ -31,12 +34,15 @@ def operator_token_role(token: str, secret: str, clock) -> str | None:
         prefix, version, payload, signature = token.split(".")
         if prefix != "browser" or version != "v3" or len(payload) > 256:
             return None
-        expected = hmac.new(
-            secret.encode("utf-8"),
-            ("browser.v3." + payload).encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
-        if not hmac.compare_digest(expected.encode("ascii"), signature.encode("ascii")):
+        signed = ("browser.v3." + payload).encode("utf-8")
+        valid_signature = any(
+            hmac.compare_digest(
+                hmac.new(candidate.encode("utf-8"), signed, hashlib.sha256).hexdigest().encode("ascii"),
+                signature.encode("ascii"),
+            )
+            for candidate in signing_secrets(secret)
+        )
+        if not valid_signature:
             return None
         decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode("utf-8")
         role, expiry_text, nonce = decoded.split(":")
