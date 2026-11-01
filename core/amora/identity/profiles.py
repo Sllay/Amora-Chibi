@@ -30,9 +30,9 @@ class BindingTrust(StrEnum):
 class PersonProfileSeed(BaseModel):
     """Small operator-owned bootstrap surface for one canonical person.
 
-    This is deliberately not a second memory store. Stable facts that BK wants to
-    pre-seed live here; learned preferences, episodes, beliefs and affect continue
-    to belong to World/Memory/Emotion and are projected into a living view later.
+    This is deliberately not a second memory store. Stable facts and explicit
+    operator capabilities live here; learned preferences, episodes, beliefs and
+    affect continue to belong to World/Memory/Emotion.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -44,6 +44,7 @@ class PersonProfileSeed(BaseModel):
     age_years: int | None = Field(default=None, ge=0, le=150)
     short_description: str | None = Field(default=None, max_length=600)
     can_define_amora_family: bool = False
+    can_control_platform_presence: bool = False
 
     @model_validator(mode="after")
     def validate_age_source(self) -> "PersonProfileSeed":
@@ -275,6 +276,16 @@ class PersonProfileService:
             if profile.can_define_amora_family
         )
 
+    def platform_presence_authorities(self) -> frozenset[str]:
+        return frozenset(
+            profile.entity_id
+            for profile in self.store.list_person_profiles()
+            if profile.can_control_platform_presence
+        )
+
+    def can_control_platform_presence(self, entity_id: str | None) -> bool:
+        return bool(entity_id and entity_id in self.platform_presence_authorities())
+
     def state(self) -> dict[str, object]:
         profiles = self.profiles()
         bindings = sum(len(self.store.platform_bindings_for(profile.entity_id)) for profile in profiles)
@@ -285,6 +296,7 @@ class PersonProfileService:
             "people_profile_fingerprint": self.catalog_fingerprint,
             "private_binding_import_count": self.private_binding_import_count,
             "family_authority_ids": sorted(self.family_authorities()),
+            "platform_presence_authority_ids": sorted(self.platform_presence_authorities()),
         }
 
 
