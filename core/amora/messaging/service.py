@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from uuid import uuid4
 
 from amora.cognition import CognitiveRequest
-from amora.events import PrivacyScope
 
 from .attention import SocialAttentionRouter
 from .models import (
@@ -16,6 +14,7 @@ from .models import (
     MessagingAuditRecord,
     OutboundMessage,
     RoutingAction,
+    TransportInvalidation,
 )
 from .store import MessagingStore
 
@@ -87,6 +86,8 @@ class PlatformMessagingService:
                 "reply_to_amora": message.reply_to_amora,
                 "attachment_count": len(message.attachments),
                 "floor_generation": decision.floor_generation,
+                "native_message_id_hash": self._hash(message.native_source_message_id),
+                "transport_revision": message.transport_revision,
             },
         )
         if not self.store.append_audit(inbound_audit):
@@ -117,6 +118,8 @@ class PlatformMessagingService:
                 "channel_type": message.channel_type.value,
                 "conversation_ref": self._conversation_ref(message),
                 "platform_message_id_hash": self._hash(message.message_id),
+                "native_message_id_hash": self._hash(message.native_source_message_id),
+                "transport_revision": message.transport_revision,
                 "social_attention_score": decision.score,
                 "social_attention_reasons": list(decision.reason_codes),
                 "floor_generation": decision.floor_generation,
@@ -147,9 +150,6 @@ class PlatformMessagingService:
             decision.score,
         )
 
-        # Reuse the established interaction appraisal so direct platform speech
-        # influences emotion consistently. Unknown group actors cannot acquire
-        # directed affect because they are not canonical registry entities.
         appraise = getattr(self.conversation, "_appraise_interaction", None)
         if callable(appraise):
             await appraise(
@@ -165,8 +165,8 @@ class PlatformMessagingService:
         plan = await self.cognition.respond(request, on_segment=None, fallback_text=fallback)
         await self.cognition.emit_event(plan)
 
-        # A group may turn away from Amora while the model is generating. The
-        # original attention lease is revalidated immediately before enqueue.
+        # A group may turn away from Amora while the model is generating. Transport
+        # UPDATE/DELETE invalidation also increments this generation concurrently.
         if message.channel_type == ChannelType.GROUP and not self.attention.floor.validate_reply(message, decision):
             self.store.add_inbound_reason(
                 platform=message.platform,
@@ -195,16 +195,15 @@ class PlatformMessagingService:
             )
             return InboundResult(decision=decision)
 
+        native_source_id = message.native_source_message_id
         outbound = OutboundMessage(
             platform=message.platform,
             account_scope=message.account_scope,
             conversation_id=message.conversation_id,
             target_entity_id=decision.speaker_entity_id,
             text=text,
-            # Native quote/reply to the exact triggering message is preferred on
-            # both Discord and WhatsApp and removes ambiguity in busy groups.
-            reply_to_message_id=message.message_id,
-            source_message_id=message.message_id,
+            reply_to_message_id=native_source_id,
+            source_message_id=native_source_id,
             created_at=self.clock.now(),
             metadata={
                 "cognitive_turn_id": str(plan.turn_id),
@@ -212,6 +211,8 @@ class PlatformMessagingService:
                 "model": plan.model,
                 "floor_generation": decision.floor_generation,
                 "attention_score": decision.score,
+                "transport_revision": message.transport_revision,
+                "delivery_message_id": message.message_id,
             },
         )
         self.store.put_outbound(outbound)
@@ -225,15 +226,16 @@ class PlatformMessagingService:
                 channel_type=message.channel_type,
                 speaker_entity_id="ENTITY_AMORA",
                 text=text,
-                reply_to_message_id=message.message_id,
+                reply_to_message_id=native_source_id,
                 routing_action=RoutingAction.RESPOND,
                 reason_codes=["CORE_OUTBOUND_ENQUEUED", *plan.reason_codes],
                 responded=True,
                 timestamp=outbound.created_at,
                 metadata={
                     "outbound_id": str(outbound.id),
-                    "source_message_id": message.message_id,
+                    "source_message_id_hash": self._hash(native_source_id),
                     "target_entity_id": decision.speaker_entity_id,
+                    "transport_revision": message.transport_revision,
                 },
             )
         )
@@ -244,6 +246,32 @@ class PlatformMessagingService:
             message_id=message.message_id,
         )
         return InboundResult(decision=decision, outbound=[outbound])
+
+    def invalidate_transport(self, invalidation: TransportInvalidation) -> dict[str, object]:
+        """Revoke an in-flight/queued reply when the native source mutates.
+
+        This endpoint intentionally carries no message body. The platform worker
+        can therefore cancel stale output without promoting transport state into
+        canonical memory or identity.
+        """
+        generation = self.attention.floor.invalidate(
+            invalidation.platform,
+            invalidation.account_scope,
+            invalidation.conversation_id,
+        )
+        cancelled = self.store.cancel_outbound_by_source(
+            platform=invalidation.platform,
+            account_scope=invalidation.account_scope,
+            conversation_id=invalidation.conversation_id,
+            source_message_id=invalidation.native_message_id,
+            reason=invalidation.reason,
+        )
+        return {
+            "status": "ok",
+            "floor_generation": generation,
+            "cancelled_outbound": cancelled,
+            "transport_revision": invalidation.transport_revision,
+        }
 
     def state(self) -> dict[str, object]:
         return {
