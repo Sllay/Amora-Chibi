@@ -34,10 +34,11 @@ export function parseDiscordAmoraInteraction(interaction) {
     : null;
   const action = String(option?.value || '');
   if (!ACTION_VALUES.has(action)) return null;
-  if (!interaction.id || !interaction.token) return null;
+  if (!interaction.id || !interaction.token || !interaction.application_id) return null;
   return {
     action,
     actorId: String(actorId),
+    applicationId: String(interaction.application_id),
     interactionId: String(interaction.id),
     interactionToken: String(interaction.token),
     guildId: interaction.guild_id ? String(interaction.guild_id) : null,
