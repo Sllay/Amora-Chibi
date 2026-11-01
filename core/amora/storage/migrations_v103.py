@@ -71,4 +71,6 @@ MIGRATION_V103 = (
     ''',
 )
 
-LATEST_SCHEMA_VERSION = 13
+# Kept here for backwards-compatible imports from app.py. The actual latest
+# migration is v104/schema 14.
+LATEST_SCHEMA_VERSION = 14
