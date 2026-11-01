@@ -41,10 +41,6 @@ _PLATFORM_PATTERNS: tuple[tuple[MessagingPlatform, re.Pattern[str]], ...] = (
     ),
 )
 
-# Keep the command grammar intentionally explicit. This parser is an authority
-# boundary, not a general NLU replacement. Ambiguous social phrases continue to
-# cognition and cannot mutate transport state merely because they contain a
-# platform name.
 _ACTION_PATTERNS: tuple[tuple[PresenceControlAction, re.Pattern[str]], ...] = (
     (
         PresenceControlAction.DISCONNECT,
@@ -128,7 +124,19 @@ class PlatformPresenceControlService:
         intent = self.parse(text)
         if intent is None:
             return None
+        return self.execute_intent(
+            intent,
+            speaker_entity_id=speaker_entity_id,
+            account_scope=account_scope,
+        )
 
+    def execute_intent(
+        self,
+        intent: PresenceControlIntent,
+        *,
+        speaker_entity_id: str | None,
+        account_scope: str = "primary",
+    ) -> PresenceControlOutcome:
         if not self.profiles.can_control_platform_presence(speaker_entity_id):
             return PresenceControlOutcome(
                 intent=intent,
