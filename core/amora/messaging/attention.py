@@ -39,12 +39,19 @@ class _Floor:
 
 
 class ConversationFloor:
-    """Short group-conversation lease owned by Core, never by a platform adapter."""
+    """Short group-conversation lease owned by Core, never by a platform adapter.
+
+    The generation is the authority token for one response turn. Native transport
+    edits/deletes invalidate that generation only when they touch a source message
+    that actually authorized a response in the current generation. Unrelated
+    channel edits must not cancel Amora's in-flight answer.
+    """
 
     def __init__(self, clock: Clock) -> None:
         self.clock = clock
         self._floors: dict[tuple[str, str, str], _Floor] = {}
         self._generation: dict[tuple[str, str, str], int] = {}
+        self._response_sources: dict[tuple[str, str, str], set[str]] = {}
 
     @staticmethod
     def key(message: InboundMessage) -> tuple[str, str, str]:
@@ -94,7 +101,15 @@ class ConversationFloor:
             reason=reason,
         )
         self._floors[key] = floor
+        self._response_sources[key] = {message.native_source_message_id}
         return floor
+
+    def register_response_source(self, message: InboundMessage, *, generation: int) -> bool:
+        key = self.key(message)
+        if self._generation.get(key, 0) != generation:
+            return False
+        self._response_sources.setdefault(key, set()).add(message.native_source_message_id)
+        return True
 
     def shift_away(self, message: InboundMessage) -> int:
         return self.invalidate(
@@ -113,7 +128,21 @@ class ConversationFloor:
         generation = self._generation.get(key, 0) + 1
         self._generation[key] = generation
         self._floors.pop(key, None)
+        self._response_sources.pop(key, None)
         return generation
+
+    def invalidate_source(
+        self,
+        platform: MessagingPlatform | str,
+        account_scope: str,
+        conversation_id: str,
+        source_message_id: str,
+    ) -> tuple[int, bool]:
+        key = self.raw_key(platform, account_scope, conversation_id)
+        generation = self._generation.get(key, 0)
+        if source_message_id not in self._response_sources.get(key, set()):
+            return generation, False
+        return self.invalidate(platform, account_scope, conversation_id), True
 
     def reply_lease(
         self,
@@ -140,7 +169,7 @@ class ConversationFloor:
             # Explicit native mention/reply/vocative is authority to answer that
             # concrete message. Provider latency must not make it stale merely
             # because the short conversational floor expired; a generation
-            # change (other speaker, edit/delete invalidation, newer direct turn)
+            # change (other speaker, relevant source edit/delete, newer direct turn)
             # still cancels it deterministically.
             return True
         floor = self.active(message)
@@ -241,6 +270,7 @@ class SocialAttentionRouter:
 
         active = self.floor.active(message)
         if active is not None and active.speaker_actor_ref == actor_ref:
+            self.floor.register_response_source(message, generation=active.generation)
             return AttentionDecision(
                 action=RoutingAction.RESPOND,
                 score=0.82,
