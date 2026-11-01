@@ -74,6 +74,25 @@ class MessagingStore:
                     raise
                 return False
 
+    def get_audit(
+        self,
+        *,
+        platform: MessagingPlatform | str,
+        account_scope: str,
+        conversation_id: str,
+        message_id: str,
+        direction: AuditDirection = AuditDirection.INBOUND,
+    ) -> MessagingAuditRecord | None:
+        platform_value = platform.value if isinstance(platform, MessagingPlatform) else str(platform)
+        with self.database._lock:
+            row = self.database._conn.execute(
+                """SELECT * FROM messaging_audit
+                   WHERE platform=? AND account_scope=? AND conversation_id=?
+                     AND message_id=? AND direction=? LIMIT 1""",
+                (platform_value, account_scope, conversation_id, message_id, direction.value),
+            ).fetchone()
+        return self._audit_from_row(row) if row is not None else None
+
     def has_audit(
         self,
         *,
@@ -83,15 +102,13 @@ class MessagingStore:
         message_id: str,
         direction: AuditDirection = AuditDirection.INBOUND,
     ) -> bool:
-        platform_value = platform.value if isinstance(platform, MessagingPlatform) else str(platform)
-        with self.database._lock:
-            row = self.database._conn.execute(
-                """SELECT 1 FROM messaging_audit
-                   WHERE platform=? AND account_scope=? AND conversation_id=?
-                     AND message_id=? AND direction=? LIMIT 1""",
-                (platform_value, account_scope, conversation_id, message_id, direction.value),
-            ).fetchone()
-        return row is not None
+        return self.get_audit(
+            platform=platform,
+            account_scope=account_scope,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            direction=direction,
+        ) is not None
 
     def mark_inbound_responded(
         self,
@@ -205,6 +222,14 @@ class MessagingStore:
                 if "UNIQUE" not in str(exc).upper() and "DUPLICATE" not in str(exc).upper():
                     raise
                 return False
+
+    def get_outbound(self, message_id: UUID | str) -> OutboundMessage | None:
+        with self.database._lock:
+            row = self.database._conn.execute(
+                "SELECT * FROM messaging_outbound_queue WHERE id=?",
+                (str(message_id),),
+            ).fetchone()
+        return self._outbound_from_row(row) if row is not None else None
 
     def claim_outbound(
         self,
