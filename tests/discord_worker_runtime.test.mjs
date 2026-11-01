@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { MessagingCoreClient } from '../workers/common/core-client.mjs';
 import { DiscordWorker } from '../workers/discord/worker.mjs';
 
 function makeWorker() {
@@ -65,4 +66,43 @@ test('desired Discord connection asks connect once when no socket exists', async
   });
 
   assert.deepEqual(order, ['connect']);
+});
+
+test('Core HTTP failures expose stable status-specific error codes to workers', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ detail: 'temporary failure' }),
+    { status: 503, headers: { 'content-type': 'application/json' } },
+  );
+  try {
+    const client = new MessagingCoreClient({
+      baseUrl: 'https://core.example.test',
+      token: 'm'.repeat(48),
+      platform: 'discord',
+    });
+    await assert.rejects(
+      client.getPresence(),
+      (error) => error?.code === 'CORE_HTTP_503' && error?.status === 503,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Core network failures expose a stable transport error code to workers', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
+  try {
+    const client = new MessagingCoreClient({
+      baseUrl: 'https://core.example.test',
+      token: 'm'.repeat(48),
+      platform: 'discord',
+    });
+    await assert.rejects(
+      client.getPresence(),
+      (error) => error?.code === 'CORE_NETWORK_ERROR' && error?.status === null,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
