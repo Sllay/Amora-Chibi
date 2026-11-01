@@ -34,23 +34,27 @@ export function parseDiscordAmoraInteraction(interaction) {
     : null;
   const action = String(option?.value || '');
   if (!ACTION_VALUES.has(action)) return null;
+  if (!interaction.id || !interaction.token) return null;
   return {
     action,
     actorId: String(actorId),
-    interactionId: String(interaction.id || ''),
-    interactionToken: String(interaction.token || ''),
+    interactionId: String(interaction.id),
+    interactionToken: String(interaction.token),
     guildId: interaction.guild_id ? String(interaction.guild_id) : null,
     channelId: interaction.channel_id ? String(interaction.channel_id) : null,
   };
 }
 
-export function discordInteractionResponse(content, { ephemeral = true } = {}) {
+export function discordDeferredInteractionResponse({ ephemeral = true } = {}) {
   return {
-    type: 4,
-    data: {
-      content: String(content || '').slice(0, 2000),
-      allowed_mentions: { parse: [] },
-      ...(ephemeral ? { flags: 64 } : {}),
-    },
+    type: 5,
+    data: ephemeral ? { flags: 64 } : {},
+  };
+}
+
+export function discordInteractionEdit(content) {
+  return {
+    content: String(content || '').slice(0, 2000),
+    allowed_mentions: { parse: [] },
   };
 }
