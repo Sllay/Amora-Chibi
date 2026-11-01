@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
@@ -25,6 +26,9 @@ class BindingTrust(StrEnum):
     OPERATOR_VERIFIED = "operator_verified"
     PLATFORM_AUTHENTICATED = "platform_authenticated"
     OBSERVED = "observed"
+
+
+_DISCORD_SNOWFLAKE = re.compile(r"^[0-9]{15,22}$")
 
 
 class PersonProfileSeed(BaseModel):
@@ -83,11 +87,12 @@ class PeopleProfileCatalog(BaseModel):
 
 
 class PlatformIdentityBinding(BaseModel):
-    """Private mapping from a platform actor identifier to a canonical person.
+    """Private mapping from a stable native platform id to a canonical person.
 
-    external_actor_id is intentionally opaque to the Core. The platform adapter
-    decides whether it is an E.164 number, WhatsApp JID/LID, Discord snowflake,
-    authenticated Web account id, or another stable identifier.
+    Identity bindings are authority, not aliases. A mutable username/display name
+    must never be used as the authoritative Discord key; those values remain
+    presentation metadata/aliases while ``discord_user_id`` is the immutable
+    snowflake emitted by the Discord adapter.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -100,6 +105,15 @@ class PlatformIdentityBinding(BaseModel):
     trust: BindingTrust = BindingTrust.OPERATOR_VERIFIED
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_native_identifier(self) -> "PlatformIdentityBinding":
+        if self.platform == PlatformKind.DISCORD and self.identifier_type in {"discord_user_id", "user_id"}:
+            if not _DISCORD_SNOWFLAKE.fullmatch(self.external_actor_id.strip()):
+                raise ValueError(
+                    "Discord identity requires the numeric user snowflake, not username/display name"
+                )
+        return self
 
 
 class IdentityBindingsFile(BaseModel):
@@ -170,8 +184,8 @@ class PersonProfileService:
         The early People Web UI stored Discord snowflakes as ``user_id`` while
         the Discord worker contract emits ``discord_user_id``. Both represent the
         same native Discord user id. Keep the fallback scoped to Discord so old
-        operator-owned bindings remain valid without weakening identity matching
-        for other platforms or identifier classes.
+        operator-owned *numeric* bindings remain valid without ever treating a
+        mutable username as identity authority.
         """
         if platform != PlatformKind.DISCORD.value:
             return (identifier_type,)
@@ -182,13 +196,6 @@ class PersonProfileService:
         return (identifier_type,)
 
     def apply_catalog(self, catalog: PeopleProfileCatalog, *, fingerprint: str | None = None) -> None:
-        """Apply the versioned file strictly as bootstrap, never as cloud authority.
-
-        Once a profile exists in persistent storage, operator/runtime edits win on
-        later restarts. Likewise the original relationship catalog is only seeded
-        on the first profile bootstrap (or for a newly-added seed profile), so a
-        deliberate operator revision/removal is not resurrected by redeploy.
-        """
         now = self.clock.now()
         persisted = {profile.entity_id: profile for profile in self.store.list_person_profiles()}
         first_profile_bootstrap = not persisted
@@ -217,11 +224,7 @@ class PersonProfileService:
         self.persist_registry(self.identities)
         for seed in catalog.profiles:
             if seed.entity_id in newly_seeded:
-                self.store.upsert_person_profile(
-                    seed,
-                    source_revision=catalog.revision,
-                    updated_at=now,
-                )
+                self.store.upsert_person_profile(seed, source_revision=catalog.revision, updated_at=now)
 
         self.catalog_revision = catalog.revision
         self.catalog_fingerprint = fingerprint
@@ -241,30 +244,18 @@ class PersonProfileService:
         field_was_explicit = "can_control_platform_presence" in profile.model_fields_set
         if persisted is not None:
             if not field_was_explicit:
-                profile = profile.model_copy(
-                    update={
-                        "can_control_platform_presence": persisted.can_control_platform_presence,
-                    }
-                )
+                profile = profile.model_copy(update={"can_control_platform_presence": persisted.can_control_platform_presence})
             elif (
                 profile.can_control_platform_presence != persisted.can_control_platform_presence
                 and not allow_platform_presence_authority_change
             ):
-                raise ValueError(
-                    "platform presence authority change requires dedicated confirmed mutation"
-                )
+                raise ValueError("platform presence authority change requires dedicated confirmed mutation")
         elif profile.can_control_platform_presence and not allow_platform_presence_authority_change:
-            raise ValueError(
-                "platform presence authority grant requires dedicated confirmed mutation"
-            )
+            raise ValueError("platform presence authority grant requires dedicated confirmed mutation")
 
         self.identities.upsert_entity(self._entity_from_profile(profile))
         self.persist_registry(self.identities)
-        self.store.upsert_person_profile(
-            profile,
-            source_revision=source_revision,
-            updated_at=self.clock.now(),
-        )
+        self.store.upsert_person_profile(profile, source_revision=source_revision, updated_at=self.clock.now())
         return profile
 
     def upsert_binding(self, binding: PlatformIdentityBinding) -> PlatformIdentityBinding:
@@ -299,6 +290,15 @@ class PersonProfileService:
         account_scope: str = "primary",
     ) -> Entity | None:
         platform_value = str(getattr(platform, "value", platform))
+        # Runtime Discord identity is authoritative only when the adapter supplied
+        # the immutable numeric snowflake. A username accidentally stored in the
+        # old user_id field can no longer impersonate a canonical person.
+        if (
+            platform_value == PlatformKind.DISCORD.value
+            and identifier_type in {"discord_user_id", "user_id"}
+            and not _DISCORD_SNOWFLAKE.fullmatch(external_actor_id.strip())
+        ):
+            return None
         for candidate in self._identifier_type_candidates(platform_value, identifier_type):
             entity_id = self.store.resolve_platform_identity_binding(
                 platform=platform_value,
@@ -320,18 +320,10 @@ class PersonProfileService:
         return self.store.platform_bindings_for(entity_id)
 
     def family_authorities(self) -> frozenset[str]:
-        return frozenset(
-            profile.entity_id
-            for profile in self.store.list_person_profiles()
-            if profile.can_define_amora_family
-        )
+        return frozenset(profile.entity_id for profile in self.store.list_person_profiles() if profile.can_define_amora_family)
 
     def platform_presence_authorities(self) -> frozenset[str]:
-        return frozenset(
-            profile.entity_id
-            for profile in self.store.list_person_profiles()
-            if profile.can_control_platform_presence
-        )
+        return frozenset(profile.entity_id for profile in self.store.list_person_profiles() if profile.can_control_platform_presence)
 
     def can_control_platform_presence(self, entity_id: str | None) -> bool:
         return bool(entity_id and entity_id in self.platform_presence_authorities())
@@ -351,7 +343,6 @@ class PersonProfileService:
 
 
 def redact_binding(binding: PlatformIdentityBinding) -> dict[str, object]:
-    """Safe diagnostic representation; never expose the raw platform identifier."""
     digest = hashlib.sha256(binding.external_actor_id.encode("utf-8")).hexdigest()[:12]
     return {
         "platform": binding.platform.value,
@@ -366,5 +357,4 @@ def redact_binding(binding: PlatformIdentityBinding) -> dict[str, object]:
 
 
 def load_bindings_text(text: str) -> IdentityBindingsFile:
-    """Small helper for tests/admin import surfaces without filesystem coupling."""
     return IdentityBindingsFile.model_validate(json.loads(text))
