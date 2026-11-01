@@ -140,7 +140,10 @@ async def test_duplicate_discord_delivery_reuses_one_cognitive_turn_and_one_outb
 
 
 @pytest.mark.asyncio
-async def test_structured_provider_attempt_budget_fails_over_to_local_fallback(tmp_path, monkeypatch) -> None:
+async def test_structured_provider_attempt_budget_fails_over_to_local_fallback_without_global_cooldown(
+    tmp_path,
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=_clock())
     provider = CountingStructuredProvider(name="slow-structured", delay=0.2)
@@ -159,11 +162,13 @@ async def test_structured_provider_attempt_budget_fails_over_to_local_fallback(t
             },
         )
         plan = await core.cognition.respond(request, fallback_text="Uhum.")
+        state = core.cognition.state()
 
         assert provider.calls == 1
         assert plan.fallback_used is True
         assert plan.provider is None
         assert "PROVIDER_ATTEMPT_TIMEOUT" in plan.reason_codes
         assert "LOCAL_FALLBACK" in plan.reason_codes
+        assert provider.descriptor.name not in state.get("cognitive_provider_cooldowns", {})
     finally:
         core.close()
