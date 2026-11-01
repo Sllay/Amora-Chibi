@@ -16,6 +16,7 @@ from .models import (
     RoutingAction,
     TransportInvalidation,
 )
+from .presence_control import PlatformPresenceControlService, PresenceControlOutcome
 from .store import MessagingStore
 
 
@@ -23,8 +24,9 @@ class PlatformMessagingService:
     """Common messaging pipeline between platform workers and Cognitive Core.
 
     Platform workers normalize transport facts. Core owns identity resolution,
-    DM authorization, group attention, cognition and outbound intent. No adapter
-    is allowed to decide canonical speaker identity or family truth.
+    DM authorization, group attention, cognition, presence-control authority and
+    outbound intent. No adapter is allowed to decide canonical speaker identity,
+    family truth or whether a person may control Amora's transport presence.
     """
 
     def __init__(
@@ -35,12 +37,14 @@ class PlatformMessagingService:
         cognition,
         conversation,
         clock,
+        presence_control: PlatformPresenceControlService | None = None,
     ) -> None:
         self.store = store
         self.attention = attention
         self.cognition = cognition
         self.conversation = conversation
         self.clock = clock
+        self.presence_control = presence_control
 
     async def receive(self, message: InboundMessage) -> InboundResult:
         if self.store.has_audit(
@@ -100,9 +104,22 @@ class PlatformMessagingService:
 
         # Critical privacy boundary: unknown DM content is retained only in the
         # private operator audit. It is never persisted into CognitiveStore and
-        # never reaches a provider.
+        # never reaches a provider or a transport-control parser.
         if decision.action in {RoutingAction.BLOCK, RoutingAction.QUARANTINE, RoutingAction.SILENCE}:
             return InboundResult(decision=decision)
+
+        # Explicit transport commands are Core-owned deterministic control, not
+        # provider prompt interpretation. Only a direct/authorized response turn
+        # may mutate presence, and the canonical PersonProfile capability decides
+        # authority. Ambiguous phrases remain ordinary conversation.
+        if decision.action == RoutingAction.RESPOND and self.presence_control is not None:
+            control = self.presence_control.handle(
+                message.text,
+                speaker_entity_id=decision.speaker_entity_id,
+                account_scope=message.account_scope,
+            )
+            if control is not None:
+                return self._presence_control_result(message, decision, control)
 
         request = CognitiveRequest(
             text=cognitive_text,
@@ -123,7 +140,6 @@ class PlatformMessagingService:
                 "social_attention_score": decision.score,
                 "social_attention_reasons": list(decision.reason_codes),
                 "floor_generation": decision.floor_generation,
-                # Messaging audit is intentionally not automatic long-term memory.
                 "memory_consolidation": False,
                 "relationship_learning": False,
                 "messaging_audit": True,
@@ -165,8 +181,6 @@ class PlatformMessagingService:
         plan = await self.cognition.respond(request, on_segment=None, fallback_text=fallback)
         await self.cognition.emit_event(plan)
 
-        # A group may turn away from Amora while the model is generating. Transport
-        # UPDATE/DELETE invalidation also increments this generation concurrently.
         if message.channel_type == ChannelType.GROUP and not self.attention.floor.validate_reply(message, decision):
             self.store.add_inbound_reason(
                 platform=message.platform,
@@ -195,6 +209,80 @@ class PlatformMessagingService:
             )
             return InboundResult(decision=decision)
 
+        outbound = self._queue_outbound(
+            message,
+            decision,
+            text,
+            metadata={
+                "cognitive_turn_id": str(plan.turn_id),
+                "provider": plan.provider,
+                "model": plan.model,
+                "floor_generation": decision.floor_generation,
+                "attention_score": decision.score,
+                "transport_revision": message.transport_revision,
+                "delivery_message_id": message.message_id,
+            },
+            reason_codes=["CORE_OUTBOUND_ENQUEUED", *plan.reason_codes],
+        )
+        return InboundResult(decision=decision, outbound=[outbound])
+
+    def _presence_control_result(
+        self,
+        message: InboundMessage,
+        decision: AttentionDecision,
+        control: PresenceControlOutcome,
+    ) -> InboundResult:
+        reason = (
+            "PLATFORM_PRESENCE_CONTROL_EXECUTED"
+            if control.authorized and control.executed
+            else "PLATFORM_PRESENCE_CONTROL_STATUS"
+            if control.authorized
+            else "PLATFORM_PRESENCE_CONTROL_DENIED"
+        )
+        self.store.add_inbound_reason(
+            platform=message.platform,
+            account_scope=message.account_scope,
+            conversation_id=message.conversation_id,
+            message_id=message.message_id,
+            reason=reason,
+        )
+
+        if message.channel_type == ChannelType.GROUP and not self.attention.floor.validate_reply(message, decision):
+            return InboundResult(
+                decision=decision.model_copy(
+                    update={
+                        "action": RoutingAction.SILENCE,
+                        "reason_codes": [*decision.reason_codes, "REPLY_LEASE_INVALIDATED"],
+                    }
+                )
+            )
+
+        outbound = self._queue_outbound(
+            message,
+            decision,
+            control.response_text,
+            metadata={
+                "local_control": True,
+                "presence_control_action": control.intent.action.value,
+                "presence_control_platform": control.intent.platform.value,
+                "presence_control_authorized": control.authorized,
+                "presence_control_executed": control.executed,
+                "transport_revision": message.transport_revision,
+                "delivery_message_id": message.message_id,
+            },
+            reason_codes=[reason, "LOCAL_DETERMINISTIC_CONTROL_REPLY"],
+        )
+        return InboundResult(decision=decision, outbound=[outbound])
+
+    def _queue_outbound(
+        self,
+        message: InboundMessage,
+        decision: AttentionDecision,
+        text: str,
+        *,
+        metadata: dict[str, object],
+        reason_codes: list[str],
+    ) -> OutboundMessage:
         native_source_id = message.native_source_message_id
         outbound = OutboundMessage(
             platform=message.platform,
@@ -205,15 +293,7 @@ class PlatformMessagingService:
             reply_to_message_id=native_source_id,
             source_message_id=native_source_id,
             created_at=self.clock.now(),
-            metadata={
-                "cognitive_turn_id": str(plan.turn_id),
-                "provider": plan.provider,
-                "model": plan.model,
-                "floor_generation": decision.floor_generation,
-                "attention_score": decision.score,
-                "transport_revision": message.transport_revision,
-                "delivery_message_id": message.message_id,
-            },
+            metadata=metadata,
         )
         self.store.put_outbound(outbound)
         self.store.append_audit(
@@ -228,7 +308,7 @@ class PlatformMessagingService:
                 text=text,
                 reply_to_message_id=native_source_id,
                 routing_action=RoutingAction.RESPOND,
-                reason_codes=["CORE_OUTBOUND_ENQUEUED", *plan.reason_codes],
+                reason_codes=reason_codes,
                 responded=True,
                 timestamp=outbound.created_at,
                 metadata={
@@ -236,6 +316,7 @@ class PlatformMessagingService:
                     "source_message_id_hash": self._hash(native_source_id),
                     "target_entity_id": decision.speaker_entity_id,
                     "transport_revision": message.transport_revision,
+                    **{key: value for key, value in metadata.items() if key.startswith("presence_control_") or key == "local_control"},
                 },
             )
         )
@@ -245,7 +326,7 @@ class PlatformMessagingService:
             conversation_id=message.conversation_id,
             message_id=message.message_id,
         )
-        return InboundResult(decision=decision, outbound=[outbound])
+        return outbound
 
     def invalidate_transport(self, invalidation: TransportInvalidation) -> dict[str, object]:
         """Revoke an in-flight/queued reply when the native source mutates.
