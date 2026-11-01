@@ -21,9 +21,9 @@ export class MessagingCoreClient {
     this.timeoutMs = timeoutMs;
   }
 
-  async request(path, { method = 'GET', body } = {}) {
+  async request(path, { method = 'GET', body, timeoutMs = this.timeoutMs } = {}) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(`${this.baseUrl}${path}`, {
         method,
@@ -66,6 +66,19 @@ export class MessagingCoreClient {
         native_message_id: String(nativeMessageId),
         reason: String(reason).slice(0, 120),
         transport_revision: transportRevision,
+      },
+    });
+  }
+
+  presenceControl({ action, senderIdentifiers, timeoutMs = 1800 }) {
+    return this.request('/v1/messaging/worker/presence-control', {
+      method: 'POST',
+      timeoutMs,
+      body: {
+        platform: this.platform,
+        account_scope: this.accountScope,
+        action,
+        sender_identifiers: senderIdentifiers,
       },
     });
   }
