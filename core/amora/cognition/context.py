@@ -78,17 +78,7 @@ class ContextCompiler:
         self.store = store
         self.privacy_gate = privacy_gate or ProviderPrivacyGate()
         self.dialogue = dialogue or DialogueOrchestrator()
-        # ACIR is compiled from the final CognitiveRequest participants, after the
-        # social/conversation layer has resolved speaker and addressee. The
-        # compiler is stateless; sharing the canonical EntityRegistry keeps it in
-        # lockstep with core.perspective/core.acir without platform-specific wiring.
         self.acir = ACIRCompiler(PerspectiveResolver(identities))
-
-        # Relationship learning is a derived local observer of already-gated
-        # WorldModel hypotheses. It never consumes provider text directly and it
-        # never owns affect/trust; those remain EmotionEngine state. Parenthood
-        # authority is projected from operator-owned people profiles rather than
-        # being inferred from literal conversation text.
         self.relationship_learning = RelationshipLearningService(
             world=world,
             relationships=RelationshipEvolutionService(world.store, clock, identities),
@@ -180,7 +170,14 @@ class ContextCompiler:
             if len(claims) >= 10:
                 break
 
-        persisted_messages = self.store.list_messages(limit=24)
+        # Literal transcript is local to one conversation session. Cross-session
+        # continuity must come through canonical Memory/World state, never by
+        # silently copying raw Web/DM/channel turns into another surface.
+        persisted_messages = self.store.list_messages(limit=24, session_id=request.session_id)
+        if request.session_id is not None:
+            reasons.append("RECENT_HISTORY_SESSION_SCOPED")
+        else:
+            reasons.append("RECENT_HISTORY_UNSCOPED_LEGACY")
         test_turn_ids = {
             str(message.turn_id)
             for message in persisted_messages
@@ -191,13 +188,8 @@ class ContextCompiler:
 
         recent: list[dict[str, Any]] = []
         for message in persisted_messages:
-            # respond() persists the input before compiling context so observability
-            # survives provider failure. Do not echo that same current turn back as
-            # history: the provider receives context.user_text separately exactly once.
             if str(message.turn_id) == str(request.turn_id):
                 continue
-            # A technical turn is excluded as one causal unit. This removes both
-            # the test input and Amora's generated segments from future history.
             if str(message.turn_id) in test_turn_ids:
                 continue
             if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
@@ -235,8 +227,6 @@ class ContextCompiler:
 
         self_snapshot = self.self_model.snapshot()
         if remote:
-            # Self Model currently has no per-entry privacy column. Until it does,
-            # send stable behavioral layers only; never arbitrary future layers.
             allowed_layers = {"core_identity", "traits", "preferences", "relationships", "current_state"}
             self_snapshot = {key: value for key, value in self_snapshot.items() if key in allowed_layers}
             reasons.append("SELF_MODEL_REMOTE_LAYER_ALLOWLIST")
@@ -269,10 +259,6 @@ class ContextCompiler:
         dialogue_plan = self.dialogue.plan(context)
         context.dialogue_plan = dialogue_plan.model_dump(mode="json")
         if context.acir is not None:
-            # Normal providers already consume the authoritative local dialogue
-            # plan. Binding the input ACIR here makes canonical speaker/addressee
-            # semantics part of that existing provider contract without creating a
-            # second platform-specific prompt path.
             context.dialogue_plan["input_acir"] = context.acir
             context.reason_codes.append("ACIR_BOUND_TO_DIALOGUE_PLAN")
         context.reason_codes.extend(
@@ -283,8 +269,6 @@ class ContextCompiler:
 
     @staticmethod
     def _fit_budget(context: CognitiveContext) -> CognitiveContext:
-        # Cheap deterministic token proxy (roughly 4 chars/token for Latin text).
-        # Prefer dropping old conversation/world detail before relevant memories.
         def estimate() -> int:
             return max(1, len(context.model_dump_json()) // 4)
 
