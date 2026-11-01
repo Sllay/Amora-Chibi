@@ -90,11 +90,12 @@ class PlatformMessagingService:
                 name=f"amora-messaging-{self._hash(key)}",
             )
             self._inflight[key] = task
-        try:
-            return await asyncio.shield(task)
-        finally:
-            if task.done() and self._inflight.get(key) is task:
-                self._inflight.pop(key, None)
+            task.add_done_callback(lambda done, key=key: self._drop_inflight(key, done))
+        return await asyncio.shield(task)
+
+    def _drop_inflight(self, key: str, task: asyncio.Task[InboundResult]) -> None:
+        if self._inflight.get(key) is task:
+            self._inflight.pop(key, None)
 
     async def _receive_once(self, message: InboundMessage) -> InboundResult:
         existing_audit = self.store.get_audit(
@@ -108,21 +109,14 @@ class PlatformMessagingService:
             if duplicate_result is not None:
                 self._log_result(duplicate_result)
                 return duplicate_result
-            decision = self.attention.route(message).model_copy(
-                update={
-                    "reason_codes": [
-                        *self.attention.route(message).reason_codes,
-                        "DUPLICATE_RECOVERY_RESUME",
-                    ]
-                }
+            routed = self.attention.route(message)
+            decision = routed.model_copy(
+                update={"reason_codes": [*routed.reason_codes, "DUPLICATE_RECOVERY_RESUME"]}
             )
-            # The previous request wrote the inbound audit but never reached a
-            # terminal decision/outbound. Resume the same deterministic turn.
             duplicate_recovery = True
         else:
             decision = self.attention.route(message)
             duplicate_recovery = False
-            actor_id = decision.speaker_entity_id or decision.speaker_actor_ref
             first_external = message.sender_identifiers[0].external_actor_id
             inbound_audit = MessagingAuditRecord(
                 platform=message.platform,
@@ -387,9 +381,7 @@ class PlatformMessagingService:
             return InboundResult(decision=decision, duplicate=True, outbound=[outbound])
 
         terminal_reason = next((reason for reason in reasons if reason in _TERMINAL_DUPLICATE_REASONS), None)
-        action = audit.routing_action
-        if terminal_reason is not None:
-            action = RoutingAction.SILENCE
+        action = RoutingAction.SILENCE if terminal_reason is not None else audit.routing_action
         if action is not None and action != RoutingAction.RESPOND:
             return InboundResult(
                 decision=AttentionDecision(
@@ -409,17 +401,6 @@ class PlatformMessagingService:
                     speaker_entity_id=audit.speaker_entity_id,
                     speaker_actor_ref=actor_ref,
                     reason_codes=[*reasons, "DUPLICATE_RESPONDED_WITHOUT_OUTBOUND"],
-                ),
-                duplicate=True,
-            )
-        if terminal_reason is not None:
-            return InboundResult(
-                decision=AttentionDecision(
-                    action=RoutingAction.SILENCE,
-                    score=0.0,
-                    speaker_entity_id=audit.speaker_entity_id,
-                    speaker_actor_ref=actor_ref,
-                    reason_codes=[*reasons, terminal_reason, "DUPLICATE_TERMINAL_REUSED"],
                 ),
                 duplicate=True,
             )
