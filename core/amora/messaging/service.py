@@ -522,10 +522,11 @@ class PlatformMessagingService:
         return outbound
 
     def invalidate_transport(self, invalidation: TransportInvalidation) -> dict[str, object]:
-        generation = self.attention.floor.invalidate(
+        generation, floor_invalidated = self.attention.floor.invalidate_source(
             invalidation.platform,
             invalidation.account_scope,
             invalidation.conversation_id,
+            invalidation.native_message_id,
         )
         cancelled = self.store.cancel_outbound_by_source(
             platform=invalidation.platform,
@@ -537,6 +538,7 @@ class PlatformMessagingService:
         return {
             "status": "ok",
             "floor_generation": generation,
+            "floor_invalidated": floor_invalidated,
             "cancelled_outbound": cancelled,
             "transport_revision": invalidation.transport_revision,
         }
