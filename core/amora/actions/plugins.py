@@ -65,6 +65,9 @@ class PluginRegistry:
         # registry owned here to that runtime identity so cognition can resolve
         # the exact same live capability view without creating another registry.
         if manifest.plugin_id == "core.actions":
+            from .builtin_capabilities import register_builtin_capabilities
+
+            register_builtin_capabilities(self.capability_registry)
             runtime_owner = getattr(plugin, "events", None)
             if runtime_owner is not None:
                 from .runtime_capabilities import bind_runtime_capabilities
