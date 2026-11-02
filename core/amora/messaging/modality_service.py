@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from contextvars import ContextVar
 from typing import Any
 
@@ -68,10 +69,14 @@ class PlatformMessagingService(BasePlatformMessagingService):
     already-authorized response should be rendered.
     """
 
+    _MAX_RECENT_CONVERSATIONS = 512
+    _RECENT_EXPRESSIONS_PER_CONVERSATION = 8
+
     def __init__(self, *args: Any, response_modality: ResponseModalitySelector | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.response_modality = response_modality or ResponseModalitySelector()
         self.cognition = _CapabilityAwareCognitionProxy(self.cognition)
+        self._recent_expressions: dict[str, deque[str]] = {}
 
     async def receive(self, message: InboundMessage):
         token = _CURRENT_MESSAGE.set(message)
@@ -91,10 +96,12 @@ class PlatformMessagingService(BasePlatformMessagingService):
     ) -> OutboundMessage:
         state = self.conversation.state() if hasattr(self.conversation, "state") else {}
         emotion_profile = str(state.get("last_emotion_profile") or "") if isinstance(state, dict) else ""
+        recent = list(self._recent_expressions.get(self._conversation_key(message), ()))
         modality = self.response_modality.select(
             message,
             text,
             emotion_profile=emotion_profile,
+            recent_expression_ids=recent,
         )
         transport_expressions = [item.model_dump(mode="json") for item in modality.expressions]
         safe_scores = {
@@ -107,6 +114,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
             "response_modality_reason_codes": list(modality.reason_codes),
             "response_modality_scores": safe_scores,
             "expression_count": len(modality.expressions),
+            "recent_expression_count": len(recent),
             # Delivery-private transport payload. This field is persisted locally
             # and consumed by the worker; it is never copied into CognitiveRequest.
             "transport_expressions": transport_expressions,
@@ -119,5 +127,25 @@ class PlatformMessagingService(BasePlatformMessagingService):
             reason_codes=[*reason_codes, *modality.reason_codes],
         )
         if modality.expressions:
+            self._remember_expressions(message, modality.expressions)
             return outbound.model_copy(update={"expressions": list(modality.expressions)})
         return outbound
+
+    @staticmethod
+    def _conversation_key(message: InboundMessage) -> str:
+        return f"{message.platform.value}:{message.account_scope}:{message.conversation_id}"
+
+    def _remember_expressions(self, message: InboundMessage, expressions) -> None:
+        key = self._conversation_key(message)
+        history = self._recent_expressions.get(key)
+        if history is None:
+            if len(self._recent_expressions) >= self._MAX_RECENT_CONVERSATIONS:
+                oldest = next(iter(self._recent_expressions), None)
+                if oldest is not None:
+                    self._recent_expressions.pop(oldest, None)
+            history = deque(maxlen=self._RECENT_EXPRESSIONS_PER_CONVERSATION)
+            self._recent_expressions[key] = history
+        for expression in expressions:
+            native_id = str(expression.native_id)
+            if native_id:
+                history.append(native_id)
