@@ -27,9 +27,11 @@ MIGRATION_V105 = (
         turn_id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
         source_message_id TEXT NOT NULL,
+        source_native_message_id TEXT NOT NULL,
         speaker_actor_ref TEXT NOT NULL,
         speaker_entity_id TEXT,
         state TEXT NOT NULL CHECK(state IN ('received','accepted','thinking','ready','delivering','delivered','cancelled','superseded','failed','recovering')),
+        revision INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         reply_valid_until TEXT,
@@ -38,6 +40,8 @@ MIGRATION_V105 = (
     );
     CREATE INDEX IF NOT EXISTS idx_conversation_runtime_turn_session
         ON conversation_runtime_turns(session_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_conversation_runtime_turn_native_source
+        ON conversation_runtime_turns(session_id, source_native_message_id);
     ''',
 )
 

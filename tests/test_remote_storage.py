@@ -1,8 +1,8 @@
 """Remote storage regression suite aligned with the current schema contract.
 
 The complete historical suite is kept in ``remote_storage_contracts_v13_source``;
-this module re-exports it and overrides only the two tests whose schema-version
-assertions changed when migration 14 was introduced.
+this module re-exports it and overrides only the tests whose schema-version
+assertions changed when migration 15 was introduced.
 """
 
 from remote_storage_contracts_v13_source import *  # noqa: F401,F403
@@ -11,7 +11,7 @@ from remote_storage_contracts_v13_source import *  # noqa: F401,F403
 def test_remote_migration_constraints_rollback_and_restart(remote, tmp_path):
     backend, server = remote
     db = AmoraDatabase(tmp_path / "unused.db", backend=backend)
-    assert db.migrate() == 14
+    assert db.migrate() == 15
     assert server.closed_transaction_streams > 0
     assert db.migrate() == 0
     event = AmoraEvent(event_type="probe", source="test", dedupe_key="persistent")
@@ -26,7 +26,7 @@ def test_remote_migration_constraints_rollback_and_restart(remote, tmp_path):
             db._conn.execute("INSERT INTO aliases VALUES ('missing', 'NOT_AN_ENTITY')")
     db.close()
     db = AmoraDatabase(tmp_path / "unused.db", backend=backend)
-    assert db.schema_version() == 14
+    assert db.schema_version() == 15
     assert not db.append_event(event)
     db.close()
     assert not server.streams
@@ -71,7 +71,7 @@ def test_remote_core_memory_web_and_snapshot_with_sql_blobs(remote, tmp_path, mo
             restore_empty_remote(restored_backend, backup)
         check = AmoraDatabase(tmp_path / "unused-restored.db", backend=restored_backend)
         assert check.integrity_check() == "ok"
-        assert check.schema_version() == 14
+        assert check.schema_version() == 15
         check.close()
         core.close()
         monkeypatch.setenv("AMORA_HOME", str(tmp_path / "replacement"))

@@ -108,7 +108,7 @@ def test_schema_14_contains_shared_floor_table(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=SimulatedClock())
     try:
-        assert core.database.schema_version() == 14
+        assert core.database.schema_version() == 15
         row = core.database._conn.execute(
             "SELECT name FROM sqlite_schema WHERE type='table' AND name='messaging_conversation_floor'"
         ).fetchone()
