@@ -30,8 +30,20 @@ def _direct_group_message(core: AmoraCore, *, message_id: str = "budget-1") -> I
     )
 
 
+def test_local_fallback_matches_greetings_as_words_not_substrings(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        composer = core.conversation.composer
+        assert composer.fallback_dialogue("Ei, Amora") == "Oi, papis. Tô aqui."
+        assert composer.fallback_dialogue("Sei mas é serio amora vc ta recebendo tudo dboa") == "Uhum."
+        assert composer.fallback_dialogue("oi namorada") == "Uhum."
+    finally:
+        core.close()
+
+
 @pytest.mark.asyncio
-async def test_messaging_cognition_hard_timeout_queues_local_fallback_instead_of_silence(
+async def test_messaging_cognition_hard_timeout_queues_operational_fallback_instead_of_silence(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -60,10 +72,12 @@ async def test_messaging_cognition_hard_timeout_queues_local_fallback_instead_of
         assert result.decision.action == RoutingAction.RESPOND
         assert len(result.outbound) == 1
         outbound = result.outbound[0]
-        assert outbound.text.strip()
+        assert outbound.text == core.conversation.composer.operational_timeout_fallback()
+        assert "[AMORA:E_TIMEOUT]" in outbound.text
         assert outbound.metadata["fallback_used"] is True
         assert outbound.metadata["provider"] is None
         assert outbound.metadata["remote_processing_allowed"] is True
         assert "MESSAGING_COGNITION_HARD_TIMEOUT" in outbound.metadata["cognitive_reason_codes"]
+        assert "OPERATIONAL_TIMEOUT_FALLBACK" in outbound.metadata["cognitive_reason_codes"]
     finally:
         core.close()
