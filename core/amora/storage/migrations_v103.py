@@ -5,6 +5,9 @@ platform identifiers remain private runtime data and are never projected through
 health/public diagnostics.
 """
 
+from .schema import LATEST_SCHEMA_VERSION
+
+
 MIGRATION_V103 = (
     13,
     '''
@@ -70,7 +73,3 @@ MIGRATION_V103 = (
     );
     ''',
 )
-
-# Kept here for backwards-compatible imports from app.py. The actual latest
-# migration is v106/schema 16.
-LATEST_SCHEMA_VERSION = 16
