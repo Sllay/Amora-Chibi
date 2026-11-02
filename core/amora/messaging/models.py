@@ -88,13 +88,15 @@ class AttachmentRef(BaseModel):
 class ExpressionSemanticProfile(BaseModel):
     """Local perceptual/social meaning attached to a transport expression.
 
-    The native transport id is intentionally outside this profile. Semantic
-    selection can therefore be tested and reasoned about without treating an
-    opaque Discord id as meaning.
+    ``short_description`` is the compact living semantic tag requested by the
+    canon: dense enough to distinguish near-duplicate expressions, but bounded so
+    it remains cheap to persist/retrieve. Native transport ids intentionally live
+    outside this profile and never define meaning.
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    short_description: str | None = Field(default=None, max_length=250)
     visual_concepts: list[str] = Field(default_factory=list, max_length=24)
     affect_tags: list[str] = Field(default_factory=list, max_length=16)
     social_roles: list[str] = Field(default_factory=list, max_length=16)
@@ -118,6 +120,12 @@ class ExpressionRef(BaseModel):
     format_type: int | None = Field(default=None, ge=0, le=64)
     guild_or_group_id: str | None = Field(default=None, max_length=512)
     semantic_profile: ExpressionSemanticProfile | None = None
+    known_to_amora: bool = False
+    memory_key: str | None = Field(default=None, max_length=768)
+    semantic_revision: int = Field(default=0, ge=0)
+    needs_visual_enrichment: bool = False
+    fingerprint: str | None = Field(default=None, max_length=128)
+    fingerprint_source: str | None = Field(default=None, max_length=64)
 
 
 class InboundMessage(BaseModel):
