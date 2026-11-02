@@ -93,6 +93,9 @@ def test_sticker_reuse_intent_is_explicit_and_negative_safe(tmp_path, monkeypatc
     try:
         service = core.messaging
         assert service._requested_sticker_reuse(_message(core)) is not None
+        assert service._requested_sticker_reuse(
+            _message(core, "Amora, vc consegue enviar figurinhas daqui do grupo? Tipo essa")
+        ) is not None
         assert service._requested_sticker_reuse(_message(core, "Amora, não manda essa figurinha")) is None
         assert service._requested_sticker_reuse(_message(core, "Amora, essa figurinha é muito boa")) is None
         assert service._requested_sticker_reuse(_message(core, "Amora, manda a configuração")) is None
