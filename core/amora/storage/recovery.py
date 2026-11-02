@@ -69,13 +69,16 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
             from .migrations_v103 import MIGRATION_V103
             from .migrations_v104 import MIGRATION_V104
             from .migrations_v105 import MIGRATION_V105
+            from .migrations_v106 import MIGRATION_V106
             from .remote import statements
+            from .schema import AUDITED_REMOTE_IMPORT_SCHEMA_VERSIONS, LATEST_SCHEMA_VERSION
 
             version = target.execute(
                 "SELECT MAX(version) FROM schema_migrations"
             ).fetchone()[0]
-            if version not in {10, 11, 12, 13, 14, 15}:
-                raise ValueError("only audited schema 10/11/12/13/14/15 snapshots can be imported")
+            if version not in AUDITED_REMOTE_IMPORT_SCHEMA_VERSIONS:
+                allowed = "/".join(str(item) for item in sorted(AUDITED_REMOTE_IMPORT_SCHEMA_VERSIONS))
+                raise ValueError(f"only audited schema {allowed} snapshots can be imported")
             if version == 10:
                 for sql in statements(MIGRATION_V101[1]):
                     target.execute(sql)
@@ -100,6 +103,16 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
                 for sql in statements(MIGRATION_V105[1]):
                     target.execute(sql)
                 target.execute("INSERT INTO schema_migrations(version) VALUES (15)")
+                version = 15
+            if version == 15:
+                for sql in statements(MIGRATION_V106[1]):
+                    target.execute(sql)
+                target.execute("INSERT INTO schema_migrations(version) VALUES (16)")
+                version = 16
+            if version != LATEST_SCHEMA_VERSION:
+                raise ValueError(
+                    f"snapshot upgrade stopped at schema {version}; expected {LATEST_SCHEMA_VERSION}"
+                )
 
             assets = source.execute("SELECT * FROM avatar_assets").fetchall()
             archive_path = Path(str(snapshot) + ".avatar.zip")
