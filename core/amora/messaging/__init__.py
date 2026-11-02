@@ -1,4 +1,5 @@
 from .attention import ConversationFloor, SocialAttentionRouter
+from .expression_service import PlatformMessagingService
 from .models import (
     AttentionDecision,
     AttachmentRef,
@@ -27,7 +28,6 @@ from .presence_control import (
     PresenceControlOutcome,
 )
 from .routes import register_messaging_routes
-from .service import PlatformMessagingService
 from .store import MessagingStore
 
 __all__ = [
