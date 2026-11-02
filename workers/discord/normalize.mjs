@@ -1,6 +1,5 @@
 export const DISCORD_INTENTS =
   (1 << 0) |  // GUILDS
-  (1 << 3) |  // GUILD_EXPRESSIONS (emoji/sticker catalogue updates)
   (1 << 9) |  // GUILD_MESSAGES
   (1 << 10) | // GUILD_MESSAGE_REACTIONS
   (1 << 12) | // DIRECT_MESSAGES
