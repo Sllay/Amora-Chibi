@@ -24,7 +24,11 @@ class CognitiveEngine(ResilientCognitiveEngine):
 
         context = self.compiler.compile(request)
         for index, suggestion in enumerate(suggestions):
-            gate = CapabilityIntentGate.evaluate(suggestion.action_kind, context)
+            gate = CapabilityIntentGate.evaluate(
+                suggestion.action_kind,
+                context,
+                request_metadata=request.metadata,
+            )
             if not gate.matched:
                 continue
 
