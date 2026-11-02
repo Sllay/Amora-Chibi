@@ -6,7 +6,9 @@ from typing import Any
 
 from amora.actions.builtin_capabilities import DISCORD_EXPRESSION_CAPABILITY_ID
 
+from .expression_memory import PerceptualExpressionMemory
 from .models import ExpressionKind, InboundMessage, MessagingPlatform, OutboundMessage
+from .perceptual_response_modality import PerceptualResponseModalitySelector
 from .response_modality import ResponseModalitySelector
 from .service import PlatformMessagingService as BasePlatformMessagingService
 
@@ -22,6 +24,8 @@ class _CapabilityAwareCognitionProxy:
 
     Native expression ids/catalog entries remain transport-local. Cognition only
     learns that a semantic capability is active/available for this exact turn.
+    Unknown catalog entries do not count: availability for cognition is the
+    intersection of what the transport can send and what Amora already knows.
     """
 
     def __init__(self, inner: object) -> None:
@@ -34,13 +38,14 @@ class _CapabilityAwareCognitionProxy:
         message = _CURRENT_MESSAGE.get()
         if message is not None:
             modalities = ["text", "silence"]
-            if self._expression_available(message):
+            known_count = self._known_expression_count(message)
+            if known_count > 0:
                 modalities.extend(["text+expression", "expression"])
                 request.metadata["active_capability_ids"] = [DISCORD_EXPRESSION_CAPABILITY_ID]
                 request.metadata["surface_available_capability_ids"] = [DISCORD_EXPRESSION_CAPABILITY_ID]
                 request.metadata["response_scoped_capability_ids"] = [DISCORD_EXPRESSION_CAPABILITY_ID]
                 request.metadata["visual_expression_available"] = True
-                request.metadata["visual_expression_count"] = min(64, len(message.available_expressions))
+                request.metadata["visual_expression_count"] = known_count
             else:
                 request.metadata["visual_expression_available"] = False
                 request.metadata["visual_expression_count"] = 0
@@ -48,25 +53,32 @@ class _CapabilityAwareCognitionProxy:
         return self._inner.observe_input(request)
 
     @staticmethod
-    def _expression_available(message: InboundMessage) -> bool:
+    def _known_expression_count(message: InboundMessage) -> int:
         if message.platform != MessagingPlatform.DISCORD:
-            return False
+            return 0
+        seen: set[str] = set()
         for expression in message.available_expressions:
             if expression.kind != ExpressionKind.STICKER:
                 continue
             if message.guild_or_group_id and expression.guild_or_group_id not in {None, message.guild_or_group_id}:
                 continue
-            return True
-        return False
+            curated_profile = (
+                expression.semantic_profile is not None
+                and expression.semantic_profile.source != "transport_metadata"
+            )
+            if expression.known_to_amora or curated_profile:
+                seen.add(expression.native_id)
+        return min(64, len(seen))
 
 
 class PlatformMessagingService(BasePlatformMessagingService):
-    """Step-5 messaging layer: semantic response modality competition.
+    """Step-6 messaging layer: persistent perceptual expression memory.
 
     The base service remains the authority for attention, timeout, idempotency,
     Conversation Runtime validation, persistence and delivery leases. This layer
-    only annotates the request with safe surface affordances and chooses how an
-    already-authorized response should be rendered.
+    hydrates known expression semantics before cognition, learns only from a
+    relevant RESPOND interaction, then performs the Step-5 response-modality
+    competition over KNOWN ∩ AVAILABLE expressions.
     """
 
     _MAX_RECENT_CONVERSATIONS = 512
@@ -74,14 +86,16 @@ class PlatformMessagingService(BasePlatformMessagingService):
 
     def __init__(self, *args: Any, response_modality: ResponseModalitySelector | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.response_modality = response_modality or ResponseModalitySelector()
+        self.expression_memory = PerceptualExpressionMemory(self.store, self.clock)
+        self.response_modality = response_modality or PerceptualResponseModalitySelector()
         self.cognition = _CapabilityAwareCognitionProxy(self.cognition)
         self._recent_expressions: dict[str, deque[str]] = {}
 
     async def receive(self, message: InboundMessage):
-        token = _CURRENT_MESSAGE.set(message)
+        hydrated = self.expression_memory.hydrate(message)
+        token = _CURRENT_MESSAGE.set(hydrated)
         try:
-            return await super().receive(message)
+            return await super().receive(hydrated)
         finally:
             _CURRENT_MESSAGE.reset(token)
 
@@ -94,6 +108,10 @@ class PlatformMessagingService(BasePlatformMessagingService):
         metadata: dict[str, object],
         reason_codes: list[str],
     ) -> OutboundMessage:
+        # Promotion to KNOWN happens only after the shared attention layer has
+        # established that this message deserves a response. A guild catalog by
+        # itself never writes perceptual memory.
+        message = self.expression_memory.observe_relevant(message, decision)
         state = self.conversation.state() if hasattr(self.conversation, "state") else {}
         emotion_profile = str(state.get("last_emotion_profile") or "") if isinstance(state, dict) else ""
         recent = list(self._recent_expressions.get(self._conversation_key(message), ()))
@@ -108,12 +126,17 @@ class PlatformMessagingService(BasePlatformMessagingService):
             candidate.modality.value: round(float(candidate.utility), 4)
             for candidate in modality.candidates
         }
+        known_available_count = sum(
+            1 for item in message.available_expressions
+            if item.kind == ExpressionKind.STICKER and item.known_to_amora
+        )
         augmented_metadata = {
             **metadata,
             "response_modality": modality.modality.value,
             "response_modality_reason_codes": list(modality.reason_codes),
             "response_modality_scores": safe_scores,
             "expression_count": len(modality.expressions),
+            "known_available_expression_count": min(64, known_available_count),
             "recent_expression_count": len(recent),
             # Delivery-private transport payload. This field is persisted locally
             # and consumed by the worker; it is never copied into CognitiveRequest.
