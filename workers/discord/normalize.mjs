@@ -10,6 +10,24 @@ export function discordEditMessageId(nativeMessageId, revision) {
   return `${String(nativeMessageId)}#edit:${Math.max(1, Number(revision) || 1)}`;
 }
 
+function expressionTags(value) {
+  if (Array.isArray(value)) return value.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 16);
+  if (typeof value !== 'string') return [];
+  return value.split(',').map((item) => item.trim()).filter(Boolean).slice(0, 16);
+}
+
+function normalizeSticker(item, guildId) {
+  return {
+    kind: 'sticker',
+    native_id: String(item.id),
+    name: item.name ? String(item.name).slice(0, 160) : null,
+    description: item.description ? String(item.description).slice(0, 512) : null,
+    tags: expressionTags(item.tags),
+    format_type: Number.isFinite(item.format_type) ? Number(item.format_type) : null,
+    guild_or_group_id: guildId,
+  };
+}
+
 export function normalizeDiscordMessage(message, {
   botUserId,
   accountScope = 'primary',
@@ -32,14 +50,12 @@ export function normalizeDiscordMessage(message, {
   const resolvedReferenceAuthor = message.referenced_message?.author?.id || referencedAuthorId || null;
   const mentionedIds = mentions.map((item) => String(item.id)).filter(Boolean);
   const guildId = message.guild_id ? String(message.guild_id) : null;
-  const expressions = stickerItems.slice(0, 8).map((item) => ({
-    kind: 'sticker',
-    native_id: String(item.id),
-    name: item.name ? String(item.name).slice(0, 160) : null,
-    description: item.description ? String(item.description).slice(0, 512) : null,
-    format_type: Number.isFinite(item.format_type) ? Number(item.format_type) : null,
-    guild_or_group_id: guildId,
-  }));
+  const expressions = stickerItems.slice(0, 8).map((item) => normalizeSticker(item, guildId));
+  const catalogSource = Array.isArray(message.__amora_sticker_catalog) ? message.__amora_sticker_catalog : [];
+  const availableExpressions = catalogSource
+    .filter((item) => item?.id)
+    .slice(0, 60)
+    .map((item) => normalizeSticker(item, guildId));
   const attachments = [
     ...rawAttachments.slice(0, 16).map((item) => ({
       attachment_id: String(item.id),
@@ -82,6 +98,7 @@ export function normalizeDiscordMessage(message, {
       : [],
     attachments,
     expressions,
+    available_expressions: availableExpressions,
     timestamp: message.edited_timestamp || message.timestamp || new Date().toISOString(),
     privacy_scope: 'PERSONAL',
     remote_processing_allowed: Boolean(remoteProcessingAllowed),
