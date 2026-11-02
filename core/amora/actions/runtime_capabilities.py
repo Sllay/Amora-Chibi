@@ -11,9 +11,10 @@ if TYPE_CHECKING:
 class RuntimeCapabilityBindings:
     """Per-Core bridge between the Action runtime and cognitive awareness.
 
-    The binding is keyed by a runtime owner object (currently AutonomyEngine),
-    not by a module-global singleton. Weak keys keep test/Core instances isolated
-    and release bindings automatically when a Core is discarded.
+    The binding is keyed by the per-Core runtime owner object (currently its
+    AsyncEventBus), not by a module-global capability singleton. Weak keys keep
+    test/Core instances isolated and release bindings automatically when a Core
+    is discarded.
     """
 
     def __init__(self) -> None:
