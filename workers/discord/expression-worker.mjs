@@ -3,6 +3,8 @@ import { discordReplyPayload, splitDiscordText } from './normalize.mjs';
 import { DiscordWorker } from './worker.mjs';
 
 const TRUE = new Set(['1', 'true', 'yes', 'on']);
+const STICKER_CATALOG_TTL_MS = 5 * 60 * 1000;
+const STICKER_CATALOG_MAX_GUILDS = 64;
 
 const enabled = (name, fallback = false) => {
   const value = process.env[name];
@@ -26,6 +28,58 @@ function outboundExpressions(item) {
 }
 
 export class DiscordExpressionWorker extends DiscordWorker {
+  constructor(options) {
+    super(options);
+    this.guildStickerCatalogs = new Map();
+  }
+
+  async guildStickerCatalog(guildId) {
+    const key = String(guildId || '');
+    if (!key) return [];
+    const now = Date.now();
+    const cached = this.guildStickerCatalogs.get(key);
+    if (cached && now - cached.fetchedAt < STICKER_CATALOG_TTL_MS) return cached.items;
+
+    try {
+      const payload = await this.rest.request(`/guilds/${encodeURIComponent(key)}/stickers`, {
+        timeoutMs: 5000,
+      });
+      const items = Array.isArray(payload) ? payload.slice(0, 60) : [];
+      this.guildStickerCatalogs.delete(key);
+      this.guildStickerCatalogs.set(key, { fetchedAt: now, items });
+      while (this.guildStickerCatalogs.size > STICKER_CATALOG_MAX_GUILDS) {
+        const oldest = this.guildStickerCatalogs.keys().next().value;
+        if (oldest === undefined) break;
+        this.guildStickerCatalogs.delete(oldest);
+      }
+      return items;
+    } catch (error) {
+      safeLog('STICKER_CATALOG_FETCH_FAILED', error?.code || error?.status || error?.name || 'Error');
+      return cached?.items || [];
+    }
+  }
+
+  async enrichWithStickerCatalog(message, fallbackGuildId = null) {
+    const guildId = message?.guild_id || fallbackGuildId;
+    if (!message || !guildId) return message;
+    const catalog = await this.guildStickerCatalog(guildId);
+    return {
+      ...message,
+      guild_id: String(guildId),
+      __amora_sticker_catalog: catalog,
+    };
+  }
+
+  async handleMessageCreate(message) {
+    return super.handleMessageCreate(await this.enrichWithStickerCatalog(message));
+  }
+
+  async handleMessageUpdate(partial) {
+    const previous = this.runtime.state(partial?.channel_id, partial?.id);
+    const guildId = partial?.guild_id || previous?.message?.guild_id || null;
+    return super.handleMessageUpdate(await this.enrichWithStickerCatalog(partial, guildId));
+  }
+
   async sendOutbound(item) {
     const chunks = splitDiscordText(item.text, 2000);
     const stickerIds = outboundExpressions(item)
