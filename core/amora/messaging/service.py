@@ -267,8 +267,12 @@ class PlatformMessagingService:
             text = (plan.display_text or plan.speech_text or fallback).strip()
         except TimeoutError:
             fallback_used = True
-            cognitive_reasons = ["MESSAGING_COGNITION_HARD_TIMEOUT", "LOCAL_FALLBACK"]
-            text = fallback.strip() or "Uhum."
+            cognitive_reasons = [
+                "MESSAGING_COGNITION_HARD_TIMEOUT",
+                "LOCAL_FALLBACK",
+                "OPERATIONAL_TIMEOUT_FALLBACK",
+            ]
+            text = self.conversation.composer.operational_timeout_fallback().strip()
             self.store.add_inbound_reason(
                 platform=message.platform,
                 account_scope=message.account_scope,

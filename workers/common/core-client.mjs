@@ -1,5 +1,5 @@
 const DEFAULT_TIMEOUT_MS = 20_000;
-const INBOUND_TIMEOUT_MS = 30_000;
+const INBOUND_TIMEOUT_MS = 45_000;
 const MIN_PRESENCE_CONTROL_TIMEOUT_MS = 5_000;
 const DEFAULT_OUTBOUND_LEASE_SECONDS = 120;
 
@@ -84,8 +84,10 @@ export class MessagingCoreClient {
   }
 
   inbound(message) {
-    // Core owns a <=24s hard messaging budget. The worker waits slightly longer
-    // so a valid local fallback can cross the HTTP boundary before transport abort.
+    // Core owns a <=24s cognition budget, but routing, appraisal, persistence and
+    // fallback delivery live outside that inner timer. Keep a generous transport
+    // margin so the worker receives the Core's controlled fallback instead of
+    // aborting the HTTP request first.
     return this.request('/v1/messaging/worker/inbound', {
       method: 'POST',
       body: message,

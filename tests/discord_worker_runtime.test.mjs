@@ -106,3 +106,35 @@ test('Core network failures expose a stable transport error code to workers', as
     globalThis.fetch = originalFetch;
   }
 });
+
+test('Core inbound transport budget outlives the Core cognition hard timeout', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let capturedTimeoutMs = null;
+
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ decision: { action: 'respond' }, outbound: [] }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  );
+  globalThis.setTimeout = (_callback, timeoutMs) => {
+    capturedTimeoutMs = timeoutMs;
+    return { fakeTimer: true };
+  };
+  globalThis.clearTimeout = () => {};
+
+  try {
+    const client = new MessagingCoreClient({
+      baseUrl: 'https://core.example.test',
+      token: 'm'.repeat(48),
+      platform: 'discord',
+    });
+    await client.inbound({ message_id: 'budget-probe' });
+    assert.equal(capturedTimeoutMs, 45_000);
+    assert.ok(capturedTimeoutMs > 24_000);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
