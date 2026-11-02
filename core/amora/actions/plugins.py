@@ -61,6 +61,16 @@ class PluginRegistry:
         self._plugins[manifest.plugin_id] = plugin
         self._health[manifest.plugin_id] = manifest.health
 
+        # CoreActionPlugin carries the per-Core AsyncEventBus. Bind the single
+        # registry owned here to that runtime identity so cognition can resolve
+        # the exact same live capability view without creating another registry.
+        if manifest.plugin_id == "core.actions":
+            runtime_owner = getattr(plugin, "events", None)
+            if runtime_owner is not None:
+                from .runtime_capabilities import bind_runtime_capabilities
+
+                bind_runtime_capabilities(runtime_owner, self.capability_registry)
+
     def plugin(self, plugin_id: str) -> ToolPlugin | None:
         return self._plugins.get(plugin_id)
 
