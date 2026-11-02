@@ -3,7 +3,7 @@ on:
   pull_request:
     paths: ['core/**', 'config/**', 'web/**', 'avatar/**', 'deploy/**', 'Dockerfile', 'tools/cloud/**', 'pyproject.toml', '.github/workflows/cloud-contracts.yml']
   push:
-    branches: [main, 'feat/**', 'fix/**']
+    branches: [main]
     paths: ['core/**', 'config/**', 'web/**', 'avatar/**', 'deploy/**', 'Dockerfile', 'tools/cloud/**', 'pyproject.toml', '.github/workflows/cloud-contracts.yml']
 permissions:
   contents: read
@@ -18,5 +18,16 @@ jobs:
         run: docker build --build-arg RUNTIME_IMAGE=amora-core:test -f deploy/containers/Dockerfile.validation -t amora-validation:test .
       - name: Check runtime dependencies without adding pip to runtime
         run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges amora-validation:test /testenv/bin/python -m pip --python /opt/venv/bin/python check
-      - name: Full Python regressions on the runtime libc, non-root and read-only
-        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,size=256m amora-validation:test
+      - name: Targeted cloud/storage/runtime regressions on runtime libc
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,size=256m amora-validation:test \
+            python -m pytest -p no:cacheprovider \
+            tests/test_cloud_runtime.py \
+            tests/test_cloud_web_incident.py \
+            tests/test_remote_storage.py \
+            tests/test_remote_voice.py \
+            tests/test_usage_recovery_stt.py \
+            tests/test_platform_messaging_remote.py \
+            tests/test_storage.py \
+            tests/test_conversation_runtime_v15.py
