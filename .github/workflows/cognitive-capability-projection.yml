@@ -1,0 +1,63 @@
+name: Cognitive capability projection
+
+on:
+  pull_request:
+    paths:
+      - "core/amora/actions/capabilities.py"
+      - "core/amora/actions/plugins.py"
+      - "core/amora/actions/runtime_capabilities.py"
+      - "core/amora/cognition/__init__.py"
+      - "core/amora/cognition/capability_context.py"
+      - "core/amora/cognition/context_v1.py"
+      - "core/amora/cognition/models.py"
+      - "core/amora/cognition/providers.py"
+      - "tests/test_cognitive_capability_projection_step3.py"
+      - "tests/test_capability_registry_v1.py"
+      - "tests/test_v10_dialogue_contract.py"
+      - ".github/workflows/cognitive-capability-projection.yml"
+  push:
+    branches: [main]
+    paths:
+      - "core/amora/actions/capabilities.py"
+      - "core/amora/actions/plugins.py"
+      - "core/amora/actions/runtime_capabilities.py"
+      - "core/amora/cognition/__init__.py"
+      - "core/amora/cognition/capability_context.py"
+      - "core/amora/cognition/context_v1.py"
+      - "core/amora/cognition/models.py"
+      - "core/amora/cognition/providers.py"
+      - "tests/test_cognitive_capability_projection_step3.py"
+      - "tests/test_capability_registry_v1.py"
+      - "tests/test_v10_dialogue_contract.py"
+      - ".github/workflows/cognitive-capability-projection.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cognitive-capability-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24 runtime
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6, Node 24 runtime
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Compile cognition and actions
+        run: python -m compileall -q core/amora/actions core/amora/cognition
+      - name: Cognitive capability contracts
+        run: |
+          python -m pytest -q \
+            tests/test_cognitive_capability_projection_step3.py \
+            tests/test_capability_registry_v1.py \
+            tests/test_v10_dialogue_contract.py
