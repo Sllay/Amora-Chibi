@@ -297,14 +297,16 @@ class CapabilityRegistry:
                 score += 4.0
                 matched_terms.add(descriptor.capability_id)
 
-            # Availability influences ordering but never authorizes execution.
+            # Relevance must come from semantic/goal evidence. Provider health
+            # can rank relevant candidates but must never create relevance.
+            if score <= 0.0:
+                continue
+
             if snapshot.availability == CapabilityAvailabilityState.AVAILABLE:
                 score += 1.0
             elif snapshot.availability == CapabilityAvailabilityState.DEGRADED:
                 score += 0.25
 
-            if score <= 0.0:
-                continue
             matches.append(
                 CapabilityMatch(
                     snapshot=snapshot,
