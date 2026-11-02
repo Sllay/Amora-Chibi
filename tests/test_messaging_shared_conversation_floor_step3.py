@@ -37,6 +37,7 @@ def test_floor_survives_core_instance_boundary(tmp_path, monkeypatch) -> None:
 
         assert continued.action == RoutingAction.RESPOND
         assert "BOUNDED_CONTINUITY" in continued.reason_codes
+        assert "CONVERSATION_RUNTIME_CONTINUITY" in continued.reason_codes
         assert continued.floor_generation > opened.floor_generation
     finally:
         second_core.close()
@@ -68,7 +69,7 @@ def test_other_speaker_closes_shared_floor_for_every_instance(tmp_path, monkeypa
         first_core.close()
 
 
-def test_shared_floor_expires_without_becoming_global_attention(tmp_path, monkeypatch) -> None:
+def test_runtime_session_survives_legacy_35_second_floor_expiry(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     clock = SimulatedClock()
     first_core = AmoraCore.bootstrap(clock=clock)
@@ -78,11 +79,31 @@ def test_shared_floor_expires_without_becoming_global_attention(tmp_path, monkey
             _message(first_core, "m1", "111111111111111111", "Amora, teste", mention=True)
         )
         clock.advance(timedelta(seconds=36))
-        expired = second_core.messaging.attention.route(
+        continued = second_core.messaging.attention.route(
+            _message(second_core, "m2", "111111111111111111", "mensagem ainda na conversa")
+        )
+        assert continued.action == RoutingAction.RESPOND
+        assert "CONVERSATION_RUNTIME_CONTINUITY" in continued.reason_codes
+    finally:
+        second_core.close()
+        first_core.close()
+
+
+def test_runtime_session_eventually_becomes_dormant(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    clock = SimulatedClock()
+    first_core = AmoraCore.bootstrap(clock=clock)
+    second_core = AmoraCore.bootstrap(clock=clock)
+    try:
+        first_core.messaging.attention.route(
+            _message(first_core, "m1", "111111111111111111", "Amora, teste", mention=True)
+        )
+        clock.advance(timedelta(seconds=901))
+        dormant = second_core.messaging.attention.route(
             _message(second_core, "m2", "111111111111111111", "mensagem ambiente")
         )
-        assert expired.action == RoutingAction.CONTEXT_ONLY
-        assert "NO_DIRECT_ATTENTION" in expired.reason_codes
+        assert dormant.action == RoutingAction.CONTEXT_ONLY
+        assert "NO_DIRECT_ATTENTION" in dormant.reason_codes
     finally:
         second_core.close()
         first_core.close()
@@ -104,7 +125,7 @@ def test_floor_isolated_by_conversation(tmp_path, monkeypatch) -> None:
         core.close()
 
 
-def test_schema_14_contains_shared_floor_table(tmp_path, monkeypatch) -> None:
+def test_schema_15_contains_shared_floor_table(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=SimulatedClock())
     try:

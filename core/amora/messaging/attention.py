@@ -437,6 +437,44 @@ class SocialAttentionRouter:
                 return entity.id, self._actor_ref(message)
         return None, self._actor_ref(message)
 
+    def _finalize_pending_runtime_turns(
+        self,
+        message: InboundMessage,
+        *,
+        target: RuntimeTurnState,
+        reason: str,
+        actor_ref: str | None = None,
+    ) -> int:
+        if self.runtime is None or self.floor.database is None:
+            return 0
+        session = self.runtime.get(
+            platform=message.platform.value,
+            account_scope=message.account_scope,
+            conversation_id=message.conversation_id,
+        )
+        if session is None:
+            return 0
+
+        query = """UPDATE conversation_runtime_turns
+                   SET state=?, revision=revision+1, updated_at=?,
+                       cancellation_reason=?
+                   WHERE session_id=? AND source_message_id<>?
+                     AND state NOT IN ('delivered', 'cancelled', 'superseded', 'failed')"""
+        params: list[object] = [
+            target.value,
+            self.clock.now().isoformat(),
+            reason,
+            session.session_id,
+            message.message_id,
+        ]
+        if actor_ref is not None:
+            query += " AND speaker_actor_ref=?"
+            params.append(actor_ref)
+
+        with self.floor.database._lock, self.floor.database._conn:
+            cursor = self.floor.database._conn.execute(query, tuple(params))
+        return cursor.rowcount
+
     def _accept_runtime_turn(
         self,
         message: InboundMessage,
@@ -447,6 +485,12 @@ class SocialAttentionRouter:
     ) -> None:
         if self.runtime is None:
             return
+        self._finalize_pending_runtime_turns(
+            message,
+            target=RuntimeTurnState.SUPERSEDED,
+            reason="NEWER_SAME_SPEAKER_TURN",
+            actor_ref=actor_ref,
+        )
         turn = self.runtime.accept_turn(
             platform=message.platform.value,
             account_scope=message.account_scope,
@@ -482,6 +526,11 @@ class SocialAttentionRouter:
     ) -> None:
         if self.runtime is None:
             return
+        self._finalize_pending_runtime_turns(
+            message,
+            target=RuntimeTurnState.CANCELLED,
+            reason="FLOOR_SHIFTED_AWAY",
+        )
         self.runtime.shift_floor(
             platform=message.platform.value,
             account_scope=message.account_scope,
@@ -612,9 +661,6 @@ class SocialAttentionRouter:
                     reason="GROUP_ACTIVE_FLOOR_SAME_SPEAKER",
                 )
             else:
-                # Runtime v2 session is still engaged even though the old 35s
-                # mirror expired. Re-open only the mirror; the session did not
-                # disappear.
                 continued = self.floor.open(
                     message,
                     actor_ref=actor_ref,
