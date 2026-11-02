@@ -21,10 +21,10 @@ _REQUEST_VERBS = {
     "manda", "mandar", "envia", "enviar", "usa", "usar", "use",
     "solta", "soltar", "joga", "jogar",
 }
-_REQUEST_REFERENCES = {
-    "essa", "esta", "uma", "figurinha", "figurinhas", "fig", "sticker",
-    "stickers", "adesivo", "adesivos",
+_STICKER_NOUNS = {
+    "figurinha", "figurinhas", "fig", "sticker", "stickers", "adesivo", "adesivos",
 }
+_SOURCE_REFERENCES = _STICKER_NOUNS | {"essa", "esta"}
 _STOP_WORDS = {
     "a", "ai", "amora", "aqui", "as", "da", "das", "de", "do", "dos",
     "essa", "esta", "eu", "fig", "figurinha", "figurinhas", "grupo", "no",
@@ -42,6 +42,10 @@ _CUE_GROUPS = (
      {"love", "heart", "amor", "carinho", "fofo", "fofa", "❤", "❤️", "🥰"}),
     ({"surpreso", "surpresa", "chocado", "choque", "wtf", "😱", "😮"},
      {"surprise", "surprised", "shock", "shocked", "wtf", "surpresa", "😱", "😮"}),
+)
+_NEGATIVE_REQUESTS = (
+    "nao manda", "nao mandar", "nao envie", "nao enviar", "nao envia",
+    "nao use", "nao usar", "nao usa", "nao solta", "nao jogar", "nao joga",
 )
 
 
@@ -155,12 +159,21 @@ class PlatformMessagingService(BasePlatformMessagingService):
         if message.platform != MessagingPlatform.DISCORD:
             return None
         text = cls._normalized_expression_request(message.text)
-        if not cls._is_explicit_sticker_request(text):
+        if not text or any(token in text for token in _NEGATIVE_REQUESTS):
+            return None
+        words = set(cls._tokens(text))
+        if not words.intersection(_REQUEST_VERBS):
             return None
 
         source = cls._first_usable_sticker(message.expressions, message.guild_or_group_id)
-        if source is not None:
+        if source is not None and (words.intersection(_SOURCE_REFERENCES) or "de volta" in text):
             return source, "source_message"
+
+        # Without an attached source sticker, generic pronouns such as "essa" are
+        # not enough. The user must actually name sticker/figurinha/adesivo before
+        # the Core is allowed to choose from the whole server catalogue.
+        if not words.intersection(_STICKER_NOUNS):
+            return None
 
         catalog = [
             item
@@ -174,14 +187,10 @@ class PlatformMessagingService(BasePlatformMessagingService):
 
     @classmethod
     def _is_explicit_sticker_request(cls, text: str) -> bool:
-        if not text:
-            return False
-        if any(token in text for token in ("nao manda", "nao enviar", "nao envia", "nao use", "nao usar", "nao usa")):
+        if not text or any(token in text for token in _NEGATIVE_REQUESTS):
             return False
         words = set(cls._tokens(text))
-        if not words.intersection(_REQUEST_VERBS):
-            return False
-        return bool(words.intersection(_REQUEST_REFERENCES) or "de volta" in text)
+        return bool(words.intersection(_REQUEST_VERBS) and words.intersection(_STICKER_NOUNS))
 
     @staticmethod
     def _first_usable_sticker(expressions: list[ExpressionRef], guild_id: str | None) -> ExpressionRef | None:
