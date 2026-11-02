@@ -119,6 +119,28 @@ class ContextMemory(BaseModel):
     reason_codes: list[str] = Field(default_factory=list)
 
 
+class ContextCapability(BaseModel):
+    """Provider-safe awareness of one relevant Core capability.
+
+    This is intentionally an affordance projection, not an executable tool
+    contract. Physical plugin/tool bindings, raw permission names and transport
+    native ids never enter this model.
+    """
+
+    capability_id: str = Field(min_length=1, max_length=160)
+    semantic_action: str = Field(min_length=1, max_length=160)
+    summary: str = Field(min_length=1, max_length=700)
+    affordances: list[str] = Field(default_factory=list, max_length=8)
+    availability: str = Field(min_length=1, max_length=32)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    preconditions: list[str] = Field(default_factory=list, max_length=12)
+    effects: list[str] = Field(default_factory=list, max_length=12)
+    policy: dict[str, Any] = Field(default_factory=dict)
+    verification_effect: str | None = Field(default=None, max_length=240)
+    authority: str = "core_execution_gate"
+
+
 class CognitiveContext(BaseModel):
     turn_id: UUID
     created_at: datetime
@@ -139,6 +161,9 @@ class CognitiveContext(BaseModel):
     world_claims: list[dict[str, Any]] = Field(default_factory=list)
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     dialogue_plan: dict[str, Any] = Field(default_factory=dict)
+    # Only the small contextually relevant subset is projected. These entries
+    # describe what Amora knows she can potentially do; they grant no authority.
+    capabilities: list[ContextCapability] = Field(default_factory=list)
     # Ephemeral aid from a specialist reasoning model. It is never canonical
     # identity/state and is not persisted as a fact merely because a model wrote it.
     specialist_support: dict[str, Any] | None = None
