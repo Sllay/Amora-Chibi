@@ -56,6 +56,10 @@ class PresenceCommand(StrEnum):
     CHECK = "check"
 
 
+class ExpressionKind(StrEnum):
+    STICKER = "sticker"
+
+
 class ExternalActorRef(BaseModel):
     """One stable platform identifier presented by an adapter.
 
@@ -77,6 +81,19 @@ class AttachmentRef(BaseModel):
     media_type: str | None = Field(default=None, max_length=128)
     filename: str | None = Field(default=None, max_length=256)
     size_bytes: int | None = Field(default=None, ge=0, le=128 * 1024 * 1024)
+
+
+class ExpressionRef(BaseModel):
+    """Transport-native social expression such as a Discord server sticker."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: ExpressionKind
+    native_id: str = Field(min_length=1, max_length=256)
+    name: str | None = Field(default=None, max_length=160)
+    description: str | None = Field(default=None, max_length=512)
+    format_type: int | None = Field(default=None, ge=0, le=32)
+    guild_or_group_id: str | None = Field(default=None, max_length=512)
 
 
 class InboundMessage(BaseModel):
@@ -106,6 +123,7 @@ class InboundMessage(BaseModel):
     reply_to_amora: bool = False
     reply_to_author_identifiers: list[ExternalActorRef] = Field(default_factory=list, max_length=6)
     attachments: list[AttachmentRef] = Field(default_factory=list, max_length=16)
+    expressions: list[ExpressionRef] = Field(default_factory=list, max_length=8)
     timestamp: datetime
     privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
     remote_processing_allowed: bool = False
@@ -114,8 +132,8 @@ class InboundMessage(BaseModel):
 
     @model_validator(mode="after")
     def require_content(self) -> "InboundMessage":
-        if not self.text.strip() and not self.attachments:
-            raise ValueError("inbound message requires text or attachment metadata")
+        if not self.text.strip() and not self.attachments and not self.expressions:
+            raise ValueError("inbound message requires text, attachment, or expression metadata")
         return self
 
     @property
@@ -157,13 +175,20 @@ class OutboundMessage(BaseModel):
     account_scope: str = Field(default="primary", min_length=1, max_length=96)
     conversation_id: str = Field(min_length=1, max_length=512)
     target_entity_id: str | None = None
-    text: str = Field(min_length=1, max_length=12000)
+    text: str = Field(default="", max_length=12000)
+    expressions: list[ExpressionRef] = Field(default_factory=list, max_length=3)
     reply_to_message_id: str | None = Field(default=None, max_length=512)
     mention_actor_ids: list[str] = Field(default_factory=list, max_length=32)
     source_message_id: str | None = Field(default=None, max_length=512)
     created_at: datetime
     status: OutboundStatus = OutboundStatus.QUEUED
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_payload(self) -> "OutboundMessage":
+        if not self.text.strip() and not self.expressions:
+            raise ValueError("outbound message requires text or expression metadata")
+        return self
 
 
 class MessagingAuditRecord(BaseModel):
