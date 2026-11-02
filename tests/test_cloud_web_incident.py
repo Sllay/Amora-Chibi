@@ -1,6 +1,7 @@
-"""Cloud/Safari incident regressions aligned with schema migration 15."""
+"""Cloud/Safari incident regressions aligned with the current schema contract."""
 
 from cloud_web_incident_v13_source import *  # noqa: F401,F403
+from amora.storage import LATEST_SCHEMA_VERSION
 
 
 def test_valid_wav_groq_transcript_conversation_queue_ack_and_restart(safari, tmp_path, monkeypatch):
@@ -39,7 +40,7 @@ def test_valid_wav_groq_transcript_conversation_queue_ack_and_restart(safari, tm
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / "replacement"))
     again = AmoraCore.bootstrap(storage=backend)
     try:
-        assert again.database.schema_version() == 15
+        assert again.database.schema_version() == LATEST_SCHEMA_VERSION
         assert again.conversation.store.get_utterance(item["id"]).text == item["text"]
         assert again.conversation.store.get_utterance(item["id"]).status.value == "spoken"
         assert any(m.raw_text == "Oi Amora" for m in again.cognition.store.list_messages())
