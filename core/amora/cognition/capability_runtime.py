@@ -69,7 +69,5 @@ class CognitiveEngine(ResilientCognitiveEngine):
                     ),
                 )
             )
-            if allowed:
-                bundle.deferred_action_count += 1
 
         return bundle
