@@ -12,6 +12,10 @@ class PerceptualResponseModalitySelector(ResponseModalitySelector):
     cannot be selected merely because Discord says it exists. The expression must
     already have a persistent CPF (``known_to_amora``), or carry a locally curated
     non-transport semantic profile supplied by trusted code/tests.
+
+    A known identity with quarantined semantics (stale/failed/current metadata no
+    longer matching the stored fingerprint) remains known, but is not eligible for
+    autonomous visual expression until a fresh semantic profile is available.
     """
 
     @staticmethod
@@ -27,6 +31,8 @@ class PerceptualResponseModalitySelector(ResponseModalitySelector):
                 and item.semantic_profile.source != "transport_metadata"
             )
             if not item.known_to_amora and not curated_profile:
+                continue
+            if item.needs_visual_enrichment and item.semantic_profile is None:
                 continue
             if not any(existing.native_id == item.native_id for existing in result):
                 result.append(item)
