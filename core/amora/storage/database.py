@@ -15,6 +15,7 @@ from .migrations_v101 import MIGRATION_V101
 from .migrations_v102 import MIGRATION_V102
 from .migrations_v103 import MIGRATION_V103
 from .migrations_v104 import MIGRATION_V104
+from .migrations_v105 import MIGRATION_V105
 from .backend import SQLiteBackend, StorageBackend, execute_atomic_statement, is_duplicate_error
 from .migrations import MIGRATIONS
 from .migrations_v06 import MIGRATION_V06
@@ -41,7 +42,7 @@ class AmoraDatabase:
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             applied = {row[0] for row in self._conn.execute("SELECT version FROM schema_migrations")}
             count = 0
-            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07, MIGRATION_V08, MIGRATION_V09, MIGRATION_V10, MIGRATION_V101, MIGRATION_V102, MIGRATION_V103, MIGRATION_V104):
+            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07, MIGRATION_V08, MIGRATION_V09, MIGRATION_V10, MIGRATION_V101, MIGRATION_V102, MIGRATION_V103, MIGRATION_V104, MIGRATION_V105):
                 if version in applied:
                     continue
                 if self.backend.capabilities.remote:

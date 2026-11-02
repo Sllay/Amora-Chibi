@@ -38,7 +38,7 @@ async def test_backup_restore_preserves_history_journal_replay_snapshot_and_usag
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored-v1.db"); database = AmoraDatabase(restored_path)
     try:
         assert database.integrity_check() == "ok"
-        assert database.schema_version() == 14
+        assert database.schema_version() == 15
     finally: database.close()
     store = CognitiveStore(restored_path, clock)
     try:

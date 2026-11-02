@@ -14,7 +14,7 @@ def test_messaging_audit_outbound_and_presence_survive_remote_compute_replacemen
     server = HranaSQLite(tmp_path / "remote.db")
     backend = LibSQLBackend("https://database.example", "database-test-only", transport=httpx.MockTransport(server)); clock = SimulatedClock(); first = AmoraCore.bootstrap(clock=clock, storage=backend)
     try:
-        assert first.database.schema_version() == 14
+        assert first.database.schema_version() == 15
         audit = MessagingAuditRecord(platform=MessagingPlatform.DISCORD, account_scope="primary", conversation_id="private-channel-123", message_id="remote-inbound-1", direction=AuditDirection.INBOUND, channel_type=ChannelType.DM, sender_external_id="123456789012345678", speaker_entity_id="PERSON_BK", text="mensagem persistida remotamente", routing_action=RoutingAction.RESPOND, reason_codes=["REMOTE_TEST"], timestamp=clock.now())
         assert first.messaging_store.append_audit(audit)
         outbound = OutboundMessage(platform=MessagingPlatform.DISCORD, account_scope="primary", conversation_id="private-channel-123", target_entity_id="PERSON_BK", text="resposta persistida", reply_to_message_id="remote-inbound-1", source_message_id="remote-inbound-1", created_at=clock.now())
@@ -25,7 +25,7 @@ def test_messaging_audit_outbound_and_presence_survive_remote_compute_replacemen
     finally: first.close()
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / "replacement-compute")); second = AmoraCore.bootstrap(clock=clock, storage=backend)
     try:
-        assert second.database.schema_version() == 14
+        assert second.database.schema_version() == 15
         records = second.messaging_store.list_audit(limit=20); recovered = next(item for item in records if item.message_id == "remote-inbound-1")
         assert recovered.text == "mensagem persistida remotamente"; assert recovered.sender_external_id == "123456789012345678"; assert recovered.speaker_entity_id == "PERSON_BK"
         claimed = second.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD, account_scope="primary")

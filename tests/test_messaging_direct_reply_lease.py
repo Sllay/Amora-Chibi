@@ -66,14 +66,13 @@ def test_explicit_discord_mention_survives_normal_provider_latency(tmp_path, mon
         assert decision.action == RoutingAction.RESPOND
         assert "GROUP_NATIVE_MENTION_AMORA" in decision.reason_codes
 
-        # The conversational floor itself is intentionally short (35 s), but a
-        # concrete native mention must not be discarded merely because provider
-        # generation took longer than that short floor.
+        # The old 35s social floor is no longer reply authority once Runtime v2
+        # accepted the turn.
         clock.advance(timedelta(seconds=40))
         assert core.messaging.attention.floor.validate_reply(message, decision)
 
-        # The explicit reply is still bounded; stale output is suppressed.
-        clock.advance(timedelta(seconds=51))
+        # READY owns a separate bounded delivery deadline.
+        clock.advance(timedelta(seconds=121))
         assert not core.messaging.attention.floor.validate_reply(message, decision)
     finally:
         core.close()
@@ -103,12 +102,14 @@ def test_explicit_discord_mention_is_invalidated_when_floor_generation_changes(t
         shifted = core.messaging.attention.route(other)
 
         assert "FLOOR_SHIFTED_AWAY" in shifted.reason_codes
+        # This is an intentional social cancellation, not accidental generation
+        # mismatch: the router explicitly cancelled pending runtime turns.
         assert not core.messaging.attention.floor.validate_reply(direct, decision)
     finally:
         core.close()
 
 
-def test_inferred_same_speaker_continuity_keeps_short_reply_lease(tmp_path, monkeypatch) -> None:
+def test_inferred_same_speaker_continuity_survives_old_short_reply_lease(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     clock = SimulatedClock()
     core = AmoraCore.bootstrap(clock=clock)
@@ -133,7 +134,13 @@ def test_inferred_same_speaker_continuity_keeps_short_reply_lease(tmp_path, monk
         assert followup.action == RoutingAction.RESPOND
         assert "BOUNDED_CONTINUITY" in followup.reason_codes
 
+        # Provider/cognition latency beyond the old 10s lease no longer kills
+        # the accepted continuation.
         clock.advance(timedelta(seconds=11))
+        assert core.messaging.attention.floor.validate_reply(continuation, followup)
+
+        # READY is still bounded, so truly stale output is discarded.
+        clock.advance(timedelta(seconds=121))
         assert not core.messaging.attention.floor.validate_reply(continuation, followup)
     finally:
         core.close()
@@ -187,6 +194,8 @@ def test_edit_of_actual_response_source_invalidates_direct_and_continuation(tmp_
 
         assert result["floor_invalidated"] is True
         assert result["floor_generation"] > continuation_decision.floor_generation
+        # The direct turn was intentionally superseded by the newer same-speaker
+        # continuation; the edited continuation itself is source-scoped-cancelled.
         assert not core.messaging.attention.floor.validate_reply(direct, direct_decision)
         assert not core.messaging.attention.floor.validate_reply(continuation, continuation_decision)
     finally:

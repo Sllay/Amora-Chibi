@@ -2,7 +2,7 @@ name: Pre-deploy security
 on:
   pull_request:
   push:
-    branches: [main, 'feat/**', 'fix/**']
+    branches: [main]
 permissions:
   contents: read
 jobs:
