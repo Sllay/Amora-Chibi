@@ -4,6 +4,9 @@ from .models import (
     AttachmentRef,
     AuditDirection,
     ChannelType,
+    ExpressionKind,
+    ExpressionRef,
+    ExpressionSemanticProfile,
     ExternalActorRef,
     InboundMessage,
     InboundResult,
@@ -24,6 +27,12 @@ from .presence_control import (
     PresenceControlIntent,
     PresenceControlOutcome,
 )
+from .response_modality import (
+    ModalityCandidate,
+    ResponseModality,
+    ResponseModalityDecision,
+    ResponseModalitySelector,
+)
 from .routes import register_messaging_routes
 from .service import PlatformMessagingService
 from .store import MessagingStore
@@ -34,12 +43,16 @@ __all__ = [
     "AuditDirection",
     "ChannelType",
     "ConversationFloor",
+    "ExpressionKind",
+    "ExpressionRef",
+    "ExpressionSemanticProfile",
     "ExternalActorRef",
     "InboundMessage",
     "InboundResult",
     "MessagingAuditRecord",
     "MessagingPlatform",
     "MessagingStore",
+    "ModalityCandidate",
     "OutboundMessage",
     "OutboundStatus",
     "PlatformMessagingService",
@@ -51,6 +64,9 @@ __all__ = [
     "PresenceControlOutcome",
     "PresenceSnapshot",
     "PresenceState",
+    "ResponseModality",
+    "ResponseModalityDecision",
+    "ResponseModalitySelector",
     "RoutingAction",
     "SocialAttentionRouter",
     "TransportInvalidation",
