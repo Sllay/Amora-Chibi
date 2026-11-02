@@ -15,6 +15,7 @@ from .migrations_v101 import MIGRATION_V101
 from .migrations_v102 import MIGRATION_V102
 from .migrations_v103 import MIGRATION_V103
 from .migrations_v104 import MIGRATION_V104
+from .migrations_v105 import MIGRATION_V105
 from .backend import SQLiteBackend, StorageBackend, execute_atomic_statement, is_duplicate_error
 from .migrations import MIGRATIONS
 from .migrations_v06 import MIGRATION_V06
@@ -41,7 +42,7 @@ class AmoraDatabase:
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             applied = {row[0] for row in self._conn.execute("SELECT version FROM schema_migrations")}
             count = 0
-            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07, MIGRATION_V08, MIGRATION_V09, MIGRATION_V10, MIGRATION_V101, MIGRATION_V102, MIGRATION_V103, MIGRATION_V104):
+            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07, MIGRATION_V08, MIGRATION_V09, MIGRATION_V10, MIGRATION_V101, MIGRATION_V102, MIGRATION_V103, MIGRATION_V104, MIGRATION_V105):
                 if version in applied:
                     continue
                 if self.backend.capabilities.remote:
@@ -79,216 +80,112 @@ class AmoraDatabase:
                     """INSERT INTO events (id, schema_version, event_type, timestamp, source, actor, target, confidence, importance, priority, payload_json, privacy_scope, session_id, correlation_id, causation_id, causal_parent, sequence, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     values,
                 )
-            except sqlite3.IntegrityError as exc:
-                if not is_duplicate_error(exc):
-                    raise
-                return False
-            return True
+                return True
+            except Exception as exc:
+                if is_duplicate_error(exc):
+                    return False
+                raise
 
-    def event_count(self) -> int:
+    def get_event_by_dedupe(self, dedupe_key: str) -> AmoraEvent | None:
         with self._lock:
-            row = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()
-            return int(row[0]) if row else 0
+            row = self._conn.execute("SELECT * FROM events WHERE dedupe_key=?", (dedupe_key,)).fetchone()
+        if row is None:
+            return None
+        return AmoraEvent.model_validate({
+            "id": row["id"], "schema_version": row["schema_version"], "event_type": row["event_type"], "timestamp": row["timestamp"], "source": row["source"], "actor": row["actor"], "target": row["target"], "confidence": row["confidence"], "importance": row["importance"], "priority": row["priority"], "payload": json.loads(row["payload_json"]), "privacy_scope": row["privacy_scope"], "session_id": row["session_id"], "correlation_id": row["correlation_id"], "causation_id": row["causation_id"], "causal_parent": row["causal_parent"], "sequence": row["sequence"], "dedupe_key": row["dedupe_key"]
+        })
 
-    def save_registry(self, registry: EntityRegistry) -> None:
+    def save_entity(self, entity: Entity) -> None:
         with self._lock, self._conn:
-            for entity in registry.entities:
-                self._conn.execute("""INSERT INTO entities(id, canonical_name, entity_type, payload_json) VALUES (?, ?, ?, '{}') ON CONFLICT(id) DO UPDATE SET canonical_name=excluded.canonical_name, entity_type=excluded.entity_type""", (entity.id, entity.canonical_name, entity.entity_type.value))
-                self._conn.execute("DELETE FROM aliases WHERE entity_id = ?", (entity.id,))
-                for alias in set(entity.aliases) | {entity.canonical_name}:
-                    self._conn.execute("INSERT INTO aliases(normalized_alias, entity_id) VALUES (?, ?)", (normalize_alias(alias), entity.id))
-            for rel in registry.relationships:
-                self._conn.execute("""INSERT INTO relationships(source, relation_type, target, confidence) VALUES (?, ?, ?, ?) ON CONFLICT(source, relation_type, target) DO UPDATE SET confidence=excluded.confidence""", (rel.source, rel.relation_type, rel.target, rel.confidence))
+            self._conn.execute("INSERT INTO entities(id, entity_type, canonical_name, metadata_json, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET entity_type=excluded.entity_type, canonical_name=excluded.canonical_name, metadata_json=excluded.metadata_json", (entity.id, entity.entity_type.value, entity.canonical_name, json.dumps(entity.metadata, ensure_ascii=False), entity.created_at.isoformat()))
 
-    def load_registry(self) -> EntityRegistry | None:
+    def get_entity(self, entity_id: str) -> Entity | None:
         with self._lock:
-            entity_rows = self._conn.execute("SELECT id, canonical_name, entity_type FROM entities ORDER BY id").fetchall()
-            if not entity_rows:
-                return None
-            aliases: dict[str, set[str]] = {}
-            for row in self._conn.execute("SELECT normalized_alias, entity_id FROM aliases"):
-                aliases.setdefault(row["entity_id"], set()).add(row["normalized_alias"])
-            relationship_rows = self._conn.execute("SELECT source, relation_type, target, confidence FROM relationships ORDER BY id").fetchall()
+            row = self._conn.execute("SELECT * FROM entities WHERE id=?", (entity_id,)).fetchone()
+        if row is None:
+            return None
+        return Entity(id=row["id"], entity_type=EntityType(row["entity_type"]), canonical_name=row["canonical_name"], metadata=json.loads(row["metadata_json"]), created_at=datetime.fromisoformat(row["created_at"]))
+
+    def list_entities(self) -> list[Entity]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM entities ORDER BY id").fetchall()
+        return [Entity(id=r["id"], entity_type=EntityType(r["entity_type"]), canonical_name=r["canonical_name"], metadata=json.loads(r["metadata_json"]), created_at=datetime.fromisoformat(r["created_at"])) for r in rows]
+
+    def save_alias(self, alias: str, entity_id: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("INSERT INTO aliases(alias_normalized, entity_id) VALUES (?, ?) ON CONFLICT(alias_normalized) DO UPDATE SET entity_id=excluded.entity_id", (normalize_alias(alias), entity_id))
+
+    def resolve_alias(self, alias: str) -> Entity | None:
+        with self._lock:
+            row = self._conn.execute("SELECT entity_id FROM aliases WHERE alias_normalized=?", (normalize_alias(alias),)).fetchone()
+        return self.get_entity(row["entity_id"]) if row else None
+
+    def save_relationship(self, relationship: Relationship) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("INSERT INTO relationships(source_id, relation_type, target_id, trust, metadata_json) VALUES (?, ?, ?, ?, ?) ON CONFLICT(source_id, relation_type, target_id) DO UPDATE SET trust=excluded.trust, metadata_json=excluded.metadata_json", (relationship.source_id, relationship.relation_type, relationship.target_id, relationship.trust, json.dumps(relationship.metadata, ensure_ascii=False)))
+
+    def list_relationships(self) -> list[Relationship]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM relationships ORDER BY source_id, relation_type, target_id").fetchall()
+        return [Relationship(source_id=r["source_id"], relation_type=r["relation_type"], target_id=r["target_id"], trust=r["trust"], metadata=json.loads(r["metadata_json"])) for r in rows]
+
+    def load_registry(self) -> EntityRegistry:
         registry = EntityRegistry()
-        for row in entity_rows:
-            canonical_norm = normalize_alias(row["canonical_name"])
-            entity_aliases = {a for a in aliases.get(row["id"], set()) if a != canonical_norm}
-            registry.add_entity(Entity(id=row["id"], canonical_name=row["canonical_name"], entity_type=EntityType(row["entity_type"]), aliases=entity_aliases))
-        for row in relationship_rows:
-            registry.add_relationship(Relationship(source=row["source"], relation_type=row["relation_type"], target=row["target"], confidence=row["confidence"]))
+        for entity in self.list_entities(): registry.add(entity)
+        with self._lock:
+            rows = self._conn.execute("SELECT alias_normalized, entity_id FROM aliases ORDER BY alias_normalized").fetchall()
+        for row in rows: registry.add_alias(row["alias_normalized"], row["entity_id"])
+        for relationship in self.list_relationships(): registry.add_relationship(relationship)
         return registry
 
-    def upsert_person_profile(self, profile: PersonProfileSeed, *, source_revision: str, updated_at: datetime) -> None:
-        payload = json.dumps(profile.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-        with self._lock:
-            execute_atomic_statement(
-                self.backend,
-                self._conn,
-                """INSERT INTO person_profiles(entity_id, profile_json, source_revision, updated_at)
-                   VALUES (?, ?, ?, ?)
-                   ON CONFLICT(entity_id) DO UPDATE SET
-                     profile_json=excluded.profile_json,
-                     source_revision=excluded.source_revision,
-                     updated_at=excluded.updated_at""",
-                (profile.entity_id, payload, source_revision, updated_at.isoformat()),
-            )
+    def save_device(self, device: DeviceIdentity) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("INSERT INTO devices(id, owner_id, label, device_type, trust, metadata_json) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET owner_id=excluded.owner_id, label=excluded.label, device_type=excluded.device_type, trust=excluded.trust, metadata_json=excluded.metadata_json", (device.id, device.owner_id, device.label, device.device_type, device.trust.value, json.dumps(device.metadata, ensure_ascii=False)))
 
-    def get_person_profile(self, entity_id: str) -> PersonProfileSeed | None:
+    def list_devices(self) -> list[DeviceIdentity]:
         with self._lock:
-            row = self._conn.execute("SELECT profile_json FROM person_profiles WHERE entity_id = ?", (entity_id,)).fetchone()
-        if row is None:
-            return None
-        return PersonProfileSeed.model_validate(json.loads(row["profile_json"]))
-
-    def list_person_profiles(self) -> tuple[PersonProfileSeed, ...]:
-        with self._lock:
-            rows = self._conn.execute("SELECT profile_json FROM person_profiles ORDER BY entity_id").fetchall()
-        return tuple(PersonProfileSeed.model_validate(json.loads(row["profile_json"])) for row in rows)
-
-    def upsert_platform_identity_binding(self, binding: PlatformIdentityBinding, *, updated_at: datetime) -> None:
-        with self._lock:
-            execute_atomic_statement(
-                self.backend,
-                self._conn,
-                """INSERT INTO platform_identity_bindings(
-                       platform, identifier_type, external_actor_id, account_scope,
-                       entity_id, trust, confidence, enabled, created_at, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(platform, identifier_type, account_scope, external_actor_id) DO UPDATE SET
-                       entity_id=excluded.entity_id,
-                       trust=excluded.trust,
-                       confidence=excluded.confidence,
-                       enabled=excluded.enabled,
-                       updated_at=excluded.updated_at""",
-                (
-                    binding.platform.value,
-                    binding.identifier_type,
-                    binding.external_actor_id,
-                    binding.account_scope,
-                    binding.entity_id,
-                    binding.trust.value,
-                    binding.confidence,
-                    int(binding.enabled),
-                    updated_at.isoformat(),
-                    updated_at.isoformat(),
-                ),
-            )
-
-    def resolve_platform_identity_binding(
-        self,
-        *,
-        platform: str,
-        identifier_type: str,
-        external_actor_id: str,
-        account_scope: str,
-    ) -> str | None:
-        with self._lock:
-            row = self._conn.execute(
-                """SELECT entity_id FROM platform_identity_bindings
-                   WHERE platform = ? AND identifier_type = ? AND external_actor_id = ?
-                     AND account_scope = ? AND enabled = 1
-                   ORDER BY confidence DESC, updated_at DESC LIMIT 1""",
-                (platform, identifier_type, external_actor_id, account_scope),
-            ).fetchone()
-        return str(row["entity_id"]) if row else None
-
-    def platform_bindings_for(self, entity_id: str) -> tuple[PlatformIdentityBinding, ...]:
-        with self._lock:
-            rows = self._conn.execute(
-                """SELECT platform, identifier_type, external_actor_id, account_scope,
-                          entity_id, trust, confidence, enabled
-                   FROM platform_identity_bindings
-                   WHERE entity_id = ? ORDER BY platform, identifier_type, id""",
-                (entity_id,),
-            ).fetchall()
-        return tuple(
-            PlatformIdentityBinding.model_validate(
-                {
-                    "platform": row["platform"],
-                    "identifier_type": row["identifier_type"],
-                    "external_actor_id": row["external_actor_id"],
-                    "account_scope": row["account_scope"],
-                    "entity_id": row["entity_id"],
-                    "trust": row["trust"],
-                    "confidence": row["confidence"],
-                    "enabled": bool(row["enabled"]),
-                }
-            )
-            for row in rows
-        )
-
-    def upsert_device(self, device: DeviceIdentity) -> None:
-        with self._lock:
-            execute_atomic_statement(
-                self.backend,
-                self._conn,
-                """INSERT INTO devices(id, owner_person_id, device_type, trust_level, credential_ref, capabilities_json, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET owner_person_id=excluded.owner_person_id, device_type=excluded.device_type, trust_level=excluded.trust_level, credential_ref=excluded.credential_ref, capabilities_json=excluded.capabilities_json, last_seen=excluded.last_seen""",
-                (device.id, device.owner_person_id, device.device_type, device.trust_level.value, device.credential_ref, json.dumps(sorted(device.capabilities)), device.last_seen.isoformat()),
-            )
-
-    def get_device(self, device_id: str) -> DeviceIdentity | None:
-        with self._lock:
-            row = self._conn.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone()
-        if row is None:
-            return None
-        return DeviceIdentity(id=row["id"], owner_person_id=row["owner_person_id"], device_type=row["device_type"], trust_level=DeviceTrust(row["trust_level"]), credential_ref=row["credential_ref"], capabilities=set(json.loads(row["capabilities_json"])), last_seen=datetime.fromisoformat(row["last_seen"]))
+            rows = self._conn.execute("SELECT * FROM devices ORDER BY id").fetchall()
+        return [DeviceIdentity(id=r["id"], owner_id=r["owner_id"], label=r["label"], device_type=r["device_type"], trust=DeviceTrust(r["trust"]), metadata=json.loads(r["metadata_json"])) for r in rows]
 
     def save_session(self, session: SessionIdentity) -> None:
-        with self._lock:
-            execute_atomic_statement(
-                self.backend,
-                self._conn,
-                """INSERT INTO sessions(id, device_id, authenticated_person_id, privacy_context, auth_method, started_at, last_seen, expires_at, capabilities_json, closed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen, expires_at=excluded.expires_at, privacy_context=excluded.privacy_context, capabilities_json=excluded.capabilities_json, closed_at=excluded.closed_at""",
-                (session.id, session.device_id, session.authenticated_person_id, session.privacy_context.value, session.auth_method, session.started_at.isoformat(), session.last_seen.isoformat(), session.expires_at.isoformat() if session.expires_at else None, json.dumps(sorted(session.capabilities)), session.closed_at.isoformat() if session.closed_at else None),
-            )
+        with self._lock, self._conn:
+            self._conn.execute("INSERT INTO sessions(id, entity_id, device_id, privacy_context, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET entity_id=excluded.entity_id, device_id=excluded.device_id, privacy_context=excluded.privacy_context, started_at=excluded.started_at, ended_at=excluded.ended_at", (session.id, session.entity_id, session.device_id, session.privacy_context.value, session.started_at.isoformat(), session.ended_at.isoformat() if session.ended_at else None))
 
-    def get_session(self, session_id: str) -> SessionIdentity | None:
+    def list_sessions(self) -> list[SessionIdentity]:
         with self._lock:
-            row = self._conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
-        if row is None:
-            return None
-        return SessionIdentity(id=row["id"], device_id=row["device_id"], authenticated_person_id=row["authenticated_person_id"], privacy_context=PrivacyContext(row["privacy_context"]), auth_method=row["auth_method"], started_at=datetime.fromisoformat(row["started_at"]), last_seen=datetime.fromisoformat(row["last_seen"]), expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None, capabilities=set(json.loads(row["capabilities_json"])), closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None)
+            rows = self._conn.execute("SELECT * FROM sessions ORDER BY started_at").fetchall()
+        return [SessionIdentity(id=r["id"], entity_id=r["entity_id"], device_id=r["device_id"], privacy_context=PrivacyContext(r["privacy_context"]), started_at=datetime.fromisoformat(r["started_at"]), ended_at=datetime.fromisoformat(r["ended_at"]) if r["ended_at"] else None) for r in rows]
 
-    def close_session(self, session_id: str, closed_at: datetime) -> bool:
+    def save_person_profile_seed(self, seed: PersonProfileSeed) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("INSERT INTO person_profiles(entity_id, preferred_name, speech_register, relationship_label, relationship_type, relationship_trust, metadata_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(entity_id) DO UPDATE SET preferred_name=excluded.preferred_name, speech_register=excluded.speech_register, relationship_label=excluded.relationship_label, relationship_type=excluded.relationship_type, relationship_trust=excluded.relationship_trust, metadata_json=excluded.metadata_json, updated_at=excluded.updated_at", (seed.entity_id, seed.preferred_name, seed.speech_register, seed.relationship_label, seed.relationship_type, seed.relationship_trust, json.dumps(seed.metadata, ensure_ascii=False), datetime.utcnow().isoformat()))
+
+    def get_person_profile_seed(self, entity_id: str) -> PersonProfileSeed | None:
         with self._lock:
-            cur = execute_atomic_statement(
-                self.backend,
-                self._conn,
-                "UPDATE sessions SET closed_at = ?, last_seen = ? WHERE id = ? AND closed_at IS NULL",
-                (closed_at.isoformat(), closed_at.isoformat(), session_id),
-            )
-            return cur.rowcount > 0
+            row = self._conn.execute("SELECT * FROM person_profiles WHERE entity_id=?", (entity_id,)).fetchone()
+        if row is None: return None
+        return PersonProfileSeed(entity_id=row["entity_id"], preferred_name=row["preferred_name"], speech_register=row["speech_register"], relationship_label=row["relationship_label"], relationship_type=row["relationship_type"], relationship_trust=float(row["relationship_trust"]), metadata=json.loads(row["metadata_json"]))
 
-    def active_session_count(self, now: datetime) -> int:
-        current = now.isoformat()
+    def list_person_profile_seeds(self) -> list[PersonProfileSeed]:
         with self._lock:
-            row = self._conn.execute("SELECT COUNT(*) FROM sessions WHERE closed_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", (current,)).fetchone()
-            return int(row[0]) if row else 0
+            rows = self._conn.execute("SELECT * FROM person_profiles ORDER BY entity_id").fetchall()
+        return [PersonProfileSeed(entity_id=r["entity_id"], preferred_name=r["preferred_name"], speech_register=r["speech_register"], relationship_label=r["relationship_label"], relationship_type=r["relationship_type"], relationship_trust=float(r["relationship_trust"]), metadata=json.loads(r["metadata_json"])) for r in rows]
 
-    def integrity_check(self) -> str:
+    def save_platform_identity_binding(self, binding: PlatformIdentityBinding) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("INSERT INTO platform_identity_bindings(platform, account_scope, identifier_type, external_actor_id, entity_id, username, display_name, aliases_json, active, metadata_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(platform, account_scope, identifier_type, external_actor_id) DO UPDATE SET entity_id=excluded.entity_id, username=excluded.username, display_name=excluded.display_name, aliases_json=excluded.aliases_json, active=excluded.active, metadata_json=excluded.metadata_json, updated_at=excluded.updated_at", (binding.platform, binding.account_scope, binding.identifier_type, binding.external_actor_id, binding.entity_id, binding.username, binding.display_name, json.dumps(binding.aliases, ensure_ascii=False), int(binding.active), json.dumps(binding.metadata, ensure_ascii=False), datetime.utcnow().isoformat()))
+
+    def resolve_platform_identity_binding(self, *, platform: str, account_scope: str, identifier_type: str, external_actor_id: str) -> PlatformIdentityBinding | None:
         with self._lock:
-            row = self._conn.execute("PRAGMA integrity_check").fetchone()
-            return str(row[0]) if row else "unknown"
+            row = self._conn.execute("SELECT * FROM platform_identity_bindings WHERE platform=? AND account_scope=? AND identifier_type=? AND external_actor_id=? AND active=1", (platform, account_scope, identifier_type, external_actor_id)).fetchone()
+        if row is None: return None
+        return PlatformIdentityBinding(platform=row["platform"], account_scope=row["account_scope"], identifier_type=row["identifier_type"], external_actor_id=row["external_actor_id"], entity_id=row["entity_id"], username=row["username"], display_name=row["display_name"], aliases=json.loads(row["aliases_json"]), active=bool(row["active"]), metadata=json.loads(row["metadata_json"]))
 
-    def backup_to(self, destination: Path) -> Path:
-        with self._lock:
-            return self.backend.backup(self._conn, destination)
-
-    @staticmethod
-    def restore_backup(source: Path, destination: Path) -> Path:
-        if not source.is_file():
-            raise FileNotFoundError(source)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        source_conn = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
-        try:
-            row = source_conn.execute("PRAGMA integrity_check").fetchone()
-            if row is None or row[0] != "ok":
-                raise ValueError("backup integrity check failed")
-            target = sqlite3.connect(destination)
-            try:
-                source_conn.backup(target)
-            finally:
-                target.close()
-        finally:
-            source_conn.close()
-        return destination
+    def list_platform_identity_bindings(self, *, platform: str | None = None, account_scope: str | None = None) -> list[PlatformIdentityBinding]:
+        sql = "SELECT * FROM platform_identity_bindings"; params: list[str] = []; clauses: list[str] = []
+        if platform is not None: clauses.append("platform=?"); params.append(platform)
+        if account_scope is not None: clauses.append("account_scope=?"); params.append(account_scope)
+        if clauses: sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY platform, account_scope, identifier_type, external_actor_id"
+        with self._lock: rows = self._conn.execute(sql, tuple(params)).fetchall()
+        return [PlatformIdentityBinding(platform=r["platform"], account_scope=r["account_scope"], identifier_type=r["identifier_type"], external_actor_id=r["external_actor_id"], entity_id=r["entity_id"], username=r["username"], display_name=r["display_name"], aliases=json.loads(r["aliases_json"]), active=bool(r["active"]), metadata=json.loads(r["metadata_json"])) for r in rows]
