@@ -79,7 +79,7 @@ class CapabilityContextProjector:
             item = ContextCapability(
                 capability_id=str(raw["capability_id"]),
                 semantic_action=str(raw["semantic_action"]),
-                summary=str(raw["summary"]),
+                summary=str(raw["summary"])[:700],
                 affordances=[str(value) for value in raw.get("affordances", [])[:8]],
                 availability=str(raw["availability"]),
                 inputs=dict(raw.get("inputs") or {}),
