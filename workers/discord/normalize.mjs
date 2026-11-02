@@ -1,5 +1,6 @@
 export const DISCORD_INTENTS =
   (1 << 0) |  // GUILDS
+  (1 << 3) |  // GUILD_EXPRESSIONS (emoji/sticker catalogue updates)
   (1 << 9) |  // GUILD_MESSAGES
   (1 << 10) | // GUILD_MESSAGE_REACTIONS
   (1 << 12) | // DIRECT_MESSAGES
@@ -22,14 +23,38 @@ export function normalizeDiscordMessage(message, {
   if (message.author.bot || message.author.id === botUserId) return null;
 
   const mentions = Array.isArray(message.mentions) ? message.mentions : [];
-  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  const rawAttachments = Array.isArray(message.attachments) ? message.attachments : [];
+  const stickerItems = Array.isArray(message.sticker_items) ? message.sticker_items : [];
   const content = typeof message.content === 'string' ? message.content : '';
-  if (!content.trim() && attachments.length === 0) return null;
+  if (!content.trim() && rawAttachments.length === 0 && stickerItems.length === 0) return null;
 
   const nativeMessageId = String(message.id);
   const referenceId = message.message_reference?.message_id || null;
   const resolvedReferenceAuthor = message.referenced_message?.author?.id || referencedAuthorId || null;
   const mentionedIds = mentions.map((item) => String(item.id)).filter(Boolean);
+  const guildId = message.guild_id ? String(message.guild_id) : null;
+  const expressions = stickerItems.slice(0, 8).map((item) => ({
+    kind: 'sticker',
+    native_id: String(item.id),
+    name: item.name ? String(item.name).slice(0, 160) : null,
+    description: item.description ? String(item.description).slice(0, 512) : null,
+    format_type: Number.isFinite(item.format_type) ? Number(item.format_type) : null,
+    guild_or_group_id: guildId,
+  }));
+  const attachments = [
+    ...rawAttachments.slice(0, 16).map((item) => ({
+      attachment_id: String(item.id),
+      media_type: item.content_type || null,
+      filename: item.filename || null,
+      size_bytes: Number.isFinite(item.size) ? item.size : null,
+    })),
+    ...expressions.map((item) => ({
+      attachment_id: `sticker:${item.native_id}`,
+      media_type: 'application/vnd.discord.sticker',
+      filename: item.name || 'discord-sticker',
+      size_bytes: null,
+    })),
+  ].slice(0, 16);
 
   return {
     platform: 'discord',
@@ -56,17 +81,13 @@ export function normalizeDiscordMessage(message, {
     reply_to_author_identifiers: resolvedReferenceAuthor
       ? [{ identifier_type: 'discord_user_id', external_actor_id: String(resolvedReferenceAuthor), confidence: 1.0 }]
       : [],
-    attachments: attachments.slice(0, 16).map((item) => ({
-      attachment_id: String(item.id),
-      media_type: item.content_type || null,
-      filename: item.filename || null,
-      size_bytes: Number.isFinite(item.size) ? item.size : null,
-    })),
+    attachments,
+    expressions,
     timestamp: message.edited_timestamp || message.timestamp || new Date().toISOString(),
     privacy_scope: 'PERSONAL',
     remote_processing_allowed: Boolean(remoteProcessingAllowed),
     native_thread_id: message.thread?.id || null,
-    guild_or_group_id: message.guild_id ? String(message.guild_id) : null,
+    guild_or_group_id: guildId,
   };
 }
 
@@ -103,11 +124,15 @@ export function discordReplyPayload(text, {
   replyToMessageId = null,
   firstChunk = true,
   nonce = null,
+  stickerIds = [],
 } = {}) {
+  const content = String(text || '');
+  const stickers = [...new Set((stickerIds || []).map(String).filter(Boolean))].slice(0, 1);
   const payload = {
-    content: text,
     allowed_mentions: { parse: [], replied_user: false },
   };
+  if (content) payload.content = content;
+  if (stickers.length) payload.sticker_ids = stickers;
   if (nonce) {
     payload.nonce = String(nonce).slice(0, 25);
     payload.enforce_nonce = true;
