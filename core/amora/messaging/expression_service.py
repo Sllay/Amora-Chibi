@@ -113,13 +113,42 @@ class PlatformMessagingService(BasePlatformMessagingService):
         if not text:
             return None
 
-        negative = ("nao manda", "nao envia", "nao use", "nao usa")
+        negative = (
+            "nao manda",
+            "nao enviar",
+            "nao envia",
+            "nao use",
+            "nao usar",
+            "nao usa",
+        )
         if any(token in text for token in negative):
             return None
 
         words = set(text.split())
-        verbs = {"manda", "envia", "usa", "use", "solta", "joga"}
-        references = {"essa", "esta", "figurinha", "fig", "sticker", "adesivo"}
+        verbs = {
+            "manda",
+            "mandar",
+            "envia",
+            "enviar",
+            "usa",
+            "usar",
+            "use",
+            "solta",
+            "soltar",
+            "joga",
+            "jogar",
+        }
+        references = {
+            "essa",
+            "esta",
+            "figurinha",
+            "figurinhas",
+            "fig",
+            "sticker",
+            "stickers",
+            "adesivo",
+            "adesivos",
+        }
         if not words.intersection(verbs):
             return None
         if not words.intersection(references) and "de volta" not in text:
