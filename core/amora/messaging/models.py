@@ -61,11 +61,7 @@ class ExpressionKind(StrEnum):
 
 
 class ExternalActorRef(BaseModel):
-    """One stable platform identifier presented by an adapter.
-
-    A platform identifier is evidence for resolving a canonical PERSON. It is not
-    itself a person id and must never be promoted into EntityRegistry implicitly.
-    """
+    """One stable platform identifier presented by an adapter."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -84,7 +80,7 @@ class AttachmentRef(BaseModel):
 
 
 class ExpressionRef(BaseModel):
-    """Transport-native social expression such as a Discord server sticker."""
+    """Transport-native social expression resolved from trusted adapter data."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -92,6 +88,7 @@ class ExpressionRef(BaseModel):
     native_id: str = Field(min_length=1, max_length=256)
     name: str | None = Field(default=None, max_length=160)
     description: str | None = Field(default=None, max_length=512)
+    tags: list[str] = Field(default_factory=list, max_length=16)
     format_type: int | None = Field(default=None, ge=0, le=32)
     guild_or_group_id: str | None = Field(default=None, max_length=512)
 
@@ -99,9 +96,8 @@ class ExpressionRef(BaseModel):
 class InboundMessage(BaseModel):
     """Provider/platform-independent inbound envelope.
 
-    `message_id` is the immutable delivery/dedupe id presented to Core. A platform
-    adapter may use a synthetic revision id for edits while preserving the actual
-    platform object in `native_message_id`. Core never derives identity from either.
+    `available_expressions` is adapter-supplied local capability data. It is not
+    conversation content and is deliberately not forwarded to the remote provider.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -124,6 +120,7 @@ class InboundMessage(BaseModel):
     reply_to_author_identifiers: list[ExternalActorRef] = Field(default_factory=list, max_length=6)
     attachments: list[AttachmentRef] = Field(default_factory=list, max_length=16)
     expressions: list[ExpressionRef] = Field(default_factory=list, max_length=8)
+    available_expressions: list[ExpressionRef] = Field(default_factory=list, max_length=60)
     timestamp: datetime
     privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
     remote_processing_allowed: bool = False
