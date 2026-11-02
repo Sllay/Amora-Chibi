@@ -149,6 +149,18 @@ def test_catalog_selection_prefers_semantic_match_and_never_provider_ids(tmp_pat
         core.close()
 
 
+def test_catalog_does_not_hijack_non_sticker_requests(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        catalog = [_sticker("one", "one"), _sticker("two", "two")]
+        for text in ("Amora, manda uma foto", "Amora, manda essa foto", "Amora, envia um arquivo"):
+            message = _message(core, text, source_sticker=False, catalog=catalog)
+            assert core.messaging._requested_sticker_expression(message, "beleza") is None
+    finally:
+        core.close()
+
+
 def test_generic_catalog_selection_is_deterministic_for_retries(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=SimulatedClock())
