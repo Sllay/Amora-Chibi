@@ -20,7 +20,7 @@ MIGRATION_V106 = (
         semantic_revision INTEGER NOT NULL DEFAULT 0 CHECK(semantic_revision >= 0),
         first_seen_at TEXT NOT NULL,
         last_seen_at TEXT NOT NULL,
-        seen_count INTEGER NOT NULL DEFAULT 1 CHECK(seen_count >= 1),
+        seen_count INTEGER NOT NULL DEFAULT 0 CHECK(seen_count >= 0),
         unique_senders_count INTEGER NOT NULL DEFAULT 0 CHECK(unique_senders_count >= 0),
         last_sender_ref TEXT,
         last_source_message_id TEXT,
@@ -33,6 +33,23 @@ MIGRATION_V106 = (
         ON perceptual_expression_assets(platform, account_scope, scope_id, last_seen_at DESC);
     CREATE INDEX IF NOT EXISTS idx_perceptual_expression_status
         ON perceptual_expression_assets(semantic_status, last_seen_at DESC);
+
+    CREATE TABLE IF NOT EXISTS perceptual_expression_observations (
+        platform TEXT NOT NULL,
+        account_scope TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        native_id TEXT NOT NULL,
+        source_message_id TEXT NOT NULL,
+        sender_ref TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        PRIMARY KEY(platform, account_scope, scope_id, kind, native_id, source_message_id),
+        FOREIGN KEY(platform, account_scope, scope_id, kind, native_id)
+            REFERENCES perceptual_expression_assets(platform, account_scope, scope_id, kind, native_id)
+            ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_perceptual_expression_observation_sender
+        ON perceptual_expression_observations(sender_ref, observed_at DESC);
 
     CREATE TABLE IF NOT EXISTS perceptual_expression_senders (
         platform TEXT NOT NULL,
