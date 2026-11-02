@@ -20,6 +20,7 @@ from .models import (
     RoutingAction,
     TransportInvalidation,
 )
+from .modality_service import PlatformMessagingService
 from .presence import PlatformPresenceController
 from .presence_control import (
     PlatformPresenceControlService,
@@ -34,7 +35,6 @@ from .response_modality import (
     ResponseModalitySelector,
 )
 from .routes import register_messaging_routes
-from .service import PlatformMessagingService
 from .store import MessagingStore
 
 __all__ = [
