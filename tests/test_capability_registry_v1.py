@@ -129,6 +129,18 @@ def _context(
     )
 
 
+def test_plugin_registry_owns_one_persistent_capability_registry() -> None:
+    plugins = PluginRegistry()
+    first = plugins.capability_registry
+    second = plugins.capability_registry
+
+    assert first is second
+    assert first.capability_count == 0
+
+    plugins.register(_CapabilityPlugin())
+    assert first.capability_count == 1
+
+
 def test_registry_only_exposes_declared_capabilities_and_keeps_binding_local() -> None:
     plugins = PluginRegistry()
     plugin = _CapabilityPlugin()
