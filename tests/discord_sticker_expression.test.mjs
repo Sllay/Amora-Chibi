@@ -28,11 +28,59 @@ test('Discord accepts sticker-only inbound as a native expression', () => {
     native_id: 'sticker-1',
     name: 'morre',
     description: null,
+    tags: [],
     format_type: 1,
     guild_or_group_id: 'guild-1',
   });
   assert.equal(normalized.attachments[0].media_type, 'application/vnd.discord.sticker');
   assert.equal(normalized.attachments[0].filename, 'morre');
+});
+
+
+test('Discord normalization carries trusted guild catalog separately from message content', () => {
+  const normalized = normalizeDiscordMessage({
+    id: 'msg-2',
+    channel_id: 'channel-1',
+    guild_id: 'guild-1',
+    timestamp: '2026-11-02T04:00:00Z',
+    content: 'Amora, manda uma figurinha de raiva',
+    author: { id: 'user-1', username: 'bk', bot: false },
+    mentions: [],
+    attachments: [],
+    sticker_items: [],
+    __amora_sticker_catalog: [
+      { id: 'angry-1', name: 'rage', description: 'muito bravo', tags: 'raiva,angry', format_type: 1 },
+      { id: 'happy-1', name: 'happy', description: 'feliz', tags: 'smile,happy', format_type: 1 },
+    ],
+  }, { botUserId: 'bot-1' });
+
+  assert.equal(normalized.expressions.length, 0);
+  assert.equal(normalized.available_expressions.length, 2);
+  assert.deepEqual(normalized.available_expressions[0].tags, ['raiva', 'angry']);
+  assert.equal(normalized.available_expressions[0].native_id, 'angry-1');
+});
+
+
+test('Discord expression worker fetches guild sticker catalog once inside TTL', async () => {
+  let fetches = 0;
+  const worker = new DiscordExpressionWorker({
+    token: 'test-discord-token',
+    core: {},
+    rest: {
+      request: async (path) => {
+        assert.equal(path, '/guilds/guild-1/stickers');
+        fetches += 1;
+        return [{ id: 'sticker-1', name: 'morre', tags: 'laugh,lol', format_type: 1 }];
+      },
+    },
+    runtime: {},
+  });
+
+  const first = await worker.guildStickerCatalog('guild-1');
+  const second = await worker.guildStickerCatalog('guild-1');
+  assert.equal(fetches, 1);
+  assert.equal(first[0].id, 'sticker-1');
+  assert.deepEqual(second, first);
 });
 
 
