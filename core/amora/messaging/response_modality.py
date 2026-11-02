@@ -39,14 +39,38 @@ class ResponseModalityDecision(BaseModel):
 
 
 _SEMANTIC_CLUSTERS: dict[str, frozenset[str]] = {
-    "joy": frozenset({"sorriso", "sorrisao", "sorrir", "feliz", "alegre", "alegria", "rir", "risada", "rindo", "kkk", "haha", "engracado", "comedia"}),
-    "playful": frozenset({"zoeira", "brinca", "brincar", "brincadeira", "provoca", "provocar", "sapeca", "marota", "meme", "caos", "caotico", "danada"}),
-    "affection": frozenset({"amor", "amo", "carinho", "fofo", "fofa", "fofinho", "fofinha", "coracao", "beijo", "abraco", "papis", "papai", "pai"}),
-    "celebration": frozenset({"parabens", "conseguiu", "conseguimos", "vitoria", "ganhou", "ganhei", "festa", "comemora", "comemorar", "celebra"}),
-    "surprise": frozenset({"nossa", "eita", "oxe", "caramba", "surpresa", "surpreso", "surpresa", "chocado", "chocada", "uau"}),
-    "sadness": frozenset({"triste", "tristeza", "chorando", "choro", "chora", "saudade", "desanimo", "desanimado", "desanimada"}),
-    "anger": frozenset({"raiva", "brava", "bravo", "irritada", "irritado", "odio", "puta", "puto"}),
-    "comfort": frozenset({"calma", "conforta", "conforto", "acolhe", "acolhimento", "apoio", "fica", "aqui"}),
+    "joy": frozenset({
+        "sorriso", "sorrisao", "sorrir", "feliz", "alegre", "alegria", "rir", "risada", "rindo",
+        "kkk", "haha", "hehe", "engracado", "comedia", "smile", "happy", "laugh", "lol", "grin",
+    }),
+    "playful": frozenset({
+        "zoeira", "brinca", "brincar", "brincadeira", "provoca", "provocar", "sapeca", "marota",
+        "meme", "caos", "caotico", "danada", "hehe", "playful", "tease", "silly", "chaos",
+    }),
+    "affection": frozenset({
+        "amor", "amo", "carinho", "fofo", "fofa", "fofinho", "fofinha", "coracao", "beijo", "abraco",
+        "papis", "papai", "pai", "love", "heart", "cute", "kiss", "hug", "affection",
+    }),
+    "celebration": frozenset({
+        "parabens", "conseguiu", "conseguimos", "vitoria", "ganhou", "ganhei", "festa", "comemora",
+        "comemorar", "celebra", "celebrate", "party", "victory", "win", "won", "congrats",
+    }),
+    "surprise": frozenset({
+        "nossa", "eita", "oxe", "caramba", "surpresa", "surpreso", "chocado", "chocada", "uau",
+        "wow", "surprise", "shock", "shocked",
+    }),
+    "sadness": frozenset({
+        "triste", "tristeza", "chorando", "choro", "chora", "saudade", "desanimo", "desanimado",
+        "desanimada", "sad", "cry", "crying", "sadness",
+    }),
+    "anger": frozenset({
+        "raiva", "brava", "bravo", "irritada", "irritado", "odio", "puta", "puto",
+        "angry", "rage", "mad", "anger",
+    }),
+    "comfort": frozenset({
+        "calma", "conforta", "conforto", "acolhe", "acolhimento", "apoio", "fica", "aqui",
+        "comfort", "support", "soothe", "hug",
+    }),
 }
 
 _VISUAL_CUES = frozenset({
@@ -55,7 +79,7 @@ _VISUAL_CUES = frozenset({
 })
 _INFORMATION_CUES = frozenset({
     "como", "qual", "quais", "quando", "onde", "porque", "por", "que", "explica", "explicar",
-    "funciona", "funcionar", "erro", "codigo", "código", "log", "status", "integracao", "integração",
+    "funciona", "funcionar", "erro", "codigo", "log", "status", "integracao",
 })
 
 
@@ -72,6 +96,12 @@ def _cluster_tags(tokens: set[str]) -> set[str]:
     return {name for name, lexicon in _SEMANTIC_CLUSTERS.items() if tokens & lexicon}
 
 
+def _canonical_clusters(values: Iterable[str]) -> set[str]:
+    normalized = {_normalize(str(value)).strip() for value in values if str(value).strip()}
+    direct = {value for value in normalized if value in _SEMANTIC_CLUSTERS}
+    return direct | _cluster_tags(set(normalized))
+
+
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, float(value)))
 
@@ -82,6 +112,12 @@ def _overlap(left: set[str], right: set[str]) -> float:
     return len(left & right) / max(1, len(left | right))
 
 
+def _coverage(desired: set[str], candidate: set[str]) -> float:
+    if not desired or not candidate:
+        return 0.0
+    return len(desired & candidate) / max(1, len(desired))
+
+
 class ResponseModalitySelector:
     """Choose how to answer after semantic dialogue realization.
 
@@ -89,6 +125,11 @@ class ResponseModalitySelector:
     transport-native expression only from assets supplied by the trusted adapter
     for the current conversation. Native ids never participate in semantic
     matching and are used only after a local asset has already won.
+
+    A learned/curated ``ExpressionSemanticProfile`` outranks raw transport
+    name/tags. Discord metadata remains useful as a fallback when no richer
+    semantic memory exists, but it cannot override a profile that Amora already
+    learned for that expression.
     """
 
     EXPRESSION_MIN_FIT = 0.56
@@ -122,9 +163,26 @@ class ResponseModalitySelector:
         ranked_assets: list[tuple[float, ExpressionRef, dict[str, float]]] = []
         for asset in self._eligible_assets(message):
             semantic = self._asset_semantics(asset)
-            semantic_fit = _clamp(0.72 * _overlap(desired_clusters, semantic["clusters"]) + 0.28 * _overlap(user_tokens, semantic["tokens"]))
-            social_fit = _clamp(0.65 * _overlap(desired_clusters, semantic["social"]) + 0.35 * visual_cue)
-            mood_fit = 0.5 if not emotion_tags else _clamp(0.35 + 0.65 * _overlap(emotion_tags, semantic["clusters"]))
+            if semantic["profile_clusters"]:
+                semantic_fit = _clamp(
+                    0.62 * _coverage(desired_clusters, semantic["profile_clusters"])
+                    + 0.20 * _coverage(desired_clusters, semantic["transport_clusters"])
+                    + 0.18 * _overlap(user_tokens, semantic["tokens"])
+                )
+                social_basis = semantic["profile_social"] or semantic["profile_clusters"]
+                social_fit = _clamp(0.72 * _coverage(desired_clusters, social_basis) + 0.28 * visual_cue)
+                mood_basis = semantic["profile_clusters"]
+                semantic_confidence = asset.semantic_profile.confidence if asset.semantic_profile is not None else 0.5
+            else:
+                semantic_fit = _clamp(
+                    0.72 * _coverage(desired_clusters, semantic["transport_clusters"])
+                    + 0.28 * _overlap(user_tokens, semantic["tokens"])
+                )
+                social_fit = _clamp(0.65 * _coverage(desired_clusters, semantic["transport_clusters"]) + 0.35 * visual_cue)
+                mood_basis = semantic["transport_clusters"]
+                semantic_confidence = 0.35
+
+            mood_fit = 0.5 if not emotion_tags else _clamp(0.35 + 0.65 * _coverage(emotion_tags, mood_basis))
             relationship_fit = 0.72 if directness >= 0.9 else 0.52
             timing = _clamp(0.32 + 0.36 * short_social + 0.22 * visual_cue + 0.10 * directness)
             novelty = 0.0 if asset.native_id in recent else 1.0
@@ -135,19 +193,21 @@ class ResponseModalitySelector:
             interruption_cost = _clamp(0.55 * information_need + 0.15 * (1.0 - directness))
 
             score = _clamp(
-                0.31 * semantic_fit
+                0.30 * semantic_fit
                 + 0.16 * social_fit
                 + 0.10 * mood_fit
                 + 0.10 * relationship_fit
-                + 0.14 * timing
-                + 0.09 * novelty
-                + 0.10 * visual_cue
+                + 0.13 * timing
+                + 0.08 * novelty
+                + 0.09 * visual_cue
+                + 0.04 * semantic_confidence
                 - 0.11 * intensity_mismatch
                 - 0.13 * interruption_cost
                 - repetition_penalty
             )
             ranked_assets.append((score, asset, {
                 "semantic_fit": semantic_fit,
+                "semantic_confidence": semantic_confidence,
                 "social_fit": social_fit,
                 "mood_fit": mood_fit,
                 "relationship_fit": relationship_fit,
@@ -204,6 +264,8 @@ class ResponseModalitySelector:
         ]
         if expressions:
             reasons.extend(["EXPRESSION_SELECTED_SEMANTICALLY", "NATIVE_ID_NOT_USED_FOR_SELECTION"])
+        if best_asset is not None and best_asset.semantic_profile is not None:
+            reasons.append("EXPRESSION_SEMANTIC_PROFILE_APPLIED")
         if information_need >= 0.75:
             reasons.append("INFORMATION_NEED_PROTECTS_TEXT")
         return ResponseModalityDecision(
@@ -228,10 +290,12 @@ class ResponseModalitySelector:
 
     @staticmethod
     def _asset_semantics(asset: ExpressionRef) -> dict[str, set[str]]:
+        transport_tokens = _tokens(" ".join(filter(None, [asset.name, asset.description, " ".join(asset.tags)])))
+        transport_clusters = _cluster_tags(transport_tokens)
+        profile_tokens: set[str] = set()
+        profile_clusters: set[str] = set()
+        profile_social: set[str] = set()
         profile = asset.semantic_profile
-        raw_tokens = _tokens(" ".join(filter(None, [asset.name, asset.description, " ".join(asset.tags)])))
-        clusters = _cluster_tags(raw_tokens)
-        social = set(clusters)
         if profile is not None:
             profile_tokens = _tokens(" ".join([
                 *profile.visual_concepts,
@@ -240,10 +304,14 @@ class ResponseModalitySelector:
                 *profile.possible_interpretations,
                 profile.register,
             ]))
-            raw_tokens |= profile_tokens
-            clusters |= set(profile.affect_tags) | _cluster_tags(profile_tokens)
-            social |= set(profile.social_roles) | _cluster_tags(profile_tokens)
-        return {"tokens": raw_tokens, "clusters": clusters, "social": social}
+            profile_clusters = _canonical_clusters(profile.affect_tags) | _cluster_tags(profile_tokens)
+            profile_social = _canonical_clusters(profile.social_roles) | _cluster_tags(profile_tokens)
+        return {
+            "tokens": transport_tokens | profile_tokens,
+            "transport_clusters": transport_clusters,
+            "profile_clusters": profile_clusters,
+            "profile_social": profile_social,
+        }
 
     @staticmethod
     def _stable_tie(message: InboundMessage, asset: ExpressionRef) -> str:
