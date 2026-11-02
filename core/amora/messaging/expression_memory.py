@@ -130,7 +130,13 @@ class PerceptualExpressionMemory:
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def hydrate(self, message: InboundMessage) -> InboundMessage:
-        """Attach persisted CPF semantics to assets that are currently available."""
+        """Attach persisted CPF semantics to assets that are currently available.
+
+        A known identity may still have unusable semantics. If current transport
+        metadata no longer matches the persisted fingerprint, or the stored profile
+        is explicitly stale/failed, keep the identity known but quarantine the old
+        semantic profile until a fresh enrichment succeeds.
+        """
 
         records = self._scope_records(
             platform=message.platform,
@@ -151,17 +157,28 @@ class PerceptualExpressionMemory:
                         "needs_visual_enrichment": False,
                     }
                 )
+
+            current_fingerprint = self.metadata_fingerprint(expression)
+            fingerprint_matches = current_fingerprint == record.fingerprint
+            semantic_quarantined = (
+                not fingerprint_matches
+                or record.semantic_status in {
+                    ExpressionSemanticStatus.STALE,
+                    ExpressionSemanticStatus.FAILED,
+                }
+            )
+            semantic_profile = None if semantic_quarantined else record.semantic_profile
             return expression.model_copy(
                 update={
                     "name": expression.name or record.name,
                     "description": expression.description or record.description,
                     "tags": expression.tags or list(record.tags),
-                    "semantic_profile": record.semantic_profile,
+                    "semantic_profile": semantic_profile,
                     "known_to_amora": True,
                     "memory_key": record.memory_key,
                     "semantic_revision": record.semantic_revision,
-                    "needs_visual_enrichment": record.needs_visual_enrichment,
-                    "fingerprint": record.fingerprint,
+                    "needs_visual_enrichment": semantic_quarantined or record.needs_visual_enrichment,
+                    "fingerprint": current_fingerprint if not fingerprint_matches else record.fingerprint,
                     "fingerprint_source": record.fingerprint_source,
                 }
             )
@@ -243,7 +260,11 @@ class PerceptualExpressionMemory:
         expected_fingerprint: str,
         source: str = "visual_perception",
     ) -> bool:
-        """Commit one visual analysis only if it still describes the current asset."""
+        """Commit one visual analysis only if it still describes the current asset.
+
+        Replaying the same successful analysis for the same fingerprint is an
+        idempotent success: semantic_revision does not increase twice.
+        """
 
         now = self.clock.now().isoformat()
         trusted_profile = profile.model_copy(update={"source": str(source)[:64] or "visual_perception"})
@@ -254,12 +275,18 @@ class PerceptualExpressionMemory:
         )
         with self.database._lock, self.database._conn:
             row = self.database._conn.execute(
-                """SELECT fingerprint FROM perceptual_expression_assets
+                """SELECT fingerprint, semantic_status, last_visual_analysis_fingerprint
+                   FROM perceptual_expression_assets
                    WHERE platform=? AND account_scope=? AND scope_id=? AND kind=? AND native_id=?""",
                 (platform.value, account_scope, scope_id, kind, native_id),
             ).fetchone()
             if row is None or str(row["fingerprint"]) != str(expected_fingerprint):
                 return False
+            if (
+                str(row["semantic_status"]) == ExpressionSemanticStatus.ENRICHED.value
+                and str(row["last_visual_analysis_fingerprint"] or "") == str(expected_fingerprint)
+            ):
+                return True
             self.database._conn.execute(
                 """UPDATE perceptual_expression_assets
                    SET semantic_profile_json=?, semantic_status='enriched',
