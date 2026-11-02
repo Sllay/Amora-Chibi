@@ -160,7 +160,11 @@ class CapabilityRegistry:
         self._manual[capability_id] = declaration
         # Validate against dynamic declarations immediately so duplicates are
         # deterministic and discovered at registration time when possible.
-        self._collect_declarations()
+        try:
+            self._collect_declarations()
+        except Exception:
+            self._manual.pop(capability_id, None)
+            raise
 
     def unregister(self, capability_id: str) -> None:
         self._manual.pop(capability_id, None)
@@ -397,7 +401,8 @@ class CapabilityRegistry:
         manifest = plugin.manifest
         effective_permissions = descriptor.permissions | manifest.permissions | tool.permissions
         effective_risk = max(descriptor.risk, manifest.risk, tool.risk)
-        effective_cost = min(1.0, descriptor.cost + manifest.cost + tool.cost)
+        physical_cost = min(1.0, manifest.cost + tool.cost)
+        effective_cost = max(descriptor.cost, physical_cost)
         effective_scope = manifest.execution_scope
         effective_idempotent = descriptor.idempotent and tool.idempotent
         return (
