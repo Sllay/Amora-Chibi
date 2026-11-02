@@ -22,11 +22,13 @@ from .providers_identity import (
 from .providers_openrouter import OpenRouterCognitiveProvider
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
 # Preserve the historical layered-runtime imports as explicit architectural
-# dependencies. The resilience layer decorates the final identity-aware provider
-# adapters without moving canonical state or identity into remote providers.
+# dependencies. The capability layer is additive: resilience and canonical
+# identity stay below it, while capability grounding never gains execution
+# authority over ActionBus.
 from .structured_runtime import CognitiveEngine as StructuredCognitiveEngine
 from .identity_runtime import CognitiveEngine as IdentityAwareCognitiveEngine
-from .resilience_runtime import CognitiveEngine
+from .resilience_runtime import CognitiveEngine as ResilientCognitiveEngine
+from .capability_runtime import CognitiveEngine
 from .replay import CognitiveReplayResult
 from .speech import SpeechCue, SpeechNormalizer, SpeechPlan, SpeechRender, SpeechSegmenter
 from .store_v1 import CognitiveStore
@@ -58,6 +60,7 @@ __all__ = [
     "ProviderDelta",
     "ProviderError",
     "ProviderPrivacyGate",
+    "ResilientCognitiveEngine",
     "SpeechNormalizer",
     "SpeechCue",
     "SpeechPlan",
