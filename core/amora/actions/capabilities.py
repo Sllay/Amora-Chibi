@@ -13,6 +13,25 @@ if TYPE_CHECKING:
     from .plugins import PluginRegistry
 
 
+_RETRIEVAL_STOP_WORDS = {
+    "a", "ao", "aos", "as", "o", "os",
+    "de", "da", "das", "do", "dos",
+    "e", "em", "na", "nas", "no", "nos",
+    "para", "pra", "pro", "por", "com", "sem",
+    "um", "uma", "uns", "umas",
+    "eu", "tu", "vc", "voce", "voces", "me", "mim", "te", "se",
+    "meu", "minha", "meus", "minhas", "seu", "sua", "seus", "suas",
+    "esse", "essa", "esses", "essas", "este", "esta", "isto", "isso", "aquilo",
+    "aqui", "ai", "la", "amora", "pai", "mae", "pfv", "favor",
+    # Generic request verbs are poor capability evidence. They may appear in many
+    # modules and therefore must not make one capability win retrieval by itself.
+    "manda", "mandar", "envia", "enviar", "envie",
+    "faz", "fazer", "usa", "usar", "use",
+    "solta", "soltar", "joga", "jogar", "abre", "abrir", "vem",
+    "quero", "queria", "pode", "consegue",
+}
+
+
 class CapabilityKnowledgeState(StrEnum):
     KNOWN = "known"
 
@@ -204,7 +223,7 @@ class CapabilityRegistry:
         """
 
         query_text = self._normalize(query.text)
-        text_tokens = set(self._tokens(query_text))
+        text_tokens = self._semantic_tokens(query_text)
         desired = {self._normalize(item) for item in query.desired_affordances if item}
         active = set(query.active_capability_ids)
         if not text_tokens and not desired and not active:
@@ -220,21 +239,21 @@ class CapabilityRegistry:
             descriptor = snapshot.descriptor
             semantic_action = self._normalize(descriptor.semantic_action)
             affordances = {self._normalize(item) for item in descriptor.affordances}
-            summary_tokens = set(self._tokens(self._normalize(descriptor.summary)))
-            example_tokens = set()
+            summary_tokens = self._semantic_tokens(descriptor.summary)
+            example_tokens: set[str] = set()
             for example in descriptor.examples:
-                example_tokens.update(self._tokens(self._normalize(example)))
-            precondition_tokens = set()
+                example_tokens.update(self._semantic_tokens(example))
+            precondition_tokens: set[str] = set()
             for item in descriptor.preconditions:
-                precondition_tokens.update(self._tokens(self._normalize(item)))
-            effect_tokens = set()
+                precondition_tokens.update(self._semantic_tokens(item))
+            effect_tokens: set[str] = set()
             for item in descriptor.effects:
-                effect_tokens.update(self._tokens(self._normalize(item)))
+                effect_tokens.update(self._semantic_tokens(item))
 
-            semantic_tokens = set(self._tokens(semantic_action))
-            affordance_tokens = set()
+            semantic_tokens = self._semantic_tokens(semantic_action)
+            affordance_tokens: set[str] = set()
             for item in affordances:
-                affordance_tokens.update(self._tokens(item))
+                affordance_tokens.update(self._semantic_tokens(item))
 
             matched_terms: set[str] = set()
             score = 0.0
@@ -423,6 +442,15 @@ class CapabilityRegistry:
         decomposed = unicodedata.normalize("NFKD", value.lower())
         ascii_value = "".join(char for char in decomposed if not unicodedata.combining(char))
         return " ".join(ascii_value.split())
+
+    @classmethod
+    def _semantic_tokens(cls, value: str) -> set[str]:
+        normalized = cls._normalize(value).replace("_", " ")
+        return {
+            token
+            for token in cls._tokens(normalized)
+            if len(token) > 1 and token not in _RETRIEVAL_STOP_WORDS
+        }
 
     @staticmethod
     def _tokens(value: str) -> list[str]:
