@@ -186,7 +186,8 @@ class OutboundMessage(BaseModel):
 
     @model_validator(mode="after")
     def require_payload(self) -> "OutboundMessage":
-        if not self.text.strip() and not self.expressions:
+        persisted_expressions = self.metadata.get("transport_expressions")
+        if not self.text.strip() and not self.expressions and not persisted_expressions:
             raise ValueError("outbound message requires text or expression metadata")
         return self
 
