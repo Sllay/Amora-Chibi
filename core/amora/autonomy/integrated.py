@@ -27,6 +27,7 @@ class AutonomyEngine(BaseAutonomyEngine):
         "ask_question": (DesireKind.ASK_QUESTION, DriveType.CURIOSITY, 0.72, 0.08),
         "seek_repair": (DesireKind.SEEK_REPAIR, DriveType.SOCIAL, 0.84, 0.14),
         "express_gratitude": (DesireKind.EXPRESS_GRATITUDE, DriveType.EXPRESSION, 0.80, 0.05),
+        "express_visually": (DesireKind.EXPRESS, DriveType.EXPRESSION, 0.76, 0.06),
         "set_boundary": (DesireKind.SET_BOUNDARY, DriveType.EXPRESSION, 0.88, 0.12),
         "withdraw": (DesireKind.WITHDRAW, DriveType.EXPRESSION, 0.68, 0.05),
         "wait": (DesireKind.WAIT, DriveType.REST, 0.86, 0.02),
@@ -59,6 +60,9 @@ class AutonomyEngine(BaseAutonomyEngine):
             "confidence": _clamp(event.confidence, 0.0, 1.0),
             "urgency": min(self.MAX_MODEL_SUGGESTION_URGENCY, _clamp(event.importance, 0.0, 1.0)),
             "reason_code": str(event.payload.get("reason_code") or "MODEL_SUGGESTION"),
+            "capability_id": event.payload.get("capability_id"),
+            "capability_availability": event.payload.get("capability_availability"),
+            "capability_grounded": event.payload.get("capability_grounded") is True,
             "created_at": self.clock.now(),
             "expires_at": self.clock.now() + self.COGNITIVE_SUGGESTION_TTL,
         }
@@ -116,6 +120,22 @@ class AutonomyEngine(BaseAutonomyEngine):
             cost=cost,
             interruption_penalty=self._interruption_penalty(context, target_id),
         )
+        metadata = {
+            "suggested_action_kind": action_kind,
+            "provider_confidence": confidence,
+            "provider_reason_code": suggestion.get("reason_code"),
+            "model_cannot_execute_directly": True,
+            "utility_recomputed_locally": True,
+        }
+        capability_id = suggestion.get("capability_id")
+        if capability_id is not None:
+            metadata.update(
+                {
+                    "capability_id": str(capability_id),
+                    "capability_availability": suggestion.get("capability_availability"),
+                    "capability_grounded": suggestion.get("capability_grounded") is True,
+                }
+            )
         return DesireCandidate(
             kind=kind,
             source_kind="cognitive_suggestion",
@@ -127,13 +147,7 @@ class AutonomyEngine(BaseAutonomyEngine):
             urgency=urgency,
             created_at=suggestion["created_at"],
             expires_at=suggestion["expires_at"],
-            metadata={
-                "suggested_action_kind": action_kind,
-                "provider_confidence": confidence,
-                "provider_reason_code": suggestion.get("reason_code"),
-                "model_cannot_execute_directly": True,
-                "utility_recomputed_locally": True,
-            },
+            metadata=metadata,
         )
 
     def _intention_from_candidate(self, candidate: DesireCandidate):
