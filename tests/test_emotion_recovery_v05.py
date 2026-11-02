@@ -5,7 +5,7 @@ import pytest
 
 from amora.app import AmoraCore
 from amora.emotion import AppraisalInput, EmotionStore, EmotionType
-from amora.storage import AmoraDatabase
+from amora.storage import AmoraDatabase, LATEST_SCHEMA_VERSION
 from amora.time import SimulatedClock
 
 
@@ -48,7 +48,7 @@ async def test_backup_restore_contains_emotion_mood_affect_and_bids(tmp_path: Pa
         assert result.event is not None; backup = core.create_backup("v05-emotion.db")
     finally: core.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored_db = AmoraDatabase(restored_path)
-    try: assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 15
+    try: assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == LATEST_SCHEMA_VERSION
     finally: restored_db.close()
     store = EmotionStore(restored_path, clock)
     try:
