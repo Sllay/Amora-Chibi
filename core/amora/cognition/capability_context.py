@@ -29,6 +29,12 @@ class CapabilityContextProjector:
     It never grants execution permission and deliberately resolves the registry
     without a per-turn ExecutionContext. Actual execution remains exclusively
     guarded by ActionBus policy/risk/permission/effect verification.
+
+    A transport may additionally declare a capability available only for the
+    current response surface (for example, a Discord sticker catalog that was
+    actually fetched for this guild). That contextual availability changes only
+    the provider-safe projection for this request; the persistent registry is not
+    mutated and no native asset id is exposed to cognition.
     """
 
     MAX_ITEMS = 6
@@ -51,11 +57,14 @@ class CapabilityContextProjector:
         if registry is None:
             return CapabilityProjectionResult(reason_codes=["CAPABILITY_REGISTRY_NOT_BOUND"])
 
+        active_ids = self._string_set(request.metadata.get("active_capability_ids"))
+        surface_available = self._string_set(request.metadata.get("surface_available_capability_ids"))
         query = CapabilityQuery(
             text=request.text,
             top_k=min(32, self.max_items * 3),
             include_unavailable=True,
             include_forbidden=True,
+            active_capability_ids=active_ids,
         )
         matches = registry.retrieve(query, context=None)
         if not matches:
@@ -69,6 +78,7 @@ class CapabilityContextProjector:
         selected: list[str] = []
         used_tokens = 0
         truncated = False
+        contextual_availability_used = False
 
         for match in matches:
             if len(projected) >= self.max_items:
@@ -76,12 +86,17 @@ class CapabilityContextProjector:
                 break
 
             raw = match.snapshot.cognitive_projection()
+            capability_id = str(raw["capability_id"])
+            availability = str(raw["availability"])
+            if capability_id in surface_available:
+                availability = "available"
+                contextual_availability_used = True
             item = ContextCapability(
-                capability_id=str(raw["capability_id"]),
+                capability_id=capability_id,
                 semantic_action=str(raw["semantic_action"]),
                 summary=str(raw["summary"])[:700],
                 affordances=[str(value) for value in raw.get("affordances", [])[:8]],
-                availability=str(raw["availability"]),
+                availability=availability,
                 inputs=dict(raw.get("inputs") or {}),
                 outputs=dict(raw.get("outputs") or {}),
                 preconditions=[str(value) for value in raw.get("preconditions", [])[:12]],
@@ -111,6 +126,10 @@ class CapabilityContextProjector:
         reasons = ["CAPABILITY_CONTEXT_PROJECTED", "CAPABILITY_CONTEXT_NON_AUTHORITATIVE"] if projected else [
             "CAPABILITY_CONTEXT_EMPTY"
         ]
+        if contextual_availability_used:
+            reasons.append("CAPABILITY_SURFACE_AVAILABILITY_PROJECTED")
+        if active_ids:
+            reasons.append("CAPABILITY_SURFACE_ACTIVE_IDS_APPLIED")
         if truncated:
             reasons.append("CAPABILITY_CONTEXT_TRIMMED")
         return CapabilityProjectionResult(
@@ -123,6 +142,12 @@ class CapabilityContextProjector:
 
     def _registry(self) -> CapabilityRegistry | None:
         return resolve_runtime_capabilities(self.runtime_owner)
+
+    @staticmethod
+    def _string_set(value: object) -> set[str]:
+        if not isinstance(value, (list, tuple, set, frozenset)):
+            return set()
+        return {str(item).strip() for item in value if str(item).strip()}
 
     @staticmethod
     def _estimate_tokens(item: ContextCapability) -> int:
