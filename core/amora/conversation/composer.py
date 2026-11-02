@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from amora.emotion import EmotionType, MoodState
 from amora.voice_expression import VoiceProsodyPlanner
 
@@ -73,7 +75,10 @@ class LocalSpeechComposer:
     def fallback_dialogue(self, text: str, *, speaker_id: str | None = None) -> str:
         """Natural local fallback used by ordinary/local conversation paths."""
         normalized = text.strip().lower()
-        if "amora" in normalized and any(token in normalized for token in ("oi", "ei", "alô", "alo")):
+        # Match lexical tokens, not substrings. In particular, "sei" must not be
+        # mistaken for the greeting "ei", and "namorada" must not match "amora".
+        tokens = set(re.findall(r"\w+", normalized, flags=re.UNICODE))
+        if "amora" in tokens and tokens.intersection({"oi", "ei", "alô", "alo"}):
             return "Oi, papis. Tô aqui."
         if normalized.endswith("?"):
             return "Uhum, tô ouvindo."
