@@ -122,7 +122,11 @@ async def run_live_social_ab(
         target_id=target_id,
         probes=probes,
     )
-    report = await compare_social_suite(left, right, cases)
+    # Shared quota-wait budget is bounded below the Shell's 300s job timeout.
+    # Honor provider Retry-After only when supplied, never retry HTTP 400.
+    report = await compare_social_suite(
+        left, right, cases, rate_limit_retry_budget_seconds=120.0
+    )
     return LiveSocialABReport(
         speaker_id=speaker_id,
         target_id=target_id,

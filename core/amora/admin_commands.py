@@ -101,17 +101,18 @@ async def _command_status(core: Any, args: list[str]) -> dict[str, Any]:
     }
 
 
-def _parse_social_certification_args(args: list[str]) -> tuple[str, str]:
+def _parse_social_certification_args(args: list[str]) -> tuple[str, str, str | None]:
     speaker_id = "PERSON_BK"
     target_id = "ENTITY_AMORA"
+    probe_id: str | None = None
     index = 0
     while index < len(args):
         option = args[index]
-        if option not in {"--speaker-id", "--target-id"}:
+        if option not in {"--speaker-id", "--target-id", "--case"}:
             raise AdminCommandError(
                 "COMMAND_ARGUMENT_INVALID",
                 f"argumento não suportado: {option}",
-                details={"usage": "providers certify social [--speaker-id PERSON_BK] [--target-id ENTITY_AMORA]"},
+                details={"usage": "providers certify social [--case ordinary_chat] [--speaker-id PERSON_BK] [--target-id ENTITY_AMORA]"},
             )
         if index + 1 >= len(args):
             raise AdminCommandError("COMMAND_ARGUMENT_INVALID", f"valor ausente para {option}")
@@ -120,18 +121,31 @@ def _parse_social_certification_args(args: list[str]) -> tuple[str, str]:
             raise AdminCommandError("COMMAND_ARGUMENT_INVALID", f"valor inválido para {option}")
         if option == "--speaker-id":
             speaker_id = value
-        else:
+        elif option == "--target-id":
             target_id = value
+        else:
+            probe_id = value
         index += 2
-    return speaker_id, target_id
+    return speaker_id, target_id, probe_id
 
 
 async def _command_providers_certify_social(core: Any, args: list[str]) -> dict[str, Any]:
-    speaker_id, target_id = _parse_social_certification_args(args)
+    speaker_id, target_id, probe_id = _parse_social_certification_args(args)
 
+    from amora.cognition.certification import SOCIAL_SURFACE_REPLAY_V1
     from amora.cognition.certification_live import (
         LiveCertificationConfigurationError,
         run_live_social_ab,
+    )
+
+    if probe_id is not None and not any(p.probe_id == probe_id for p in SOCIAL_SURFACE_REPLAY_V1):
+        raise AdminCommandError(
+            "CERTIFICATION_CASE_NOT_FOUND", "caso de certificação inexistente",
+            details={"available_cases": [p.probe_id for p in SOCIAL_SURFACE_REPLAY_V1]},
+        )
+    probes = (
+        tuple(p for p in SOCIAL_SURFACE_REPLAY_V1 if p.probe_id == probe_id)
+        if probe_id is not None else SOCIAL_SURFACE_REPLAY_V1
     )
 
     try:
@@ -139,6 +153,7 @@ async def _command_providers_certify_social(core: Any, args: list[str]) -> dict[
             core,
             speaker_id=speaker_id,
             target_id=target_id,
+            probes=probes,
         )
     except LiveCertificationConfigurationError as exc:
         raise AdminCommandError(
@@ -171,8 +186,8 @@ _COMMANDS: tuple[RegisteredCommand, ...] = (
     ),
     RegisteredCommand(
         path=("providers", "certify", "social"),
-        usage="providers certify social [--speaker-id PERSON_BK] [--target-id ENTITY_AMORA]",
-        description="Executa o A/B live canônico Qwen × Mistral em contexto read-only.",
+        usage="providers certify social [--case ordinary_chat] [--speaker-id PERSON_BK] [--target-id ENTITY_AMORA]",
+        description="Executa A/B live Qwen × Mistral read-only (ou um único caso com --case).",
         timeout_seconds=300.0,
         handler=_command_providers_certify_social,
         exclusive=True,

@@ -221,7 +221,8 @@ async def test_mistral_candidate_payload_keeps_secret_out_and_trusted_context_se
     payload = provider.captured_payload
     assert payload is not None
     assert payload["model"] == "mistralai/mistral-large-4-1t-a52b"
-    assert payload["reasoning_effort"] == "none"
+    assert payload["reasoning_effort"] == "high"
+    assert payload["max_tokens"] >= 4096
     assert payload["stream"] is False
     assert "response_format" not in payload
     serialized = json.dumps(payload, ensure_ascii=False)

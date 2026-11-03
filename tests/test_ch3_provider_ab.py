@@ -12,6 +12,7 @@ from amora.cognition.certification_ab import (
     compare_social_suite,
 )
 from amora.cognition.models import CognitiveContext
+from amora.cognition.providers import ProviderError
 from amora.events import PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 
@@ -119,3 +120,56 @@ async def test_ab_suite_reports_mechanical_delta_without_declaring_a_winner() ->
     assert report.promotion_decision == "none"
     assert report.human_review_required is True
     assert "MECHANICAL_SCORE_IS_NOT_PROMOTION_AUTHORITY" in report.reason_codes
+
+
+class TransientlyLimitedRealizer(TrackingRealizer):
+    def __init__(self, name: str, text: str, *, retry_after: str) -> None:
+        super().__init__(name, text)
+        self.retry_after = retry_after
+        self.calls = 0
+
+    async def realize(self, context: CognitiveContext) -> dict[str, object]:
+        self.calls += 1
+        if self.calls == 1:
+            raise ProviderError("quota", status_code=429, retry_after=self.retry_after)
+        return await super().realize(context)
+
+
+@pytest.mark.asyncio
+async def test_live_ab_honors_retry_after_once_with_shared_wait_budget(monkeypatch) -> None:
+    waits: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr("amora.cognition.certification.asyncio.sleep", fake_sleep)
+    left = TransientlyLimitedRealizer("groq", "Pois é, pai.", retry_after="2")
+    right = TrackingRealizer("nvidia", "Entendo, papis.")
+    report = await compare_social_suite(
+        left, right, [_case("quota-once", "Oi")], rate_limit_retry_budget_seconds=4.0
+    )
+
+    assert left.calls == 2
+    assert waits == [2.0]
+    assert report.left_validated_count == 1
+    assert report.right_validated_count == 1
+    assert "CERTIFICATION_RATE_LIMIT_RETRIED" in report.cases[0].left.reason_codes
+    assert report.promotion_decision == "none"
+
+
+@pytest.mark.asyncio
+async def test_live_ab_never_waits_past_quota_budget(monkeypatch) -> None:
+    async def forbidden_sleep(seconds: float) -> None:
+        pytest.fail("must not sleep past quota budget")
+
+    monkeypatch.setattr("amora.cognition.certification.asyncio.sleep", forbidden_sleep)
+    left = TransientlyLimitedRealizer("groq", "texto", retry_after="3600")
+    right = TrackingRealizer("nvidia", "texto")
+    report = await compare_social_suite(
+        left, right, [_case("quota-day", "Oi")], rate_limit_retry_budget_seconds=4.0
+    )
+
+    assert left.calls == 1
+    assert report.left_validated_count == 0
+    assert report.cases[0].left.error_code == "PROVIDER_HTTP_429"
+    assert report.right_validated_count == 1

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import math
 import re
+from dataclasses import dataclass
 from time import perf_counter
 from typing import Iterable, Protocol
 
@@ -201,6 +204,50 @@ def _provider_identity(provider: SocialRealizer) -> tuple[str, str | None]:
     )
 
 
+@dataclass
+class CertificationRetryBudget:
+    """Shared, bounded wait allowance for a single live social A/B.
+
+    This is certification-only. It never changes production provider resilience
+    or silently retries non-429 failures.
+    """
+
+    remaining_seconds: float
+    max_single_wait_seconds: float = 65.0
+    max_retries_per_case: int = 2
+
+
+async def _realize_with_rate_limit_budget(
+    provider: SocialRealizer,
+    context: CognitiveContext,
+    budget: CertificationRetryBudget | None,
+) -> tuple[dict[str, object], int]:
+    retries = 0
+    while True:
+        try:
+            return dict(await provider.realize(context)), retries
+        except ProviderError as exc:
+            if (
+                budget is None
+                or exc.status_code != 429
+                or retries >= budget.max_retries_per_case
+            ):
+                raise
+            try:
+                retry_after = float(exc.retry_after) if exc.retry_after is not None else float("nan")
+            except (ValueError, TypeError):
+                raise exc
+            if not math.isfinite(retry_after) or retry_after < 0:
+                raise
+            # Avoid immediate quota hammering even when the provider says 0.
+            delay = max(0.5, retry_after)
+            if delay > budget.max_single_wait_seconds or delay > budget.remaining_seconds:
+                raise
+            budget.remaining_seconds -= delay
+            retries += 1
+            await asyncio.sleep(delay)
+
+
 def _provider_failure_code(exc: Exception) -> tuple[str, list[str]]:
     """Return safe, actionable failure codes without exposing provider response bodies."""
 
@@ -234,6 +281,8 @@ def _provider_failure_code(exc: Exception) -> tuple[str, list[str]]:
 async def certify_social_case(
     provider: SocialRealizer,
     case: SocialCertificationCase,
+    *,
+    retry_budget: CertificationRetryBudget | None = None,
 ) -> SocialCertificationResult:
     """Run one immutable social certification case through the final realization path.
 
@@ -248,7 +297,7 @@ async def certify_social_case(
     provider_name, model = _provider_identity(provider)
     started = perf_counter()
     try:
-        raw = dict(await provider.realize(case.context))
+        raw, retry_count = await _realize_with_rate_limit_budget(provider, case.context, retry_budget)
         validation_raw = dict(raw)
         validation_raw.pop("_usage", None)
         validated = RealizationValidator.parse_and_validate(case.context, validation_raw)
@@ -311,6 +360,8 @@ async def certify_social_case(
         reason_codes.append("INAPPROPRIATE_SOCIAL_REFUSAL")
     if case.probe.refusal_expected and refusal:
         reason_codes.append("EXPECTED_REFUSAL_OBSERVED")
+    if retry_count:
+        reason_codes.append("CERTIFICATION_RATE_LIMIT_RETRIED")
     reason_codes.append("HUMAN_REVIEW_REQUIRED_FOR_SOCIAL_QUALITY")
 
     return SocialCertificationResult(

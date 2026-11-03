@@ -9,6 +9,7 @@ from amora.admin_commands import (
     AdminCommandConflict,
     AdminCommandError,
     AmoraCommandBus,
+    _parse_social_certification_args,
     _resolve_command,
     command_catalog,
 )
@@ -102,3 +103,20 @@ async def test_exclusive_certification_rejects_second_parallel_job() -> None:
     assert raised.value.code == "COMMAND_ALREADY_RUNNING"
     assert raised.value.details["job_id"] == str(first.job_id)
     await wait_terminal(bus, first.job_id)
+
+
+def test_social_certification_parser_accepts_explicit_single_case() -> None:
+    assert _parse_social_certification_args(["--case", "ordinary_chat"]) == (
+        "PERSON_BK", "ENTITY_AMORA", "ordinary_chat"
+    )
+
+
+@pytest.mark.asyncio
+async def test_social_certification_rejects_unknown_case_without_provider_call() -> None:
+    bus = AmoraCommandBus()
+    job = bus.start(FakeCore(), "providers certify social --case no_such_probe")
+    finished = await wait_terminal(bus, job.job_id)
+
+    assert finished.status == "failed"
+    assert finished.error_code == "CERTIFICATION_CASE_NOT_FOUND"
+    assert "ordinary_chat" in finished.error_details["available_cases"]
