@@ -16,6 +16,9 @@ MIGRATION_V107 = (
         CHECK(visual_attempt_count >= 0);
     ALTER TABLE perceptual_expression_assets ADD COLUMN visual_last_error_code TEXT;
     ALTER TABLE perceptual_expression_assets ADD COLUMN visual_defer_until TEXT;
+    ALTER TABLE perceptual_expression_assets ADD COLUMN remote_processing_allowed INTEGER NOT NULL DEFAULT 0
+        CHECK(remote_processing_allowed IN (0, 1));
+    ALTER TABLE perceptual_expression_assets ADD COLUMN privacy_scope TEXT NOT NULL DEFAULT 'PERSONAL';
 
     CREATE INDEX IF NOT EXISTS idx_perceptual_expression_visual_claim
         ON perceptual_expression_assets(
