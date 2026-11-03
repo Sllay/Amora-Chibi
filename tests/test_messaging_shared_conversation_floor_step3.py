@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from amora.app import AmoraCore
 from amora.messaging import ChannelType, ExternalActorRef, InboundMessage, MessagingPlatform, RoutingAction
+from amora.storage import LATEST_SCHEMA_VERSION
 from amora.time import SimulatedClock
 
 
@@ -125,11 +126,11 @@ def test_floor_isolated_by_conversation(tmp_path, monkeypatch) -> None:
         core.close()
 
 
-def test_schema_15_contains_shared_floor_table(tmp_path, monkeypatch) -> None:
+def test_latest_schema_contains_shared_floor_table(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=SimulatedClock())
     try:
-        assert core.database.schema_version() == 15
+        assert core.database.schema_version() == LATEST_SCHEMA_VERSION
         row = core.database._conn.execute(
             "SELECT name FROM sqlite_schema WHERE type='table' AND name='messaging_conversation_floor'"
         ).fetchone()
