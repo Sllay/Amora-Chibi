@@ -68,6 +68,7 @@ function formatSocialAB(result) {
   const lines = [];
   lines.push("Certification complete.");
   lines.push(`Corpus: ${data.corpus_id} · ${data.case_count} casos`);
+  if (data.case_count < 11) lines.push("Diagnóstico parcial: a certificação completa dos 11 casos ainda é necessária.");
   lines.push(`Left : ${report.left_provider} · score médio ${Number(report.left_mean_mechanical_score || 0).toFixed(2)} · latência ${seconds(report.left_mean_latency_ms)}`);
   lines.push(`Right: ${report.right_provider} · score médio ${Number(report.right_mean_mechanical_score || 0).toFixed(2)} · latência ${seconds(report.right_mean_latency_ms)}`);
   lines.push(`Validated: ${report.left_validated_count}/${data.case_count} × ${report.right_validated_count}/${data.case_count}`);
