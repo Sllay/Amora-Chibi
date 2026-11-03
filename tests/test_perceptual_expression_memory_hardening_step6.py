@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from amora.app import AmoraCore
@@ -82,30 +83,54 @@ def _core(tmp_path: Path, monkeypatch) -> AmoraCore:
     return AmoraCore.bootstrap(clock=SimulatedClock())
 
 
+def _claim_and_bind(memory, *, body: bytes = b"hardening-visual-v1"):
+    claims = memory.claim_visual(
+        platform=MessagingPlatform.DISCORD,
+        account_scope="primary",
+    )
+    assert len(claims) == 1
+    claim = claims[0]
+    content_sha = hashlib.sha256(body).hexdigest()
+    assert memory.record_visual_content(
+        platform=MessagingPlatform.DISCORD,
+        account_scope="primary",
+        scope_id=claim.record.scope_id,
+        kind=claim.record.kind,
+        native_id=claim.record.native_id,
+        claim_token=claim.claim_token,
+        expected_fingerprint=claim.record.fingerprint,
+        content_fingerprint=content_sha,
+        content_mime="image/png",
+        content_size_bytes=len(body),
+    ) is True
+    return claim, content_sha
+
+
+def _apply(memory, claim, content_sha: str) -> bool:
+    return memory.apply_visual_enrichment(
+        platform=MessagingPlatform.DISCORD,
+        account_scope="primary",
+        scope_id=claim.record.scope_id,
+        kind=claim.record.kind,
+        native_id=claim.record.native_id,
+        profile=_profile(),
+        expected_fingerprint=claim.record.fingerprint,
+        claim_token=claim.claim_token,
+        content_fingerprint=content_sha,
+        provider="test-provider",
+        model="test-vision",
+    )
+
+
 def test_same_visual_enrichment_retry_is_idempotent(tmp_path: Path, monkeypatch) -> None:
     core = _core(tmp_path, monkeypatch)
     try:
         sticker = _sticker()
         memory = core.messaging.expression_memory
         memory.observe_relevant(_message(sticker, message_id="m1", inbound=True), _decision())
-        record = memory.get(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-        )
-        assert record is not None
+        claim, content_sha = _claim_and_bind(memory)
 
-        assert memory.apply_visual_enrichment(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-            profile=_profile(),
-            expected_fingerprint=record.fingerprint,
-        ) is True
+        assert _apply(memory, claim, content_sha) is True
         once = memory.get(
             platform=MessagingPlatform.DISCORD,
             account_scope="primary",
@@ -116,15 +141,9 @@ def test_same_visual_enrichment_retry_is_idempotent(tmp_path: Path, monkeypatch)
         assert once is not None
         assert once.semantic_revision == 1
 
-        assert memory.apply_visual_enrichment(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-            profile=_profile(),
-            expected_fingerprint=record.fingerprint,
-        ) is True
+        # Network retry after the successful commit is accepted even though the
+        # lease was already cleared; semantic_revision must not increment twice.
+        assert _apply(memory, claim, content_sha) is True
         twice = memory.get(
             platform=MessagingPlatform.DISCORD,
             account_scope="primary",
@@ -144,23 +163,8 @@ def test_changed_catalog_metadata_quarantines_old_semantics_before_observation(t
         original = _sticker(description="chibi sorrindo")
         memory = core.messaging.expression_memory
         memory.observe_relevant(_message(original, message_id="m1", inbound=True), _decision())
-        record = memory.get(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-        )
-        assert record is not None
-        assert memory.apply_visual_enrichment(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-            profile=_profile(),
-            expected_fingerprint=record.fingerprint,
-        ) is True
+        claim, content_sha = _claim_and_bind(memory)
+        assert _apply(memory, claim, content_sha) is True
 
         changed = _sticker(description="conteúdo/metadata agora diferente")
         hydrated = memory.hydrate(_message(changed, message_id="later", inbound=False))
@@ -182,23 +186,8 @@ def test_stale_record_is_not_autonomously_selected_until_fresh_enrichment(tmp_pa
         original = _sticker(description="chibi sorrindo")
         memory = core.messaging.expression_memory
         memory.observe_relevant(_message(original, message_id="m1", inbound=True), _decision())
-        first = memory.get(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-        )
-        assert first is not None
-        assert memory.apply_visual_enrichment(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-            profile=_profile(),
-            expected_fingerprint=first.fingerprint,
-        ) is True
+        claim, content_sha = _claim_and_bind(memory)
+        assert _apply(memory, claim, content_sha) is True
 
         changed = _sticker(description="chibi completamente diferente")
         memory.observe_relevant(_message(changed, message_id="m2", inbound=True), _decision())
