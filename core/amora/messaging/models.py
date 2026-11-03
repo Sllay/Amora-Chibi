@@ -56,6 +56,12 @@ class PresenceCommand(StrEnum):
     CHECK = "check"
 
 
+class ExpressionKind(StrEnum):
+    STICKER = "sticker"
+    REACTION = "reaction"
+    IMAGE = "image"
+
+
 class ExternalActorRef(BaseModel):
     """One stable platform identifier presented by an adapter.
 
@@ -77,6 +83,41 @@ class AttachmentRef(BaseModel):
     media_type: str | None = Field(default=None, max_length=128)
     filename: str | None = Field(default=None, max_length=256)
     size_bytes: int | None = Field(default=None, ge=0, le=128 * 1024 * 1024)
+
+
+class ExpressionSemanticProfile(BaseModel):
+    """Local perceptual/social meaning attached to a transport expression.
+
+    The native transport id is intentionally outside this profile. Semantic
+    selection can therefore be tested and reasoned about without treating an
+    opaque Discord id as meaning.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    visual_concepts: list[str] = Field(default_factory=list, max_length=24)
+    affect_tags: list[str] = Field(default_factory=list, max_length=16)
+    social_roles: list[str] = Field(default_factory=list, max_length=16)
+    possible_interpretations: list[str] = Field(default_factory=list, max_length=16)
+    register: str = Field(default="casual", max_length=48)
+    intensity: float = Field(default=0.5, ge=0.0, le=1.0)
+    valence: float = Field(default=0.0, ge=-1.0, le=1.0)
+    arousal: float = Field(default=0.5, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    source: str = Field(default="transport_metadata", max_length=64)
+
+
+class ExpressionRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: ExpressionKind
+    native_id: str = Field(min_length=1, max_length=256)
+    name: str | None = Field(default=None, max_length=160)
+    description: str | None = Field(default=None, max_length=512)
+    tags: list[str] = Field(default_factory=list, max_length=32)
+    format_type: int | None = Field(default=None, ge=0, le=64)
+    guild_or_group_id: str | None = Field(default=None, max_length=512)
+    semantic_profile: ExpressionSemanticProfile | None = None
 
 
 class InboundMessage(BaseModel):
@@ -106,6 +147,8 @@ class InboundMessage(BaseModel):
     reply_to_amora: bool = False
     reply_to_author_identifiers: list[ExternalActorRef] = Field(default_factory=list, max_length=6)
     attachments: list[AttachmentRef] = Field(default_factory=list, max_length=16)
+    expressions: list[ExpressionRef] = Field(default_factory=list, max_length=8)
+    available_expressions: list[ExpressionRef] = Field(default_factory=list, max_length=64)
     timestamp: datetime
     privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
     remote_processing_allowed: bool = False
@@ -114,8 +157,8 @@ class InboundMessage(BaseModel):
 
     @model_validator(mode="after")
     def require_content(self) -> "InboundMessage":
-        if not self.text.strip() and not self.attachments:
-            raise ValueError("inbound message requires text or attachment metadata")
+        if not self.text.strip() and not self.attachments and not self.expressions:
+            raise ValueError("inbound message requires text, attachment metadata, or expression metadata")
         return self
 
     @property
@@ -157,13 +200,20 @@ class OutboundMessage(BaseModel):
     account_scope: str = Field(default="primary", min_length=1, max_length=96)
     conversation_id: str = Field(min_length=1, max_length=512)
     target_entity_id: str | None = None
-    text: str = Field(min_length=1, max_length=12000)
+    text: str = Field(default="", max_length=12000)
+    expressions: list[ExpressionRef] = Field(default_factory=list, max_length=4)
     reply_to_message_id: str | None = Field(default=None, max_length=512)
     mention_actor_ids: list[str] = Field(default_factory=list, max_length=32)
     source_message_id: str | None = Field(default=None, max_length=512)
     created_at: datetime
     status: OutboundStatus = OutboundStatus.QUEUED
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_payload(self) -> "OutboundMessage":
+        if not self.text.strip() and not self.expressions and not self.metadata.get("transport_expressions"):
+            raise ValueError("outbound message requires text or expression payload")
+        return self
 
 
 class MessagingAuditRecord(BaseModel):

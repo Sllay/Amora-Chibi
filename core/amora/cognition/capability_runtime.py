@@ -14,6 +14,10 @@ class CognitiveEngine(ResilientCognitiveEngine):
     same request and resolves that semantic action against capabilities actually
     projected for this turn. A grounded suggestion is still only evidence for
     BDI; this layer never resolves plugin/tool bindings or dispatches ActionBus.
+
+    Some capabilities are response-scoped presentation affordances. They may be
+    visible to cognition for the current turn, but must not become autonomous BDI
+    intentions; the messaging renderer owns their modality competition instead.
     """
 
     async def reflect(self, request):
@@ -23,6 +27,7 @@ class CognitiveEngine(ResilientCognitiveEngine):
             return bundle
 
         context = self.compiler.compile(request)
+        response_scoped_ids = self._string_set(request.metadata.get("response_scoped_capability_ids"))
         for index, suggestion in enumerate(suggestions):
             gate = CapabilityIntentGate.evaluate(
                 suggestion.action_kind,
@@ -34,11 +39,20 @@ class CognitiveEngine(ResilientCognitiveEngine):
 
             target_id = suggestion.target_id
             target_known = target_id is None or self.identities.get(target_id) is not None
-            allowed = gate.allowed_kind and target_known
-            decision = gate.decision if target_known else "rejected_by_local_gate"
+            response_scoped = gate.capability_id in response_scoped_ids if gate.capability_id else False
+            allowed = gate.allowed_kind and target_known and not response_scoped
+            if response_scoped:
+                decision = "handled_by_response_modality"
+            else:
+                decision = gate.decision if target_known else "rejected_by_local_gate"
             reason_codes = list(gate.reason_codes)
             if not target_known:
                 reason_codes.append("CAPABILITY_TARGET_UNKNOWN")
+            if response_scoped:
+                reason_codes.extend([
+                    "CAPABILITY_RESPONSE_SCOPED",
+                    "CAPABILITY_BDI_AUTONOMY_SUPPRESSED",
+                ])
 
             await self.events.publish(
                 AmoraEvent(
@@ -55,6 +69,7 @@ class CognitiveEngine(ResilientCognitiveEngine):
                         "capability_id": gate.capability_id,
                         "capability_availability": gate.availability,
                         "capability_grounded": True,
+                        "response_scoped": response_scoped,
                         "allowed_kind": allowed,
                         "provider_reason_code": suggestion.reason_code,
                         "reason_code": reason_codes[0] if reason_codes else "CAPABILITY_GROUNDED",
@@ -71,3 +86,9 @@ class CognitiveEngine(ResilientCognitiveEngine):
             )
 
         return bundle
+
+    @staticmethod
+    def _string_set(value: object) -> set[str]:
+        if not isinstance(value, (list, tuple, set, frozenset)):
+            return set()
+        return {str(item).strip() for item in value if str(item).strip()}

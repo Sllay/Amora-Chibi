@@ -42,7 +42,7 @@ async function main() {
   const health = startHealthServer(port);
   safeLog('ENTRYPOINT_START');
 
-  const child = spawn(process.execPath, ['workers/discord/worker.mjs'], {
+  const child = spawn(process.execPath, ['workers/discord/expression-worker.mjs'], {
     stdio: 'inherit',
     env: process.env,
   });
