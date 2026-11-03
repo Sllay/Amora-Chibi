@@ -4,7 +4,7 @@ import pytest
 
 from amora.app import AmoraCore
 from amora.autonomy import AutonomyStore, DecisionContext, DecisionOutcome, DriveType
-from amora.storage import AmoraDatabase
+from amora.storage import AmoraDatabase, LATEST_SCHEMA_VERSION
 from amora.time import SimulatedClock
 
 
@@ -42,7 +42,7 @@ async def test_backup_restore_preserves_autonomy_state(tmp_path, monkeypatch) ->
     finally: core.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored_db = AmoraDatabase(restored_path)
     try:
-        assert restored_db.integrity_check() == "ok"; assert restored_db.schema_version() == 15
+        assert restored_db.integrity_check() == "ok"; assert restored_db.schema_version() == LATEST_SCHEMA_VERSION
     finally: restored_db.close()
     store = AutonomyStore(restored_path, clock)
     try:
