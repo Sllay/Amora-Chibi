@@ -1,3 +1,18 @@
+from .certification import (
+    SOCIAL_SURFACE_REPLAY_V1,
+    SocialCertificationCase,
+    SocialCertificationResult,
+    SocialReplayProbe,
+    certify_social_case,
+    certify_social_suite,
+)
+from .certification_ab import (
+    SocialABCaseResult,
+    SocialABReport,
+    canonical_context_fingerprint,
+    compare_social_case,
+    compare_social_suite,
+)
 from .context import ProviderPrivacyGate
 from .context_v1 import ContextCompiler
 from .models import (
@@ -19,6 +34,7 @@ from .providers_identity import (
     GeminiCognitiveProvider,
     GroqCognitiveProvider,
 )
+from .providers_nvidia import NvidiaMistralLarge4Provider
 from .providers_openrouter import OpenRouterCognitiveProvider
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
 # Preserve the historical layered-runtime imports as explicit architectural
@@ -56,15 +72,27 @@ __all__ = [
     "MemoryProposal",
     "MessageSource",
     "MessageStatus",
+    "NvidiaMistralLarge4Provider",
     "OpenRouterCognitiveProvider",
     "ProviderDelta",
     "ProviderError",
     "ProviderPrivacyGate",
     "ResilientCognitiveEngine",
+    "SOCIAL_SURFACE_REPLAY_V1",
+    "SocialABCaseResult",
+    "SocialABReport",
+    "SocialCertificationCase",
+    "SocialCertificationResult",
+    "SocialReplayProbe",
     "SpeechNormalizer",
     "SpeechCue",
     "SpeechPlan",
     "SpeechRender",
     "SpeechSegment",
     "SpeechSegmenter",
+    "canonical_context_fingerprint",
+    "certify_social_case",
+    "certify_social_suite",
+    "compare_social_case",
+    "compare_social_suite",
 ]
