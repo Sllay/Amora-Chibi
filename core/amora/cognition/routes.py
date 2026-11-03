@@ -82,3 +82,9 @@ def register_cognition_routes(app: FastAPI, core, require_auth) -> None:
     # API assembly modular without making the top-level API module own provider code.
     from amora.voice.routes import register_voice_routes
     register_voice_routes(app, core, require_auth)
+
+    # The administrative command surface is a separate registry/bus. It is
+    # registered here only because cognition already owns the provider
+    # certification entry point; handlers themselves remain explicitly scoped.
+    from amora.admin_commands import register_admin_command_routes
+    register_admin_command_routes(app, core, require_auth)
