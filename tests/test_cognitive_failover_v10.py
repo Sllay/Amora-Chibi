@@ -65,11 +65,11 @@ async def test_backoff_uses_canonical_clock_and_expires(tmp_path: Path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_marks_quota_zero_until_cooldown_expires(tmp_path: Path, monkeypatch) -> None:
+async def test_long_rate_limit_marks_quota_zero_without_inline_retry(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora")); clock = _clock(); core = AmoraCore.bootstrap(clock=clock)
     try:
         primary = ScriptedProvider("primary", priority=9, mode="rate_limit"); fallback = ScriptedProvider("secondary", priority=3, mode="success"); core.cognition.register_provider(primary); core.cognition.register_provider(fallback)
-        await core.cognition.respond(_request()); assert core.cognition.router.descriptor("primary").quota_remaining == 0.0; assert primary.calls == 2
-        await core.cognition.respond(_request()); assert primary.calls == 2
-        clock.advance(timedelta(seconds=61)); await core.cognition.respond(_request()); assert primary.calls == 4
+        await core.cognition.respond(_request()); assert core.cognition.router.descriptor("primary").quota_remaining == 0.0; assert primary.calls == 1
+        await core.cognition.respond(_request()); assert primary.calls == 1
+        clock.advance(timedelta(seconds=61)); await core.cognition.respond(_request()); assert primary.calls == 2
     finally: core.close()
