@@ -260,15 +260,10 @@ async def test_real_adapter_service_pipeline_persists_semantics_and_reuses_same_
         assert record.visual_provider == "groq"
         assert record.visual_model == MODEL
         assert record.content_fingerprint == hashlib.sha256(PNG).hexdigest()
-
-        with core.database._lock:
-            row = core.database._conn.execute(
-                "SELECT semantic_json FROM perceptual_expression_assets WHERE native_id=?",
-                ("123456789012345678",),
-            ).fetchone()
-        semantic = json.loads(row["semantic_json"])
-        assert semantic["source"] == "vision_model"
-        assert semantic["confidence"] == pytest.approx(0.94)
+        assert record.semantic_profile is not None
+        assert record.semantic_profile.source == "vision_model"
+        assert record.semantic_profile.confidence == pytest.approx(0.94)
+        assert record.semantic_profile.short_description.startswith("Chibi sorrindo")
 
         revised_message = _message(_sticker(description="metadata revisada"), message_id="m2")
         core.messaging.expression_memory.observe_relevant(revised_message, _decision())
