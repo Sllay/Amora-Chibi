@@ -236,7 +236,7 @@ async def _realize_with_rate_limit_budget(
             try:
                 retry_after = float(exc.retry_after) if exc.retry_after is not None else float("nan")
             except (ValueError, TypeError):
-                raise
+                raise exc
             if not math.isfinite(retry_after) or retry_after < 0:
                 raise
             # Avoid immediate quota hammering even when the provider says 0.
