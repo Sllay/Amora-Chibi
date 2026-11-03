@@ -8,6 +8,8 @@ on:
       - 'tests/test_perceptual_expression_memory_step6.py'
       - 'tests/test_perceptual_expression_memory_hardening_step6.py'
       - 'tests/test_response_modality_step5.py'
+      - 'tests/test_visual_enrichment_service_ch2.py'
+      - 'tests/test_groq_visual_analyzer_ch2.py'
       - '.github/workflows/perceptual-expression-memory.yml'
   push:
     branches: [main]
@@ -17,6 +19,8 @@ on:
       - 'tests/test_perceptual_expression_memory_step6.py'
       - 'tests/test_perceptual_expression_memory_hardening_step6.py'
       - 'tests/test_response_modality_step5.py'
+      - 'tests/test_visual_enrichment_service_ch2.py'
+      - 'tests/test_groq_visual_analyzer_ch2.py'
       - '.github/workflows/perceptual-expression-memory.yml'
 
 permissions:
@@ -48,4 +52,6 @@ jobs:
           python -m pytest -q \
             tests/test_perceptual_expression_memory_step6.py \
             tests/test_perceptual_expression_memory_hardening_step6.py \
-            tests/test_response_modality_step5.py
+            tests/test_response_modality_step5.py \
+            tests/test_visual_enrichment_service_ch2.py \
+            tests/test_groq_visual_analyzer_ch2.py

@@ -1,15 +1,13 @@
 # AMORA — Perceptual Asset Memory
 
-**Status:** CANÔNICO / ATUAL  
-**Atualizado em:** 2026-11-02
+**Status:** CANÔNICO / CH2 SOFTWARE COMPLETE  
+**Atualizado em:** 2026-11-03
 
 ## 1. Princípio
 
-Assets perceptuais sociais — sticker, emoji customizado, GIF, imagem pontual e
-futuros equivalentes — não devem ser reinterpretados do zero toda vez.
+Assets perceptuais sociais — sticker, emoji customizado, GIF, imagem pontual e futuros equivalentes — não devem ser reinterpretados do zero toda vez.
 
-A Amora mantém representação persistente e revisionada do que **conhece**,
-separada do que está **disponível** no transporte atual.
+A Amora mantém representação persistente e revisionada do que **conhece**, separada do que está **disponível** no transporte atual.
 
 ```text
 AVAILABLE != KNOWN
@@ -21,17 +19,15 @@ Seleção autônoma normal:
 KNOWN ∩ AVAILABLE
 ```
 
-Provider pode ajudar a perceber; não vira dono da semântica persistida.
+Provider pode ajudar a perceber; não vira dono da semântica persistida nem da identidade da Amora.
 
----
-
-## 2. Escopo e fronteira com V1.1
+## 2. Fronteira com V1.1
 
 Este canon trata de **Perceptual Asset Vision**:
 
 ```text
 asset pontual
-→ observar/enriquecer
+→ observar/enriquecer uma vez
 → persistir
 → reutilizar
 ```
@@ -46,86 +42,69 @@ screen/video/environment
 → contexto temporal
 ```
 
-Sticker CPF não deve esperar screen mapping, OCR contínuo, avatar ou pipeline
-de vídeo V1.1.
+Sticker CPF não deve esperar screen mapping, OCR contínuo, avatar ou pipeline de vídeo V1.1.
 
----
+## 3. Identidade, revisão e conteúdo
 
-## 3. Identidade do asset
-
-Um asset é identificado de forma estável pelo máximo de contexto disponível:
+Um asset é localizado pelo máximo de contexto estável disponível:
 
 - plataforma;
-- conta/workspace/guild/scope;
-- tipo de asset;
-- native asset ID;
-- fingerprint/revision do conteúdo ou metadata confiável.
+- account/workspace/guild/scope;
+- tipo do asset;
+- native asset ID.
 
 Native ID sozinho não é semanticamente global.
 
----
+### `fingerprint`
 
-## 4. AVAILABLE
+É a **revisão de metadata/contrato de transporte**. Serve como compare-and-set para impedir que observação antiga sobrescreva revisão nova.
 
-`AVAILABLE` responde:
+Não é hash visual.
 
-> este asset pode ser usado agora neste transporte/scope?
+### `content_fingerprint`
 
-É estado operacional e pode mudar sem apagar conhecimento.
+É o **SHA-256 dos bytes reais efetivamente obtidos para percepção**.
 
-Exemplos:
+```text
+metadata fingerprint != content fingerprint
+```
 
-- sticker removido;
-- guild diferente;
-- permissão perdida;
-- pacote não instalado;
-- API temporariamente indisponível.
+URL efêmera, CDN path, nome, descrição e tags não substituem o hash dos bytes.
 
-Mudança de disponibilidade não deve apagar CPF.
+Se metadata muda mas o SHA dos bytes continua igual ao conteúdo já analisado, o CPF pode ser revalidado sem nova chamada multimodal. Se os bytes mudam, nova análise é necessária.
 
----
+## 4. AVAILABLE e KNOWN
 
-## 5. KNOWN
+`AVAILABLE` responde se o asset pode ser usado agora naquele transporte/scope. É estado operacional e pode mudar sem apagar conhecimento.
 
-`KNOWN` responde:
+`KNOWN` responde se a Amora possui semântica suficiente e confiável para usar o asset. Descoberta por catálogo/metadata pode criar bootstrap fraco, mas **não deve fingir visão real**.
 
-> a Amora possui semântica suficiente e confiável para usar este asset?
+## 5. Expression Semantic Profile — CPF
 
-Conhecimento visual/social é persistente e revisionado.
+O CPF mantém, conforme o schema:
 
-A descoberta por catálogo/metadata pode criar um profile, mas **não deve fingir
-visão real**.
-
----
-
-## 6. Expression Semantic Profile — CPF
-
-O profile de expressão deve manter, conforme suporte do schema:
-
-- `short_description` — compacta, <= 250 chars;
+- `short_description`;
 - `visual_concepts`;
-- affect/emotion tags;
-- `social_usage`;
-- interpretations possíveis;
+- affect tags;
+- papéis sociais;
+- interpretações possíveis;
+- `register`;
 - `intensity`;
 - `valence`;
 - `arousal`;
 - `confidence`;
 - provenance/source;
-- fingerprint;
+- metadata fingerprint;
+- content fingerprint;
 - semantic revision;
-- seen count;
-- distinct senders;
-- status;
-- timestamps relevantes.
+- seen/distinct-sender counters;
+- provider/model perceptual;
+- timestamps;
+- claim/retry/defer state.
 
 A descrição curta não substitui os campos estruturados.
 
----
-
-## 7. Estados implementados
-
-Para expressão social, o runtime atual usa:
+## 6. Estados
 
 ```text
 metadata_only
@@ -135,215 +114,160 @@ stale
 failed
 ```
 
-Semântica:
+- `metadata_only`: apenas bootstrap fraco.
+- `pending_visual`: aguarda percepção real.
+- `enriched`: semântica visual validada para o content SHA atual.
+- `stale`: revisão mudou; semântica antiga fica em quarentena até revalidação por conteúdo.
+- `failed`: tentativa falhou; CPF não é apagado e pode ser retomado pela política de retry/defer.
 
-### `metadata_only`
-Existe apenas bootstrap fraco de metadata/catálogo.
-
-### `pending_visual`
-Asset relevante foi descoberto e aguarda análise perceptual real.
-
-### `enriched`
-Existe análise multimodal validada localmente para o fingerprint atual.
-
-### `stale`
-O fingerprint/revision mudou; semântica antiga não pode ser tratada como visão
-atual até reenriquecimento.
-
-### `failed`
-Uma tentativa falhou. O profile continua persistido e pode ser retomado pela
-política de retry/defer; falha não equivale a apagar o asset.
-
----
-
-## 8. Relevância antes de custo
+## 7. Relevância antes de custo
 
 Não analisar toda mídia que aparece.
-
-Antes de job remoto/caro, aplicar gate social/local:
-
-- asset enviado para a Amora;
-- asset usado por addressee relevante;
-- asset escolhido/recebido em conversa que realmente importa;
-- asset necessário para resposta/seleção;
-- necessidade explícita de catálogo conhecido.
 
 ```text
 relevance gate
 → perception job
 ```
 
-Não:
+Entram assets socialmente relevantes para a Amora, necessários para resposta/seleção ou explicitamente promovidos ao conhecimento. Catálogo inteiro não deve ser enviado a provider.
 
-```text
-toda mídia
-→ provider
-```
-
----
-
-## 9. Pipeline do CH2
-
-A base persistente já existe. O enriquecimento real deve seguir:
+## 8. Pipeline canônico do CH2
 
 ```text
 ExpressionAsset
       ↓
 social relevance
       ↓
-PENDING_VISUAL
+PENDING_VISUAL / STALE / FAILED
       ↓
-secure media resolver
+claim_visual()
+      ↓
+secure transport resolver
       ↓
 bounded media fetch
       ↓
+Core valida bytes + MIME
+      ↓
 SHA-256 dos bytes reais
       ↓
-MultimodalProvider
+record_visual_content()
+      ↓
+┌───────────────────────────────────────────┐
+│ SHA já enriquecido?                      │
+│ sim → reuse CPF sem provider             │
+│ não → VisionAnalyzer                     │
+└───────────────────────────────────────────┘
       ↓
 strict structured output
       ↓
-local normalization/validation
+local Pydantic/schema validation
       ↓
-apply_visual_enrichment(expected_fingerprint)
+apply_visual_enrichment(
+  expected metadata fingerprint,
+  content SHA,
+  claim token
+)
       ↓
 ENRICHED
 ```
 
-### 9.1 Metadata fingerprint x content fingerprint
+Resolver/fetch pertence ao boundary do transporte. CPF, lease, content addressing, validação e persistência pertencem ao Core.
 
-Metadata pode bootstrapar identidade/revision, mas a visão real deve amarrar o
-resultado aos **bytes efetivamente analisados** quando o transporte permitir.
+## 9. Claim/lease, CAS e idempotência
 
-O worker deve conhecer:
+- trabalho visual é leaseado antes do fetch/análise;
+- dois workers não mantêm claim válido simultâneo para a mesma revisão;
+- lease expirado pode ser reclaimado;
+- token velho não pode bindar bytes nem commitar resultado;
+- mudança de metadata invalida claim antigo;
+- `record_visual_content()` aceita somente claim vivo + fingerprint esperado;
+- commit exige metadata revision + content SHA + claim token;
+- resultado atrasado não sobrescreve asset alterado;
+- retry do mesmo commit é idempotente;
+- semantic revision não incrementa duas vezes por retry;
+- SHA já enriquecido é reutilizado sem nova percepção;
+- SHA novo exige nova análise.
 
-- fingerprint esperado ao claimar o job;
-- hash dos bytes baixados;
-- fingerprint/revision vigente no momento do commit.
+## 10. Secure media resolver
 
-Resultado atrasado não pode sobrescrever asset alterado.
+O provider não recebe URL arbitrária de chat.
 
----
+O resolver Discord deriva mídia de `sticker_id + format_type` e o fetch impõe fronteiras locais: host/URL do transporte, no-redirect, timeout, limite de bytes, MIME/content validation e descarte de payload inválido.
 
-## 10. Compare-and-set e idempotência
+O Core recomputa o SHA dos bytes que atravessaram a fronteira de confiança. Hash declarado pelo worker não é autoridade.
 
-`apply_visual_enrichment(expected_fingerprint)` é a fronteira de commit.
+## 11. Formatos e animação — política certificada
 
-Regras:
+### Certificado no CH2
 
-- se fingerprint atual != esperado: rejeitar resultado como stale;
-- retry da mesma análise para o mesmo fingerprint deve ser idempotente;
-- semantic revision só avança quando existe mudança semântica válida;
-- dois workers concorrentes não podem “vencer” sem controle;
-- falha depois de download/análise não deve corromper o último CPF válido.
+- PNG estático: análise direta;
+- JPEG estático: análise direta;
+- WebP estático: análise direta;
+- provider recebe no máximo o payload bounded já validado pelo Core.
 
-Para worker distribuído, usar claim/lease bounded ou equivalente.
+### Fail-closed no CH2
 
----
+- GIF animado;
+- Lottie/JSON;
+- qualquer formato animado cuja sequência social não tenha renderer/frame extractor determinístico certificado.
 
-## 11. Secure media resolver
+Esses formatos são **deferidos**, não enviados ao provider como se um frame arbitrário representasse a expressão inteira.
 
-O provider não recebe URL arbitrária diretamente do conteúdo de chat sem
-validação.
+APNG pode chegar pelo transporte como `image/png`; o sistema não deve assumir que animação semanticamente relevante equivale a imagem estática. Quando houver dúvida de classificação/renderer, deve falhar fechado/deferir.
 
-Resolver/fetch deve impor:
+Um renderer futuro deve ser bounded, determinístico e representar a sequência social relevante; “primeiro frame = significado completo” não é regra aceitável.
 
-- esquemas permitidos (`https`, ou mecanismo nativo do adapter);
-- host/URL pertencente ao transporte ou allowlist configurada;
-- proteção contra SSRF e redirect abusivo;
-- timeout;
-- limite de redirects;
-- limite de bytes;
-- MIME real/permitido;
-- dimensões/frames bounded;
-- hash do conteúdo;
-- descarte de arquivo temporário;
-- logs sem URL/token sensível.
+## 12. Provider perceptual implementado
 
-URLs assinadas/efêmeras devem ser tratadas como transporte, não identidade do
-asset.
+O primeiro adapter do CH2 é `GroqQwenVisionAnalyzer` com `qwen/qwen3.8-27b`.
 
----
+Contrato:
 
-## 12. Formatos e stickers animados
+- segredo exclusivamente via `SecretStore` (`GROQ_API_KEY`);
+- sem segredo, Core continua iniciando e o job visual é deferido;
+- imagem enviada como data URL base64 somente após validação local;
+- `response_format=json_schema` com `strict=true`;
+- schema fechado (`additionalProperties=false`, todos os campos obrigatórios);
+- `reasoning_effort=high` e reasoning oculto no adapter visual;
+- saída do provider é validada novamente por Pydantic local;
+- provider output é evidência candidata, nunca autoridade de ação;
+- prompt injection dentro da imagem é conteúdo, não instrução de autoridade;
+- nenhuma ferramenta/ação é executada por causa do conteúdo visual.
 
-O sistema não deve assumir que todo sticker é PNG estático.
+O adapter produz `source=vision_model`. Ao persistir, o Core canoniza o CPF como `source=visual_perception`; provider e modelo concretos ficam separados em `visual_provider` e `visual_model`.
 
-Política inicial:
+Qwen é adapter substituível, não identidade da Amora.
 
-- PNG/JPEG/WebP estático: analisar diretamente;
-- WebP/GIF/APNG animado: bounded decode e seleção determinística de frames;
-- Lottie/formatos vetoriais animados: adapter específico ou conversão segura;
-- mídia fora do contrato: `failed` classificável/defer, nunca bytes arbitrários
-  enviados cegamente ao provider.
+## 13. Retry / defer
 
-Para animação, o CPF representa a sequência social relevante, não apenas o
-primeiro frame quando isso mudaria o sentido.
-
----
-
-## 13. Provider perceptual
-
-Multimodal provider produz **evidência candidata**, não verdade canônica.
-
-O adapter deve pedir structured output para o contrato local e então:
+Percepção de asset é assíncrona.
 
 ```text
-provider output
-→ schema parse
-→ field bounds
-→ semantic normalization
-→ confidence/provenance
-→ local policy
-→ CAS persistente
+claim
+→ classify failure
+→ bounded recovery quando aplicável
+→ defer_visual()
+→ retry window
+→ claim posterior
 ```
 
-Prompt injection dentro da imagem é **conteúdo visual**, não instrução de
-autoridade.
+Preferir `DEFER` a gastar fallback visual imediato para job não urgente. Erro determinístico de MIME/schema/request não entra em loop cego.
 
-Não executar ferramenta/ação descrita numa imagem.
+## 14. Privacidade
 
----
+Antes de provider remoto:
 
-## 14. Retry / defer
-
-Percepção de asset é normalmente assíncrona.
-
-Se o provider cair temporariamente:
-
-```text
-pending_visual
-→ classify
-→ bounded retry
-→ DEFER
-→ retry posterior
-```
-
-Preferir `DEFER` a fallback visual imediato quando não há urgência.
-
-Erros determinísticos de MIME/schema/request não devem entrar em loop de retry.
-
----
-
-## 15. Privacidade
-
-Antes de processamento remoto:
-
-- respeitar scope/consentimento aplicável;
-- minimizar metadata enviada;
-- não incluir conversation history desnecessário;
+- respeitar `remote_processing_allowed`;
+- bloquear scopes privados/secret/auth conforme política local;
+- minimizar metadata;
+- não enviar histórico de conversa desnecessário;
 - não enviar auth/native secrets;
-- registrar qual provider/modelo analisou;
-- permitir política local-only para scopes que exigirem.
+- registrar provider/modelo perceptual;
+- manter política local-only quando exigido.
 
-CPF persistido deve conter semântica útil, não uma cópia desnecessária do
-arquivo remoto.
+CPF persiste semântica útil, não cópia desnecessária do arquivo remoto.
 
----
-
-## 16. Retrieval e uso
-
-O Core deve recuperar poucos profiles relevantes por intenção/contexto.
+## 15. Retrieval e uso
 
 ```text
 semantic/social query
@@ -354,60 +278,71 @@ semantic/social query
 → action/capability validation
 ```
 
-Não despejar catálogo inteiro no prompt.
+A Amora pode conhecer um asset sem usá-lo automaticamente. Relação, frequência, contexto, recent use e modalidade participam da decisão social.
 
-A Amora pode aprender um asset sem passar a usá-lo automaticamente; frequência,
-relação, contexto e recent use participam da decisão social.
-
----
-
-## 17. Staleness
-
-Mudança de fingerprint/revision:
+## 16. Staleness e revalidação
 
 ```text
 ENRICHED
+→ metadata mudou
 → STALE
-→ pending reenrichment
+→ claim + fetch/hash
 ```
 
-Até reenriquecer:
+Se o SHA for o mesmo já analisado:
 
-- metadata pode continuar existindo;
-- semântica antiga não é tratada como visão atual;
-- seleção autônoma deve respeitar confiança/status;
-- cache antigo não pode mascarar conteúdo novo.
+```text
+reuse CPF
+→ ENRICHED sem provider
+```
 
----
+Se o SHA mudar:
 
-## 18. Observabilidade
+```text
+nova análise
+→ nova semantic revision
+→ ENRICHED
+```
 
-Expor reason codes suficientes para saber:
+Até a verificação, semântica antiga não é tratada como visão atual.
 
-- por que o asset virou relevante;
-- por que entrou em `pending_visual`;
-- provider/modelo usado;
-- tentativa/retry/defer;
-- MIME/tamanho/frame policy;
-- fingerprint esperado e revision sem expor segredo;
-- validação/CAS aceita ou rejeitada;
+## 17. Observabilidade
+
+Devem existir reason codes/estado suficientes para entender:
+
+- relevância;
+- pending/stale/failed;
+- claim/reclaim;
+- provider/modelo;
+- attempt/retry/defer;
+- MIME/tamanho/policy;
+- metadata fingerprint esperado;
+- content SHA;
+- reuse sem provider;
+- CAS aceito/rejeitado;
 - status final.
 
 Não depender de adivinhar pelo texto da resposta.
 
----
+## 18. Critério de saída do CH2
 
-## 19. Critério de saída do CH2
+CH2 está software-completo quando:
 
-Visual Expression Enrichment só está pronto quando:
-
-1. bytes reais são obtidos por resolver seguro;
-2. fingerprint de conteúdo é verificável;
+1. bytes reais vêm de resolver seguro;
+2. Core calcula/verifica content SHA;
 3. multimodal output é estruturado e validado localmente;
-4. CAS impede write stale;
+4. metadata revision + content SHA + claim token impedem write stale;
 5. retry/defer é bounded;
-6. concorrência é idempotente;
-7. animated formats possuem política explícita;
-8. privacidade/size/MIME/SSRF têm testes;
-9. CPF enriquecido sobrevive restart;
-10. o mesmo fingerprint não é reanalisado sem motivo.
+6. concorrência/lease é idempotente;
+7. mesmo SHA não é reanalisado sem motivo;
+8. animated formats possuem política explícita fail-closed;
+9. privacidade/size/MIME/redirect têm testes;
+10. CPF enriquecido é persistente;
+11. provider/model provenance é registrada;
+12. CI aplicável está verde e gates operacionais pendentes estão documentados.
+
+### Estado de certificação
+
+O SHA de código `7ea117b512f1e10ad029897e1172c3f3902b1862` passou Core tests, Perceptual expression memory, Messaging workers, Response modality competition, Cloud container contracts e Pre-deploy security.
+
+Isso certifica o contrato de software, inclusive o pipeline ponta-a-ponta com `MockTransport` do adapter real. Não equivale a uma chamada live Groq com credencial produtiva nem a uma execução física Discord real. Esses gates permanecem operacionais e devem ser executados separadamente quando ambiente/credenciais apropriados estiverem disponíveis.

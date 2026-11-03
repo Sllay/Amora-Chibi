@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+import secrets
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Iterable
 
@@ -43,6 +44,9 @@ class PerceptualExpressionRecord(BaseModel):
     semantic_status: ExpressionSemanticStatus
     fingerprint: str
     fingerprint_source: str
+    content_fingerprint: str | None = None
+    content_mime: str | None = None
+    content_size_bytes: int | None = None
     semantic_revision: int = 0
     first_seen_at: datetime
     last_seen_at: datetime
@@ -52,6 +56,13 @@ class PerceptualExpressionRecord(BaseModel):
     last_source_message_id: str | None = None
     last_visual_analysis_at: datetime | None = None
     last_visual_analysis_fingerprint: str | None = None
+    last_visual_analysis_content_fingerprint: str | None = None
+    visual_provider: str | None = None
+    visual_model: str | None = None
+    visual_claimed_until: datetime | None = None
+    visual_attempt_count: int = 0
+    visual_last_error_code: str | None = None
+    visual_defer_until: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -75,7 +86,22 @@ class PerceptualExpressionRecord(BaseModel):
             ExpressionSemanticStatus.FAILED,
         }:
             return True
-        return self.last_visual_analysis_fingerprint != self.fingerprint
+        if self.last_visual_analysis_content_fingerprint is None:
+            return True
+        return (
+            self.content_fingerprint is not None
+            and self.content_fingerprint != self.last_visual_analysis_content_fingerprint
+        )
+
+
+class PerceptualExpressionClaim(BaseModel):
+    """Opaque lease over one CPF revision pending real visual perception."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    record: PerceptualExpressionRecord
+    claim_token: str = Field(min_length=16, max_length=128)
+    claimed_until: datetime
 
 
 class PerceptualExpressionMemory:
@@ -87,13 +113,17 @@ class PerceptualExpressionMemory:
       are promoted into this memory;
     * future catalog entries are hydrated only when a matching CPF already exists.
 
-    There is no vision engine in Core yet. New assets therefore receive a bounded,
-    low-confidence metadata bootstrap and ``pending_visual`` status. A future local
-    perception engine can call ``apply_visual_enrichment`` exactly once per current
-    fingerprint. Delayed/stale analysis is rejected by expected-fingerprint CAS.
+    Metadata fingerprint and visual content fingerprint are deliberately distinct:
+    metadata revisions guard stale transport observations, while content SHA-256
+    identifies the bytes actually perceived. Visual work is leased so concurrent
+    workers cannot analyze the same CPF revision simultaneously.
     """
 
     MAX_SCOPE_RECORDS = 1024
+    MAX_VISUAL_CLAIMS = 32
+    MIN_VISUAL_LEASE_SECONDS = 1
+    MAX_VISUAL_LEASE_SECONDS = 900
+    MAX_CONTENT_BYTES = 20 * 1024 * 1024
 
     def __init__(self, messaging_store, clock) -> None:
         self.store = messaging_store
@@ -130,13 +160,7 @@ class PerceptualExpressionMemory:
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def hydrate(self, message: InboundMessage) -> InboundMessage:
-        """Attach persisted CPF semantics to assets that are currently available.
-
-        A known identity may still have unusable semantics. If current transport
-        metadata no longer matches the persisted fingerprint, or the stored profile
-        is explicitly stale/failed, keep the identity known but quarantine the old
-        semantic profile until a fresh enrichment succeeds.
-        """
+        """Attach persisted CPF semantics to assets that are currently available."""
 
         records = self._scope_records(
             platform=message.platform,
@@ -195,11 +219,7 @@ class PerceptualExpressionMemory:
         message: InboundMessage,
         decision: AttentionDecision,
     ) -> InboundMessage:
-        """Learn only expressions that actually addressed/engaged Amora.
-
-        Merely being listed in a guild catalog is never an observation. We also do
-        not learn from blocked/quarantined/context-only traffic in this step.
-        """
+        """Learn only expressions that actually addressed/engaged Amora."""
 
         if decision.action != RoutingAction.RESPOND or not message.expressions:
             return self.hydrate(message)
@@ -241,12 +261,193 @@ class PerceptualExpressionMemory:
             rows = self.database._conn.execute(
                 """SELECT * FROM perceptual_expression_assets
                    WHERE semantic_status IN ('metadata_only','pending_visual','stale','failed')
-                      OR last_visual_analysis_fingerprint IS NULL
-                      OR last_visual_analysis_fingerprint <> fingerprint
+                      OR last_visual_analysis_content_fingerprint IS NULL
+                      OR (
+                           content_fingerprint IS NOT NULL
+                           AND last_visual_analysis_content_fingerprint <> content_fingerprint
+                      )
                    ORDER BY last_seen_at DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
         return tuple(self._record_from_row(row) for row in rows)
+
+    def claim_visual(
+        self,
+        *,
+        platform: MessagingPlatform,
+        account_scope: str,
+        limit: int = 1,
+        lease_seconds: int = 120,
+    ) -> tuple[PerceptualExpressionClaim, ...]:
+        """Lease pending visual work transactionally.
+
+        A lease is scoped to the current metadata fingerprint. Expired leases are
+        reclaimable; old claim tokens cannot commit after a newer claim replaces them.
+        """
+
+        limit = max(1, min(self.MAX_VISUAL_CLAIMS, int(limit)))
+        lease_seconds = max(
+            self.MIN_VISUAL_LEASE_SECONDS,
+            min(self.MAX_VISUAL_LEASE_SECONDS, int(lease_seconds)),
+        )
+        now = self.clock.now()
+        now_iso = now.isoformat()
+        claimed_until = now + timedelta(seconds=lease_seconds)
+        claimed_until_iso = claimed_until.isoformat()
+        claims: list[PerceptualExpressionClaim] = []
+
+        with self.database._lock, self.database._conn:
+            rows = self.database._conn.execute(
+                """SELECT * FROM perceptual_expression_assets
+                   WHERE platform=? AND account_scope=?
+                     AND (
+                          semantic_status IN ('metadata_only','pending_visual','stale','failed')
+                          OR last_visual_analysis_content_fingerprint IS NULL
+                          OR (
+                               content_fingerprint IS NOT NULL
+                               AND last_visual_analysis_content_fingerprint <> content_fingerprint
+                          )
+                     )
+                     AND (visual_defer_until IS NULL OR visual_defer_until <= ?)
+                     AND (
+                          visual_claim_token IS NULL
+                          OR visual_claimed_until IS NULL
+                          OR visual_claimed_until <= ?
+                     )
+                   ORDER BY last_seen_at DESC
+                   LIMIT ?""",
+                (platform.value, account_scope, now_iso, now_iso, limit),
+            ).fetchall()
+
+            for row in rows:
+                token = secrets.token_urlsafe(24)
+                key = self._row_key(row)
+                cur = self.database._conn.execute(
+                    """UPDATE perceptual_expression_assets
+                       SET visual_claim_token=?, visual_claimed_until=?,
+                           visual_attempt_count=visual_attempt_count+1,
+                           visual_last_error_code=NULL
+                       WHERE platform=? AND account_scope=? AND scope_id=? AND kind=? AND native_id=?
+                         AND fingerprint=?
+                         AND (visual_defer_until IS NULL OR visual_defer_until <= ?)
+                         AND (
+                              visual_claim_token IS NULL
+                              OR visual_claimed_until IS NULL
+                              OR visual_claimed_until <= ?
+                         )""",
+                    (
+                        token,
+                        claimed_until_iso,
+                        *key,
+                        str(row["fingerprint"]),
+                        now_iso,
+                        now_iso,
+                    ),
+                )
+                if cur.rowcount <= 0:
+                    continue
+                current = self.database._conn.execute(
+                    """SELECT * FROM perceptual_expression_assets
+                       WHERE platform=? AND account_scope=? AND scope_id=? AND kind=? AND native_id=?""",
+                    key,
+                ).fetchone()
+                if current is None:
+                    continue
+                claims.append(
+                    PerceptualExpressionClaim(
+                        record=self._record_from_row(current),
+                        claim_token=token,
+                        claimed_until=claimed_until,
+                    )
+                )
+        return tuple(claims)
+
+    def record_visual_content(
+        self,
+        *,
+        platform: MessagingPlatform,
+        account_scope: str,
+        scope_id: str,
+        kind: str,
+        native_id: str,
+        claim_token: str,
+        expected_fingerprint: str,
+        content_fingerprint: str,
+        content_mime: str,
+        content_size_bytes: int,
+    ) -> bool:
+        """Bind fetched bytes to a live claim; return True only when analysis is needed.
+
+        If the exact content SHA was already analyzed, the existing semantic profile
+        is revalidated for the current metadata revision without another provider call.
+        """
+
+        content_sha = self._normalize_sha256(content_fingerprint)
+        mime = self._normalize_mime(content_mime)
+        size = self._normalize_content_size(content_size_bytes)
+        now = self.clock.now()
+        key = (platform.value, account_scope, scope_id, kind, native_id)
+
+        with self.database._lock, self.database._conn:
+            row = self.database._conn.execute(
+                """SELECT fingerprint, semantic_profile_json, semantic_revision,
+                          last_visual_analysis_content_fingerprint,
+                          visual_claim_token, visual_claimed_until
+                   FROM perceptual_expression_assets
+                   WHERE platform=? AND account_scope=? AND scope_id=? AND kind=? AND native_id=?""",
+                key,
+            ).fetchone()
+            if row is None or str(row["fingerprint"]) != str(expected_fingerprint):
+                return False
+            if not self._claim_is_live(
+                row,
+                claim_token=claim_token,
+                now=now,
+            ):
+                return False
+
+            already_analyzed = (
+                bool(row["semantic_profile_json"])
+                and int(row["semantic_revision"] or 0) > 0
+                and str(row["last_visual_analysis_content_fingerprint"] or "") == content_sha
+            )
+            if already_analyzed:
+                self.database._conn.execute(
+                    """UPDATE perceptual_expression_assets
+                       SET content_fingerprint=?, content_mime=?, content_size_bytes=?,
+                           semantic_status='enriched',
+                           last_visual_analysis_fingerprint=?,
+                           visual_claim_token=NULL, visual_claimed_until=NULL,
+                           visual_last_error_code=NULL, visual_defer_until=NULL
+                       WHERE platform=? AND account_scope=? AND scope_id=? AND kind=? AND native_id=?
+                         AND fingerprint=? AND visual_claim_token=?""",
+                    (
+                        content_sha,
+                        mime,
+                        size,
+                        expected_fingerprint,
+                        *key,
+                        expected_fingerprint,
+                        claim_token,
+                    ),
+                )
+                return False
+
+            cur = self.database._conn.execute(
+                """UPDATE perceptual_expression_assets
+                   SET content_fingerprint=?, content_mime=?, content_size_bytes=?
+                   WHERE platform=? AND account_scope=? AND scope_id=? AND kind=? AND native_id=?
+                     AND fingerprint=? AND visual_claim_token=?""",
+                (
+                    content_sha,
+                    mime,
+                    size,
+                    *key,
+                    expected_fingerprint,
+                    claim_token,
+                ),
+            )
+            return cur.rowcount > 0
 
     def apply_visual_enrichment(
         self,
@@ -258,55 +459,129 @@ class PerceptualExpressionMemory:
         native_id: str,
         profile: ExpressionSemanticProfile,
         expected_fingerprint: str,
+        claim_token: str,
+        content_fingerprint: str,
+        provider: str,
+        model: str,
         source: str = "visual_perception",
     ) -> bool:
-        """Commit one visual analysis only if it still describes the current asset.
+        """Commit structured perception for the exact claimed metadata/content pair.
 
-        Replaying the same successful analysis for the same fingerprint is an
-        idempotent success: semantic_revision does not increase twice.
+        A successful retry for already-committed content is idempotent even after the
+        lease was cleared, which makes network ambiguity safe for the worker.
         """
 
-        now = self.clock.now().isoformat()
+        content_sha = self._normalize_sha256(content_fingerprint)
+        now = self.clock.now()
+        now_iso = now.isoformat()
         trusted_profile = profile.model_copy(update={"source": str(source)[:64] or "visual_perception"})
         payload = json.dumps(
             trusted_profile.model_dump(mode="json"),
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        provider_name = self._bounded_label(provider, 64, "unknown")
+        model_name = self._bounded_label(model, 128, "unknown")
+        key = (platform.value, account_scope, scope_id, kind, native_id)
+
         with self.database._lock, self.database._conn:
             row = self.database._conn.execute(
-                """SELECT fingerprint, semantic_status, last_visual_analysis_fingerprint
+                """SELECT fingerprint, semantic_status, content_fingerprint,
+                          last_visual_analysis_content_fingerprint,
+                          visual_claim_token, visual_claimed_until
                    FROM perceptual_expression_assets
                    WHERE platform=? AND account_scope=? AND scope_id=? AND kind=? AND native_id=?""",
-                (platform.value, account_scope, scope_id, kind, native_id),
+                key,
             ).fetchone()
             if row is None or str(row["fingerprint"]) != str(expected_fingerprint):
                 return False
+
             if (
                 str(row["semantic_status"]) == ExpressionSemanticStatus.ENRICHED.value
-                and str(row["last_visual_analysis_fingerprint"] or "") == str(expected_fingerprint)
+                and str(row["last_visual_analysis_content_fingerprint"] or "") == content_sha
             ):
                 return True
-            self.database._conn.execute(
+
+            if not self._claim_is_live(row, claim_token=claim_token, now=now):
+                return False
+            if str(row["content_fingerprint"] or "") != content_sha:
+                return False
+
+            cur = self.database._conn.execute(
                 """UPDATE perceptual_expression_assets
                    SET semantic_profile_json=?, semantic_status='enriched',
                        semantic_revision=semantic_revision+1,
-                       last_visual_analysis_at=?, last_visual_analysis_fingerprint=?
+                       last_visual_analysis_at=?,
+                       last_visual_analysis_fingerprint=?,
+                       last_visual_analysis_content_fingerprint=?,
+                       visual_provider=?, visual_model=?,
+                       visual_claim_token=NULL, visual_claimed_until=NULL,
+                       visual_last_error_code=NULL, visual_defer_until=NULL
                    WHERE platform=? AND account_scope=? AND scope_id=? AND kind=? AND native_id=?
-                     AND fingerprint=?""",
+                     AND fingerprint=? AND content_fingerprint=? AND visual_claim_token=?""",
                 (
                     payload,
-                    now,
+                    now_iso,
                     expected_fingerprint,
-                    platform.value,
-                    account_scope,
-                    scope_id,
-                    kind,
-                    native_id,
+                    content_sha,
+                    provider_name,
+                    model_name,
+                    *key,
                     expected_fingerprint,
+                    content_sha,
+                    claim_token,
                 ),
             )
-        return True
+            return cur.rowcount > 0
+
+    def defer_visual(
+        self,
+        *,
+        platform: MessagingPlatform,
+        account_scope: str,
+        scope_id: str,
+        kind: str,
+        native_id: str,
+        claim_token: str,
+        expected_fingerprint: str,
+        error_code: str,
+        retry_after_seconds: int = 60,
+    ) -> bool:
+        """Release a live claim after a bounded failure and schedule a retry window."""
+
+        now = self.clock.now()
+        retry_after_seconds = max(1, min(86_400, int(retry_after_seconds)))
+        defer_until = now + timedelta(seconds=retry_after_seconds)
+        key = (platform.value, account_scope, scope_id, kind, native_id)
+
+        with self.database._lock, self.database._conn:
+            row = self.database._conn.execute(
+                """SELECT fingerprint, visual_claim_token, visual_claimed_until
+                   FROM perceptual_expression_assets
+                   WHERE platform=? AND account_scope=? AND scope_id=? AND kind=? AND native_id=?""",
+                key,
+            ).fetchone()
+            if row is None or str(row["fingerprint"]) != str(expected_fingerprint):
+                return False
+            if not self._claim_is_live(row, claim_token=claim_token, now=now):
+                return False
+
+            cur = self.database._conn.execute(
+                """UPDATE perceptual_expression_assets
+                   SET semantic_status='failed',
+                       visual_claim_token=NULL, visual_claimed_until=NULL,
+                       visual_last_error_code=?, visual_defer_until=?
+                   WHERE platform=? AND account_scope=? AND scope_id=? AND kind=? AND native_id=?
+                     AND fingerprint=? AND visual_claim_token=?""",
+                (
+                    self._bounded_label(error_code, 96, "VISUAL_ENRICHMENT_FAILED"),
+                    defer_until.isoformat(),
+                    *key,
+                    expected_fingerprint,
+                    claim_token,
+                ),
+            )
+            return cur.rowcount > 0
 
     def known_count(self) -> int:
         with self.database._lock:
@@ -381,7 +656,11 @@ class PerceptualExpressionMemory:
                     """UPDATE perceptual_expression_assets
                        SET name=?, description=?, tags_json=?, semantic_profile_json=?,
                            semantic_status=?, fingerprint=?, fingerprint_source='transport_metadata',
-                           last_seen_at=?, last_sender_ref=?, last_source_message_id=?
+                           last_seen_at=?, last_sender_ref=?, last_source_message_id=?,
+                           visual_claim_token=CASE WHEN ? THEN NULL ELSE visual_claim_token END,
+                           visual_claimed_until=CASE WHEN ? THEN NULL ELSE visual_claimed_until END,
+                           visual_defer_until=CASE WHEN ? THEN NULL ELSE visual_defer_until END,
+                           visual_last_error_code=CASE WHEN ? THEN NULL ELSE visual_last_error_code END
                        WHERE platform=? AND account_scope=? AND scope_id=? AND kind=? AND native_id=?""",
                     (
                         expression.name,
@@ -393,6 +672,10 @@ class PerceptualExpressionMemory:
                         now,
                         sender_ref,
                         source_message_id,
+                        int(changed),
+                        int(changed),
+                        int(changed),
+                        int(changed),
                         *key,
                     ),
                 )
@@ -494,6 +777,56 @@ class PerceptualExpressionMemory:
         )
 
     @staticmethod
+    def _row_key(row) -> tuple[str, str, str, str, str]:
+        return (
+            str(row["platform"]),
+            str(row["account_scope"]),
+            str(row["scope_id"]),
+            str(row["kind"]),
+            str(row["native_id"]),
+        )
+
+    @staticmethod
+    def _claim_is_live(row, *, claim_token: str, now: datetime) -> bool:
+        if not claim_token or str(row["visual_claim_token"] or "") != str(claim_token):
+            return False
+        raw_until = row["visual_claimed_until"]
+        if not raw_until:
+            return False
+        try:
+            claimed_until = datetime.fromisoformat(str(raw_until))
+        except ValueError:
+            return False
+        if claimed_until.tzinfo is None or claimed_until.utcoffset() is None:
+            return False
+        return claimed_until > now
+
+    @staticmethod
+    def _normalize_sha256(value: str) -> str:
+        candidate = str(value).strip().lower()
+        if len(candidate) != 64 or any(char not in "0123456789abcdef" for char in candidate):
+            raise ValueError("content_fingerprint must be a SHA-256 hex digest")
+        return candidate
+
+    @staticmethod
+    def _normalize_mime(value: str) -> str:
+        mime = str(value).strip().lower()
+        if not mime or len(mime) > 100 or "/" not in mime:
+            raise ValueError("content_mime must be a bounded media type")
+        return mime
+
+    def _normalize_content_size(self, value: int) -> int:
+        size = int(value)
+        if size < 1 or size > self.MAX_CONTENT_BYTES:
+            raise ValueError("content_size_bytes outside visual enrichment bounds")
+        return size
+
+    @staticmethod
+    def _bounded_label(value: str, limit: int, fallback: str) -> str:
+        normalized = " ".join(str(value or "").split()).strip()
+        return normalized[:limit] or fallback
+
+    @staticmethod
     def _record_from_row(row) -> PerceptualExpressionRecord:
         profile_raw = row["semantic_profile_json"]
         profile = (
@@ -514,6 +847,13 @@ class PerceptualExpressionMemory:
             semantic_status=ExpressionSemanticStatus(str(row["semantic_status"])),
             fingerprint=str(row["fingerprint"]),
             fingerprint_source=str(row["fingerprint_source"]),
+            content_fingerprint=row["content_fingerprint"],
+            content_mime=row["content_mime"],
+            content_size_bytes=(
+                int(row["content_size_bytes"])
+                if row["content_size_bytes"] is not None
+                else None
+            ),
             semantic_revision=int(row["semantic_revision"] or 0),
             first_seen_at=datetime.fromisoformat(str(row["first_seen_at"])),
             last_seen_at=datetime.fromisoformat(str(row["last_seen_at"])),
@@ -527,5 +867,22 @@ class PerceptualExpressionMemory:
                 else None
             ),
             last_visual_analysis_fingerprint=row["last_visual_analysis_fingerprint"],
+            last_visual_analysis_content_fingerprint=row[
+                "last_visual_analysis_content_fingerprint"
+            ],
+            visual_provider=row["visual_provider"],
+            visual_model=row["visual_model"],
+            visual_claimed_until=(
+                datetime.fromisoformat(str(row["visual_claimed_until"]))
+                if row["visual_claimed_until"]
+                else None
+            ),
+            visual_attempt_count=int(row["visual_attempt_count"] or 0),
+            visual_last_error_code=row["visual_last_error_code"],
+            visual_defer_until=(
+                datetime.fromisoformat(str(row["visual_defer_until"]))
+                if row["visual_defer_until"]
+                else None
+            ),
             metadata=dict(json.loads(row["metadata_json"] or "{}")),
         )

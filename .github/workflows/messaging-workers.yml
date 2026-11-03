@@ -12,6 +12,8 @@ on:
       - 'tests/discord_lifecycle_stability.test.mjs'
       - 'tests/discord_entrypoint.test.mjs'
       - 'tests/discord_response_modality.test.mjs'
+      - 'tests/discord_sticker_media.test.mjs'
+      - 'tests/discord_visual_enrichment_worker.test.mjs'
       - '.github/workflows/messaging-workers.yml'
   pull_request:
     paths:
@@ -24,6 +26,8 @@ on:
       - 'tests/discord_lifecycle_stability.test.mjs'
       - 'tests/discord_entrypoint.test.mjs'
       - 'tests/discord_response_modality.test.mjs'
+      - 'tests/discord_sticker_media.test.mjs'
+      - 'tests/discord_visual_enrichment_worker.test.mjs'
       - '.github/workflows/messaging-workers.yml'
 
 jobs:
@@ -45,15 +49,17 @@ jobs:
           node --check workers/discord/http.mjs
           node --check workers/discord/normalize.mjs
           node --check workers/discord/social-runtime.mjs
+          node --check workers/discord/sticker-media.mjs
+          node --check workers/discord/visual-worker.mjs
           node --check workers/discord/worker.mjs
           node --check workers/whatsapp/normalize.mjs
           node --check workers/whatsapp/worker.mjs
       - name: Adapter contract tests
-        run: node --test tests/messaging_workers.test.mjs tests/messaging_privacy_scope_contract.test.mjs tests/discord_worker_runtime.test.mjs tests/discord_lifecycle_stability.test.mjs tests/discord_entrypoint.test.mjs tests/discord_response_modality.test.mjs
+        run: node --test tests/messaging_workers.test.mjs tests/messaging_privacy_scope_contract.test.mjs tests/discord_worker_runtime.test.mjs tests/discord_lifecycle_stability.test.mjs tests/discord_entrypoint.test.mjs tests/discord_response_modality.test.mjs tests/discord_sticker_media.test.mjs tests/discord_visual_enrichment_worker.test.mjs
       - name: Build Discord worker container
         run: |
           docker build -f workers/discord/Dockerfile -t amora-discord:test .
-          docker run --rm --entrypoint sh amora-discord:test -c 'test "$(id -u)" = "10001" && node --check workers/discord/entrypoint.mjs && node --check workers/discord/expression-worker.mjs && node --check workers/discord/worker.mjs'
+          docker run --rm --entrypoint sh amora-discord:test -c 'test "$(id -u)" = "10001" && node --check workers/discord/entrypoint.mjs && node --check workers/discord/expression-worker.mjs && node --check workers/discord/sticker-media.mjs && node --check workers/discord/visual-worker.mjs && node --check workers/discord/worker.mjs'
       - name: Resolve exact Baileys release, import worker and audit installed tree
         working-directory: workers/whatsapp
         run: |

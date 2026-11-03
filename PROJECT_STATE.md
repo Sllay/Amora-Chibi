@@ -1,9 +1,10 @@
 # AMORA — Project State / Checkpoint Operacional
 
-**Atualizado em:** 2026-11-02  
-**Base funcional consolidada:** `main` após merge da PR #121 (`a42270db5ea427c483adf67c8e50206ec6e74aa9`)  
-**Schema canônico atual:** **16**  
-**Objetivo:** checkpoint curto para retomar o projeto sem reconstruir decisões por chat.
+**Atualizado em:** 2026-11-03  
+**Base funcional consolidada em `main`:** PR #122 / `33041eadd145259539d55153830523731a622299`  
+**Schema em `main` antes da promoção do CH2:** **16**  
+**Schema do CH2 / PR #123:** **17**  
+**Objetivo:** retomar o projeto sem reconstruir decisões por chat.
 
 ## 1. Fonte de verdade
 
@@ -18,137 +19,222 @@ Ordem de leitura para trabalho novo:
 7. este `PROJECT_STATE.md`;
 8. código, schemas, testes, PRs e CI atuais.
 
-Se checkpoint e código divergirem, isso é dívida do CH atual e deve ser corrigido antes de abrir nova frente grande.
+Se checkpoint e código divergirem, isso é dívida do CH atual.
 
 ## 2. Invariantes
 
-- **Amora não é um LLM.** O Core possui identidade, memória, relações, emoção, world/self state, `DialoguePlan`, policy/authority e observação de efeitos.
+- **Amora não é um LLM.** Core possui identidade, memória, relações, emoção, world/self state, `DialoguePlan`, policy/authority e observação de efeitos.
 - Providers/modelos são capacidades substituíveis por task class.
 - `AVAILABLE != KNOWN` para assets perceptuais.
 - ação física só existe depois de capability/authority/policy/validation local.
 - `WEB_SAFARI != DEVICE_A15`.
-- CI verde não substitui certificação física real.
-- objetivo de custo continua **R$ 0 sempre que praticável**.
-- nenhuma chave/token/segredo vai para Git, prompt ou log.
+- CI verde não substitui certificação física/live.
+- custo alvo continua **R$ 0 sempre que praticável**.
+- chave/token/segredo não vai para Git, prompt ou log.
 
-## 3. CH1 — CONSOLIDADO
+## 3. CH1 — COMPLETED
 
-A antiga pilha empilhada foi promovida em ordem e recertificada em cada base nova:
+Promovidos e recertificados: #116, #117, #118, #119, #120, #121 e #122.
 
-- PR #116 — capability awareness + perceptual asset memory canon;
-- PR #117 — canonical capability registry;
-- PR #118 — capability projection para contexto cognitivo;
-- PR #119 — ações cognitivas grounded nas capabilities projetadas;
-- PR #120 — semantic response modality competition;
-- PR #121 — persistent perceptual expression memory / CPF.
+#115 foi fechada sem merge por estar supersedida.
 
-A PR #115, linha antiga de sticker expressions, foi **fechada sem merge** por estar supersedida por #120/#121.
+Durante #121, cinco testes antigos hardcodavam schema 15; foram corrigidos para depender de `amora.storage.LATEST_SCHEMA_VERSION`.
 
-Durante a promoção da #121, o Core CI encontrou cinco testes antigos hardcodando schema `15`. A migration para schema 16 estava correta. Os testes foram corrigidos para depender de `amora.storage.LATEST_SCHEMA_VERSION`, removendo a dívida em vez de trocar apenas `15 -> 16`. No head final da #121 passaram:
+ADR-0033 registra continuidade, fronteira **Perceptual Asset Vision != Continuous Environment Vision** e recovery-before-fallback.
 
-- Core tests;
-- Perceptual expression memory;
-- Response modality competition;
-- Cloud container contracts;
-- Pre-deploy security.
-
-## 4. Capability Awareness — ATIVO
+## 4. Capability + cognition baseline
 
 Fluxo canônico:
 
 ```text
 Capability Registry
-→ capability projection/retrieval
+→ projection/retrieval
 → Decision / DialoguePlan
 → policy + authority
 → ActionBus / adapter
 → Observation
 ```
 
-O provider não inventa capability IDs, permissões, resultados ou poderes. Linguagem natural não é keyword gate de autoridade.
+Provider não inventa capability IDs, permissões, resultados ou poderes.
+
+Baseline de providers até promoção explícita:
+
+- social dialogue: **Qwen 3.8 27B**;
+- reasoning specialist: **GPT-OSS 120B**;
+- Mistral Large 4 via NVIDIA: candidato em CH3, não promovido.
 
 ## 5. Response Modality Competition — ATIVA
 
-Texto, expressão nativa/sticker e outras modalidades competem semanticamente antes da execução.
+Texto, expressão nativa/sticker e futuras modalidades competem semanticamente antes da execução.
 
-Seleção de asset normal usa:
+Seleção normal de asset:
 
 ```text
 KNOWN ∩ AVAILABLE
 ```
 
-Catálogo nativo/IDs continuam autoridade local do adapter/Core; não são despejados no provider.
+Catálogo/IDs continuam autoridade local do Core/adapter.
 
-## 6. CPF perceptual persistente — ATIVO
+## 6. CPF perceptual persistente
 
-Schema 16 mantém memória perceptual de expressão persistente com identidade por plataforma/account/scope/tipo/native ID, fingerprint, semantic revision, contadores e provenance.
+Schema 16 em `main` já possuía memória perceptual persistente, bootstrap fraco por metadata, estados `metadata_only/pending_visual/enriched/stale/failed`, compare-and-set e reuso entre restarts.
 
-Estados atuais:
+CH2 sobe o contrato para schema **17** e adiciona content addressing, lease visual e percepção multimodal real.
+
+## 7. CH2 — Visual Expression Enrichment — SOFTWARE COMPLETE
+
+Delivery PR:
+
+- **#123** `feat: add content-addressed visual expression enrichment`;
+- branch: `feat/ch2-visual-expression-enrichment`;
+- schema: **17**;
+- estado do software: **COMPLETED / ready for promotion**;
+- certificação de código: `7ea117b512f1e10ad029897e1172c3f3902b1862`.
+
+### Contrato entregue
 
 ```text
-metadata_only
-pending_visual
-enriched
-stale
-failed
+relevant asset
+→ PENDING_VISUAL / STALE / FAILED
+→ claim/lease
+→ Discord secure resolver + bounded fetch
+→ Core valida bytes e recalcula SHA-256
+→ bind content ao claim
+→ [SHA conhecido? reuse : VisionAnalyzer]
+→ strict structured output
+→ local Pydantic validation
+→ metadata revision + content SHA + claim token CAS
+→ ENRICHED
 ```
 
-A base atual já suporta:
+Implementado:
 
-- descoberta/bootstrap por metadata fraca;
-- separação `AVAILABLE` x `KNOWN`;
-- persistência entre restarts;
-- `pending_visual()`;
-- `apply_visual_enrichment(expected_fingerprint)` com compare-and-set;
-- rejeição de resultado stale;
-- retry idempotente para mesmo fingerprint.
+- schema 17;
+- `fingerprint` de metadata separado de `content_fingerprint` real;
+- claim/lease transacional e token opaco;
+- reclaim após expiração e rejeição de token velho;
+- CAS por metadata revision + content SHA + claim;
+- stale-result rejection;
+- retry/defer persistente;
+- reuse do mesmo SHA sem nova chamada remota nem nova semantic revision;
+- provider/model provenance;
+- recovery/import schema 16 → 17;
+- worker boundary autenticado claim/content/defer;
+- Discord sticker resolver derivado de `sticker_id + format_type`, sem URL arbitrária de chat;
+- bounded fetch com host/formato/MIME/content/size/redirect/timeout validation;
+- visual worker isolado de heartbeat/reconnect;
+- política de privacidade persistida antes do job remoto;
+- Core recomputa SHA; worker não é autoridade do hash;
+- `VisionAnalyzer` substituível;
+- `GroqQwenVisionAnalyzer` para `qwen/qwen3.8-27b`;
+- segredo exclusivamente por `SecretStore`;
+- sem Groq secret, bootstrap continua funcionando e job visual é deferido;
+- imagem base64 + strict JSON Schema no provider;
+- validação local Pydantic depois do provider;
+- provider source `vision_model` canonizado no CPF como `visual_perception`, com provider/model em campos separados;
+- pipeline end-to-end certificado com `MockTransport` do adapter real;
+- testes de concorrência, lease, CAS, privacidade, mídia, provider contract, persistência e reuse.
 
-**Limite explícito:** a Amora ainda não vê pixels de sticker. Metadata bootstrap não é visão real e não deve ser apresentada como tal.
+### Formatos
 
-## 7. Duas visões diferentes
+Certificado para análise direta no CH2:
+
+- PNG estático;
+- JPEG estático;
+- WebP estático.
+
+Fail-closed/defer até renderer/frame extractor determinístico:
+
+- GIF animado;
+- Lottie/JSON;
+- animação cuja sequência social não possa ser representada com segurança pelo contrato atual.
+
+Não fingir que primeiro frame representa a expressão inteira.
+
+### CI do código final
+
+O SHA `7ea117b512f1e10ad029897e1172c3f3902b1862` passou:
+
+- Core tests;
+- Perceptual expression memory;
+- Messaging workers;
+- Response modality competition;
+- Cloud container contracts;
+- Pre-deploy security.
+
+### Gates operacionais ainda abertos
+
+Não inferir PASS por CI:
+
+- chamada live Groq/Qwen com credencial operacional;
+- mídia real Discord atravessando resolver/fetch/worker/Core/provider;
+- reconnect/permissões/intents do Discord em ambiente real;
+- validação física/operacional longa no dispositivo/infra alvo.
+
+Esses gates não bloqueiam o fechamento **software** do CH2; permanecem explicitamente pendentes.
+
+## 8. Duas visões diferentes
 
 ### Perceptual Asset Vision — CH2
-
-Sticker/emoji/GIF/imagem pontual:
 
 ```text
 asset relevante
 → fetch seguro
-→ hash dos bytes reais
-→ multimodal structured analysis
-→ validação local
+→ hash real
+→ percepção pontual
 → CPF persistente
 → reuso
 ```
-
-Isso pode e deve existir antes da V1.1.
 
 ### Continuous Environment Vision — V1.1
 
 ```text
 screen/video/environment
 → captura temporal
-→ scene change / keyframes
-→ OCR/objetos
+→ keyframes/scene changes
+→ OCR/objects
 → contexto temporal + áudio
 → world/perception events
 ```
 
-Não confundir as duas frentes.
+Não puxar V1.1 para dentro do CH2.
 
-## 8. Provider baseline e candidatos
+## 9. CH3 — Provider Certification + Resilience — IN PROGRESS / STACKED
 
-Baseline até CH3 certificar mudança:
+PR ativa:
 
-- **social dialogue:** Qwen 3.8 27B;
-- **reasoning specialist:** GPT-OSS 120B;
-- **Mistral Large 4 via NVIDIA** (`mistralai/mistral-large-4-1t-a52b`): candidato para diálogo, reasoning e percepção multimodal.
+- **#124** `feat: add provider certification harness and Mistral Large 4 candidate`;
+- branch: `feat/ch3-provider-certification-resilience`;
+- base atual: branch do CH2;
+- merge bloqueado até promoção da #123.
 
-Se Mistral vencer diálogo, Qwen vira fallback. Se vencer reasoning, GPT-OSS vira fallback. Nenhuma promoção acontece por intuição ou porque um modelo parece mais permissivo.
+Já implementado/certificado na branch do CH3:
 
-## 9. Recovery-before-fallback — DECISÃO CANÔNICA
+- `SOCIAL_SURFACE_REPLAY_V1`;
+- Mistral Large 4 NVIDIA como candidato `certification_only`;
+- identical-context A/B Qwen x Mistral;
+- context fingerprint e execução sequencial;
+- `promotion_decision=none` por contrato;
+- Retry-After;
+- bounded exponential backoff + jitter;
+- structured repair bounded;
+- `ProviderCircuitRegistry` por provider + task class;
+- `CLOSED → OPEN → HALF_OPEN` com probe único;
+- sucesso fecha / falha reabre;
+- ProviderRouter continua dono do ranking.
 
-Fallback não reage ao primeiro timeout.
+Ainda pendente no CH3:
+
+- após #123 entrar, retarget/sync #124 para `main`;
+- full Core regression na base final;
+- A/B live Qwen x Mistral + revisão humana;
+- evidência live de latência/quota/custo;
+- Mistral x GPT-OSS no reasoning;
+- promoção somente se evidência justificar.
+
+## 10. Recovery-before-fallback
+
+Direção canônica:
 
 ```text
 primary
@@ -158,81 +244,42 @@ primary
 → fallback OR defer OR local degrade
 ```
 
-Regras registradas em `docs/canon/PROVIDER_MESH.md` e ADR-0033:
+Diálogo tem budget curto. Job perceptual assíncrono prefere `DEFER` a fallback imediato. Depois de delivery válido, não costurar provider no meio da mesma fala.
 
-- transient network/timeout/5xx/capacity: retry bounded com backoff + jitter se o budget permitir;
-- `429`: respeitar `Retry-After`/budget;
-- auth/bad request determinístico: sem retry cego;
-- structured output inválido: repair/retry bounded;
-- circuit breaker com `HALF_OPEN`;
-- uma falha isolada não bane o primary;
-- diálogo tem budget curto;
-- perception job assíncrono prefere `DEFER` a fallback imediato;
-- depois do início de delivery validado, não costurar outro provider na mesma fala.
-
-A implementação/certificação completa dessa política pertence ao CH3; a decisão arquitetural já está congelada.
-
-## 10. Gates físicos/operacionais ainda abertos
-
-Não declarar PASS por inferência:
+## 11. Gates físicos/operacionais gerais ainda abertos
 
 - Discord real: guild/DM/reply/reconnect/intents/permissões;
-- WhatsApp linked-device real: pairing/reconnect/offline sync e storage auth produtivo;
-- Background Voice / WebRTC Call Mode com iPhone + app em foreground;
+- WhatsApp linked-device real;
+- Background Voice / WebRTC Call Mode com iPhone;
 - long-run voz/latência/térmica/barge-in;
+- Visual Expression Enrichment live;
 - Continuous Environment Vision V1.1;
 - corpo/avatar final.
 
-## 11. Próximos CHs
-
-Somente três movimentos grandes ficam ativos no mapa:
+## 12. Linha ativa
 
 ### CH1 — Consolidar e organizar
 
-**Status:** `COMPLETED em código; documentação desta consolidação em fechamento.`
-
-Entregas: promover #116–#121, fechar #115 supersedida, corrigir schema-test debt, atualizar checkpoint/canon/roadmap/ADR.
+**Status:** `COMPLETED`
 
 ### CH2 — Visual Expression Enrichment
 
-**Status:** `NEXT`
-
-Entregar somente:
-
-```text
-pending_visual
-→ secure media resolver/fetch
-→ SHA-256 real
-→ multimodal provider
-→ strict CPF schema
-→ local validation
-→ CAS
-→ enriched
-```
-
-Inclui SSRF/MIME/size/animated formats, lease/idempotência, privacidade e retry/defer. Não puxar screen capture/OCR contínuo/avatar para este CH.
+**Status:** `SOFTWARE COMPLETE — PR #123 ready for promotion`
 
 ### CH3 — Provider Certification + Resilience
 
-**Status:** `AFTER CH2`
+**Status:** `IN_PROGRESS — PR #124 stacked on CH2`
 
-- replay A/B Qwen x Mistral no diálogo;
-- Mistral x GPT-OSS no reasoning;
-- conjunto fixo de assets para percepção;
-- pt-BR, personalidade, humor/palavrão contextual, adult-context permitido, assistantism, moralização/recusa indevida, grounding, latência, custo e structured output;
-- implementar/certificar recovery-before-fallback por task class;
-- promover Mistral somente onde vencer.
+Nenhum CH4 será aberto antes de CH3 ser consolidado.
 
-## 12. Regra de fechamento de CH
+## 13. Regra de fechamento de CH
 
-Nenhum CH futuro é `COMPLETED` até a mesma linha de entrega registrar:
+Nenhum CH é `COMPLETED` até registrar:
 
-1. código/schema/testes integrados;
+1. código/schema/testes integrados ou prontos para promoção;
 2. CI aplicável verde;
-3. gates físicos ainda pendentes explicitamente;
+3. gates físicos/live pendentes explicitamente;
 4. `PROJECT_STATE.md` atualizado;
 5. roadmap/canon/ADR afetados atualizados;
 6. próximo estado reduzido a no máximo três CHs ativos;
 7. nenhuma decisão crítica vivendo só no chat.
-
-ADR desta consolidação: `ADR-0033-ch1-continuity-perceptual-boundary-and-provider-recovery.md`.

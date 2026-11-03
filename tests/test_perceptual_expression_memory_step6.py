@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from amora.app import AmoraCore
@@ -16,6 +17,7 @@ from amora.messaging import (
     ResponseModality,
     RoutingAction,
 )
+from amora.storage import LATEST_SCHEMA_VERSION
 from amora.time import SimulatedClock
 
 
@@ -83,24 +85,94 @@ def _decision(
     )
 
 
-def _core(tmp_path: Path, monkeypatch) -> AmoraCore:
+def _core(tmp_path: Path, monkeypatch, *, clock: SimulatedClock | None = None) -> AmoraCore:
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
-    return AmoraCore.bootstrap(clock=SimulatedClock())
+    return AmoraCore.bootstrap(clock=clock or SimulatedClock())
 
 
-def test_schema_16_contains_perceptual_asset_observation_and_sender_tables(tmp_path: Path, monkeypatch) -> None:
+def _profile() -> ExpressionSemanticProfile:
+    return ExpressionSemanticProfile(
+        short_description="Chibi com sorriso enorme e olhar pirado; energia de zoeira caótica.",
+        visual_concepts=["chibi", "sorriso enorme", "olhar pirado"],
+        affect_tags=["joy", "playful"],
+        social_roles=["playful", "affection"],
+        possible_interpretations=["zoeira", "sorriso da loucura"],
+        intensity=0.9,
+        valence=0.7,
+        arousal=0.9,
+        confidence=0.96,
+    )
+
+
+def _claim(memory):
+    claims = memory.claim_visual(
+        platform=MessagingPlatform.DISCORD,
+        account_scope="primary",
+    )
+    assert len(claims) == 1
+    return claims[0]
+
+
+def _bind(memory, claim, *, body: bytes = b"visual-sticker-v1") -> str:
+    content_sha = hashlib.sha256(body).hexdigest()
+    assert memory.record_visual_content(
+        platform=MessagingPlatform.DISCORD,
+        account_scope="primary",
+        scope_id=claim.record.scope_id,
+        kind=claim.record.kind,
+        native_id=claim.record.native_id,
+        claim_token=claim.claim_token,
+        expected_fingerprint=claim.record.fingerprint,
+        content_fingerprint=content_sha,
+        content_mime="image/png",
+        content_size_bytes=len(body),
+    ) is True
+    return content_sha
+
+
+def _enrich(memory, *, profile: ExpressionSemanticProfile | None = None, body: bytes = b"visual-sticker-v1"):
+    claim = _claim(memory)
+    content_sha = _bind(memory, claim, body=body)
+    assert memory.apply_visual_enrichment(
+        platform=MessagingPlatform.DISCORD,
+        account_scope="primary",
+        scope_id=claim.record.scope_id,
+        kind=claim.record.kind,
+        native_id=claim.record.native_id,
+        profile=profile or _profile(),
+        expected_fingerprint=claim.record.fingerprint,
+        claim_token=claim.claim_token,
+        content_fingerprint=content_sha,
+        provider="test-provider",
+        model="test-vision",
+    ) is True
+    return claim, content_sha
+
+
+def test_latest_schema_contains_perceptual_visual_enrichment_fields(tmp_path: Path, monkeypatch) -> None:
     core = _core(tmp_path, monkeypatch)
     try:
-        assert core.database.schema_version() == 16
-        names = {
-            str(row[0])
+        assert core.database.schema_version() == LATEST_SCHEMA_VERSION == 17
+        columns = {
+            str(row[1])
             for row in core.database._conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
+                "PRAGMA table_info(perceptual_expression_assets)"
             ).fetchall()
         }
-        assert "perceptual_expression_assets" in names
-        assert "perceptual_expression_observations" in names
-        assert "perceptual_expression_senders" in names
+        for name in {
+            "content_fingerprint",
+            "content_mime",
+            "content_size_bytes",
+            "last_visual_analysis_content_fingerprint",
+            "visual_provider",
+            "visual_model",
+            "visual_claim_token",
+            "visual_claimed_until",
+            "visual_attempt_count",
+            "visual_last_error_code",
+            "visual_defer_until",
+        }:
+            assert name in columns
     finally:
         core.close()
 
@@ -142,6 +214,7 @@ def test_relevant_inbound_expression_creates_persistent_cpf(tmp_path: Path, monk
         assert record.seen_count == 1
         assert record.unique_senders_count == 1
         assert record.fingerprint_source == "transport_metadata"
+        assert record.content_fingerprint is None
         assert record.needs_visual_enrichment is True
         assert record.semantic_profile is not None
         assert record.semantic_profile.source == "transport_metadata"
@@ -254,7 +327,7 @@ def test_cpf_survives_restart_and_hydrates_future_catalog(tmp_path: Path, monkey
         core.close()
 
 
-def test_visual_enrichment_is_revisioned_and_reused(tmp_path: Path, monkeypatch) -> None:
+def test_visual_enrichment_is_content_addressed_revisioned_and_reused(tmp_path: Path, monkeypatch) -> None:
     core = _core(tmp_path, monkeypatch)
     try:
         sticker = _sticker()
@@ -263,36 +336,8 @@ def test_visual_enrichment_is_revisioned_and_reused(tmp_path: Path, monkeypatch)
             _message(expression=sticker, catalog=[sticker], text=""),
             _decision(),
         )
-        before = memory.get(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-        )
-        assert before is not None
 
-        profile = ExpressionSemanticProfile(
-            short_description="Chibi com sorriso enorme e olhar pirado; energia de zoeira caótica.",
-            visual_concepts=["chibi", "sorriso enorme", "olhar pirado"],
-            affect_tags=["joy", "playful"],
-            social_roles=["playful", "affection"],
-            possible_interpretations=["zoeira", "sorriso da loucura"],
-            intensity=0.9,
-            valence=0.7,
-            arousal=0.9,
-            confidence=0.96,
-            source="ignored-caller-source",
-        )
-        assert memory.apply_visual_enrichment(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-            profile=profile,
-            expected_fingerprint=before.fingerprint,
-        ) is True
+        _, content_sha = _enrich(memory)
 
         after = memory.get(
             platform=MessagingPlatform.DISCORD,
@@ -305,9 +350,12 @@ def test_visual_enrichment_is_revisioned_and_reused(tmp_path: Path, monkeypatch)
         assert after.semantic_status == ExpressionSemanticStatus.ENRICHED
         assert after.semantic_revision == 1
         assert after.needs_visual_enrichment is False
+        assert after.content_fingerprint == content_sha
+        assert after.last_visual_analysis_content_fingerprint == content_sha
+        assert after.visual_provider == "test-provider"
+        assert after.visual_model == "test-vision"
         assert after.semantic_profile is not None
         assert after.semantic_profile.source == "visual_perception"
-        assert after.semantic_profile.short_description == profile.short_description
         assert all(item.native_id != "smile-1" for item in memory.pending_visual())
 
         hydrated = memory.hydrate(
@@ -315,12 +363,12 @@ def test_visual_enrichment_is_revisioned_and_reused(tmp_path: Path, monkeypatch)
         )
         assert hydrated.available_expressions[0].semantic_revision == 1
         assert hydrated.available_expressions[0].semantic_profile is not None
-        assert hydrated.available_expressions[0].semantic_profile.short_description == profile.short_description
+        assert hydrated.available_expressions[0].semantic_profile.short_description == _profile().short_description
     finally:
         core.close()
 
 
-def test_changed_metadata_marks_cpf_stale_and_rejects_old_visual_result(tmp_path: Path, monkeypatch) -> None:
+def test_changed_metadata_invalidates_old_claim_and_result(tmp_path: Path, monkeypatch) -> None:
     core = _core(tmp_path, monkeypatch)
     try:
         memory = core.messaging.expression_memory
@@ -329,14 +377,8 @@ def test_changed_metadata_marks_cpf_stale_and_rejects_old_visual_result(tmp_path
             _message(message_id="m1", expression=original, catalog=[original], text=""),
             _decision(),
         )
-        first = memory.get(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-        )
-        assert first is not None
+        claim = _claim(memory)
+        content_sha = _bind(memory, claim)
 
         changed = _sticker(description="chibi com sorriso diferente e olhos arregalados")
         memory.observe_relevant(
@@ -351,30 +393,29 @@ def test_changed_metadata_marks_cpf_stale_and_rejects_old_visual_result(tmp_path
             native_id="smile-1",
         )
         assert stale is not None
-        assert stale.fingerprint != first.fingerprint
+        assert stale.fingerprint != claim.record.fingerprint
         assert stale.semantic_status == ExpressionSemanticStatus.STALE
         assert stale.needs_visual_enrichment is True
 
-        late_profile = ExpressionSemanticProfile(
-            short_description="resultado atrasado",
-            confidence=0.99,
-            source="visual_perception",
-        )
         assert memory.apply_visual_enrichment(
             platform=MessagingPlatform.DISCORD,
             account_scope="primary",
             scope_id="guild-1",
             kind="sticker",
             native_id="smile-1",
-            profile=late_profile,
-            expected_fingerprint=first.fingerprint,
+            profile=_profile(),
+            expected_fingerprint=claim.record.fingerprint,
+            claim_token=claim.claim_token,
+            content_fingerprint=content_sha,
+            provider="test-provider",
+            model="test-vision",
         ) is False
         assert any(item.native_id == "smile-1" for item in memory.pending_visual())
     finally:
         core.close()
 
 
-def test_production_selector_uses_only_known_available_assets(tmp_path: Path, monkeypatch) -> None:
+def test_production_selector_uses_only_known_available_enriched_assets(tmp_path: Path, monkeypatch) -> None:
     core = _core(tmp_path, monkeypatch)
     try:
         smile = _sticker()
@@ -395,31 +436,7 @@ def test_production_selector_uses_only_known_available_assets(tmp_path: Path, mo
             _message(message_id="learn", expression=smile, catalog=[smile, rage], text=""),
             _decision(),
         )
-        record = memory.get(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-        )
-        assert record is not None
-        profile = ExpressionSemanticProfile(
-            short_description="Chibi sorrindo de forma exagerada e engraçada.",
-            visual_concepts=["sorriso enorme"],
-            affect_tags=["joy"],
-            social_roles=["affection", "playful"],
-            intensity=0.7,
-            confidence=0.95,
-        )
-        assert memory.apply_visual_enrichment(
-            platform=MessagingPlatform.DISCORD,
-            account_scope="primary",
-            scope_id="guild-1",
-            kind="sticker",
-            native_id="smile-1",
-            profile=profile,
-            expected_fingerprint=record.fingerprint,
-        )
+        _enrich(memory)
 
         hydrated = memory.hydrate(catalog_only)
         decision = core.messaging.response_modality.select(hydrated, "hehe papis")

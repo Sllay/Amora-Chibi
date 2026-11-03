@@ -1,7 +1,9 @@
 const DEFAULT_TIMEOUT_MS = 20_000;
 const INBOUND_TIMEOUT_MS = 45_000;
+const VISUAL_CONTENT_TIMEOUT_MS = 45_000;
 const MIN_PRESENCE_CONTROL_TIMEOUT_MS = 5_000;
 const DEFAULT_OUTBOUND_LEASE_SECONDS = 120;
+const DEFAULT_VISUAL_LEASE_SECONDS = 120;
 
 function cleanBaseUrl(value) {
   const url = new URL(value);
@@ -151,6 +153,51 @@ export class MessagingCoreClient {
     return this.request(`/v1/messaging/worker/outbound/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',
       body: { reason: String(reason).slice(0, 120) },
+    });
+  }
+
+  claimVisual(limit = 1, leaseSeconds = DEFAULT_VISUAL_LEASE_SECONDS) {
+    const query = new URLSearchParams({
+      platform: this.platform,
+      account_scope: this.accountScope,
+      limit: String(limit),
+      lease_seconds: String(leaseSeconds),
+    });
+    return this.request(`/v1/messaging/worker/visual?${query}`);
+  }
+
+  submitVisualContent(work, { contentMime, contentBase64 }) {
+    return this.request('/v1/messaging/worker/visual/content', {
+      method: 'POST',
+      timeoutMs: VISUAL_CONTENT_TIMEOUT_MS,
+      body: {
+        platform: work.platform ?? this.platform,
+        account_scope: work.account_scope ?? this.accountScope,
+        scope_id: work.scope_id,
+        kind: work.kind,
+        native_id: work.native_id,
+        expected_fingerprint: work.expected_fingerprint,
+        claim_token: work.claim_token,
+        content_mime: contentMime,
+        content_base64: contentBase64,
+      },
+    });
+  }
+
+  deferVisual(work, { errorCode, retryAfterSeconds = 60 }) {
+    return this.request('/v1/messaging/worker/visual/defer', {
+      method: 'POST',
+      body: {
+        platform: work.platform ?? this.platform,
+        account_scope: work.account_scope ?? this.accountScope,
+        scope_id: work.scope_id,
+        kind: work.kind,
+        native_id: work.native_id,
+        expected_fingerprint: work.expected_fingerprint,
+        claim_token: work.claim_token,
+        error_code: String(errorCode || 'VISUAL_WORKER_FAILED').slice(0, 96),
+        retry_after_seconds: Math.max(1, Math.min(86_400, Number(retryAfterSeconds) || 60)),
+      },
     });
   }
 
