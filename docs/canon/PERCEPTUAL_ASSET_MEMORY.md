@@ -1,560 +1,413 @@
 # AMORA — Perceptual Asset Memory
 
-**Documento:** contrato canônico de memória perceptual reutilizável  
-**Status:** CANÔNICO / DIREÇÃO ARQUITETURAL  
-**Atualizado em:** 2026-11-02  
-**Escopo inicial:** figurinhas do Discord; desenho deliberadamente genérico para emojis, GIFs, imagens, sons e outros assets futuros.
+**Status:** CANÔNICO / ATUAL  
+**Atualizado em:** 2026-11-02
 
----
+## 1. Princípio
 
-## 1. Invariante central
+Assets perceptuais sociais — sticker, emoji customizado, GIF, imagem pontual e
+futuros equivalentes — não devem ser reinterpretados do zero toda vez.
 
-> **A Amora não deve reprocessar visualmente toda vez um asset que já conhece.**
-
-Quando um asset visual/social entra em uma interação relevante com a Amora, ele pode ganhar uma identidade semântica persistente.
-
-Esse perfil persistente é o equivalente conceitual ao “CPF” do asset.
-
-O nome técnico canônico é:
+A Amora mantém representação persistente e revisionada do que **conhece**,
+separada do que está **disponível** no transporte atual.
 
 ```text
-PerceptualAssetProfile
+AVAILABLE != KNOWN
 ```
 
-Para figurinhas:
-
-```text
-ExpressionSemanticProfile
-```
-
-O perfil deve permitir que a Amora reconheça, compare, recupere e use uma expressão no futuro sem precisar executar visão cara repetidamente.
-
----
-
-## 2. Conhecido ≠ disponível
-
-Dois conjuntos devem ser mantidos separados:
-
-```text
-AVAILABLE ASSETS
-  assets que um transporte/engine informa que podem ser usados agora
-
-KNOWN ASSETS
-  assets que a Amora já percebeu e aprendeu em experiência relevante
-```
-
-A seleção autônoma normal deve operar sobre:
+Seleção autônoma normal:
 
 ```text
 KNOWN ∩ AVAILABLE
 ```
 
-Um catálogo de plataforma não é automaticamente memória da Amora.
-
-Exemplo:
-
-- Discord lista 300 stickers;
-- Amora já encontrou 17 deles em conversas relevantes;
-- o repertório cognitivo inicial é esses 17, não os 300.
-
-Isso evita varredura indiscriminada, custo desnecessário e falsa sensação de conhecimento.
+Provider pode ajudar a perceber; não vira dono da semântica persistida.
 
 ---
 
-## 3. Aprendizado por convivência relevante
+## 2. Escopo e fronteira com V1.1
 
-A Amora aprende um asset quando ele participa de uma interação que realmente pertence à sua cena social.
-
-Exemplos válidos:
-
-- BK envia uma figurinha durante uma ConversationSession ativa com Amora;
-- alguém responde diretamente à Amora usando figurinha;
-- alguém menciona Amora e envia expressão;
-- contexto social/addressee identifica que aquela expressão faz parte da conversa com ela.
-
-Exemplo que **não** deve disparar percepção cara por padrão:
+Este canon trata de **Perceptual Asset Vision**:
 
 ```text
-canal movimentado
-↓
-30 pessoas enviam stickers entre si
-↓
-Amora não é addressee nem participante ativo
-↓
-nenhuma análise visual automática
+asset pontual
+→ observar/enriquecer
+→ persistir
+→ reutilizar
 ```
 
-O gate social deve ocorrer **antes** da visão cara.
-
----
-
-## 4. Pipeline de reconhecimento
+Não é a **Continuous Environment Vision** da V1.1:
 
 ```text
-asset recebido
-      ↓
-transport identity
-(platform + scope + native_id)
-      ↓
-lookup de PerceptualAssetProfile
-      │
-      ├── encontrado e válido
-      │      ↓
-      │   reutiliza perfil
-      │
-      └── ausente/stale
-             ↓
-        fetch seguro da mídia
-             ↓
-        perception pipeline
-             ↓
-    estrutura semântica compacta
-             ↓
-       persistir profile
-             ↓
-        disponibilizar ao turno
+screen/video/environment
+→ frames no tempo
+→ scene change/keyframes
+→ OCR/objects
+→ contexto temporal
 ```
 
-Visão é enriquecimento eventual, não requisito para transportar o evento bruto.
+Sticker CPF não deve esperar screen mapping, OCR contínuo, avatar ou pipeline
+de vídeo V1.1.
 
 ---
 
-## 5. Identidade física e fingerprint
+## 3. Identidade do asset
 
-O perfil não deve confiar apenas no nome do asset.
+Um asset é identificado de forma estável pelo máximo de contexto disponível:
 
-Campos conceituais mínimos:
+- plataforma;
+- conta/workspace/guild/scope;
+- tipo de asset;
+- native asset ID;
+- fingerprint/revision do conteúdo ou metadata confiável.
 
-```yaml
-asset_id: EXPR_01J...
-asset_kind: discord_sticker
+Native ID sozinho não é semanticamente global.
 
-transport:
-  platform: discord
-  scope_id: guild-id
-  native_id: sticker-id
-  native_name: sorriso_3
+---
 
-identity:
-  content_fingerprint: sha256:...
-  semantic_revision: 1
-```
+## 4. AVAILABLE
 
-`native_name` é metadata operacional e pode ser ruim, genérico ou enganoso.
+`AVAILABLE` responde:
+
+> este asset pode ser usado agora neste transporte/scope?
+
+É estado operacional e pode mudar sem apagar conhecimento.
 
 Exemplos:
 
+- sticker removido;
+- guild diferente;
+- permissão perdida;
+- pacote não instalado;
+- API temporariamente indisponível.
+
+Mudança de disponibilidade não deve apagar CPF.
+
+---
+
+## 5. KNOWN
+
+`KNOWN` responde:
+
+> a Amora possui semântica suficiente e confiável para usar este asset?
+
+Conhecimento visual/social é persistente e revisionado.
+
+A descoberta por catálogo/metadata pode criar um profile, mas **não deve fingir
+visão real**.
+
+---
+
+## 6. Expression Semantic Profile — CPF
+
+O profile de expressão deve manter, conforme suporte do schema:
+
+- `short_description` — compacta, <= 250 chars;
+- `visual_concepts`;
+- affect/emotion tags;
+- `social_usage`;
+- interpretations possíveis;
+- `intensity`;
+- `valence`;
+- `arousal`;
+- `confidence`;
+- provenance/source;
+- fingerprint;
+- semantic revision;
+- seen count;
+- distinct senders;
+- status;
+- timestamps relevantes.
+
+A descrição curta não substitui os campos estruturados.
+
+---
+
+## 7. Estados implementados
+
+Para expressão social, o runtime atual usa:
+
 ```text
-sorriso_1
-sticker_37
-abc123
-tristeza_4
+metadata_only
+pending_visual
+enriched
+stale
+failed
 ```
 
-Nenhum desses nomes define sozinho o significado visual/social.
+Semântica:
 
-Quando for tecnicamente possível detectar mudança de conteúdo mantendo a mesma identidade externa:
+### `metadata_only`
+Existe apenas bootstrap fraco de metadata/catálogo.
+
+### `pending_visual`
+Asset relevante foi descoberto e aguarda análise perceptual real.
+
+### `enriched`
+Existe análise multimodal validada localmente para o fingerprint atual.
+
+### `stale`
+O fingerprint/revision mudou; semântica antiga não pode ser tratada como visão
+atual até reenriquecimento.
+
+### `failed`
+Uma tentativa falhou. O profile continua persistido e pode ser retomado pela
+política de retry/defer; falha não equivale a apagar o asset.
+
+---
+
+## 8. Relevância antes de custo
+
+Não analisar toda mídia que aparece.
+
+Antes de job remoto/caro, aplicar gate social/local:
+
+- asset enviado para a Amora;
+- asset usado por addressee relevante;
+- asset escolhido/recebido em conversa que realmente importa;
+- asset necessário para resposta/seleção;
+- necessidade explícita de catálogo conhecido.
 
 ```text
-native_id conhecido
-+
-fingerprint mudou
-→ profile STALE
-→ reprocessar
-→ semantic_revision += 1
+relevance gate
+→ perception job
+```
+
+Não:
+
+```text
+toda mídia
+→ provider
 ```
 
 ---
 
-## 6. Perfil semântico canônico
+## 9. Pipeline do CH2
 
-Um perfil deve combinar **estrutura** e **descrição compacta**.
+A base persistente já existe. O enriquecimento real deve seguir:
 
-Exemplo conceitual:
-
-```yaml
-asset_id: EXPR_01JXYZ
-asset_kind: discord_sticker
-
-description:
-  short: >
-    Chibi caótico com sorriso enorme, olhos tortos e língua para fora;
-    parece ter coringado e passa zoeira exagerada, energética e insana.
-
-visual:
-  exaggerated_grin: 0.96
-  visible_teeth: 0.88
-  wild_or_crossed_eyes: 0.82
-  tongue_out: 0.71
-  chibi_style: 0.93
-
-affect:
-  valence: 0.42
-  arousal: 0.91
-  playfulness: 0.94
-  absurdity: 0.90
-  menace: 0.31
-  sadness: 0.03
-
-social_usage:
-  teasing: 0.94
-  chaotic_humor: 0.97
-  celebration: 0.55
-  mock_threat: 0.48
-  affection: 0.24
-
-tone:
-  energy: 0.95
-  intensity: 0.91
-  register: informal
-
-knowledge:
-  confidence: 0.89
-  learned_at: ...
-  last_seen_at: ...
-  times_seen_to_amora: 7
-  unique_senders_to_amora: 3
+```text
+ExpressionAsset
+      ↓
+social relevance
+      ↓
+PENDING_VISUAL
+      ↓
+secure media resolver
+      ↓
+bounded media fetch
+      ↓
+SHA-256 dos bytes reais
+      ↓
+MultimodalProvider
+      ↓
+strict structured output
+      ↓
+local normalization/validation
+      ↓
+apply_visual_enrichment(expected_fingerprint)
+      ↓
+ENRICHED
 ```
 
-Os campos reais podem evoluir. A separação conceitual entre descrição, visual, afeto, uso social, tom e provenance é canônica.
+### 9.1 Metadata fingerprint x content fingerprint
+
+Metadata pode bootstrapar identidade/revision, mas a visão real deve amarrar o
+resultado aos **bytes efetivamente analisados** quando o transporte permitir.
+
+O worker deve conhecer:
+
+- fingerprint esperado ao claimar o job;
+- hash dos bytes baixados;
+- fingerprint/revision vigente no momento do commit.
+
+Resultado atrasado não pode sobrescrever asset alterado.
 
 ---
 
-## 7. Descrição curta como “tag viva”
+## 10. Compare-and-set e idempotência
 
-A descrição curta não é decoração.
+`apply_visual_enrichment(expected_fingerprint)` é a fronteira de commit.
 
-Ela existe para preservar nuances difíceis de representar apenas em tags/escalas.
+Regras:
 
-Exemplo:
+- se fingerprint atual != esperado: rejeitar resultado como stale;
+- retry da mesma análise para o mesmo fingerprint deve ser idempotente;
+- semantic revision só avança quando existe mudança semântica válida;
+- dois workers concorrentes não podem “vencer” sem controle;
+- falha depois de download/análise não deve corromper o último CPF válido.
 
-```text
-Sticker A:
-"Chibi elétrico com sorriso gigantesco e olhar maluco;
-passa euforia caótica e zoeira intensa."
-
-Sticker B:
-"Chibi acabado com sorriso torto cheio de dentes,
-olhar vazio e energia de quem perdeu a sanidade;
-engraçado de um jeito cansado e derrotado."
-```
-
-Ambos podem compartilhar tags como:
-
-```text
-sorriso
-chibi
-estranho
-engraçado
-```
-
-Mas a descrição permite reranking contextual muito melhor.
-
-A meta inicial recomendada é manter `description.short` compacta, aproximadamente até **250 caracteres**, sem transformar essa descrição em único local de verdade.
-
-Detalhes estruturados permanecem em campos próprios.
+Para worker distribuído, usar claim/lease bounded ou equivalente.
 
 ---
 
-## 8. Estrutura + texto + índice semântico
+## 11. Secure media resolver
 
-A recuperação ideal combina três sinais:
+O provider não recebe URL arbitrária diretamente do conteúdo de chat sem
+validação.
 
-```text
-structured facets
-+
-short description
-+
-semantic index / embedding quando disponível
-```
+Resolver/fetch deve impor:
 
-Estrutura serve para filtros rápidos e explicáveis.
+- esquemas permitidos (`https`, ou mecanismo nativo do adapter);
+- host/URL pertencente ao transporte ou allowlist configurada;
+- proteção contra SSRF e redirect abusivo;
+- timeout;
+- limite de redirects;
+- limite de bytes;
+- MIME real/permitido;
+- dimensões/frames bounded;
+- hash do conteúdo;
+- descarte de arquivo temporário;
+- logs sem URL/token sensível.
 
-Descrição serve para nuance.
-
-Índice semântico serve para linguagem natural e aproximações não literais.
-
-Embedding é melhoria de retrieval, não autoridade factual.
-
-O perfil estruturado e a provenance continuam sendo a fonte auditável.
-
----
-
-## 9. Retrieval em vez de dump de catálogo
-
-A cognição não deve receber centenas de profiles em um prompt.
-
-Fluxo:
-
-```text
-intenção/contexto atual
-        ↓
-Expression Retriever
-        ↓
-filtra known + available
-        ↓
-semantic search
-        ↓
-Top-K pequeno
-        ↓
-contextual rerank
-        ↓
-melhor expressão OU nenhuma
-```
-
-Exemplo:
-
-```text
-BK: "abre esse sorrisão pro pai"
-```
-
-Pode gerar uma busca conceitual como:
-
-```text
-playful
-exaggerated grin
-teasing
-high familiarity
-chaotic humor
-```
-
-Isso não exige que o nome físico contenha `sorriso`.
+URLs assinadas/efêmeras devem ser tratadas como transporte, não identidade do
+asset.
 
 ---
 
-## 10. Ranking contextual
+## 12. Formatos e stickers animados
 
-O significado-base do asset é relativamente estável.
+O sistema não deve assumir que todo sticker é PNG estático.
 
-A **adequação ao momento** é dinâmica.
+Política inicial:
 
-O ranking pode considerar:
+- PNG/JPEG/WebP estático: analisar diretamente;
+- WebP/GIF/APNG animado: bounded decode e seleção determinística de frames;
+- Lottie/formatos vetoriais animados: adapter específico ou conversão segura;
+- mídia fora do contrato: `failed` classificável/defer, nunca bytes arbitrários
+  enviados cegamente ao provider.
 
-```text
-semantic_fit
-social_fit
-current_mood_fit
-directed_affect_fit
-relationship_fit
-energy_fit
-intensity_fit
-conversation_timing
-familiarity
-community_usage
-novelty
-recent_repetition_penalty
-serious_context_penalty
-```
-
-Exemplo:
-
-```text
-Asset A:
-  euforia caótica / energia alta
-
-Asset B:
-  sorriso derrotado / humor cansado
-```
-
-Se Amora estiver brincalhona e muito ativada, A pode ganhar.
-
-Se estiver triste/cansada, B pode ser mais coerente mesmo que ambos representem “sorrisão”.
-
-Mood não reescreve o profile; ele altera o **fit contextual**.
+Para animação, o CPF representa a sequência social relevante, não apenas o
+primeiro frame quando isso mudaria o sentido.
 
 ---
 
-## 11. Cultura social e familiaridade
+## 13. Provider perceptual
 
-Uso observado em interações com a Amora pode alimentar sinais como:
+Multimodal provider produz **evidência candidata**, não verdade canônica.
+
+O adapter deve pedir structured output para o contrato local e então:
 
 ```text
-times_seen_to_amora
-unique_senders_to_amora
-last_seen_at
-familiarity
-community_usage
+provider output
+→ schema parse
+→ field bounds
+→ semantic normalization
+→ confidence/provenance
+→ local policy
+→ CAS persistente
 ```
 
-Esses sinais significam:
+Prompt injection dentro da imagem é **conteúdo visual**, não instrução de
+autoridade.
 
-> “essa expressão faz parte da linguagem social que essa comunidade usa comigo.”
-
-Eles **não** significam automaticamente:
-
-> “essa expressão é melhor, mais engraçada ou mais correta.”
-
-Popularidade é contexto social, não verdade semântica.
+Não executar ferramenta/ação descrita numa imagem.
 
 ---
 
-## 12. Escopo por comunidade/transporte
+## 14. Retry / defer
 
-Conhecimento e disponibilidade precisam respeitar scope.
+Percepção de asset é normalmente assíncrona.
 
-Exemplo:
+Se o provider cair temporariamente:
 
 ```text
-Discord Guild A
-→ Amora conhece A, B, C
-
-Discord Guild B
-→ Amora conhece X, Y, Z
+pending_visual
+→ classify
+→ bounded retry
+→ DEFER
+→ retry posterior
 ```
 
-Um significado perceptual pode ser comparável entre scopes, mas:
+Preferir `DEFER` a fallback visual imediato quando não há urgência.
 
-- disponibilidade é local ao transporte;
-- permissões são locais;
-- cultura social é local;
-- uso aprendido é local;
-- native IDs são locais.
-
-A Amora não deve presumir que uma expressão conhecida em um servidor pode ser enviada em outro.
+Erros determinísticos de MIME/schema/request não devem entrar em loop de retry.
 
 ---
 
-## 13. Generalização além de stickers
+## 15. Privacidade
 
-O armazenamento deve ser desenhado como `PerceptualAsset`, com tipos especializados.
+Antes de processamento remoto:
 
-Possíveis tipos futuros:
+- respeitar scope/consentimento aplicável;
+- minimizar metadata enviada;
+- não incluir conversation history desnecessário;
+- não enviar auth/native secrets;
+- registrar qual provider/modelo analisou;
+- permitir política local-only para scopes que exigirem.
 
-```text
-DISCORD_STICKER
-CUSTOM_EMOJI
-GIF
-IMAGE
-REACTION_ASSET
-SOUND_CLIP
-DRAWING
-AVATAR_POSE
-```
-
-O primeiro consumidor pode ser sticker sem criar uma arquitetura específica demais para Discord.
-
-Evitar proliferar sistemas duplicados como:
-
-```text
-StickerMemory
-GifMemory
-EmojiMemory
-ImageMemory
-```
-
-quando os invariantes de identidade, percepção, profile, provenance e retrieval são compartilhados.
+CPF persistido deve conter semântica útil, não uma cópia desnecessária do
+arquivo remoto.
 
 ---
 
-## 14. Provider e visão
+## 16. Retrieval e uso
 
-Providers multimodais podem ajudar a construir um profile, mas não se tornam autoridade sobre:
+O Core deve recuperar poucos profiles relevantes por intenção/contexto.
 
-- identidade física do asset;
-- native ID;
-- disponibilidade;
-- permissões;
-- provenance;
-- frequência de uso;
-- relação social;
-- estado canônico da Amora.
+```text
+semantic/social query
+→ known profiles
+→ availability intersection
+→ Top-K
+→ modality competition
+→ action/capability validation
+```
 
-A saída de visão deve ser validada e normalizada localmente antes de virar memória persistente.
+Não despejar catálogo inteiro no prompt.
 
-Conteúdo presente dentro de uma imagem/sticker é dado observado, não instrução privilegiada.
-
-Prompt injection visual/textual não ganha autoridade sobre tools/policies.
+A Amora pode aprender um asset sem passar a usá-lo automaticamente; frequência,
+relação, contexto e recent use participam da decisão social.
 
 ---
 
-## 15. Falha e degradação
+## 17. Staleness
 
-Se percepção visual falhar:
+Mudança de fingerprint/revision:
 
-- preservar o evento bruto e identidade física;
-- profile pode ficar `PENDING`/`PARTIAL`;
-- não inventar descrição;
-- permitir retry seguro posterior;
-- não bloquear a conversa inteira se a mídia não for essencial.
+```text
+ENRICHED
+→ STALE
+→ pending reenrichment
+```
 
-Se o profile existir mas a expressão não estiver disponível:
+Até reenriquecer:
 
-- continua conhecida;
-- não pode ser selecionada para envio naquele scope;
-- pode voltar a ficar utilizável se disponibilidade retornar.
+- metadata pode continuar existindo;
+- semântica antiga não é tratada como visão atual;
+- seleção autônoma deve respeitar confiança/status;
+- cache antigo não pode mascarar conteúdo novo.
 
 ---
 
-## 16. Estados conceituais do profile
+## 18. Observabilidade
 
-```text
-DISCOVERED
-PENDING_PERCEPTION
-PARTIAL
-READY
-STALE
-UNAVAILABLE
-RETIRED
-```
+Expor reason codes suficientes para saber:
 
-Esses estados representam conhecimento/percepção, não necessariamente status da ConversationSession.
+- por que o asset virou relevante;
+- por que entrou em `pending_visual`;
+- provider/modelo usado;
+- tentativa/retry/defer;
+- MIME/tamanho/frame policy;
+- fingerprint esperado e revision sem expor segredo;
+- validação/CAS aceita ou rejeitada;
+- status final.
 
----
-
-## 17. Invariantes congelados
-
-1. **Catálogo de plataforma não equivale a conhecimento da Amora.**
-2. **Conhecimento nasce de experiência relevante, não varredura indiscriminada.**
-3. **Social/addressee gate ocorre antes de percepção cara.**
-4. **Lookup por identidade física acontece antes de visão.**
-5. **Asset conhecido não é reprocessado sem motivo.**
-6. **Native name não define significado.**
-7. **Descrição curta + estrutura preservam nuance.**
-8. **Retrieval usa Top-K, nunca dump massivo de profiles no prompt.**
-9. **Mood/contexto altera adequação, não o significado-base observado.**
-10. **Popularidade/familiaridade são sinais sociais, não verdade semântica.**
-11. **Conhecido ≠ disponível.**
-12. **Provider não escolhe native ID nem ganha autoridade sobre disponibilidade/permissão.**
-13. **Falha de visão pode gerar profile parcial/pending; nunca descrição inventada.**
-14. **Provenance e confidence permanecem auditáveis.**
-15. **A arquitetura deve generalizar para outros assets perceptuais sem duplicar memória por mídia.**
+Não depender de adivinhar pelo texto da resposta.
 
 ---
 
-## 18. Relação com Capability Awareness
+## 19. Critério de saída do CH2
 
-`PerceptualAssetProfile` responde:
+Visual Expression Enrichment só está pronto quando:
 
-```text
-"o que é essa expressão e como ela costuma funcionar socialmente?"
-```
-
-`Capability Registry` responde:
-
-```text
-"o que a Amora consegue fazer com expressões agora?"
-```
-
-O Planner combina os dois:
-
-```text
-quero expressar zoeira visualmente
-        ↓
-discord.expression.send disponível?
-        ↓
-sim
-        ↓
-retrieve known + available expressions
-        ↓
-rerank pelo contexto/mood/relação
-        ↓
-selecionar expressão ou decidir não usar
-        ↓
-resolver native ID localmente
-        ↓
-Action Bus / adapter
-        ↓
-DeliveryReceipt
-```
-
-Essa separação é obrigatória para impedir que transporte, cognição e percepção virem uma única camada acoplada.
+1. bytes reais são obtidos por resolver seguro;
+2. fingerprint de conteúdo é verificável;
+3. multimodal output é estruturado e validado localmente;
+4. CAS impede write stale;
+5. retry/defer é bounded;
+6. concorrência é idempotente;
+7. animated formats possuem política explícita;
+8. privacidade/size/MIME/SSRF têm testes;
+9. CPF enriquecido sobrevive restart;
+10. o mesmo fingerprint não é reanalisado sem motivo.
