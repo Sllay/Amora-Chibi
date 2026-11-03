@@ -96,7 +96,7 @@ PLANEJAMENTO ANTIGO V0.9 / V0.95
 
 ## 4. V1.0 — fechamento cognitivo, social e vocal
 
-**Status:** `IN_PROGRESS — BASE COGNITIVA/SOCIAL CONSOLIDADA / PHYSICAL VOICE GATES PENDING`
+**Status:** `IN_PROGRESS — BASE COGNITIVA/SOCIAL CONSOLIDADA / PHYSICAL VOICE + LIVE PROVIDER GATES PENDING`
 
 Fundação vigente inclui:
 
@@ -105,11 +105,13 @@ Fundação vigente inclui:
 - DialoguePlan + RealizationFrame + validator local;
 - Context Compiler / Conversation History / Cognitive Journal;
 - provider mesh zero-cost fail-closed;
+- recovery-before-fallback + circuit lifecycle por provider/task;
 - capabilities explícitas + authority/policy local;
 - response modality competition;
 - Platform Messaging + Social Attention;
 - persistent perceptual expression memory;
 - Perceptual Asset Vision pontual do CH2;
+- provider certification harness + identical-context A/B do CH3;
 - backup/restore/observabilidade/security;
 - Android/Web voice paths e identidade vocal de laboratório.
 
@@ -131,7 +133,7 @@ PR #29 / merge `dfe50de9a9312f0e6a3f08cc482e9b4dc0aee1d4`.
 
 **Status:** `IMPLEMENTED / MERGED / CANON UPDATED`
 
-Provider mesh, quota/cooldown/circuit state, health/usage e zero-cost guards existem. ADR-0033 e `PROVIDER_MESH.md` congelam **recovery-before-fallback** como direção obrigatória; CH3 completa a certificação por task class.
+Provider mesh, quota/cooldown/circuit state, health/usage e zero-cost guards existem. ADR-0033 e `PROVIDER_MESH.md` congelam **recovery-before-fallback** como direção obrigatória; CH3 integrou a infraestrutura de certificação e o lifecycle de resiliência, mas a decisão live entre candidatos continua separada.
 
 ### V1 Step 4 — Canonical Voice + V1 Certification
 
@@ -211,9 +213,9 @@ Formatos certificados diretamente: PNG/JPEG/WebP estáticos.
 
 GIF/Lottie/animação sem renderer determinístico ficam **fail-closed/deferred**. Não inferir significado completo por primeiro frame arbitrário.
 
-SHA de código certificado: `7ea117b512f1e10ad029897e1172c3f3902b1862`.
+Head de código certificado: `7ea117b512f1e10ad029897e1172c3f3902b1862`.
 
-Gates verdes nesse SHA:
+Gates verdes nesse head:
 
 - Core tests;
 - Perceptual expression memory;
@@ -234,30 +236,47 @@ Esses gates permanecem operacionais e não reabrem o CH2 software.
 
 ### CH3 — Provider Certification + Resilience
 
-**Status:** `IN_PROGRESS — PR #124; CH2 DEPENDENCY RESOLVED / RETARGET TO MAIN NEXT`
+**Status:** `IN_PROGRESS — SOFTWARE MERGED / LIVE CERTIFICATION PENDING — PR #124 / b72e7d1e`
 
-A infraestrutura de certificação já existe na branch do CH3. Como #123 já entrou em `main`, o bloqueio de dependência foi removido; a ação imediata agora é retarget/sync da #124 para `main` e full Core regression antes de qualquer promoção de provider.
+Software integrado em `main` via PR #124.
 
-Implementado na #124:
+- head final certificado: `769cba5eae1677a5867a3765aab12c077abcf6fb`;
+- merge: `b72e7d1e7628ff58e02042b3658863b481c02bfe`;
+- schema permanece 17.
+
+Integrado:
 
 - `SOCIAL_SURFACE_REPLAY_V1`;
 - Mistral Large 4 como candidato `certification_only`;
 - A/B identical-context Qwen × Mistral;
+- context fingerprint e execução sequencial;
 - mechanical score sem autoridade de promoção;
-- Retry-After;
+- Retry-After delay-seconds + HTTP-date;
 - bounded backoff + jitter;
-- structured repair bounded;
+- long Retry-After fora do budget interativo → circuit/cooldown/failover sem retry inline;
+- structured repair bounded no runtime estruturado;
+- proxy de resiliência direto preservado como transport-only por padrão;
+- código semântico de realization preservado separadamente da classificação `PROVIDER_STRUCTURED_OUTPUT_INVALID`;
 - circuit registry por provider + task;
 - `CLOSED → OPEN → HALF_OPEN` com probe único;
-- ProviderRouter continua dono do ranking.
+- ProviderRouter continua dono do ranking/quota.
 
-Agora que CH2 foi promovido:
+No fechamento da #124, a recertificação contra `main` revelou três regressões de contrato — expectativa legada de Retry-After longo, mistura de validação semântica no proxy de transporte e perda do código semântico na observabilidade. As três foram corrigidas antes do merge; o head final passou:
+
+- Core tests em Python 3.11 / 3.12 / 3.13 / 3.14;
+- Provider certification;
+- Cloud container contracts;
+- Pre-deploy security;
+- Cognitive capability projection;
+- Capability grounded intent;
+- Response modality competition.
+
+Próxima sequência do mesmo CH3:
 
 ```text
-retarget #124 → main
-→ sync / full Core regression
-→ live Qwen × Mistral social replay
+live Qwen × Mistral social replay
 → human review
+→ latency/quota/cost evidence
 → Mistral × GPT-OSS reasoning replay
 → promote only where evidence wins
 ```
@@ -270,7 +289,7 @@ REASONING: GPT-OSS 120B
 MISTRAL LARGE 4: candidate only
 ```
 
-Nenhum modelo vira identidade da Amora.
+**O merge da #124 promoveu a infraestrutura CH3, não o Mistral.** Nenhum modelo vira identidade da Amora.
 
 ---
 
