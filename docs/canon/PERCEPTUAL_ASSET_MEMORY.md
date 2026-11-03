@@ -51,17 +51,42 @@ de vídeo V1.1.
 
 ---
 
-## 3. Identidade do asset
+## 3. Identidade, revisão e conteúdo
 
-Um asset é identificado de forma estável pelo máximo de contexto disponível:
+Um asset é localizado de forma estável pelo máximo de contexto disponível:
 
 - plataforma;
 - conta/workspace/guild/scope;
 - tipo de asset;
-- native asset ID;
-- fingerprint/revision do conteúdo ou metadata confiável.
+- native asset ID.
 
 Native ID sozinho não é semanticamente global.
+
+CH2 torna explícita uma distinção que não pode voltar a ser confundida:
+
+### `fingerprint`
+
+É a **revisão de metadata/contrato de transporte** conhecida pelo Core. Serve
+como compare-and-set para impedir que uma observação antiga sobrescreva uma
+revisão mais nova do mesmo asset.
+
+Não deve ser chamado de hash visual quando foi derivado de nome, descrição,
+tags ou formato.
+
+### `content_fingerprint`
+
+É o **SHA-256 dos bytes reais efetivamente obtidos para percepção**.
+
+```text
+metadata fingerprint != content fingerprint
+```
+
+URL efêmera, CDN path, nome do sticker, descrição e tags não substituem o hash
+dos bytes.
+
+A semântica visual é ligada ao conteúdo observado. Se a metadata mudar mas os
+bytes continuarem com o mesmo SHA já analisado, o CPF pode ser revalidado sem
+nova chamada multimodal. Se os bytes mudarem, nova análise é necessária.
 
 ---
 
@@ -105,19 +130,22 @@ O profile de expressão deve manter, conforme suporte do schema:
 - `short_description` — compacta, <= 250 chars;
 - `visual_concepts`;
 - affect/emotion tags;
-- `social_usage`;
+- `social_usage`/papéis sociais;
 - interpretations possíveis;
 - `intensity`;
 - `valence`;
 - `arousal`;
 - `confidence`;
 - provenance/source;
-- fingerprint;
+- metadata fingerprint/revision;
+- content fingerprint quando bytes reais já foram observados;
 - semantic revision;
 - seen count;
 - distinct senders;
 - status;
-- timestamps relevantes.
+- provider/modelo perceptual quando houver análise remota;
+- timestamps relevantes;
+- estado de claim/retry/defer quando houver trabalho perceptual pendente.
 
 A descrição curta não substitui os campos estruturados.
 
@@ -125,7 +153,7 @@ A descrição curta não substitui os campos estruturados.
 
 ## 7. Estados implementados
 
-Para expressão social, o runtime atual usa:
+Para expressão social, o runtime usa:
 
 ```text
 metadata_only
@@ -144,11 +172,13 @@ Existe apenas bootstrap fraco de metadata/catálogo.
 Asset relevante foi descoberto e aguarda análise perceptual real.
 
 ### `enriched`
-Existe análise multimodal validada localmente para o fingerprint atual.
+Existe semântica visual validada para o content SHA conhecido e compatível com
+a revisão atual do asset.
 
 ### `stale`
-O fingerprint/revision mudou; semântica antiga não pode ser tratada como visão
-atual até reenriquecimento.
+A revisão de metadata mudou e a semântica antiga não pode ser tratada como visão
+atual até o conteúdo ser verificado. Se o content SHA continuar idêntico ao já
+analisado, a semântica pode ser revalidada sem novo provider call.
 
 ### `failed`
 Uma tentativa falhou. O profile continua persistido e pode ser retomado pela
@@ -182,62 +212,75 @@ toda mídia
 
 ---
 
-## 9. Pipeline do CH2
+## 9. Pipeline canônico do CH2
 
-A base persistente já existe. O enriquecimento real deve seguir:
+O contrato durável do CH2 é:
 
 ```text
 ExpressionAsset
       ↓
 social relevance
       ↓
-PENDING_VISUAL
+PENDING_VISUAL / STALE / FAILED
+      ↓
+claim_visual()
       ↓
 secure media resolver
       ↓
 bounded media fetch
       ↓
+Core recebe/valida os bytes
+      ↓
 SHA-256 dos bytes reais
       ↓
-MultimodalProvider
+record_visual_content()
+      ↓
+┌─────────────────────────────────────────────┐
+│ content SHA já analisado?                   │
+│   sim → revalidar CPF sem provider call     │
+│   não → MultimodalProvider                  │
+└─────────────────────────────────────────────┘
       ↓
 strict structured output
       ↓
 local normalization/validation
       ↓
-apply_visual_enrichment(expected_fingerprint)
+apply_visual_enrichment(
+  expected metadata fingerprint,
+  content SHA,
+  claim token
+)
       ↓
 ENRICHED
 ```
 
-### 9.1 Metadata fingerprint x content fingerprint
-
-Metadata pode bootstrapar identidade/revision, mas a visão real deve amarrar o
-resultado aos **bytes efetivamente analisados** quando o transporte permitir.
-
-O worker deve conhecer:
-
-- fingerprint esperado ao claimar o job;
-- hash dos bytes baixados;
-- fingerprint/revision vigente no momento do commit.
-
-Resultado atrasado não pode sobrescrever asset alterado.
+O resolver/fetch pertence ao boundary de transporte. O CPF, lease, validação,
+content addressing e persistência pertencem ao Core.
 
 ---
 
-## 10. Compare-and-set e idempotência
+## 10. Claim/lease, compare-and-set e idempotência
 
-`apply_visual_enrichment(expected_fingerprint)` é a fronteira de commit.
+Trabalho visual é leaseado antes do fetch/análise.
+
+`claim_visual()` produz um token opaco e uma expiração. O claim é sobre a
+revisão atual do CPF.
 
 Regras:
 
-- se fingerprint atual != esperado: rejeitar resultado como stale;
-- retry da mesma análise para o mesmo fingerprint deve ser idempotente;
-- semantic revision só avança quando existe mudança semântica válida;
-- dois workers concorrentes não podem “vencer” sem controle;
-- falha depois de download/análise não deve corromper o último CPF válido.
+- dois workers não recebem simultaneamente um claim válido para a mesma revisão;
+- lease expirado pode ser reclaimado;
+- token antigo não pode bindar bytes nem commitar resultado depois de reclaim;
+- mudança de metadata invalida claim da revisão anterior;
+- `record_visual_content()` só aceita bytes ligados a claim vivo e fingerprint esperado;
+- `apply_visual_enrichment()` só aceita o par exato revisão de metadata + content SHA + claim token;
+- resultado atrasado não sobrescreve asset alterado;
+- retry de commit já concluído para o mesmo content SHA é idempotente;
+- semantic revision não incrementa duas vezes por retry de rede;
+- mesmo content SHA já enriquecido pode ser reaproveitado sem nova percepção;
+- content SHA novo exige nova análise antes de voltar a `enriched`.
 
-Para worker distribuído, usar claim/lease bounded ou equivalente.
+A fronteira persistente não deve depender apenas de URL, native ID ou metadata.
 
 ---
 
@@ -251,6 +294,7 @@ Resolver/fetch deve impor:
 - esquemas permitidos (`https`, ou mecanismo nativo do adapter);
 - host/URL pertencente ao transporte ou allowlist configurada;
 - proteção contra SSRF e redirect abusivo;
+- revalidação de cada redirect;
 - timeout;
 - limite de redirects;
 - limite de bytes;
@@ -262,6 +306,9 @@ Resolver/fetch deve impor:
 
 URLs assinadas/efêmeras devem ser tratadas como transporte, não identidade do
 asset.
+
+O Core deve recomputar/verificar o SHA dos bytes que realmente atravessaram a
+fronteira de confiança; não confiar cegamente em hash declarado por worker.
 
 ---
 
@@ -295,7 +342,7 @@ provider output
 → semantic normalization
 → confidence/provenance
 → local policy
-→ CAS persistente
+→ content+revision CAS persistente
 ```
 
 Prompt injection dentro da imagem é **conteúdo visual**, não instrução de
@@ -303,25 +350,33 @@ autoridade.
 
 Não executar ferramenta/ação descrita numa imagem.
 
+O provider visual deve estar atrás de interface substituível (`VisionAnalyzer`
+ou equivalente). Qwen 3.8 27B via Groq é o primeiro adapter planejado do CH2,
+não uma dependência identitária da Amora.
+
 ---
 
 ## 14. Retry / defer
 
 Percepção de asset é normalmente assíncrona.
 
-Se o provider cair temporariamente:
+Se resolver/provider cair temporariamente:
 
 ```text
-pending_visual
-→ classify
-→ bounded retry
-→ DEFER
-→ retry posterior
+claim
+→ classify failure
+→ bounded retry quando aplicável
+→ defer_visual()
+→ FAILED + retry window
+→ claim posterior
 ```
 
 Preferir `DEFER` a fallback visual imediato quando não há urgência.
 
 Erros determinísticos de MIME/schema/request não devem entrar em loop de retry.
+
+`failed` continua elegível depois da janela de defer; o último CPF válido não é
+apagado por falha transitória.
 
 ---
 
@@ -330,6 +385,7 @@ Erros determinísticos de MIME/schema/request não devem entrar em loop de retry
 Antes de processamento remoto:
 
 - respeitar scope/consentimento aplicável;
+- verificar `remote_processing_allowed` ou política equivalente;
 - minimizar metadata enviada;
 - não incluir conversation history desnecessário;
 - não enviar auth/native secrets;
@@ -361,17 +417,34 @@ relação, contexto e recent use participam da decisão social.
 
 ---
 
-## 17. Staleness
+## 17. Staleness e revalidação por conteúdo
 
-Mudança de fingerprint/revision:
+Mudança de metadata fingerprint:
 
 ```text
 ENRICHED
 → STALE
-→ pending reenrichment
+→ claim + fetch/hash
 ```
 
-Até reenriquecer:
+Depois do hash:
+
+```text
+mesmo content SHA já analisado
+→ revalidar CPF
+→ ENRICHED sem provider
+```
+
+ou:
+
+```text
+content SHA diferente
+→ multimodal analysis
+→ nova semantic revision
+→ ENRICHED
+```
+
+Até essa verificação:
 
 - metadata pode continuar existindo;
 - semântica antiga não é tratada como visão atual;
@@ -385,11 +458,14 @@ Até reenriquecer:
 Expor reason codes suficientes para saber:
 
 - por que o asset virou relevante;
-- por que entrou em `pending_visual`;
+- por que entrou em `pending_visual`/`stale`/`failed`;
+- claim criado, expirado ou reclaimado;
 - provider/modelo usado;
 - tentativa/retry/defer;
 - MIME/tamanho/frame policy;
-- fingerprint esperado e revision sem expor segredo;
+- metadata fingerprint esperado;
+- content SHA conhecido sem expor conteúdo/segredo;
+- reuse sem provider quando content SHA já era conhecido;
 - validação/CAS aceita ou rejeitada;
 - status final.
 
@@ -402,12 +478,14 @@ Não depender de adivinhar pelo texto da resposta.
 Visual Expression Enrichment só está pronto quando:
 
 1. bytes reais são obtidos por resolver seguro;
-2. fingerprint de conteúdo é verificável;
+2. content SHA é calculado/verificado no Core;
 3. multimodal output é estruturado e validado localmente;
-4. CAS impede write stale;
+4. metadata revision + content SHA + claim token impedem write stale;
 5. retry/defer é bounded;
-6. concorrência é idempotente;
-7. animated formats possuem política explícita;
-8. privacidade/size/MIME/SSRF têm testes;
-9. CPF enriquecido sobrevive restart;
-10. o mesmo fingerprint não é reanalisado sem motivo.
+6. concorrência/lease é idempotente;
+7. mesmo content SHA não é reanalisado sem motivo;
+8. animated formats possuem política explícita;
+9. privacidade/size/MIME/SSRF/redirect têm testes;
+10. CPF enriquecido sobrevive restart;
+11. provider/model provenance fica registrada;
+12. CI aplicável está verde e gates operacionais pendentes estão documentados.
