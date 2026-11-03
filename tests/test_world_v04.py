@@ -6,6 +6,7 @@ import pytest
 from amora.app import AmoraCore
 from amora.events import PrivacyScope
 from amora.language import ACIR, ACIRProposition, UnresolvedReference
+from amora.storage import LATEST_SCHEMA_VERSION
 from amora.time import SimulatedClock
 from amora.world import EpistemicKind, PerspectiveClaimDraft, PerspectiveConsolidationStatus, SelfLayer, WorldClaimDraft
 
@@ -105,5 +106,5 @@ def test_world_state_survives_restart(tmp_path: Path, monkeypatch) -> None:
     second = AmoraCore.bootstrap()
     try:
         state = second.world.current_state(subject_id="PERSON_BK"); assert len(state) == 1 and state[0].predicate == "preferred_drawing_period" and state[0].object_value == "night"
-        assert second.health_report()["schema_version"] == 15
+        assert second.health_report()["schema_version"] == LATEST_SCHEMA_VERSION
     finally: second.close()
