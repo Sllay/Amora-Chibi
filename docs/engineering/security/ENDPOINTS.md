@@ -1,6 +1,6 @@
 # Inventário HTTP — modo cloud
 
-Gerado da composição real da API em 2026-10-31. O gate ASGI protege rotas
+Gerado da composição real da API em 2026-11-03. O gate ASGI protege rotas
 antes da leitura do body, independentemente de Depends. WebSocket e mounts
 estáticos são descritos após a tabela.
 
@@ -72,6 +72,10 @@ estáticos são descritos após a tabela.
 | GET | `/v1/operator/bindings/export` | admin ou operator |
 | POST | `/v1/operator/bindings/import/apply` | admin ou operator |
 | POST | `/v1/operator/bindings/import/preview` | admin ou operator |
+| GET | `/v1/operator/commands/catalog` | admin ou operator |
+| GET | `/v1/operator/commands` | admin ou operator |
+| GET | `/v1/operator/commands/{job_id}` | admin ou operator |
+| POST | `/v1/operator/commands` | admin ou operator |
 | GET | `/v1/operator/messaging/audit` | admin ou operator |
 | GET | `/v1/operator/messaging/presence` | admin ou operator |
 | POST | `/v1/operator/messaging/presence/{platform}` | admin ou operator |

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#17131f" />
+  <title>Amora Shell</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./operator.css" />
+  <style>
+    .shell-page { max-width: 1040px; margin: 0 auto; padding: 18px; display: grid; gap: 16px; }
+    .shell-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .shell-form { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+    .shell-form input { min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .shell-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .shell-output { white-space: pre-wrap; overflow-wrap: anywhere; min-height: 180px; max-height: 60vh; overflow: auto; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88rem; line-height: 1.45; }
+    .shell-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .shell-jobs { display: grid; gap: 8px; }
+    .shell-job { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 10px 0; border-top: 1px solid rgba(255,255,255,.08); }
+    .shell-job small { grid-column: 1 / -1; opacity: .72; }
+    @media (max-width: 640px) { .shell-form { grid-template-columns: 1fr; } .shell-head { align-items: flex-start; } }
+  </style>
+</head>
+<body>
+  <main class="shell-page">
+    <header class="shell-head">
+      <div>
+        <div class="eyebrow">AMORA CONSOLE v1</div>
+        <h1>Amora Shell</h1>
+        <p class="subtle">Command Bus administrativo — sem bash, <code>eval()</code> ou subprocess arbitrário.</p>
+      </div>
+      <a class="ghost" href="./">Voltar à Amora</a>
+    </header>
+
+    <section id="operatorGate" class="card admin-card hidden">
+      <div class="eyebrow">MODO OPERADOR</div>
+      <h2>Desbloquear o console</h2>
+      <p>Use um código de operador ou sua chave pessoal Dev. A chave pessoal assina a credencial no próprio navegador, então este fluxo não depende do shell da hospedagem.</p>
+      <form id="operatorPairForm" class="pair-form">
+        <input id="operatorPairCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" aria-label="Código de operador" />
+        <button type="submit">Desbloquear</button>
+      </form>
+      <p id="operatorPairError" class="error"></p>
+    </section>
+
+    <section id="consolePanel" class="hidden">
+      <section class="card admin-card">
+        <div class="section-title-row">
+          <div>
+            <div class="eyebrow">COMANDO</div>
+            <h2>Executar</h2>
+          </div>
+          <button id="lockOperator" type="button" class="danger ghost">Bloquear operador</button>
+        </div>
+        <form id="shellForm" class="shell-form">
+          <input id="shellInput" value="providers certify social" autocomplete="off" spellcheck="false" aria-label="Comando Amora" />
+          <button id="shellRun" type="submit">Executar</button>
+        </form>
+        <div class="shell-actions">
+          <button type="button" class="ghost quick-command" data-command="status">status</button>
+          <button type="button" class="ghost quick-command" data-command="help">help</button>
+          <button type="button" class="ghost quick-command" data-command="providers certify social">A/B social</button>
+        </div>
+        <p class="notice">A certificação usa o corpus canônico read-only, não altera memória/conversa e nunca promove provider automaticamente. Revisão humana continua obrigatória.</p>
+      </section>
+
+      <section class="card admin-card">
+        <div class="section-title-row">
+          <div>
+            <div class="eyebrow">RESULTADO</div>
+            <h2 id="resultTitle">amora&gt;</h2>
+          </div>
+          <div id="jobStatus" class="shell-status subtle">idle</div>
+        </div>
+        <pre id="shellOutput" class="shell-output">Digite um comando acima.</pre>
+      </section>
+
+      <section class="card admin-card">
+        <div class="section-title-row">
+          <div><div class="eyebrow">HISTÓRICO</div><h2>Jobs desta instância</h2></div>
+          <button id="refreshJobs" type="button" class="ghost">Atualizar</button>
+        </div>
+        <div id="jobsList" class="shell-jobs"></div>
+      </section>
+    </section>
+  </main>
+
+  <script type="module" src="./amora-shell.js?v=20261103-2"></script>
+</body>
+</html>
