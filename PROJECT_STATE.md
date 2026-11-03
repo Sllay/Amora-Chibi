@@ -1,8 +1,9 @@
 # AMORA — Project State / Checkpoint Operacional
 
 **Atualizado em:** 2026-11-02  
-**Base funcional consolidada:** `main` após merge da PR #121 (`a42270db5ea427c483adf67c8e50206ec6e74aa9`)  
-**Schema canônico atual:** **16**  
+**Base funcional consolidada:** `main` após merge da PR #122 (`33041eadd145259539d55153830523731a622299`)  
+**Schema em `main`:** **16**  
+**Schema no CH2 / PR #123:** **17**  
 **Objetivo:** checkpoint curto para retomar o projeto sem reconstruir decisões por chat.
 
 ## 1. Fonte de verdade
@@ -31,7 +32,7 @@ Se checkpoint e código divergirem, isso é dívida do CH atual e deve ser corri
 - objetivo de custo continua **R$ 0 sempre que praticável**.
 - nenhuma chave/token/segredo vai para Git, prompt ou log.
 
-## 3. CH1 — CONSOLIDADO
+## 3. CH1 — COMPLETED
 
 A antiga pilha empilhada foi promovida em ordem e recertificada em cada base nova:
 
@@ -40,17 +41,14 @@ A antiga pilha empilhada foi promovida em ordem e recertificada em cada base nov
 - PR #118 — capability projection para contexto cognitivo;
 - PR #119 — ações cognitivas grounded nas capabilities projetadas;
 - PR #120 — semantic response modality competition;
-- PR #121 — persistent perceptual expression memory / CPF.
+- PR #121 — persistent perceptual expression memory / CPF;
+- PR #122 — checkpoint/canon/roadmap/ADR de consolidação do CH1.
 
 A PR #115, linha antiga de sticker expressions, foi **fechada sem merge** por estar supersedida por #120/#121.
 
-Durante a promoção da #121, o Core CI encontrou cinco testes antigos hardcodando schema `15`. A migration para schema 16 estava correta. Os testes foram corrigidos para depender de `amora.storage.LATEST_SCHEMA_VERSION`, removendo a dívida em vez de trocar apenas `15 -> 16`. No head final da #121 passaram:
+Durante a promoção da #121, o Core CI encontrou cinco testes antigos hardcodando schema `15`. A migration para schema 16 estava correta. Os testes foram corrigidos para depender de `amora.storage.LATEST_SCHEMA_VERSION`, removendo a dívida em vez de trocar apenas `15 -> 16`.
 
-- Core tests;
-- Perceptual expression memory;
-- Response modality competition;
-- Cloud container contracts;
-- Pre-deploy security.
+CH1 está fechado em código e documentação. A fronteira **Perceptual Asset Vision != Continuous Environment Vision** está registrada em canon e ADR-0033.
 
 ## 4. Capability Awareness — ATIVO
 
@@ -79,11 +77,11 @@ KNOWN ∩ AVAILABLE
 
 Catálogo nativo/IDs continuam autoridade local do adapter/Core; não são despejados no provider.
 
-## 6. CPF perceptual persistente — ATIVO
+## 6. CPF perceptual persistente — BASE ATIVA
 
-Schema 16 mantém memória perceptual de expressão persistente com identidade por plataforma/account/scope/tipo/native ID, fingerprint, semantic revision, contadores e provenance.
+Schema 16 em `main` mantém memória perceptual de expressão persistente com identidade por plataforma/account/scope/tipo/native ID, metadata fingerprint, semantic revision, contadores e provenance.
 
-Estados atuais:
+Estados:
 
 ```text
 metadata_only
@@ -93,19 +91,78 @@ stale
 failed
 ```
 
-A base atual já suporta:
+A base consolidada em `main` já suporta:
 
 - descoberta/bootstrap por metadata fraca;
 - separação `AVAILABLE` x `KNOWN`;
 - persistência entre restarts;
 - `pending_visual()`;
-- `apply_visual_enrichment(expected_fingerprint)` com compare-and-set;
+- compare-and-set por revisão de metadata;
 - rejeição de resultado stale;
-- retry idempotente para mesmo fingerprint.
+- retry idempotente da linha antiga.
 
-**Limite explícito:** a Amora ainda não vê pixels de sticker. Metadata bootstrap não é visão real e não deve ser apresentada como tal.
+**Limite explícito de `main`:** a Amora ainda não vê pixels de sticker. Metadata bootstrap não é visão real e não deve ser apresentada como tal.
 
-## 7. Duas visões diferentes
+## 7. CH2 — Visual Expression Enrichment — IN PROGRESS
+
+PR ativa:
+
+- **#123** `feat: add content-addressed visual expression enrichment`;
+- branch: `feat/ch2-visual-expression-enrichment`;
+- estado: **draft / em desenvolvimento**.
+
+### Slice 1 — Durable visual contract
+
+Já implementado na branch do CH2:
+
+- schema **17**;
+- `content_fingerprint` separado do metadata `fingerprint`;
+- SHA-256 representa os **bytes reais observados**, não URL nem metadata;
+- claim/lease transacional com token opaco e expiração;
+- `record_visual_content(...)` para vincular os bytes baixados ao claim vivo;
+- CAS de commit exige revisão de metadata + content SHA + claim token;
+- retry do mesmo commit é idempotente;
+- lease expirado pode ser reclaimado e token velho é rejeitado;
+- `defer_visual(...)` mantém erro/retry window sem apagar CPF;
+- mesmo content SHA já analisado pode ser reaproveitado após mudança de metadata, sem nova chamada multimodal e sem incrementar `semantic_revision`;
+- mudança real dos bytes exige nova análise e nova revisão semântica;
+- provider/model provenance persistente;
+- recovery/import auditado de schema 16 para 17;
+- testes específicos para concorrência, lease, defer, content CAS, reuse e bounds.
+
+Fluxo durável do CH2 agora é:
+
+```text
+relevant asset
+→ PENDING_VISUAL / STALE / FAILED
+→ claim_visual()
+→ transport resolve + bounded fetch
+→ Core calcula/verifica SHA-256 real
+→ record_visual_content()
+→ [same content already known? reuse CPF : multimodal analysis]
+→ local validation
+→ apply_visual_enrichment(metadata revision + content SHA + claim token)
+→ ENRICHED
+```
+
+### Próximo slice do CH2
+
+Ainda falta implementar/certificar:
+
+1. worker boundary autenticado para claim/upload/defer;
+2. secure Discord media resolver/fetch;
+3. SSRF/redirect/MIME/size/animated-format policy;
+4. Core recomputar SHA dos bytes recebidos;
+5. `VisionAnalyzer` substituível;
+6. adapter multimodal Qwen 3.8 27B via Groq com structured output estrito;
+7. normalização/validação local do `ExpressionSemanticProfile`;
+8. privacidade/`remote_processing_allowed`;
+9. testes end-to-end do pipeline real;
+10. CI completo e gates operacionais aplicáveis.
+
+Não marcar CH2 como `COMPLETED` antes desses itens.
+
+## 8. Duas visões diferentes
 
 ### Perceptual Asset Vision — CH2
 
@@ -121,7 +178,7 @@ asset relevante
 → reuso
 ```
 
-Isso pode e deve existir antes da V1.1.
+Isso existe antes da V1.1 e não implica visão contínua.
 
 ### Continuous Environment Vision — V1.1
 
@@ -134,9 +191,9 @@ screen/video/environment
 → world/perception events
 ```
 
-Não confundir as duas frentes.
+Não puxar screen mapping, OCR contínuo, avatar ou pipeline de vídeo para o CH2.
 
-## 8. Provider baseline e candidatos
+## 9. Provider baseline e candidatos
 
 Baseline até CH3 certificar mudança:
 
@@ -144,9 +201,11 @@ Baseline até CH3 certificar mudança:
 - **reasoning specialist:** GPT-OSS 120B;
 - **Mistral Large 4 via NVIDIA** (`mistralai/mistral-large-4-1t-a52b`): candidato para diálogo, reasoning e percepção multimodal.
 
+Para o CH2, Qwen 3.8 27B via Groq é o primeiro adapter visual planejado porque a mesma família já está no runtime e o endpoint atual suporta imagem + JSON. Isso não transforma Qwen em identidade da Amora nem congela o provider.
+
 Se Mistral vencer diálogo, Qwen vira fallback. Se vencer reasoning, GPT-OSS vira fallback. Nenhuma promoção acontece por intuição ou porque um modelo parece mais permissivo.
 
-## 9. Recovery-before-fallback — DECISÃO CANÔNICA
+## 10. Recovery-before-fallback — DECISÃO CANÔNICA
 
 Fallback não reage ao primeiro timeout.
 
@@ -170,9 +229,9 @@ Regras registradas em `docs/canon/PROVIDER_MESH.md` e ADR-0033:
 - perception job assíncrono prefere `DEFER` a fallback imediato;
 - depois do início de delivery validado, não costurar outro provider na mesma fala.
 
-A implementação/certificação completa dessa política pertence ao CH3; a decisão arquitetural já está congelada.
+A implementação/certificação completa dessa política pertence ao CH3; o CH2 usa apenas o subconjunto necessário para job perceptual assíncrono (`defer/retry`).
 
-## 10. Gates físicos/operacionais ainda abertos
+## 11. Gates físicos/operacionais ainda abertos
 
 Não declarar PASS por inferência:
 
@@ -180,24 +239,23 @@ Não declarar PASS por inferência:
 - WhatsApp linked-device real: pairing/reconnect/offline sync e storage auth produtivo;
 - Background Voice / WebRTC Call Mode com iPhone + app em foreground;
 - long-run voz/latência/térmica/barge-in;
+- Visual Expression Enrichment real com mídia Discord + provider remoto;
 - Continuous Environment Vision V1.1;
 - corpo/avatar final.
 
-## 11. Próximos CHs
+## 12. Próximos CHs
 
 Somente três movimentos grandes ficam ativos no mapa:
 
 ### CH1 — Consolidar e organizar
 
-**Status:** `COMPLETED em código; documentação desta consolidação em fechamento.`
-
-Entregas: promover #116–#121, fechar #115 supersedida, corrigir schema-test debt, atualizar checkpoint/canon/roadmap/ADR.
+**Status:** `COMPLETED`
 
 ### CH2 — Visual Expression Enrichment
 
-**Status:** `NEXT`
+**Status:** `IN_PROGRESS — PR #123 (draft)`
 
-Entregar somente:
+Objetivo final:
 
 ```text
 pending_visual
@@ -206,11 +264,9 @@ pending_visual
 → multimodal provider
 → strict CPF schema
 → local validation
-→ CAS
+→ content+revision CAS
 → enriched
 ```
-
-Inclui SSRF/MIME/size/animated formats, lease/idempotência, privacidade e retry/defer. Não puxar screen capture/OCR contínuo/avatar para este CH.
 
 ### CH3 — Provider Certification + Resilience
 
@@ -223,7 +279,7 @@ Inclui SSRF/MIME/size/animated formats, lease/idempotência, privacidade e retry
 - implementar/certificar recovery-before-fallback por task class;
 - promover Mistral somente onde vencer.
 
-## 12. Regra de fechamento de CH
+## 13. Regra de fechamento de CH
 
 Nenhum CH futuro é `COMPLETED` até a mesma linha de entrega registrar:
 
@@ -235,4 +291,4 @@ Nenhum CH futuro é `COMPLETED` até a mesma linha de entrega registrar:
 6. próximo estado reduzido a no máximo três CHs ativos;
 7. nenhuma decisão crítica vivendo só no chat.
 
-ADR desta consolidação: `ADR-0033-ch1-continuity-perceptual-boundary-and-provider-recovery.md`.
+ADR de consolidação anterior: `ADR-0033-ch1-continuity-perceptual-boundary-and-provider-recovery.md`.
