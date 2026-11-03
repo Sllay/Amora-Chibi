@@ -261,7 +261,7 @@ async def test_real_adapter_service_pipeline_persists_semantics_and_reuses_same_
         assert record.visual_model == MODEL
         assert record.content_fingerprint == hashlib.sha256(PNG).hexdigest()
         assert record.semantic_profile is not None
-        assert record.semantic_profile.source == "vision_model"
+        assert record.semantic_profile.source == "visual_perception"
         assert record.semantic_profile.confidence == pytest.approx(0.94)
         assert record.semantic_profile.short_description.startswith("Chibi sorrindo")
 
