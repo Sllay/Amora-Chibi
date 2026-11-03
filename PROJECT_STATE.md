@@ -1,7 +1,7 @@
 # AMORA — Project State / Checkpoint Operacional
 
 **Atualizado em:** 2026-11-03  
-**Base funcional consolidada em `main`:** PR #123 / `ac13f4d5a84dff2a908c47d28ccf4cf4a4c539af`  
+**Base funcional consolidada em `main`:** PR #124 / `b72e7d1e7628ff58e02042b3658863b481c02bfe`  
 **Schema atual em `main`:** **17**  
 **Objetivo:** retomar o projeto sem reconstruir decisões por chat.
 
@@ -56,11 +56,11 @@ Capability Registry
 
 Provider não inventa capability IDs, permissões, resultados ou poderes.
 
-Baseline de providers até promoção explícita:
+Baseline de providers até promoção explícita baseada em evidência:
 
 - social dialogue: **Qwen 3.8 27B**;
 - reasoning specialist: **GPT-OSS 120B**;
-- Mistral Large 4 via NVIDIA: candidato em CH3, não promovido.
+- Mistral Large 4 via NVIDIA: **candidato somente**, não promovido.
 
 ## 5. Response Modality Competition — ATIVA
 
@@ -85,11 +85,11 @@ CH2 promoveu o contrato para schema **17** com content addressing, lease visual 
 Delivery:
 
 - **PR #123** `feat: add content-addressed visual expression enrichment`;
-- merge commit em `main`: **`ac13f4d5a84dff2a908c47d28ccf4cf4a4c539af`**;
+- merge em `main`: **`ac13f4d5a84dff2a908c47d28ccf4cf4a4c539af`**;
 - schema atual: **17**;
-- certificação de código: `7ea117b512f1e10ad029897e1172c3f3902b1862`.
+- head de código certificado: `7ea117b512f1e10ad029897e1172c3f3902b1862`.
 
-### Contrato entregue
+Contrato entregue:
 
 ```text
 relevant asset
@@ -107,71 +107,32 @@ relevant asset
 
 Implementado:
 
-- schema 17;
-- `fingerprint` de metadata separado de `content_fingerprint` real;
-- claim/lease transacional e token opaco;
-- reclaim após expiração e rejeição de token velho;
-- CAS por metadata revision + content SHA + claim;
-- stale-result rejection;
+- metadata fingerprint separado de `content_fingerprint` real;
+- claim/lease transacional, CAS e stale-result rejection;
 - retry/defer persistente;
 - reuse do mesmo SHA sem nova chamada remota nem nova semantic revision;
 - provider/model provenance;
-- recovery/import schema 16 → 17;
-- worker boundary autenticado claim/content/defer;
+- worker boundary autenticado;
 - Discord sticker resolver derivado de `sticker_id + format_type`, sem URL arbitrária de chat;
 - bounded fetch com host/formato/MIME/content/size/redirect/timeout validation;
-- visual worker isolado de heartbeat/reconnect;
 - política de privacidade persistida antes do job remoto;
 - Core recomputa SHA; worker não é autoridade do hash;
 - `VisionAnalyzer` substituível;
 - `GroqQwenVisionAnalyzer` para `qwen/qwen3.8-27b`;
 - segredo exclusivamente por `SecretStore`;
-- sem Groq secret, bootstrap continua funcionando e job visual é deferido;
-- imagem base64 + strict JSON Schema no provider;
-- validação local Pydantic depois do provider;
-- provider source `vision_model` canonizado no CPF como `visual_perception`, com provider/model em campos separados;
-- pipeline end-to-end certificado com `MockTransport` do adapter real;
-- testes de concorrência, lease, CAS, privacidade, mídia, provider contract, persistência e reuse.
+- imagem base64 + strict JSON Schema no provider e validação Pydantic local;
+- pipeline end-to-end certificado com adapter real + `MockTransport`.
 
-### Formatos
+Formatos certificados diretamente: PNG/JPEG/WebP estáticos.
 
-Certificado para análise direta no CH2:
+GIF/Lottie/animação sem renderer/frame extractor determinístico permanecem **fail-closed/deferred**. Não inferir significado completo por primeiro frame arbitrário.
 
-- PNG estático;
-- JPEG estático;
-- WebP estático.
-
-Fail-closed/defer até renderer/frame extractor determinístico:
-
-- GIF animado;
-- Lottie/JSON;
-- animação cuja sequência social não possa ser representada com segurança pelo contrato atual.
-
-Não fingir que primeiro frame representa a expressão inteira.
-
-### CI do código final
-
-O SHA `7ea117b512f1e10ad029897e1172c3f3902b1862` passou:
-
-- Core tests;
-- Perceptual expression memory;
-- Messaging workers;
-- Response modality competition;
-- Cloud container contracts;
-- Pre-deploy security.
-
-Depois desse SHA houve apenas três commits de documentação antes do merge.
-
-### Gates operacionais ainda abertos
-
-Não inferir PASS por CI:
+Gates operacionais CH2 ainda abertos e separados do software:
 
 - chamada live Groq/Qwen com credencial operacional;
 - mídia real Discord atravessando resolver/fetch/worker/Core/provider;
 - reconnect/permissões/intents do Discord em ambiente real;
 - validação física/operacional longa no dispositivo/infra alvo.
-
-Esses gates continuam explicitamente pendentes; não reabrem o CH2 software.
 
 ## 8. Duas visões diferentes
 
@@ -199,38 +160,70 @@ screen/video/environment
 
 Não puxar V1.1 para dentro do CH2.
 
-## 9. CH3 — Provider Certification + Resilience — IN PROGRESS
+## 9. CH3 — Provider Certification + Resilience — SOFTWARE MERGED / LIVE CERTIFICATION PENDING
 
-PR ativa:
+Delivery de software:
 
-- **#124** `feat: add provider certification harness and Mistral Large 4 candidate`;
-- branch: `feat/ch3-provider-certification-resilience`;
-- dependência CH2 resolvida;
-- próximo passo: retarget/sync #124 para `main` e rodar full Core regression.
+- **PR #124** `feat: add provider certification harness and Mistral Large 4 candidate`;
+- head final certificado: **`769cba5eae1677a5867a3765aab12c077abcf6fb`**;
+- merge em `main`: **`b72e7d1e7628ff58e02042b3658863b481c02bfe`**;
+- schema permanece **17**; CH3 não alterou storage schema.
 
-Já implementado/certificado na branch do CH3:
+Integrado em `main`:
 
 - `SOCIAL_SURFACE_REPLAY_V1`;
 - Mistral Large 4 NVIDIA como candidato `certification_only`;
-- identical-context A/B Qwen x Mistral;
-- context fingerprint e execução sequencial;
+- A/B identical-context Qwen × Mistral;
+- fingerprint canônico de contexto e execução sequencial;
 - `promotion_decision=none` por contrato;
-- Retry-After;
+- Retry-After em delay-seconds e HTTP-date;
 - bounded exponential backoff + jitter;
-- structured repair bounded;
+- long `Retry-After` fora do budget de diálogo retorna controle ao Core em vez de dormir/retry inline;
+- structured repair bounded e opt-in no runtime estruturado;
+- `ResilientProviderProxy` preservado como transport-only por padrão para callers diretos;
+- erro semântico original de realization preservado junto da classificação operacional `PROVIDER_STRUCTURED_OUTPUT_INVALID`;
 - `ProviderCircuitRegistry` por provider + task class;
-- `CLOSED → OPEN → HALF_OPEN` com probe único;
-- sucesso fecha / falha reabre;
-- ProviderRouter continua dono do ranking.
+- `CLOSED → OPEN → HALF_OPEN` com probe único/lease;
+- sucesso fecha, falha reabre e quota esgotada mantém OPEN;
+- ProviderRouter continua dono do ranking/quota.
 
-Ainda pendente no CH3:
+### Regressões encontradas no fechamento e corrigidas pela raiz
 
-- retarget/sync #124 para `main`;
-- full Core regression na base final;
-- A/B live Qwen x Mistral + revisão humana;
+Ao recertificar #124 diretamente sobre `main`, o Core suite encontrou três incompatibilidades:
+
+1. teste legado esperava retry inline em `429 + Retry-After: 60s`, contrariando o novo budget interativo;
+2. o proxy de resiliência havia misturado transporte com validação semântica por padrão;
+3. o wrapper preservava internamente o erro semântico de realization, mas a observabilidade externa o substituía pelo tipo da exceção.
+
+Correção final:
+
+- `Retry-After` longo → cooldown/circuit/failover, sem retry inline;
+- `Retry-After` curto → bounded inline retry, coberto pelos testes CH3;
+- proxy direto → transporte/retry por padrão;
+- runtime social estruturado → um repair explícito;
+- observabilidade mantém o código semântico original e a classificação operacional separadamente.
+
+### CI final do head `769cba5e...`
+
+Todos os gates aplicáveis passaram no mesmo head:
+
+- Core tests — Python 3.11 / 3.12 / 3.13 / 3.14;
+- Provider certification;
+- Cloud container contracts;
+- Pre-deploy security;
+- Cognitive capability projection;
+- Capability grounded intent;
+- Response modality competition.
+
+### Ainda pendente no CH3 — live / decisão de provider
+
+- A/B live canônico Qwen × Mistral no social replay;
+- revisão humana de naturalidade, humor, personalidade, over-refusal e qualidade de recusa;
 - evidência live de latência/quota/custo;
-- Mistral x GPT-OSS no reasoning;
-- promoção somente se evidência justificar.
+- Mistral × GPT-OSS no reasoning;
+- promoção de provider **somente se evidência justificar**.
+
+**Nenhum modelo foi promovido pelo merge da #124.** Qwen e GPT-OSS mantêm os papéis atuais; Mistral permanece candidato.
 
 ## 10. Recovery-before-fallback
 
@@ -253,6 +246,7 @@ Diálogo tem budget curto. Job perceptual assíncrono prefere `DEFER` a fallback
 - Background Voice / WebRTC Call Mode com iPhone;
 - long-run voz/latência/térmica/barge-in;
 - Visual Expression Enrichment live;
+- certificação live dos providers do CH3;
 - Continuous Environment Vision V1.1;
 - corpo/avatar final.
 
@@ -268,9 +262,9 @@ Diálogo tem budget curto. Job perceptual assíncrono prefere `DEFER` a fallback
 
 ### CH3 — Provider Certification + Resilience
 
-**Status:** `IN_PROGRESS — PR #124; retarget para main é o próximo passo`
+**Status:** `IN_PROGRESS — SOFTWARE MERGED / LIVE CERTIFICATION PENDING — PR #124 / b72e7d1e`
 
-Nenhum CH4 será aberto antes de CH3 ser consolidado.
+Nenhum CH4 será aberto antes de fechar a decisão live do CH3 ou registrar explicitamente sua deferral.
 
 ## 13. Regra de fechamento de CH
 
