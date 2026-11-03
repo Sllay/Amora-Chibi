@@ -52,6 +52,29 @@ providers certify social
 
 `providers certify social` é a primeira operação longa oficial do Shell.
 
+O CH3 inclui diagnóstico parcial seguro:
+
+```text
+providers certify social --case ordinary_chat
+```
+
+`--case` aceita somente IDs existentes no `SOCIAL_SURFACE_REPLAY_V1`.
+Ele testa os dois providers com o **mesmo contexto compilado** e não
+autoriza promoção nem substitui a certificação completa dos 11 casos.
+
+No A/B live, limites HTTP 429 com `Retry-After` numérico podem
+ser repetidos apenas sob orçamento compartilhado de espera (120 s,
+até 2 tentativas de recuperação por caso e 65 s por intervalo).
+Sem cabeçalho válido ou quando o orçamento termina, a falha é
+registrada sem novas chamadas. Erros 400 não são repetidos.
+Esses retries não modificam o caminho de produção nem o contexto canônico.
+
+A integração NVIDIA usa o modo de raciocínio `high` e reserva
+orçamento de saída para tokens de raciocínio e JSON visível, conforme
+a compatibilidade documentada entre diferentes variantes NIM.
+A compatibilidade real precisa ser verificada com um teste live parcial
+antes de gastar quota no corpus completo.
+
 Fluxo:
 
 ```text
