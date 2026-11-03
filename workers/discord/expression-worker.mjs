@@ -1,5 +1,6 @@
 import { MessagingCoreClient, workerConfig } from '../common/core-client.mjs';
 import { discordReplyPayload, splitDiscordText } from './normalize.mjs';
+import { DiscordVisualEnrichmentWorker } from './visual-worker.mjs';
 import { DiscordWorker } from './worker.mjs';
 
 const TRUE = new Set(['1', 'true', 'yes', 'on']);
@@ -31,6 +32,23 @@ export class DiscordExpressionWorker extends DiscordWorker {
   constructor(options) {
     super(options);
     this.guildStickerCatalogs = new Map();
+    this.visualEnrichment = options.visualEnrichment || new DiscordVisualEnrichmentWorker({ core: this.core });
+  }
+
+  async syncPresence(presence) {
+    await super.syncPresence(presence);
+    if (!this.ready || !this.socket || this.stopped) return;
+    // Visual perception is intentionally detached from the gateway/presence loop.
+    // The visual worker has its own processing lock, so repeated polls only nudge
+    // the drain without overlapping provider/fetch work or heartbeat handling.
+    this.visualEnrichment.drain().catch((error) => {
+      safeLog('VISUAL_DRAIN_FAILED', error?.code || error?.status || error?.name || 'Error');
+    });
+  }
+
+  stop() {
+    this.visualEnrichment?.stop?.();
+    super.stop();
   }
 
   async guildStickerCatalog(guildId) {
