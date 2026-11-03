@@ -90,13 +90,12 @@ def classify_provider_failure(
 
 
 class ResilientProviderProxy:
-    """Bounded recovery proxy for structured realization.
+    """Bounded recovery proxy for provider realization.
 
-    The exact same frozen CognitiveContext is reused for every attempt. Transport
-    recovery is short enough to fit interactive dialogue; long Retry-After values
-    are surfaced immediately so the outer runtime can open the circuit and fail
-    over. Structurally invalid realization receives one bounded same-context repair
-    attempt before being surfaced as a provider failure to the outer circuit.
+    Transport recovery is always available and reuses the exact same immutable
+    context. Structured-output repair is deliberately opt-in: direct callers keep
+    the historical transport-only contract, while the social runtime enables one
+    bounded repair when it decorates production structured providers.
     """
 
     def __init__(
@@ -104,7 +103,7 @@ class ResilientProviderProxy:
         provider: Any,
         *,
         max_retries: int = 1,
-        max_validation_retries: int = 1,
+        max_validation_retries: int = 0,
         base_delay_seconds: float = 0.08,
         max_inline_retry_delay_seconds: float = 1.5,
         jitter_fraction: float = 0.20,
@@ -120,9 +119,14 @@ class ResilientProviderProxy:
         self.jitter_fraction = min(1.0, max(0.0, float(jitter_fraction)))
         self._random = random_fn or random.random
         self._sleep = sleep_fn or asyncio.sleep
+        self._last_structured_error_code: str | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._provider, name)
+
+    @property
+    def last_structured_error_code(self) -> str | None:
+        return self._last_structured_error_code
 
     def _bounded_backoff(self, attempt: int) -> float:
         raw = self.base_delay_seconds * (2 ** max(0, attempt - 1))
@@ -147,6 +151,7 @@ class ResilientProviderProxy:
         if not callable(realize):
             raise AttributeError("wrapped provider has no realize interface")
 
+        self._last_structured_error_code = None
         transport_attempt = 0
         validation_attempt = 0
         while True:
@@ -173,6 +178,7 @@ class ResilientProviderProxy:
                     RealizationValidator.parse_and_validate(context, validation_raw)
                 except RealizationError as exc:
                     if validation_attempt >= self.max_validation_retries:
+                        self._last_structured_error_code = exc.code
                         raise StructuredRealizationProviderError(exc.code) from exc
                     validation_attempt += 1
                     delay = self._bounded_backoff(validation_attempt)
@@ -187,4 +193,6 @@ def wrap_resilient_provider(provider: Any) -> Any:
         return provider
     if not callable(getattr(provider, "realize", None)):
         return provider
-    return ResilientProviderProxy(provider)
+    # Production structured social realization opts into one repair attempt while
+    # direct ResilientProviderProxy callers retain transport-only semantics.
+    return ResilientProviderProxy(provider, max_validation_retries=1)
