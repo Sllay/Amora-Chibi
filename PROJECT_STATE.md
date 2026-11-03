@@ -1,7 +1,7 @@
 # AMORA — Project State / Checkpoint Operacional
 
 **Atualizado em:** 2026-11-03  
-**Base funcional consolidada em `main`:** PR #124 / `b72e7d1e7628ff58e02042b3658863b481c02bfe`  
+**Base funcional consolidada em `main`:** PR #128 / `847ef29ef0c1c3519c642733b1fd44340f5e4183`  
 **Schema atual em `main`:** **17**  
 **Objetivo:** retomar o projeto sem reconstruir decisões por chat.
 
@@ -85,7 +85,7 @@ CH2 promoveu o contrato para schema **17** com content addressing, lease visual 
 Delivery:
 
 - **PR #123** `feat: add content-addressed visual expression enrichment`;
-- merge em `main`: **`ac13f4d5a84dff2a908c47d28ccf4cf4a4c539af`**;
+- merge em `main`: **`ac13f4d5a84dff2a908c47d28ccf4a4c539af`**;
 - schema atual: **17**;
 - head de código certificado: `7ea117b512f1e10ad029897e1172c3f3902b1862`.
 
@@ -169,6 +169,14 @@ Delivery de software:
 - merge em `main`: **`b72e7d1e7628ff58e02042b3658863b481c02bfe`**;
 - schema permanece **17**; CH3 não alterou storage schema.
 
+Acesso operacional live integrado depois do harness:
+
+- **PR #127** `feat: add CH3 live provider certification runner` → `run_live_social_ab()` + CLI one-shot; merge/head em `main`: **`72a9b615266df41182d48a8ab039ef574ffca66f`**;
+- **PR #128** `feat: add Amora Shell admin command bus for live A/B` → Command Registry autenticado, jobs estruturados e `/web/amora-shell.html`; merge em `main`: **`847ef29ef0c1c3519c642733b1fd44340f5e4183`**;
+- ADR-0035 + `docs/canon/ADMIN_CONSOLE.md` tornam o Amora Shell parte da arquitetura administrativa, sem bash/eval/exec/subprocess arbitrário;
+- desbloqueio Web pode usar credencial operator existente ou a chave pessoal Dev assinada localmente no navegador, sem depender do shell da hospedagem;
+- comando oficial para este gate: `providers certify social`.
+
 Integrado em `main`:
 
 - `SOCIAL_SURFACE_REPLAY_V1`;
@@ -176,6 +184,9 @@ Integrado em `main`:
 - A/B identical-context Qwen × Mistral;
 - fingerprint canônico de contexto e execução sequencial;
 - `promotion_decision=none` por contrato;
+- runner live read-only com `GROQ_API_KEY` + `NVIDIA_API_KEY` somente via SecretStore;
+- Amora Command Bus com registry explícito, role operator/admin, timeout e histórico transitório de jobs;
+- A/B social exclusivo no bus para impedir duas certificações simultâneas/quota burst;
 - Retry-After em delay-seconds e HTTP-date;
 - bounded exponential backoff + jitter;
 - long `Retry-After` fora do budget de diálogo retorna controle ao Core em vez de dormir/retry inline;
@@ -203,7 +214,7 @@ Correção final:
 - runtime social estruturado → um repair explícito;
 - observabilidade mantém o código semântico original e a classificação operacional separadamente.
 
-### CI final do head `769cba5e...`
+### CI final do harness CH3 — head `769cba5e...`
 
 Todos os gates aplicáveis passaram no mesmo head:
 
@@ -215,15 +226,29 @@ Todos os gates aplicáveis passaram no mesmo head:
 - Capability grounded intent;
 - Response modality competition.
 
+### Recertificação do acesso operacional — PR #128 / head `102ab630...`
+
+Todos os 7 workflows disparados pelo PR passaram:
+
+- Core tests;
+- Cloud container contracts;
+- Pre-deploy security;
+- Provider certification;
+- Avatar tests;
+- Capability grounded intent;
+- Response modality competition.
+
+Testes adicionais cobrem registry fechado, rejeição de texto de shell arbitrário, missing-secret sem vazamento, exclusão de A/B concorrente e acesso real por role operator via API.
+
 ### Ainda pendente no CH3 — live / decisão de provider
 
-- A/B live canônico Qwen × Mistral no social replay;
+- executar o A/B live canônico Qwen × Mistral no social replay pelo **Amora Shell** (`providers certify social`) após a infra carregar o `main` atual;
 - revisão humana de naturalidade, humor, personalidade, over-refusal e qualidade de recusa;
 - evidência live de latência/quota/custo;
 - Mistral × GPT-OSS no reasoning;
 - promoção de provider **somente se evidência justificar**.
 
-**Nenhum modelo foi promovido pelo merge da #124.** Qwen e GPT-OSS mantêm os papéis atuais; Mistral permanece candidato.
+**Nenhum modelo foi promovido pelos merges #124, #127 ou #128.** Qwen e GPT-OSS mantêm os papéis atuais; Mistral permanece candidato.
 
 ## 10. Recovery-before-fallback
 
@@ -262,7 +287,7 @@ Diálogo tem budget curto. Job perceptual assíncrono prefere `DEFER` a fallback
 
 ### CH3 — Provider Certification + Resilience
 
-**Status:** `IN_PROGRESS — SOFTWARE MERGED / LIVE CERTIFICATION PENDING — PR #124 / b72e7d1e`
+**Status:** `IN_PROGRESS — SOFTWARE + LIVE RUNNER + AMORA SHELL MERGED / LIVE CERTIFICATION PENDING — PRs #124/#127/#128`
 
 Nenhum CH4 será aberto antes de fechar a decisão live do CH3 ou registrar explicitamente sua deferral.
 
