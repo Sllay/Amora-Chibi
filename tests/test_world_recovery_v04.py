@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from amora.app import AmoraCore
-from amora.storage import AmoraDatabase
+from amora.storage import AmoraDatabase, LATEST_SCHEMA_VERSION
 from amora.time import SystemClock
 from amora.world import EpistemicKind, EvidenceKind, SelfLayer, WorldClaimDraft, WorldModelService, WorldStore
 
@@ -37,7 +37,7 @@ def test_world_model_survives_backup_restore_with_history(tmp_path: Path, monkey
     finally: core.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored_db = AmoraDatabase(restored_path)
     try:
-        assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 15
+        assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == LATEST_SCHEMA_VERSION
     finally: restored_db.close()
     store = WorldStore(restored_path, SystemClock()); world = WorldModelService(store, SystemClock())
     try:

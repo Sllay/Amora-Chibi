@@ -1,15 +1,15 @@
 from pathlib import Path
 from amora.events import AmoraEvent, AsyncEventBus
 from amora.identity import build_initial_registry
-from amora.storage import AmoraDatabase
+from amora.storage import AmoraDatabase, LATEST_SCHEMA_VERSION
 
 
 def test_database_migrates_and_deduplicates_event(tmp_path: Path) -> None:
     db = AmoraDatabase(tmp_path / "amora.db")
     try:
-        assert db.migrate() == 15
+        assert db.migrate() == LATEST_SCHEMA_VERSION
         assert db.migrate() == 0
-        assert db.schema_version() == 15
+        assert db.schema_version() == LATEST_SCHEMA_VERSION
         event = AmoraEvent(event_type="test", source="pytest", dedupe_key="abc")
         assert db.append_event(event) is True
         duplicate = AmoraEvent(event_type="test", source="pytest", dedupe_key="abc")
@@ -49,6 +49,6 @@ def test_backup_restore_roundtrip(tmp_path: Path) -> None:
     original = AmoraDatabase(tmp_path / "amora.db"); original.migrate(); original.append_event(AmoraEvent(event_type="backup.test", source="pytest")); backup = original.backup_to(tmp_path / "backup.db"); original.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored = AmoraDatabase(restored_path)
     try:
-        assert restored.integrity_check() == "ok"; assert restored.event_count() == 1; assert restored.schema_version() == 15
+        assert restored.integrity_check() == "ok"; assert restored.event_count() == 1; assert restored.schema_version() == LATEST_SCHEMA_VERSION
     finally:
         restored.close()

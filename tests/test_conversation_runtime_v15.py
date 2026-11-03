@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from amora.conversation.runtime import ConversationRuntime, RuntimeTurnState, SessionState
-from amora.storage import AmoraDatabase
+from amora.storage import AmoraDatabase, LATEST_SCHEMA_VERSION
 from amora.time import SimulatedClock
 
 
@@ -11,8 +11,8 @@ def test_runtime_v15_schema_and_turn_lifecycle(tmp_path) -> None:
     database = AmoraDatabase(tmp_path / "amora.db")
     clock = SimulatedClock()
     try:
-        assert database.migrate() == 15
-        assert database.schema_version() == 15
+        assert database.migrate() == LATEST_SCHEMA_VERSION
+        assert database.schema_version() == LATEST_SCHEMA_VERSION
 
         session_columns = {
             row["name"] for row in database._conn.execute("PRAGMA table_info(conversation_runtime_sessions)")

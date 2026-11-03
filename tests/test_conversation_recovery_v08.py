@@ -5,7 +5,7 @@ from pathlib import Path
 from amora.app import AmoraCore
 from amora.conversation import ConversationStore, UtteranceKind, UtteranceStatus
 from amora.events import PrivacyScope
-from amora.storage import AmoraDatabase
+from amora.storage import AmoraDatabase, LATEST_SCHEMA_VERSION
 from amora.time import SimulatedClock
 
 
@@ -33,7 +33,7 @@ def test_backup_restore_preserves_speech_queue(tmp_path: Path, monkeypatch) -> N
         assert item is not None; backup = core.create_backup("v08-conversation.db")
     finally: core.close()
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored.db"); restored_db = AmoraDatabase(restored_path)
-    try: assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == 15
+    try: assert restored_db.integrity_check() == "ok" and restored_db.schema_version() == LATEST_SCHEMA_VERSION
     finally: restored_db.close()
     store = ConversationStore(restored_path, clock)
     try:

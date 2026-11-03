@@ -9,7 +9,7 @@ from amora.app import AmoraCore
 from amora.cognition import CognitiveRequest, CognitiveStore, ProviderDelta
 from amora.events import PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
-from amora.storage import AmoraDatabase
+from amora.storage import AmoraDatabase, LATEST_SCHEMA_VERSION
 from amora.time import SimulatedClock
 
 
@@ -38,7 +38,7 @@ async def test_backup_restore_preserves_history_journal_replay_snapshot_and_usag
     restored_path = AmoraDatabase.restore_backup(backup, tmp_path / "restored-v1.db"); database = AmoraDatabase(restored_path)
     try:
         assert database.integrity_check() == "ok"
-        assert database.schema_version() == 15
+        assert database.schema_version() == LATEST_SCHEMA_VERSION
     finally: database.close()
     store = CognitiveStore(restored_path, clock)
     try:

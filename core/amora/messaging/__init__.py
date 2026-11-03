@@ -1,4 +1,9 @@
 from .attention import ConversationFloor, SocialAttentionRouter
+from .expression_memory import (
+    ExpressionSemanticStatus,
+    PerceptualExpressionMemory,
+    PerceptualExpressionRecord,
+)
 from .models import (
     AttentionDecision,
     AttachmentRef,
@@ -21,6 +26,7 @@ from .models import (
     TransportInvalidation,
 )
 from .modality_service import PlatformMessagingService
+from .perceptual_response_modality import PerceptualResponseModalitySelector
 from .presence import PlatformPresenceController
 from .presence_control import (
     PlatformPresenceControlService,
@@ -46,6 +52,7 @@ __all__ = [
     "ExpressionKind",
     "ExpressionRef",
     "ExpressionSemanticProfile",
+    "ExpressionSemanticStatus",
     "ExternalActorRef",
     "InboundMessage",
     "InboundResult",
@@ -55,6 +62,9 @@ __all__ = [
     "ModalityCandidate",
     "OutboundMessage",
     "OutboundStatus",
+    "PerceptualExpressionMemory",
+    "PerceptualExpressionRecord",
+    "PerceptualResponseModalitySelector",
     "PlatformMessagingService",
     "PlatformPresenceController",
     "PlatformPresenceControlService",
