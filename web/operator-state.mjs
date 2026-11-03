@@ -58,6 +58,9 @@ export class OperatorState {
 }
 
 if (typeof document !== 'undefined') {
+  import('./amora-shell-link.mjs?v=20261103-1')
+    .then((module) => module.installAmoraShellLink())
+    .catch(() => {});
   import('./operator-presence-authority.mjs?v=20261031-98')
     .then((module) => module.installPresenceAuthorityControl({ operatorKey: OPERATOR_KEY }))
     .catch(() => {});
