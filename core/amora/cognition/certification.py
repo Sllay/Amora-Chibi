@@ -7,6 +7,7 @@ from typing import Iterable, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from .models import CognitiveContext
+from .providers import ProviderError
 from .realization import RealizationError, RealizationValidator
 
 
@@ -200,6 +201,36 @@ def _provider_identity(provider: SocialRealizer) -> tuple[str, str | None]:
     )
 
 
+def _provider_failure_code(exc: Exception) -> tuple[str, list[str]]:
+    """Return safe, actionable failure codes without exposing provider response bodies."""
+
+    if not isinstance(exc, ProviderError):
+        name = type(exc).__name__
+        if "timeout" in name.lower():
+            return name, ["PROVIDER_TIMEOUT"]
+        return name, ["PROVIDER_TRANSPORT_OR_RUNTIME_FAILURE"]
+
+    status_code = exc.status_code
+    if status_code == 429:
+        codes = ["PROVIDER_RATE_LIMITED", "PROVIDER_HTTP_429"]
+        if exc.retry_after:
+            codes.append("PROVIDER_RETRY_AFTER_PRESENT")
+        return "PROVIDER_HTTP_429", codes
+    if status_code in {401, 403}:
+        return f"PROVIDER_HTTP_{status_code}", ["PROVIDER_AUTH_REJECTED", f"PROVIDER_HTTP_{status_code}"]
+    if status_code is not None and 400 <= status_code < 500:
+        return f"PROVIDER_HTTP_{status_code}", ["PROVIDER_REQUEST_REJECTED", f"PROVIDER_HTTP_{status_code}"]
+    if status_code is not None and status_code >= 500:
+        return f"PROVIDER_HTTP_{status_code}", ["PROVIDER_UPSTREAM_FAILURE", f"PROVIDER_HTTP_{status_code}"]
+
+    message = str(exc).lower()
+    if "invalid realization json" in message or "invalid http json" in message:
+        return "PROVIDER_RESPONSE_JSON_INVALID", ["PROVIDER_RESPONSE_INVALID"]
+    if "root must be an object" in message:
+        return "PROVIDER_RESPONSE_SHAPE_INVALID", ["PROVIDER_RESPONSE_INVALID"]
+    return "ProviderError", ["PROVIDER_ERROR_UNCLASSIFIED"]
+
+
 async def certify_social_case(
     provider: SocialRealizer,
     case: SocialCertificationCase,
@@ -234,6 +265,7 @@ async def certify_social_case(
             reason_codes=["CERTIFICATION_REPLAY", "NO_STATE_MUTATION", "REALIZATION_REJECTED"],
         )
     except Exception as exc:
+        error_code, failure_reasons = _provider_failure_code(exc)
         return SocialCertificationResult(
             probe_id=case.probe.probe_id,
             category=case.probe.category,
@@ -242,8 +274,13 @@ async def certify_social_case(
             success=False,
             validated=False,
             latency_ms=(perf_counter() - started) * 1000.0,
-            error_code=type(exc).__name__,
-            reason_codes=["CERTIFICATION_REPLAY", "NO_STATE_MUTATION", "PROVIDER_FAILURE"],
+            error_code=error_code,
+            reason_codes=[
+                "CERTIFICATION_REPLAY",
+                "NO_STATE_MUTATION",
+                "PROVIDER_FAILURE",
+                *failure_reasons,
+            ],
         )
 
     text = validated.text
