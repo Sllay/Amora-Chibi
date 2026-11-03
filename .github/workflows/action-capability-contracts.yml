@@ -1,0 +1,52 @@
+name: Action capability contracts
+
+on:
+  pull_request:
+    paths:
+      - "core/amora/actions/**"
+      - "tests/test_capability_registry_v1.py"
+      - "tests/test_actions_v07.py"
+      - "tests/test_actions_contract_v07.py"
+      - "tests/test_actions_idempotency_v07.py"
+      - ".github/workflows/action-capability-contracts.yml"
+  push:
+    branches: [main]
+    paths:
+      - "core/amora/actions/**"
+      - "tests/test_capability_registry_v1.py"
+      - "tests/test_actions_v07.py"
+      - "tests/test_actions_contract_v07.py"
+      - "tests/test_actions_idempotency_v07.py"
+      - ".github/workflows/action-capability-contracts.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: action-capability-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24 runtime
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6, Node 24 runtime
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Compile actions package
+        run: python -m compileall -q core/amora/actions
+      - name: Capability and Action Bus contracts
+        run: |
+          python -m pytest -q \
+            tests/test_capability_registry_v1.py \
+            tests/test_actions_v07.py \
+            tests/test_actions_contract_v07.py \
+            tests/test_actions_idempotency_v07.py

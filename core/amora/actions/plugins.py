@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from amora.events import AmoraEvent, AsyncEventBus
 
@@ -13,6 +13,9 @@ from .models import (
     ToolCall,
     ToolSpec,
 )
+
+if TYPE_CHECKING:
+    from .capabilities import CapabilityRegistry
 
 
 class ToolPlugin(Protocol):
@@ -37,11 +40,16 @@ class PluginRegistry:
     deliberately lives in the registry so a transient integration failure never
     has to mutate a plugin manifest. Future connectors (Minecraft, OBS, browser,
     etc.) can stay UNAVAILABLE while disconnected and become HEALTHY on connect.
+
+    The CapabilityRegistry is owned lazily by this registry so every consumer of
+    the Action layer observes one persistent capability view instead of creating
+    independent per-turn registries.
     """
 
     def __init__(self) -> None:
         self._plugins: dict[str, ToolPlugin] = {}
         self._health: dict[str, PluginHealth] = {}
+        self._capability_registry: CapabilityRegistry | None = None
 
     def register(self, plugin: ToolPlugin) -> None:
         manifest = plugin.manifest
@@ -81,6 +89,14 @@ class PluginRegistry:
 
     def health_snapshot(self) -> dict[str, str]:
         return {plugin_id: self.health(plugin_id).value for plugin_id in sorted(self._plugins)}
+
+    @property
+    def capability_registry(self) -> CapabilityRegistry:
+        if self._capability_registry is None:
+            from .capabilities import CapabilityRegistry
+
+            self._capability_registry = CapabilityRegistry(self)
+        return self._capability_registry
 
     @property
     def plugin_count(self) -> int:
