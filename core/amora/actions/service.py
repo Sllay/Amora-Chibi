@@ -9,6 +9,7 @@ from amora.events import AmoraEvent, AsyncEventBus, PrivacyScope
 from amora.time import Clock
 
 from .bus import ActionBus
+from .builtin_capabilities import register_builtin_capabilities
 from .models import (
     ActionPlan,
     ExecutionContext,
@@ -56,6 +57,9 @@ class ActionEngine:
         self.registry = registry or PluginRegistry()
         if self.registry.plugin("core.actions") is None:
             self.registry.register(CoreActionPlugin(events, semantic_sink=semantic_sink))
+        # Production semantic affordances belong to the assembled Action runtime,
+        # not to generic PluginRegistry instances used by tests/connectors.
+        register_builtin_capabilities(self.registry.capability_registry)
         self.skills = skills or SkillLibrary.builtins()
         self.planner = planner or Planner(clock, self.skills)
         self.bus = ActionBus(self.registry, clock)
