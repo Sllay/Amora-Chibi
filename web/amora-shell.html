@@ -18,7 +18,6 @@
     .shell-jobs { display: grid; gap: 8px; }
     .shell-job { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 10px 0; border-top: 1px solid rgba(255,255,255,.08); }
     .shell-job small { grid-column: 1 / -1; opacity: .72; }
-    .terminal-line { color: inherit; }
     @media (max-width: 640px) { .shell-form { grid-template-columns: 1fr; } .shell-head { align-items: flex-start; } }
   </style>
 </head>
@@ -36,7 +35,7 @@
     <section id="operatorGate" class="card admin-card hidden">
       <div class="eyebrow">MODO OPERADOR</div>
       <h2>Desbloquear o console</h2>
-      <p>Use o mesmo código de operador do Living Console. A credencial fica limitada ao navegador e expira automaticamente.</p>
+      <p>Use um código de operador ou sua chave pessoal Dev. A chave pessoal assina a credencial no próprio navegador, então este fluxo não depende do shell da hospedagem.</p>
       <form id="operatorPairForm" class="pair-form">
         <input id="operatorPairCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" aria-label="Código de operador" />
         <button type="submit">Desbloquear</button>
@@ -86,6 +85,6 @@
     </section>
   </main>
 
-  <script type="module" src="./amora-shell.js?v=20261103-1"></script>
+  <script type="module" src="./amora-shell.js?v=20261103-2"></script>
 </body>
 </html>
