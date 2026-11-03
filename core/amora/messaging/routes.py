@@ -15,6 +15,7 @@ from .models import (
     TransportInvalidation,
 )
 from .presence_control import PresenceControlAction, PresenceControlIntent
+from .visual_routes import register_visual_enrichment_routes
 
 
 class OutboundAckRequest(BaseModel):
@@ -65,6 +66,8 @@ class PresenceAuthorityRequest(BaseModel):
 
 def register_messaging_routes(app, core, require_auth) -> None:
     """Register a narrow worker boundary plus operator audit/presence controls."""
+
+    register_visual_enrichment_routes(app, core, require_auth)
 
     @app.post("/v1/messaging/worker/inbound", dependencies=[Depends(require_auth)])
     async def messaging_inbound(message: InboundMessage):
