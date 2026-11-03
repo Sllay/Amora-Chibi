@@ -1,7 +1,7 @@
 # AMORA — Version Lineage / Roadmap Canônico
 
 **Status:** CANÔNICO  
-**Atualizado em:** 2026-11-02
+**Atualizado em:** 2026-11-03
 
 Este arquivo registra **linhagem, destino e ordem de grandes frentes**. Detalhe operacional atual fica em `PROJECT_STATE.md`. `MOVED` não significa cancelado.
 
@@ -90,7 +90,7 @@ PLANEJAMENTO ANTIGO V0.9 / V0.95
 └── ownership de autoimagem ─────────────────────→ V1.2
 ```
 
-**Importante:** Perceptual Asset Vision de sticker/emoji/GIF não é a antiga screen vision e foi antecipada para CH2 da linha atual.
+**Importante:** Perceptual Asset Vision de sticker/emoji/imagem pontual não é a antiga screen vision. Foi antecipada para CH2 da linha atual.
 
 ---
 
@@ -109,6 +109,7 @@ Fundação vigente inclui:
 - response modality competition;
 - Platform Messaging + Social Attention;
 - persistent perceptual expression memory;
+- Perceptual Asset Vision pontual do CH2;
 - backup/restore/observabilidade/security;
 - Android/Web voice paths e identidade vocal de laboratório.
 
@@ -130,7 +131,7 @@ PR #29 / merge `dfe50de9a9312f0e6a3f08cc482e9b4dc0aee1d4`.
 
 **Status:** `IMPLEMENTED / MERGED / CANON UPDATED`
 
-Provider mesh, quota/cooldown/circuit state, health/usage e zero-cost guards existem. ADR-0033 e `PROVIDER_MESH.md` agora congelam **recovery-before-fallback** como direção obrigatória; implementação/certificação completa pertence ao CH3.
+Provider mesh, quota/cooldown/circuit state, health/usage e zero-cost guards existem. ADR-0033 e `PROVIDER_MESH.md` congelam **recovery-before-fallback** como direção obrigatória; CH3 completa a certificação por task class.
 
 ### V1 Step 4 — Canonical Voice + V1 Certification
 
@@ -143,24 +144,13 @@ Decisões de voz vigentes continuam:
 - ADR-0011: `AMORA_VOICE_SIGNATURE_V1_SOFT` aprovada em laboratório;
 - ADR-0014: mesma implementação compartilhada entre Android JNI e worker Web/Termux.
 
-Pipeline congelado:
-
-```text
-Supertonic 3 INT8
-→ style 60% speaker 0 + 40% speaker 4
-→ AMORA_CHILD_FINAL_B_PLUS60
-→ AMORA_VOICE_SIGNATURE_V1_SOFT
-→ Emotion / Prosody V2 bounded
-→ PCM
-```
-
-Gates físicos ainda não podem ser marcados PASS por CI: Safari/iPhone, latência/RTF, barge-in/manual stop, RAM/CPU/temperatura, conversa longa e estabilidade real.
+Gates físicos continuam separados de CI: Safari/iPhone, latência/RTF, barge-in/manual stop, RAM/CPU/temperatura, conversa longa e estabilidade real.
 
 ---
 
 ## 5. Linha atual de engenharia — somente 3 CHs
 
-Para evitar novo acúmulo de pontas soltas, a linha ativa fica reduzida a três movimentos grandes.
+Para evitar novo acúmulo de pontas soltas, a linha ativa continua reduzida a três movimentos grandes.
 
 ### CH1 — Consolidação e continuidade
 
@@ -173,78 +163,110 @@ Promovido e recertificado:
 - #118 cognitive capability projection;
 - #119 capability-grounded actions;
 - #120 response modality competition;
-- #121 persistent perceptual expression memory / schema 16.
+- #121 persistent perceptual expression memory / schema 16;
+- #122 checkpoint/canon/roadmap/ADR de consolidação.
 
 #115 foi fechada sem merge por estar supersedida.
-
-Também foram corrigidos testes antigos que hardcodavam schema 15; agora dependem de `LATEST_SCHEMA_VERSION`.
 
 Documentação/decisão: `PROJECT_STATE.md`, `PROVIDER_MESH.md`, `PERCEPTUAL_ASSET_MEMORY.md` e ADR-0033.
 
 ### CH2 — Visual Expression Enrichment
 
-**Status:** `NEXT`
+**Status:** `SOFTWARE COMPLETE — PR #123 READY FOR PROMOTION`
 
-Objetivo único: transformar `pending_visual` em CPF realmente percebido.
+Objetivo entregue: transformar `pending_visual` em CPF realmente percebido por conteúdo.
 
 ```text
 relevant expression asset
-→ secure resolver/fetch
+→ claim/lease
+→ secure Discord resolver/fetch
 → real-byte SHA-256
-→ multimodal provider
+→ [reuse known SHA | multimodal provider]
 → strict structured semantic profile
 → local validation
-→ apply_visual_enrichment(expected_fingerprint)
+→ metadata+content+claim CAS
 → ENRICHED
 ```
 
-Inclui:
+Entregue:
 
-- SSRF/redirect/MIME/size/timeouts;
-- PNG/JPEG/WebP e política bounded para animated formats;
-- claim/lease/idempotência;
-- stale-result rejection;
-- privacidade/provenance;
+- schema 17;
+- metadata fingerprint separado do content SHA;
+- claim/lease/idempotência e stale-result rejection;
+- authenticated worker boundary;
+- secure Discord resolver + bounded fetch;
+- Core recomputando SHA dos bytes reais;
+- privacy/remote-processing gate persistente;
+- `VisionAnalyzer` substituível;
+- `GroqQwenVisionAnalyzer` com `qwen/qwen3.8-27b`;
+- strict JSON Schema no endpoint + validação Pydantic local;
+- provider/model provenance;
+- same-SHA reuse sem nova chamada e sem nova semantic revision;
 - retry/defer assíncrono;
-- nenhum reprocessamento do mesmo fingerprint sem motivo.
+- gate perceptual CI cobrindo contratos CH2.
+
+Formatos certificados diretamente: PNG/JPEG/WebP estáticos.
+
+GIF/Lottie/animação sem renderer determinístico ficam **fail-closed/deferred**. Não inferir significado completo por primeiro frame arbitrário.
+
+SHA de código certificado: `7ea117b512f1e10ad029897e1172c3f3902b1862`.
+
+Gates verdes nesse SHA:
+
+- Core tests;
+- Perceptual expression memory;
+- Messaging workers;
+- Response modality competition;
+- Cloud container contracts;
+- Pre-deploy security.
+
+Gates live ainda abertos e explicitamente separados:
+
+- chamada real Groq/Qwen com credencial operacional;
+- sticker real Discord atravessando resolver/worker/Core/provider;
+- reconnect/intents/permissões do Discord em ambiente real.
 
 **Fora do CH2:** screen capture, vídeo contínuo, OCR temporal, avatar/corpo.
 
 ### CH3 — Provider Certification + Resilience
 
-**Status:** `AFTER CH2`
+**Status:** `IN_PROGRESS — PR #124 STACKED ON CH2`
 
-Certificar por task class, sem “modelo central = identidade”:
+A infraestrutura de certificação já existe na branch do CH3, mas a promoção permanece bloqueada até #123 entrar em `main`.
 
-```text
-SOCIAL DIALOGUE
-Qwen 3.8 27B baseline
-vs
-Mistral Large 4 candidate
+Implementado na #124:
 
-REASONING
-GPT-OSS 120B baseline
-vs
-Mistral Large 4 candidate
+- `SOCIAL_SURFACE_REPLAY_V1`;
+- Mistral Large 4 como candidato `certification_only`;
+- A/B identical-context Qwen × Mistral;
+- mechanical score sem autoridade de promoção;
+- Retry-After;
+- bounded backoff + jitter;
+- structured repair bounded;
+- circuit registry por provider + task;
+- `CLOSED → OPEN → HALF_OPEN` com probe único;
+- ProviderRouter continua dono do ranking.
 
-PERCEPTION
-Mistral Large 4 candidate
-+ fallback somente se benchmark/política justificar
-```
-
-Replay deve medir pt-BR, personality fit, DialoguePlan fidelity, grounding, humor/palavrão contextual, conversa adulta permitida, assistantism, moralização/recusa social indevida, structured output, latência, disponibilidade e custo.
-
-Resiliência obrigatória:
+Depois da promoção do CH2:
 
 ```text
-classify failure
-→ bounded recovery do primary
-→ backoff + jitter / Retry-After
-→ circuit breaker + HALF_OPEN
-→ fallback OR defer
+retarget #124 → main
+→ sync / full Core regression
+→ live Qwen × Mistral social replay
+→ human review
+→ Mistral × GPT-OSS reasoning replay
+→ promote only where evidence wins
 ```
 
-Se Mistral vencer diálogo, Qwen vira fallback. Se vencer reasoning, GPT-OSS vira fallback. Promoção só depois de evidência reproduzível.
+Baseline permanece:
+
+```text
+SOCIAL DIALOGUE: Qwen 3.8 27B
+REASONING: GPT-OSS 120B
+MISTRAL LARGE 4: candidate only
+```
+
+Nenhum modelo vira identidade da Amora.
 
 ---
 
@@ -270,7 +292,7 @@ Platform Messaging/People/Console e workers Discord/WhatsApp já possuem fundaç
 
 **Status:** `PLANNED`
 
-V1.1 agora significa explicitamente **percepção contínua do ambiente/tela**, não análise pontual de sticker.
+V1.1 significa explicitamente **percepção contínua do ambiente/tela**, não análise pontual de sticker.
 
 ```text
 screen / video / environment
@@ -325,7 +347,7 @@ platforms/  -> Android, Web e futuros adapters
 runtime/    -> registry, loader, event bus e lifecycle
 ```
 
-Refactor deve seguir fronteiras reais e replay/testes, não reescrita preventiva total.
+Refactor segue fronteiras reais e replay/testes, não reescrita preventiva total.
 
 ---
 
