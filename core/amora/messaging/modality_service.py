@@ -11,6 +11,7 @@ from .models import ExpressionKind, InboundMessage, MessagingPlatform, OutboundM
 from .perceptual_response_modality import PerceptualResponseModalitySelector
 from .response_modality import ResponseModalitySelector
 from .service import PlatformMessagingService as BasePlatformMessagingService
+from .visual_enrichment import VisualExpressionEnrichmentService
 
 
 _CURRENT_MESSAGE: ContextVar[InboundMessage | None] = ContextVar(
@@ -87,6 +88,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
     def __init__(self, *args: Any, response_modality: ResponseModalitySelector | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.expression_memory = PerceptualExpressionMemory(self.store, self.clock)
+        self.visual_enrichment = VisualExpressionEnrichmentService(self.expression_memory)
         self.response_modality = response_modality or PerceptualResponseModalitySelector()
         self.cognition = _CapabilityAwareCognitionProxy(self.cognition)
         self._recent_expressions: dict[str, deque[str]] = {}
@@ -112,6 +114,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
         # established that this message deserves a response. A guild catalog by
         # itself never writes perceptual memory.
         message = self.expression_memory.observe_relevant(message, decision)
+        self.visual_enrichment.observe_policy(message, decision)
         state = self.conversation.state() if hasattr(self.conversation, "state") else {}
         emotion_profile = str(state.get("last_emotion_profile") or "") if isinstance(state, dict) else ""
         recent = list(self._recent_expressions.get(self._conversation_key(message), ()))
