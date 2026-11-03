@@ -7,6 +7,7 @@ on:
       - 'tests/test_ch3_provider_certification.py'
       - 'tests/test_ch3_provider_ab.py'
       - 'tests/test_ch3_provider_resilience.py'
+      - 'tests/test_ch3_live_provider_certification.py'
       - 'tests/test_cognitive_replay_v10.py'
       - '.github/workflows/provider-certification.yml'
   push:
@@ -16,6 +17,7 @@ on:
       - 'tests/test_ch3_provider_certification.py'
       - 'tests/test_ch3_provider_ab.py'
       - 'tests/test_ch3_provider_resilience.py'
+      - 'tests/test_ch3_live_provider_certification.py'
       - 'tests/test_cognitive_replay_v10.py'
       - '.github/workflows/provider-certification.yml'
 
@@ -45,4 +47,5 @@ jobs:
             tests/test_ch3_provider_certification.py \
             tests/test_ch3_provider_ab.py \
             tests/test_ch3_provider_resilience.py \
+            tests/test_ch3_live_provider_certification.py \
             tests/test_cognitive_replay_v10.py
