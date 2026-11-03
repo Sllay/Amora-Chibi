@@ -6,6 +6,13 @@ const TERMINAL = new Set(["succeeded", "failed", "timed_out"]);
 let activeJobId = null;
 let pollTimer = null;
 
+// The standalone Shell must not reintroduce a dependency on the host terminal.
+// Reuse the existing Dev master-key flow so an operator can unlock this page
+// directly from the browser when no pairing code can be generated on the host.
+import("./dev-master-key.mjs?v=20261103-1")
+  .then((module) => module.installDevMasterKey({ OperatorState }))
+  .catch(() => {});
+
 function token() {
   return operatorState.get();
 }
@@ -104,7 +111,7 @@ function renderJob(job) {
   $("resultTitle").textContent = `amora> ${job.command_path}`;
   $("jobStatus").textContent = `${job.status} · ${job.job_id}`;
   $("shellOutput").textContent = formatJob(job);
-  $("shellRun").disabled = !TERMINAL.has(job.status) && job.status !== "failed" && job.status !== "timed_out";
+  $("shellRun").disabled = !TERMINAL.has(job.status);
 }
 
 function stopPolling() {
