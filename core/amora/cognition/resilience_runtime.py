@@ -31,6 +31,41 @@ class CognitiveEngine(IdentityAwareCognitiveEngine):
             if wrapped is not current:
                 self._providers[name] = wrapped
 
+    def _structured_failure_details(self, provider_name: str) -> tuple[str | None, str | None]:
+        provider = self._providers.get(provider_name)
+        semantic_code = getattr(provider, "last_structured_error_code", None)
+        if not semantic_code:
+            return None, None
+        return str(semantic_code), "PROVIDER_STRUCTURED_OUTPUT_INVALID"
+
+    def _record_provider_failure(
+        self,
+        request,
+        descriptor,
+        *,
+        error_code: str,
+        status_code: int | None,
+        started: float,
+    ) -> None:
+        semantic_code, provider_failure_code = self._structured_failure_details(descriptor.name)
+        normalized_error = provider_failure_code or error_code
+
+        if provider_failure_code is not None:
+            rejection = getattr(self, "_last_realization_rejection", None)
+            if isinstance(rejection, dict) and rejection.get("provider") == descriptor.name:
+                updated = dict(rejection)
+                updated["code"] = semantic_code
+                updated["provider_failure_code"] = provider_failure_code
+                self._last_realization_rejection = updated
+
+        super()._record_provider_failure(
+            request,
+            descriptor,
+            error_code=normalized_error,
+            status_code=status_code,
+            started=started,
+        )
+
     def _backoff(
         self,
         descriptor,
@@ -49,7 +84,10 @@ class CognitiveEngine(IdentityAwareCognitiveEngine):
         if until is None:
             return
         failure_count = self._provider_failures.get(descriptor.name, 1)
-        failure_code = f"HTTP_{status_code}" if status_code is not None else "PROVIDER_FAILURE"
+        _, structured_failure_code = self._structured_failure_details(descriptor.name)
+        failure_code = structured_failure_code or (
+            f"HTTP_{status_code}" if status_code is not None else "PROVIDER_FAILURE"
+        )
         self._provider_circuits.open(
             descriptor.name,
             self._CIRCUIT_TASK,
