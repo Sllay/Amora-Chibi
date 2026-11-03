@@ -1,54 +1,114 @@
 # AMORA — Malha de Providers Cognitivos
 
-
-> Atualização de infraestrutura (2026-10-23, ADR-0015): Core/Web serão
-> preparados para host Linux remoto e a mesma voz congelada para worker
-> independente. Koyeb/Turso/Modal são candidatos substituíveis. Descrições
-> Termux/local abaixo registram o caminho implementado anterior, preservado
-> para desenvolvimento. Esta decisão muda localização de compute/storage,
-> não identidade, semântica, consentimento, custo ou parâmetros da voz.
+> Atualização de infraestrutura (2026-10-23, ADR-0015): Core/Web podem operar
+> em host Linux remoto e a mesma voz pode operar em worker independente.
+> Localização de compute/storage não altera identidade, consentimento, custo ou
+> autoridade canônica do Core.
 
 **Status:** CANÔNICO / ATUAL  
-**Atualizado em:** 2026-10-31
+**Atualizado em:** 2026-11-02
 
-## Princípio
+## 1. Princípio
 
-Provider é capacidade substituível. O Core local continua autoridade sobre identidade, estado, memória, emoção, relações, DialoguePlan, validação de RealizationFrame, privacidade e failover.
+Provider é capacidade substituível.
 
-## Objetivo econômico
+O Core continua autoridade sobre:
+
+- identidade;
+- self e relações;
+- memória;
+- emoção/drives;
+- world state;
+- `DialoguePlan`;
+- policy/authority;
+- escolha e validação de capabilities;
+- privacidade/consentimento;
+- failover;
+- aceitação do `RealizationFrame`;
+- observação de efeitos.
+
+**Provider não é identidade e não ganha autoridade por estar saudável, rápido ou ser o primary.**
+
+---
+
+## 2. Objetivo econômico
 
 Objetivo operacional: **R$ 0 sempre que praticável**.
 
-Free tiers são capacidade oportunística, não contrato eterno. Quotas, modelos, preços e disponibilidade mudam com o tempo; limites gratuitos não devem ser hardcoded como regra canônica. Quota observada entra como telemetria dinâmica e um modelo pode ser trocado sem mudar a identidade da Amora.
+Free tier é capacidade oportunística, não contrato arquitetural. Quota, preço,
+modelo e disponibilidade são telemetria dinâmica.
 
-Nenhum adapter pode comprar créditos, ativar billing, trocar silenciosamente para modelo pago ou continuar chamadas cobradas apenas para evitar fallback local.
+Nenhum adapter pode:
 
-## Ordem funcional V1
+- comprar crédito;
+- ativar billing;
+- trocar silenciosamente para rota paga;
+- continuar chamadas cobradas só para evitar degradação;
+- esconder do Core qual provider/modelo respondeu.
 
-1. **Groq** — primary enquanto saudável, certificado e com quota.
-2. **Cloudflare Workers AI** — segundo eixo remoto independente, usando modelo configurável e elegível no plano atual.
-3. **Gemini** — fallback cognitivo já existente quando configurado.
-4. **OpenRouter** — specialist broker / último recurso, preservando a cota gratuita para falha ou tarefa especializada.
-5. **Fallback local** — degradação segura quando nenhum remoto elegível está disponível.
+---
 
-OpenRouter não é caminho normal de toda conversa quando providers diretos estão saudáveis.
+## 3. Papéis por task class
 
-## Provider contract
-
-Cada provider declara nome lógico, modelo, task classes, privacy scopes, suporte a structured output, context window quando conhecido, qualidade/latência/custo relativos, prioridade, disponibilidade e quota/cooldown observados.
-
-Para diálogo social, todo remoto participa do mesmo contrato:
+A malha não possui um “modelo central” único.
 
 ```text
-DialoguePlan
-→ provider gera RealizationFrame
-→ validator local
-→ só então fala
+AMORA CORE
+├─ social surface actor
+├─ reasoning specialist
+└─ perception provider
 ```
 
-### Fronteira de autoridade do provider
+Cada papel é certificado separadamente.
 
-O provider recebe um protocolo lógico comum, independente do transporte específico:
+### Baseline atual
+
+- **social dialogue:** Qwen 3.8 27B no caminho Groq configurado;
+- **reasoning specialist:** GPT-OSS 120B;
+- **Mistral Large 4 / NVIDIA (`mistralai/mistral-large-4-1t-a52b`): CANDIDATO**, não promovido;
+- Cloudflare Workers AI, Gemini, OpenRouter e fallback local continuam eixos
+  substituíveis conforme capability, health, privacy, custo e certificação.
+
+Se o Mistral vencer o CH3:
+
+```text
+dialogue:
+Mistral Large 4
+→ recovery do primary
+→ Qwen fallback
+
+reasoning:
+Mistral Large 4
+→ recovery do primary
+→ GPT-OSS 120B fallback
+```
+
+Essa ordem é **resultado de benchmark**, nunca identidade canônica.
+
+---
+
+## 4. Provider contract
+
+Cada provider/modelo declara:
+
+- nome lógico;
+- modelo;
+- task classes;
+- privacy scopes;
+- structured output real suportado;
+- multimodalidade real suportada;
+- context window observado/contratado;
+- quality/latency/cost class;
+- prioridade;
+- disponibilidade;
+- quota/rate-limit observados;
+- cooldown/circuit state;
+- capabilities específicas.
+
+Não inferir capability pelo nome do modelo. O adapter deve provar o que o
+endpoint realmente aceita.
+
+Para diálogo social:
 
 ```text
 Amora Constitution
@@ -56,64 +116,277 @@ Amora Constitution
 + TurnFrame
 + RealizationContract
         ↓
-trusted instructions/system context
+trusted provider instructions
 
 ConversationTurn(s) literais
         ↓
-conversation input/content
+conversation content
 ```
 
-- **Constitution** contém invariantes e a autoridade do Core.
-- **LivingProfile** é uma projeção revisionada de camadas lentas do Self Model e estilo expressivo; nunca é um segundo banco canônico.
-- **TurnFrame** contém metadados confiáveis do turno, `speaker_id`/`addressee_id`, ACIR/cena social, estado atual permitido, relações relevantes, emoção/drives, memórias/claims selecionados, `DialoguePlan` e `ExpressionCue`.
-- **RealizationContract** define o formato/limites da fala final e continua sujeito ao `RealizationValidator` local.
-- texto literal de conversa nunca pode sobrescrever metadados confiáveis, mesmo que contenha frases como `eu sou X`, `speaker_id=...` ou linguagem que imite uma instrução de desenvolvedor.
-- papéis técnicos `user`/`assistant`/`model` são papéis de transporte, não identidade social.
+Depois:
 
-O adapter deve usar o mecanismo nativo mais forte realmente suportado pelo provider/model:
+```text
+provider
+→ RealizationFrame
+→ local validator
+→ delivery
+```
 
-- Groq: Responses API — protocolo confiável em `instructions`, conversa em `input`;
-- OpenRouter: Responses API no adapter de produção — `instructions` separado de `input`;
-- Gemini: `systemInstruction` separado de `contents`;
-- Cloudflare: `system` + mensagens no caminho OpenAI-compatible suportado pelo modelo configurado, mantendo envelopes de identidade e a mesma separação semântica.
+Texto do usuário nunca sobrescreve metadata confiável como `speaker_id`,
+`addressee_id`, policy, platform ou authority.
 
-Persistência/caching do provider é otimização, não autoridade. Se o provider não persistir sessão, o Core reenvia o contexto necessário.
+---
 
-### Expressão linguística
+## 5. Recovery-before-fallback
 
-A voz textual da Amora é português brasileiro oral e pode carregar regionalidade nordestina leve e palavrão contextual. Isso não é um comando genérico de “falar nordestino”.
+### 5.1 Regra
 
-`ExpressionProfile` define repertório/princípios de baixa densidade. `ExpressionCue` é compilado por turno a partir de relação, `DialoguePlan`, tone tags e histórico recente. A seleção usa variação replay-stable e cooldown lexical para evitar bordões repetitivos. Interjeições como `oxente`, `oxi`, `eita`, `nossa senhora`, `apois viu`, `eita mulesta` e `vish maria` são opções, não obrigação. Palavrão pode ser `none`, `light` ou `emphatic` conforme o contexto; hostilidade não deve ser inventada.
+**Fallback é consequência de recuperação bounded falhar; não é reação ao primeiro erro.**
 
-## Failover seguro
+```text
+request
+  ↓
+primary
+  ↓ falha
+classify
+  ↓
+bounded recovery
+  ↓
+circuit/cooldown
+  ↓
+fallback OR defer OR local failure
+```
 
-Failover só ocorre antes de qualquer fala não ambígua ter sido emitida. Se um provider falha, excede quota, retorna estrutura inválida ou entra em cooldown antes de um frame validado, outro provider pode tentar. Depois que uma realização validada começou a ser entregue, não costurar outro provider no mesmo turno.
+### 5.2 Classificação mínima
 
-Sinais de falha incluem quota/rate limit, 5xx, out-of-capacity, timeout, saída estruturada inválida, RealizationFrame rejeitado e capability ausente.
+| classe | exemplos | retry |
+|---|---|---|
+| `TRANSIENT_NETWORK` | reset, DNS temporário, connect error | sim, bounded |
+| `TIMEOUT` | connect/read timeout | sim, se budget permitir |
+| `SERVER_5XX` | 500/502/503/504 | sim, bounded |
+| `CAPACITY` | overloaded/out-of-capacity | sim/defer conforme budget |
+| `RATE_LIMIT` | 429 | respeitar `Retry-After`; não martelar |
+| `AUTH` | 401/403 | não retry cego |
+| `BAD_REQUEST` | request determinístico inválido | não repetir idêntico |
+| `INVALID_OUTPUT` | JSON/frame inválido | no máximo repair/retry bounded |
+| `POLICY_REJECTION` | provider recusou conteúdo permitido pelo plano | registrar; retry só por política explícita |
+| `UNKNOWN` | erro não classificado | conservador, bounded |
 
-## Quota e circuit breaker
+### 5.3 Backoff
 
-O Core mantém estado operacional por provider: failures consecutivos, cooldown, último status HTTP, request/success count, tokens quando reportados, quota headers quando existirem, latência e modelo usado.
+Retries transitórios devem usar:
 
-Ausência de header de quota não significa quota infinita. Provider em cooldown não participa da seleção até o prazo expirar.
+```text
+exponential backoff
++ jitter
++ limite de tentativas
++ latency budget da task
+```
 
-## Provider Certification
+Não criar retry storm. Não repetir automaticamente uma chamada paga ou com
+quota cara apenas porque o retry budget técnico permitiria.
 
-Adicionar adapter não significa certificar provider. Certificação por task class precisa provar conectividade/configuração, structured output quando exigido, pt-BR suficiente, privacidade, erro/quota classificáveis, failover seguro e preservação da identidade social.
+### 5.4 Budget por task
 
-Cognitive Replay é preferido para comparação sem mutação de estado. Não rodar chamadas remotas automáticas em todo startup só para diagnóstico.
+**Diálogo:** curto. A Amora precisa responder; após recuperação bounded,
+fallback elegível pode assumir.
 
-## Configuração
+**Reasoning:** maior que diálogo, mas continua bounded.
 
-Credenciais permanecem no SecretStore local da Amora e nunca aparecem em log, health report ou Git. Modelos podem ser escolhidos por configuração/env sem serem tratados como identidade canônica.
+**Perceptual asset enrichment:** normalmente assíncrono. Se o provider cair:
 
-## Critério de saída do Step 3
+```text
+PENDING_VISUAL
+→ retry/defer posterior
+```
 
-1. Groq, Cloudflare e OpenRouter possuem adapters isolados compatíveis com o runtime estruturado.
-2. Gemini continua fallback independente.
-3. Router escolhe por capability, privacy, health, quota, custo e prioridade.
-4. Falha/quota gera failover seguro antes da fala.
-5. Caminhos gratuitos não escalam silenciosamente para cobrança.
-6. Usage ledger/health tornam a malha observável.
-7. Testes determinísticos cobrem seleção, cooldown, zero-cost guard e failover sem consumir APIs reais.
-8. Ausência de configuração de um provider apenas o torna indisponível; o Core continua funcional.
+e não “troca de cérebro” imediata só porque a NVIDIA/Groq espirrou.
+
+---
+
+## 6. Circuit breaker
+
+Estado operacional mínimo por `provider + model + task_class`:
+
+```text
+HEALTHY
+SUSPECT
+DEGRADED
+COOLDOWN
+HALF_OPEN
+UNAVAILABLE
+```
+
+Uma falha isolada não deve banir o primary.
+
+Falhas consecutivas/relevantes abrem o circuito. Depois do cooldown:
+
+```text
+COOLDOWN
+→ HALF_OPEN
+→ probe/request elegível
+   ├─ success → HEALTHY
+   └─ failure → COOLDOWN maior
+```
+
+Cooldown global de um provider não deve ser aplicado a task/modelo não
+afetado sem evidência.
+
+---
+
+## 7. Regra de delivery
+
+Failover só pode ocorrer antes de qualquer fala não ambígua ter sido entregue.
+
+```text
+provider falha antes do frame/delivery
+→ recovery/fallback permitido
+
+fala validada começou a ser entregue
+→ NÃO costurar outro provider no mesmo turno
+```
+
+Se uma stream cai depois de entrega parcial, o sistema registra interrupção
+e decide novo turno/reparo; não mistura duas vozes cognitivas numa sentença.
+
+---
+
+## 8. Repair de structured output
+
+Structured output inválido é diferente de indisponibilidade.
+
+Fluxo recomendado:
+
+```text
+invalid frame
+→ local parse/validation reason
+→ no máximo um repair/retry contextual
+→ se persistir: provider failure for this task
+→ fallback/defer
+```
+
+Nunca aceitar JSON inválido só para “não perder a resposta”.
+
+---
+
+## 9. Ordem funcional da malha V1
+
+A ordem é dinâmica por task class, mas os eixos disponíveis permanecem:
+
+1. provider direto primário certificado;
+2. segundo eixo remoto direto certificado;
+3. Gemini quando elegível/configurado;
+4. OpenRouter como specialist broker/último recurso gratuito elegível;
+5. fallback local/degradação segura.
+
+OpenRouter não é caminho normal de toda conversa quando providers diretos
+estão saudáveis.
+
+Ausência de configuração de um provider apenas o torna indisponível.
+
+---
+
+## 10. Observabilidade
+
+Registrar por request/tentativa:
+
+- provider/model/task class;
+- request id interno;
+- tentativa N;
+- failure class;
+- status HTTP quando houver;
+- latency;
+- quota headers quando houver;
+- tokens quando reportados;
+- retry/backoff escolhido;
+- circuit state antes/depois;
+- resolution:
+  - `PRIMARY_SUCCESS`
+  - `RETRY_PRIMARY`
+  - `RETRY_REPAIRED`
+  - `DEFER`
+  - `FALLBACK_PROVIDER`
+  - `LOCAL_DEGRADE`
+  - `FAILED`
+- provider final usado.
+
+O Console pode resumir sem spam; logs estruturados guardam o detalhe.
+
+---
+
+## 11. Provider Certification
+
+Adicionar adapter não certifica provider.
+
+Certificação por task class precisa provar:
+
+- conectividade/configuração;
+- pt-BR suficiente quando aplicável;
+- fidelidade ao `DialoguePlan`;
+- personalidade/continuidade;
+- ausência de assistantism intrusivo;
+- structured output quando exigido;
+- multimodalidade quando exigida;
+- erro/quota classificáveis;
+- latency dentro do budget;
+- privacy/consent;
+- custo;
+- recovery/fallback seguro;
+- identidade social preservada.
+
+`Cognitive Replay` é o método padrão para comparação sem mutação de estado.
+
+Não rodar chamadas remotas automáticas em todo startup só para diagnóstico.
+
+---
+
+## 12. Social Surface Certification
+
+Para social dialogue, o replay deve incluir também:
+
+- português brasileiro natural;
+- gíria e palavrão contextual;
+- humor quebrado/ironia;
+- conflito e provocação;
+- afeto;
+- conversa adulta comum;
+- sexualidade mencionada em contexto permitido;
+- identidade relacional;
+- perguntas sobre self;
+- recusa apropriada versus recusa social indevida;
+- moralização desnecessária;
+- `assistantism` / “como uma IA...” intrusivo;
+- fidelidade ao plano e aos fatos do Core.
+
+O objetivo é reduzir over-refusal e quebra de personagem **sem mover policy e
+segurança de ações para o provider**.
+
+---
+
+## 13. Configuração e secrets
+
+Credenciais ficam no SecretStore/configuração segura e nunca aparecem em:
+
+- Git;
+- prompt;
+- log;
+- health report público;
+- exception serializada para cliente.
+
+Modelos podem ser alterados por config/env sem serem tratados como identidade.
+
+---
+
+## 14. Critério de saída da malha
+
+A malha é considerada pronta para uma task class quando:
+
+1. primary e fallback têm adapters isolados;
+2. erros são classificados;
+3. retry/backoff/jitter são bounded;
+4. circuit breaker possui cooldown + half-open;
+5. zero-cost guard continua fail-closed;
+6. troca de provider é observável;
+7. não há costura após início de delivery;
+8. testes determinísticos cobrem falhas sem consumir APIs reais;
+9. replay/certificação real prova o comportamento esperado.

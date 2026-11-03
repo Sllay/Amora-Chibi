@@ -1,352 +1,238 @@
-# PROJECT_STATE — Amora-Chibi
+# AMORA — Project State / Checkpoint Operacional
 
-**Última atualização:** 2026-10-31  
-**Base operacional:** `main` após PR #95 (`1c6ef0b0b7b651adf3c5f0c5eefe8b20439931bd`)  
-**Objetivo:** checkpoint operacional curto; código/testes/CI atuais vencem descrições históricas antigas.
+**Atualizado em:** 2026-11-02  
+**Base funcional consolidada:** `main` após merge da PR #121 (`a42270db5ea427c483adf67c8e50206ec6e74aa9`)  
+**Schema canônico atual:** **16**  
+**Objetivo:** checkpoint curto para retomar o projeto sem reconstruir decisões por chat.
 
-## 1. Autoridade
+## 1. Fonte de verdade
 
-Ordem de leitura atual:
+Ordem de leitura para trabalho novo:
 
 1. `docs/canon/SKILL.md`;
 2. `docs/canon/ARCHITECTURE.md`;
 3. `docs/canon/GDD.md`;
-4. `docs/canon/DIALOGUE_EMOTION.md`;
-5. `docs/canon/PROVIDER_MESH.md`;
-6. `docs/canon/PEOPLE_IDENTITY.md`;
-7. `docs/canon/PLATFORM_MESSAGING.md`;
-8. `docs/canon/VOICE_IDENTITY.md`;
-9. `docs/roadmap/VERSIONS.md`;
-10. ADRs relevantes;
-11. reviews de engenharia;
-12. este snapshot;
-13. código/testes/CI atuais.
-
-Quando um documento antigo contradizer canon/ADR/código/testes mais recentes, não restaurar silenciosamente o método antigo.
-
-## 2. Freeze operacional
-
-**Congelado, não cancelado:**
-
-- corpo/avatar visual final;
-- rig/animação/expressão visual e integração cérebro→corpo;
-- visual perception / screen mapping / OCR/keyframes;
-- V1.2 estética/self-image/roupa/aparência.
-
-**Liberado:** Web/PWA UI/UX, Pessoas/Família, Console, mensageria, adapters/workers, presença de plataforma, diagnóstico/configuração e voz não visual.
-
-## 3. Persistência/runtime
-
-- Core + Web/PWA: container Linux remoto.
-- Storage: SQLite local ou libSQL remoto.
-- schema atual: **13**.
-- recovery auditado aceita snapshots 10/11/12/13 em destino remoto vazio e promove aditivamente até 13 sem editar o snapshot fonte.
-- schema 13 adiciona `messaging_audit`, `messaging_outbound_queue` e `platform_presence`.
-- `WEB_SAFARI != DEVICE_A15` permanece invariante.
-
-## 4. Cognição, identidade e expressão — ATIVOS
-
-Ativos/integrados:
-
-- Scheduler + autonomia idle;
-- autonomia → ActionEngine bounded;
-- ACIR/Perspective + PerspectiveConsolidator;
-- relationship learning corroborado;
-- Memory / World / Self;
-- Emotion Engine + Interaction Appraiser;
-- DialoguePlan + RealizationFrame validator;
-- provider mesh + Provider Protocol;
-- STT Groq;
-- Fish/Gemini Web voice;
-- People Profiles + PlatformIdentityBinding + family authority;
-- Web Chat / Pessoas / Console;
-- observability/operations/security/container CI.
-
-Provider não define `speaker_id`, família, memória ou identidade canônica. Literal conversation input não possui autoridade estrutural.
-
-## 5. Passo 1 — CONCLUÍDO
-
-PR #92 implementou:
-
-- papel browser `operator` separado de `web` e do admin master;
-- `amora pair --role operator` com challenge próprio;
-- aba Pessoas/Família;
-- CRUD de profiles;
-- Relationship Graph familiar administrativo com histórico temporal;
-- N bindings WhatsApp/Discord/Web por PERSON;
-- IDs privados mascarados por padrão;
-- export/import público separado de bindings privados;
-- bootstrap JSON read-only como seed, storage canônico como runtime authority;
-- Living Console seguro via `/v1/operations/state`.
-
-ADR: `ADR-0028-operator-web-people-settings.md`.
-
-## 6. Passo 2 — CONCLUÍDO EM CÓDIGO / STAGING DE REDE PENDENTE
-
-PR #95 implementou a camada comum de mensageria.
-
-```text
-Discord / WhatsApp worker
-        ↓
-normalized InboundMessage
-        ↓
-PlatformIdentityBinding
-        ↓
-SocialAttentionRouter
-+ bounded ConversationFloor
-        ↓
-Cognitive Core
-        ↓
-OutboundMessage queue
-        ↓
-worker / plataforma
-```
-
-Canon: `docs/canon/PLATFORM_MESSAGING.md`  
-ADR: `ADR-0029-platform-messaging-social-attention.md`.
-
-### 6.1 Identidade
-
-- Discord user ID, WhatsApp JID/LID/telefone são **external actor identifiers**, nunca PERSON por si.
-- Core resolve identidade via `PlatformIdentityBinding`.
-- display name/nickname é apresentação contextual, não autenticação.
-- desconhecido em grupo usa `EXT_*` efêmero; não cria `PERSON_*` automaticamente.
-
-### 6.2 DM
-
-```text
-DM
-→ resolve binding
-   ├─ conhecida → cognition/reply permitido
-   └─ desconhecida → QUARANTINE
-                     → audit privado
-                     → NÃO CognitiveStore/provider
-```
-
-DM desconhecida não ganha acesso cognitivo normal apenas por enviar texto.
-
-### 6.3 Grupo / atenção
-
-Evidências principais:
-
-- native reply/quote para Amora: muito alta;
-- native @mention da Amora: muito alta;
-- vocativo explícito `Amora, ...`: alto;
-- mesmo speaker dentro do floor ativo: continuidade bounded;
-- ambiente sem atenção direta: context-only;
-- menção explícita a outro ator / outro speaker tomando o floor: shift away.
-
-Incerteza favorece silêncio.
-
-`ConversationFloor` usa generation + reply lease curto. Se o grupo mudar enquanto o provider gera, a resposta antiga pode ser suprimida antes de entrar na fila outbound.
-
-### 6.4 Audit != Memory
-
-`messaging_audit` preserva histórico operacional/social suficiente para BK auditar manipulação e contexto:
-
-- plataforma/account/conversation/message;
-- direção;
-- sender externo e PERSON resolvida quando houver;
-- texto;
-- reply/mention metadata;
-- routing action/reason codes;
-- se Amora respondeu.
-
-Isso **não** consolida automaticamente todo grupo/DM em Memory ou Relationship Graph. Mensageria entra com `memory_consolidation=false` e `relationship_learning=false` até existir policy explícita futura.
-
-### 6.5 Outbound
-
-Core produz `OutboundMessage` normalizado e fila persistente. Worker faz claim/ack bounded.
-
-Quando possível, resposta usa native reply/quote para a mensagem exata que chamou Amora, reduzindo ambiguidade em grupo.
-
-### 6.6 Credencial de worker
-
-Nova credencial:
-
-```text
-AMORA_MESSAGING_SERVICE_TOKEN
-→ role messaging
-→ somente GET/POST /v1/messaging/worker/**
-```
-
-Ela deve ser diferente do admin e do voice service token; em cloud exige no mínimo 32 bytes.
-
-Worker comprometido não recebe Memory, World, Actions, People Settings, operator audit, Console ou `/v1/state`.
-
-## 7. PlatformPresenceController — ATIVO
-
-Core separa intenção de presença de transporte físico.
-
-Persistido:
-
-```text
-desired_connected
-check_requested
-generation
-```
-
-Reportado pelo worker:
-
-```text
-DISCONNECTED
-→ CONNECTING
-→ CONNECTED
-↔ CHECKING
-→ DISCONNECTING
-→ DISCONNECTED
-```
-
-Após restart/troca de compute, estado físico anterior volta para `DISCONNECTED` com `CORE_RESTART_TRANSPORT_UNKNOWN`, mas `desired_connected` sobrevive. Amora não finge que um socket antigo ainda existe.
-
-`CHECK` permite connect/check/disconnect bounded quando a presença desejada permanente é false.
-
-**Limite atual:** o controller e APIs estão integrados; o binding conversacional específico de linguagem natural como `Amora, conecta no Discord` pode ser adicionado sobre essa fundação sem alterar workers/contrato. Não alegar conexão física enquanto worker real não estiver provisionado.
-
-## 8. Discord worker — IMPLEMENTADO / STAGING PENDENTE
-
-Worker isolado em `workers/discord/`:
-
-- Gateway v10 + REST v10;
-- heartbeat / Identify / Ready / Resume / reconnect;
-- stable Discord user ID;
-- guild/DM;
-- mentions;
-- message reference/reply;
-- attachment metadata;
-- outbound native reply;
-- `allowed_mentions.parse=[]` para evitar ping acidental gerado pelo modelo;
-- mensagens de bots/self descartadas;
-- presença controlada pelo Core.
-
-Staging real ainda exige:
-
-- bot/token real;
-- intents/permissões corretas;
-- `MESSAGE_CONTENT` quando aplicável;
-- guild/canais de teste;
-- prova física de reconnect/DM/grupo/reply.
-
-Código implementado não equivale a bot já conectado.
-
-## 9. WhatsApp linked-device worker — IMPLEMENTADO / NÃO-OFICIAL / STAGING PENDENTE
-
-Worker isolado em `workers/whatsapp/` para a semântica desejada de uma conta/número normal como linked device.
-
-Estado atual:
-
-- dependência direta pinada em `@whiskeysockets/baileys@7.0.0-rc14`;
-- CI instala o pacote, confirma versão, importa o worker real e executa audit HIGH;
-- só `messages.upsert type=notify` vira input social;
-- upsert com `requestId` é descartado como defesa adicional;
-- full history sync desabilitado;
-- auth state fica fora do Git/log/imagem;
-- QR/pairing secret vai somente para auth dir privado;
-- disconnect normal preserva sessão; não usa logout;
-- quoted reply usa mensagem original em cache bounded quando disponível.
-
-Baileys continua integração não-oficial em relação à Meta Cloud API e possui risco operacional/de conta.
-
-`useMultiFileAuthState` está aceito somente para bootstrap/staging. Antes de deploy definitivo, mover auth state para backend durável/transacional e provar reconnect/offline sync com conta dedicada.
-
-## 10. Gates do Passo 2
-
-PR #95 foi mergeado somente após o mesmo SHA passar:
-
-- Core Python 3.11;
-- Core Python 3.12;
-- Core Python 3.13;
-- Core Python 3.14;
-- Pre-deploy security;
+4. `docs/roadmap/VERSIONS.md`;
+5. canons especializados relevantes;
+6. ADRs relevantes;
+7. este `PROJECT_STATE.md`;
+8. código, schemas, testes, PRs e CI atuais.
+
+Se checkpoint e código divergirem, isso é dívida do CH atual e deve ser corrigido antes de abrir nova frente grande.
+
+## 2. Invariantes
+
+- **Amora não é um LLM.** O Core possui identidade, memória, relações, emoção, world/self state, `DialoguePlan`, policy/authority e observação de efeitos.
+- Providers/modelos são capacidades substituíveis por task class.
+- `AVAILABLE != KNOWN` para assets perceptuais.
+- ação física só existe depois de capability/authority/policy/validation local.
+- `WEB_SAFARI != DEVICE_A15`.
+- CI verde não substitui certificação física real.
+- objetivo de custo continua **R$ 0 sempre que praticável**.
+- nenhuma chave/token/segredo vai para Git, prompt ou log.
+
+## 3. CH1 — CONSOLIDADO
+
+A antiga pilha empilhada foi promovida em ordem e recertificada em cada base nova:
+
+- PR #116 — capability awareness + perceptual asset memory canon;
+- PR #117 — canonical capability registry;
+- PR #118 — capability projection para contexto cognitivo;
+- PR #119 — ações cognitivas grounded nas capabilities projetadas;
+- PR #120 — semantic response modality competition;
+- PR #121 — persistent perceptual expression memory / CPF.
+
+A PR #115, linha antiga de sticker expressions, foi **fechada sem merge** por estar supersedida por #120/#121.
+
+Durante a promoção da #121, o Core CI encontrou cinco testes antigos hardcodando schema `15`. A migration para schema 16 estava correta. Os testes foram corrigidos para depender de `amora.storage.LATEST_SCHEMA_VERSION`, removendo a dívida em vez de trocar apenas `15 -> 16`. No head final da #121 passaram:
+
+- Core tests;
+- Perceptual expression memory;
+- Response modality competition;
 - Cloud container contracts;
-- regressões completas no container non-root/read-only;
-- Messaging workers;
-- import real do worker Baileys instalado;
-- adapter contract tests;
-- `npm audit --omit=dev --audit-level=high`.
+- Pre-deploy security.
 
-Também há regressão dedicada de audit/outbound/presence em libSQL remoto com troca de compute home.
+## 4. Capability Awareness — ATIVO
 
-## 11. Voz Web / Background Voice
-
-Web normal continua:
+Fluxo canônico:
 
 ```text
-WEB_SAFARI
-→ Core
-→ Fish Audio s2.1-pro-free + clone
-→ PCM incremental
-→ Safari
+Capability Registry
+→ capability projection/retrieval
+→ Decision / DialoguePlan
+→ policy + authority
+→ ActionBus / adapter
+→ Observation
 ```
 
-Background Voice enquanto Free Fire/outro app está foreground continua **NÃO IMPLEMENTADO / GATE FÍSICO PENDENTE**.
+O provider não inventa capability IDs, permissões, resultados ou poderes. Linguagem natural não é keyword gate de autoridade.
 
-Direção aprovada:
+## 5. Response Modality Competition — ATIVA
+
+Texto, expressão nativa/sticker e outras modalidades competem semanticamente antes da execução.
+
+Seleção de asset normal usa:
 
 ```text
-Safari Call Mode
-↕ WebRTC audio
-VoicePresenceBridge remoto
-→ VAD → STT → Core → TTS
-↕
-iPhone com outro app em foreground
+KNOWN ∩ AVAILABLE
 ```
 
-Não prometer always-on mic Web até spike físico passar.
+Catálogo nativo/IDs continuam autoridade local do adapter/Core; não são despejados no provider.
 
-## 12. Implementado mas ainda não vivendo completamente
+## 6. CPF perceptual persistente — ATIVO
 
-- `SessionSpeakerTracker`: pronto, sem upstream real de diarização; WhatsApp/Discord não dependem dele.
-- Core `EnergyVad`: dormente/legado enquanto Web usa VAD da superfície.
-- Avatar Core/Studio: existe, mas corpo/avatar final segue congelado.
+Schema 16 mantém memória perceptual de expressão persistente com identidade por plataforma/account/scope/tipo/native ID, fingerprint, semantic revision, contadores e provenance.
 
-## 13. Próxima ordem recomendada
+Estados atuais:
 
 ```text
-PASSO 1 — CONCLUÍDO
-✓ Web operator
-✓ Pessoas/Família
-✓ bindings privados
-✓ import/export
-✓ Living Console
-
-PASSO 2 — CONCLUÍDO EM CÓDIGO
-✓ PlatformMessagingContract
-✓ identity gate
-✓ unknown-DM quarantine antes da cognição
-✓ SocialAttentionRouter
-✓ bounded ConversationFloor
-✓ audit/history separado de Memory
-✓ outbound queue
-✓ Discord worker
-✓ WhatsApp linked-device worker isolado
-✓ PlatformPresenceController
-✓ scoped messaging service credential
-
-STAGING PASSO 2 — quando credenciais/contas estiverem disponíveis
-1. provisionar bot Discord e testar guild/DM/reply/reconnect
-2. provisionar conta WhatsApp dedicada e parear linked device
-3. substituir auth multi-file por storage produtivo
-4. provar reconnect/offline sync sem replay indevido
-5. opcional: ligar comandos conversacionais `conecta/desconecta/check` ao PresenceController
-
-PASSO 3 — próximo bloco de engenharia
-6. spike físico WebRTC Background Voice / Call Mode no iPhone + Free Fire
-7. se PASS, integrar Call Mode ao Web normal
-8. se FAIL, registrar limite Web; sem cliente nativo não prometer always-on mic
-
-DÍVIDA
-9. flatten da cognição guiado por replay
-10. SpeakerTracker somente com diarização real
+metadata_only
+pending_visual
+enriched
+stale
+failed
 ```
 
-## 14. Últimos merges relevantes
+A base atual já suporta:
 
-- PR #87 — Provider authority/expression — `c7c329c49b37db517a08e858ff22c7d64290b8aa`.
-- PR #88 — People Profiles + private bindings — `9c85d14be6f1d125869c058c4eb2725cf466deaa`.
-- PR #89 — checkpoint identity/messaging direction — `e39760260783b47f4e48a2c5f948463f47168529`.
-- PR #92 — Web People/Family Settings + operator + Console — `33b897def4a33708b0337bc96304628df89b8d24`.
-- PR #93 — checkpoint Passo 1 — `a81a8acebf186cbf87961208f8001fecc2716d78`.
-- PR #95 — Platform Messaging + social attention + audit + presence + Discord/WhatsApp workers — `1c6ef0b0b7b651adf3c5f0c5eefe8b20439931bd`.
+- descoberta/bootstrap por metadata fraca;
+- separação `AVAILABLE` x `KNOWN`;
+- persistência entre restarts;
+- `pending_visual()`;
+- `apply_visual_enrichment(expected_fingerprint)` com compare-and-set;
+- rejeição de resultado stale;
+- retry idempotente para mesmo fingerprint.
 
-Nenhum gate físico de Discord real, WhatsApp real, Background Voice/iPhone/Free Fire, visão ou corpo/avatar final é declarado PASS por inferência.
+**Limite explícito:** a Amora ainda não vê pixels de sticker. Metadata bootstrap não é visão real e não deve ser apresentada como tal.
+
+## 7. Duas visões diferentes
+
+### Perceptual Asset Vision — CH2
+
+Sticker/emoji/GIF/imagem pontual:
+
+```text
+asset relevante
+→ fetch seguro
+→ hash dos bytes reais
+→ multimodal structured analysis
+→ validação local
+→ CPF persistente
+→ reuso
+```
+
+Isso pode e deve existir antes da V1.1.
+
+### Continuous Environment Vision — V1.1
+
+```text
+screen/video/environment
+→ captura temporal
+→ scene change / keyframes
+→ OCR/objetos
+→ contexto temporal + áudio
+→ world/perception events
+```
+
+Não confundir as duas frentes.
+
+## 8. Provider baseline e candidatos
+
+Baseline até CH3 certificar mudança:
+
+- **social dialogue:** Qwen 3.8 27B;
+- **reasoning specialist:** GPT-OSS 120B;
+- **Mistral Large 4 via NVIDIA** (`mistralai/mistral-large-4-1t-a52b`): candidato para diálogo, reasoning e percepção multimodal.
+
+Se Mistral vencer diálogo, Qwen vira fallback. Se vencer reasoning, GPT-OSS vira fallback. Nenhuma promoção acontece por intuição ou porque um modelo parece mais permissivo.
+
+## 9. Recovery-before-fallback — DECISÃO CANÔNICA
+
+Fallback não reage ao primeiro timeout.
+
+```text
+primary
+→ classify failure
+→ bounded recovery
+→ circuit/cooldown
+→ fallback OR defer OR local degrade
+```
+
+Regras registradas em `docs/canon/PROVIDER_MESH.md` e ADR-0033:
+
+- transient network/timeout/5xx/capacity: retry bounded com backoff + jitter se o budget permitir;
+- `429`: respeitar `Retry-After`/budget;
+- auth/bad request determinístico: sem retry cego;
+- structured output inválido: repair/retry bounded;
+- circuit breaker com `HALF_OPEN`;
+- uma falha isolada não bane o primary;
+- diálogo tem budget curto;
+- perception job assíncrono prefere `DEFER` a fallback imediato;
+- depois do início de delivery validado, não costurar outro provider na mesma fala.
+
+A implementação/certificação completa dessa política pertence ao CH3; a decisão arquitetural já está congelada.
+
+## 10. Gates físicos/operacionais ainda abertos
+
+Não declarar PASS por inferência:
+
+- Discord real: guild/DM/reply/reconnect/intents/permissões;
+- WhatsApp linked-device real: pairing/reconnect/offline sync e storage auth produtivo;
+- Background Voice / WebRTC Call Mode com iPhone + app em foreground;
+- long-run voz/latência/térmica/barge-in;
+- Continuous Environment Vision V1.1;
+- corpo/avatar final.
+
+## 11. Próximos CHs
+
+Somente três movimentos grandes ficam ativos no mapa:
+
+### CH1 — Consolidar e organizar
+
+**Status:** `COMPLETED em código; documentação desta consolidação em fechamento.`
+
+Entregas: promover #116–#121, fechar #115 supersedida, corrigir schema-test debt, atualizar checkpoint/canon/roadmap/ADR.
+
+### CH2 — Visual Expression Enrichment
+
+**Status:** `NEXT`
+
+Entregar somente:
+
+```text
+pending_visual
+→ secure media resolver/fetch
+→ SHA-256 real
+→ multimodal provider
+→ strict CPF schema
+→ local validation
+→ CAS
+→ enriched
+```
+
+Inclui SSRF/MIME/size/animated formats, lease/idempotência, privacidade e retry/defer. Não puxar screen capture/OCR contínuo/avatar para este CH.
+
+### CH3 — Provider Certification + Resilience
+
+**Status:** `AFTER CH2`
+
+- replay A/B Qwen x Mistral no diálogo;
+- Mistral x GPT-OSS no reasoning;
+- conjunto fixo de assets para percepção;
+- pt-BR, personalidade, humor/palavrão contextual, adult-context permitido, assistantism, moralização/recusa indevida, grounding, latência, custo e structured output;
+- implementar/certificar recovery-before-fallback por task class;
+- promover Mistral somente onde vencer.
+
+## 12. Regra de fechamento de CH
+
+Nenhum CH futuro é `COMPLETED` até a mesma linha de entrega registrar:
+
+1. código/schema/testes integrados;
+2. CI aplicável verde;
+3. gates físicos ainda pendentes explicitamente;
+4. `PROJECT_STATE.md` atualizado;
+5. roadmap/canon/ADR afetados atualizados;
+6. próximo estado reduzido a no máximo três CHs ativos;
+7. nenhuma decisão crítica vivendo só no chat.
+
+ADR desta consolidação: `ADR-0033-ch1-continuity-perceptual-boundary-and-provider-recovery.md`.
