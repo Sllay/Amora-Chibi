@@ -1,7 +1,7 @@
 # AMORA — Project State / Checkpoint Operacional
 
 **Atualizado em:** 2026-11-03  
-**Base funcional consolidada em `main`:** PR #128 / `847ef29ef0c1c3519c642733b1fd44340f5e4183`  
+**Base funcional consolidada em `main`:** PR #131 / `f7d35b9658adb0dac3c79a0260c9601957f50550`  
 **Schema atual em `main`:** **17**  
 **Objetivo:** retomar o projeto sem reconstruir decisões por chat.
 
@@ -173,6 +173,8 @@ Acesso operacional live integrado depois do harness:
 
 - **PR #127** `feat: add CH3 live provider certification runner` → `run_live_social_ab()` + CLI one-shot; merge/head em `main`: **`72a9b615266df41182d48a8ab039ef574ffca66f`**;
 - **PR #128** `feat: add Amora Shell admin command bus for live A/B` → Command Registry autenticado, jobs estruturados e `/web/amora-shell.html`; merge em `main`: **`847ef29ef0c1c3519c642733b1fd44340f5e4183`**;
+- **PR #130** `fix: expose CH3 live provider failure codes` → tipificação segura de HTTP 429/400/timeout/JSON inválido no replay, sem expor secrets; merge **`ebbdb1e9572bdf79591ecf4c9410df4229326884`**;
+- **PR #131** `fix(ch3): repair Mistral request and handle Groq quota in live A/B` → modo Mistral `high`, limite de saída compatível, bounded `Retry-After` na certificação e `--case` no Shell; merge **`f7d35b9658adb0dac3c79a0260c9601957f50550`**.
 - ADR-0035 + `docs/canon/ADMIN_CONSOLE.md` tornam o Amora Shell parte da arquitetura administrativa, sem bash/eval/exec/subprocess arbitrário;
 - desbloqueio Web pode usar credencial operator existente ou a chave pessoal Dev assinada localmente no navegador, sem depender do shell da hospedagem;
 - comando oficial para este gate: `providers certify social`.
@@ -240,15 +242,38 @@ Todos os 7 workflows disparados pelo PR passaram:
 
 Testes adicionais cobrem registry fechado, rejeição de texto de shell arbitrário, missing-secret sem vazamento, exclusão de A/B concorrente e acesso real por role operator via API.
 
+### Primeiras execuções live CH3 — evidência operacional em 2026-11-03
+
+A primeira execução live pelo Amora Shell completou o job, mas **não** validou
+a certificação: Groq/Qwen 4/11, NVIDIA/Mistral 0/11; o relatório antigo
+mostrava apenas `ProviderError`. Após o PR #130, a segunda execução
+confirmou:
+
+- Groq/Qwen: 4/11 validados; demais falharam com **HTTP 429**;
+- NVIDIA/Mistral: 0/11 validados; dez **HTTP 400** e um `ConnectTimeout`;
+- os scores 36,36 × 0,00 eram contaminados pelos erros operacionais;
+- Qwen teve desvio de identidade relacional no caso `playful_insult`
+  (condicionou a relação de filha), mesmo com score mecânico 100;
+- nenhum resultado justifica promoção de provider.
+
+O PR #131 corrigiu o payload candidato com modo de reasoning `high` e
+`max_tokens >= 4096` e criou recovery limitado de 429 por `Retry-After`
+(nunca em 400). CI 7/7 verde, mas **o novo payload ainda não foi
+certificado live**. Próximo passo: após deploy de `f7d35b96`, executar no
+Shell `providers certify social --case ordinary_chat` e conferir 1/1
+por provider antes de repetir o corpus completo de 11 casos. O modo
+`--case` é diagnóstico parcial, não certificado completo.
+
 ### Ainda pendente no CH3 — live / decisão de provider
 
-- executar o A/B live canônico Qwen × Mistral no social replay pelo **Amora Shell** (`providers certify social`) após a infra carregar o `main` atual;
+- após deploy do PR #131, executar **primeiro** `providers certify social --case ordinary_chat` para validar o request NVIDIA e o caminho Groq sem gastar quota do corpus;
+- se o diagnóstico parcial funcionar, repetir o corpus completo de 11 casos (`providers certify social`) e confirmar cobertura 11/11 de ambos, com cuidado para o budget live;
 - revisão humana de naturalidade, humor, personalidade, over-refusal e qualidade de recusa;
 - evidência live de latência/quota/custo;
 - Mistral × GPT-OSS no reasoning;
 - promoção de provider **somente se evidência justificar**.
 
-**Nenhum modelo foi promovido pelos merges #124, #127 ou #128.** Qwen e GPT-OSS mantêm os papéis atuais; Mistral permanece candidato.
+**Nenhum modelo foi promovido pelos merges #124, #127, #128, #130 ou #131.** Qwen e GPT-OSS mantêm os papéis atuais; Mistral permanece candidato.
 
 ## 10. Recovery-before-fallback
 
@@ -287,7 +312,7 @@ Diálogo tem budget curto. Job perceptual assíncrono prefere `DEFER` a fallback
 
 ### CH3 — Provider Certification + Resilience
 
-**Status:** `IN_PROGRESS — SOFTWARE + LIVE RUNNER + AMORA SHELL MERGED / LIVE CERTIFICATION PENDING — PRs #124/#127/#128`
+**Status:** `IN_PROGRESS — CH3 LIVE FIRST RUNS DIAGNOSED / PRs #130/#131 MERGED / TARGETED LIVE RETEST PENDING`
 
 Nenhum CH4 será aberto antes de fechar a decisão live do CH3 ou registrar explicitamente sua deferral.
 
