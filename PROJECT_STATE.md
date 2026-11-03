@@ -1,9 +1,8 @@
 # AMORA — Project State / Checkpoint Operacional
 
 **Atualizado em:** 2026-11-03  
-**Base funcional consolidada em `main`:** PR #122 / `33041eadd145259539d55153830523731a622299`  
-**Schema em `main` antes da promoção do CH2:** **16**  
-**Schema do CH2 / PR #123:** **17**  
+**Base funcional consolidada em `main`:** PR #123 / `ac13f4d5a84dff2a908c47d28ccf4cf4a4c539af`  
+**Schema atual em `main`:** **17**  
 **Objetivo:** retomar o projeto sem reconstruir decisões por chat.
 
 ## 1. Fonte de verdade
@@ -77,18 +76,17 @@ Catálogo/IDs continuam autoridade local do Core/adapter.
 
 ## 6. CPF perceptual persistente
 
-Schema 16 em `main` já possuía memória perceptual persistente, bootstrap fraco por metadata, estados `metadata_only/pending_visual/enriched/stale/failed`, compare-and-set e reuso entre restarts.
+Schema 16 introduziu memória perceptual persistente, bootstrap fraco por metadata, estados `metadata_only/pending_visual/enriched/stale/failed`, compare-and-set e reuso entre restarts.
 
-CH2 sobe o contrato para schema **17** e adiciona content addressing, lease visual e percepção multimodal real.
+CH2 promoveu o contrato para schema **17** com content addressing, lease visual e percepção multimodal pontual real.
 
-## 7. CH2 — Visual Expression Enrichment — SOFTWARE COMPLETE
+## 7. CH2 — Visual Expression Enrichment — COMPLETED / MERGED
 
-Delivery PR:
+Delivery:
 
-- **#123** `feat: add content-addressed visual expression enrichment`;
-- branch: `feat/ch2-visual-expression-enrichment`;
-- schema: **17**;
-- estado do software: **COMPLETED / ready for promotion**;
+- **PR #123** `feat: add content-addressed visual expression enrichment`;
+- merge commit em `main`: **`ac13f4d5a84dff2a908c47d28ccf4cf4a4c539af`**;
+- schema atual: **17**;
 - certificação de código: `7ea117b512f1e10ad029897e1172c3f3902b1862`.
 
 ### Contrato entregue
@@ -162,6 +160,8 @@ O SHA `7ea117b512f1e10ad029897e1172c3f3902b1862` passou:
 - Cloud container contracts;
 - Pre-deploy security.
 
+Depois desse SHA houve apenas três commits de documentação antes do merge.
+
 ### Gates operacionais ainda abertos
 
 Não inferir PASS por CI:
@@ -171,7 +171,7 @@ Não inferir PASS por CI:
 - reconnect/permissões/intents do Discord em ambiente real;
 - validação física/operacional longa no dispositivo/infra alvo.
 
-Esses gates não bloqueiam o fechamento **software** do CH2; permanecem explicitamente pendentes.
+Esses gates continuam explicitamente pendentes; não reabrem o CH2 software.
 
 ## 8. Duas visões diferentes
 
@@ -199,14 +199,14 @@ screen/video/environment
 
 Não puxar V1.1 para dentro do CH2.
 
-## 9. CH3 — Provider Certification + Resilience — IN PROGRESS / STACKED
+## 9. CH3 — Provider Certification + Resilience — IN PROGRESS
 
 PR ativa:
 
 - **#124** `feat: add provider certification harness and Mistral Large 4 candidate`;
 - branch: `feat/ch3-provider-certification-resilience`;
-- base atual: branch do CH2;
-- merge bloqueado até promoção da #123.
+- dependência CH2 resolvida;
+- próximo passo: retarget/sync #124 para `main` e rodar full Core regression.
 
 Já implementado/certificado na branch do CH3:
 
@@ -225,7 +225,7 @@ Já implementado/certificado na branch do CH3:
 
 Ainda pendente no CH3:
 
-- após #123 entrar, retarget/sync #124 para `main`;
+- retarget/sync #124 para `main`;
 - full Core regression na base final;
 - A/B live Qwen x Mistral + revisão humana;
 - evidência live de latência/quota/custo;
@@ -264,11 +264,11 @@ Diálogo tem budget curto. Job perceptual assíncrono prefere `DEFER` a fallback
 
 ### CH2 — Visual Expression Enrichment
 
-**Status:** `SOFTWARE COMPLETE — PR #123 ready for promotion`
+**Status:** `COMPLETED / MERGED — PR #123 / ac13f4d5`
 
 ### CH3 — Provider Certification + Resilience
 
-**Status:** `IN_PROGRESS — PR #124 stacked on CH2`
+**Status:** `IN_PROGRESS — PR #124; retarget para main é o próximo passo`
 
 Nenhum CH4 será aberto antes de CH3 ser consolidado.
 

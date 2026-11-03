@@ -172,7 +172,9 @@ Documentação/decisão: `PROJECT_STATE.md`, `PROVIDER_MESH.md`, `PERCEPTUAL_ASS
 
 ### CH2 — Visual Expression Enrichment
 
-**Status:** `SOFTWARE COMPLETE — PR #123 READY FOR PROMOTION`
+**Status:** `COMPLETED / MERGED — PR #123 / ac13f4d5`
+
+Merge em `main`: `ac13f4d5a84dff2a908c47d28ccf4cf4a4c539af`.
 
 Objetivo entregue: transformar `pending_visual` em CPF realmente percebido por conteúdo.
 
@@ -226,13 +228,15 @@ Gates live ainda abertos e explicitamente separados:
 - sticker real Discord atravessando resolver/worker/Core/provider;
 - reconnect/intents/permissões do Discord em ambiente real.
 
+Esses gates permanecem operacionais e não reabrem o CH2 software.
+
 **Fora do CH2:** screen capture, vídeo contínuo, OCR temporal, avatar/corpo.
 
 ### CH3 — Provider Certification + Resilience
 
-**Status:** `IN_PROGRESS — PR #124 STACKED ON CH2`
+**Status:** `IN_PROGRESS — PR #124; CH2 DEPENDENCY RESOLVED / RETARGET TO MAIN NEXT`
 
-A infraestrutura de certificação já existe na branch do CH3, mas a promoção permanece bloqueada até #123 entrar em `main`.
+A infraestrutura de certificação já existe na branch do CH3. Como #123 já entrou em `main`, o bloqueio de dependência foi removido; a ação imediata agora é retarget/sync da #124 para `main` e full Core regression antes de qualquer promoção de provider.
 
 Implementado na #124:
 
@@ -247,7 +251,7 @@ Implementado na #124:
 - `CLOSED → OPEN → HALF_OPEN` com probe único;
 - ProviderRouter continua dono do ranking.
 
-Depois da promoção do CH2:
+Agora que CH2 foi promovido:
 
 ```text
 retarget #124 → main
