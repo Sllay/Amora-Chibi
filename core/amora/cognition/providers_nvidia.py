@@ -22,6 +22,8 @@ from .realization import realization_instruction
 
 _NVIDIA_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 _MISTRAL_LARGE_4_MODEL = "mistralai/mistral-large-4-1t-a52b"
+# Mistral reasoning tokens share max_tokens with the visible structured answer.
+_MISTRAL_COMPLETION_TOKEN_FLOOR = 4096
 
 
 class NvidiaMistralLarge4Provider:
@@ -75,7 +77,7 @@ class NvidiaMistralLarge4Provider:
                 "endpoint": self.API_URL,
                 "promotion_status": "not_promoted",
                 "structured_output_status": "endpoint_unverified",
-                "reasoning_effort": "none",
+                "reasoning_effort": "high",
             },
         )
 
@@ -132,8 +134,10 @@ class NvidiaMistralLarge4Provider:
             "stream": False,
             "temperature": 0.70,
             "top_p": 0.80,
-            "max_tokens": _dialogue_token_budget(context),
-            "reasoning_effort": "none",
+            # High reasoning is supported across published NVIDIA Mistral 4 contracts;
+            # some NIM runtimes reject "none" with HTTP 400.
+            "max_tokens": max(_MISTRAL_COMPLETION_TOKEN_FLOOR, _dialogue_token_budget(context)),
+            "reasoning_effort": "high",
         }
 
     async def _post_chat(
