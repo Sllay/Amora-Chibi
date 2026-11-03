@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from .groq_vision import GroqQwenVisionAnalyzer
 from .models import MessagingPlatform
 from .visual_enrichment import VisualEnrichmentError
 
@@ -29,8 +30,28 @@ class VisualDeferRequest(VisualAssetKey):
     retry_after_seconds: int = Field(default=60, ge=1, le=86_400)
 
 
+def configure_visual_analyzer(core) -> bool:
+    """Attach the default remote analyzer only when its secret is configured.
+
+    The visual queue remains valid without a remote provider: jobs defer instead
+    of making Core startup depend on an external API. Tests and future providers
+    may install another analyzer before route registration and are never replaced.
+    """
+
+    service = core.messaging.visual_enrichment
+    if service.analyzer is not None:
+        return True
+    candidate = GroqQwenVisionAnalyzer(core.secrets)
+    if not candidate.available:
+        return False
+    service.analyzer = candidate
+    return True
+
+
 def register_visual_enrichment_routes(app, core, require_auth) -> None:
     """Register the local authenticated worker boundary for one-shot asset vision."""
+
+    configure_visual_analyzer(core)
 
     @app.get("/v1/messaging/worker/visual", dependencies=[Depends(require_auth)])
     def visual_claim(
