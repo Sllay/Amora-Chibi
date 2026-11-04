@@ -503,3 +503,40 @@ O comando exige `--case` (um teste só), aceita corpora fechados
 Não tenta contornar recusas, não repete HTTP 400 automaticamente, não toca
 na decisão de promoção e não aciona a NVIDIA. Se quiser comparar as
 **falas naturais** depois, execute a certificação A/B usual.
+
+
+### Perguntas reflexivas em contexto — sem liberar follow-up genérico
+
+Uma falha anterior da `SOCIAL_NUANCE4_V1` em
+`adult_relationship_subtext` foi identificada com precisão pelo comando
+`providers diagnose groq`: `FOLLOWUP_NOT_AUTHORIZED` com
+`validation_failure_detail=terminal_question_mark`. Isso indica que o
+Groq terminou uma fala com `?`, e não que recusou o conteúdo sexual.
+O texto da fala rejeitada não foi capturado no relatório; não é
+possível julgar sua qualidade semântica.
+
+O Core agora reconhece `confuso/confusa` como estado de desabafo.
+Quando existe histórico de conversa pertinente **e** o interlocutor
+pergunta explicitamente se Amora entendeu/sacou a ideia, o DialoguePlan
+pode declarar `allow_reflective_question=true` e
+`closing_mode=natural`, mantendo `ask_followup=false`. O realizador
+fica livre para concluir em afirmação ou uma pergunta curta que confira
+a interpretação. O validador aceita **somente uma interrogação final**
+dentro dessa autorização e de atos `respond_to_disclosure` ou
+`answer_question`; ainda rejeita pergunta extra, `ask_followup`
+fora do plano, oferta de ajuda não solicitada, moves não autorizados,
+textos muito longos e falas fora do perfil/contexto. Isso não garante
+semanticamente que toda pergunta permitida seja boa: continua necessária
+revisão humana.
+
+**Não** aplica uma permissão geral para perguntas, não altera dados
+privados ou o PrivacyGate, não força interrogação nem altera o provider
+promovido. Teste recomendado após o deploy:
+
+```text
+providers diagnose groq --suite nuance4 --case adult_relationship_subtext
+```
+
+Se `validated=true`, execute uma comparação A/B apenas desse caso,
+para analisar a qualidade da resposta e não só o contrato:
+`providers certify social --suite nuance4 --case adult_relationship_subtext`.
