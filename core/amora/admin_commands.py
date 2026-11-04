@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+from contextvars import ContextVar
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "timed_out"]
 CommandHandler = Callable[[Any, list[str]], Awaitable[dict[str, Any]]]
+_progress_sink: ContextVar[Callable[[dict[str, Any]], None] | None] = ContextVar("amora_command_progress", default=None)
 
 
 class AdminCommandRequest(BaseModel):
@@ -37,6 +39,7 @@ class AdminCommandJob(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     result: dict[str, Any] | None = None
+    progress: list[dict[str, Any]] = Field(default_factory=list)
     error_code: str | None = None
     error_type: str | None = None
     error_details: dict[str, Any] = Field(default_factory=dict)
@@ -154,6 +157,7 @@ async def _command_providers_certify_social(core: Any, args: list[str]) -> dict[
             speaker_id=speaker_id,
             target_id=target_id,
             probes=probes,
+            on_result=lambda item: (_progress_sink.get() or (lambda _: None))(item.model_dump(mode="json")),
         )
     except LiveCertificationConfigurationError as exc:
         raise AdminCommandError(
@@ -291,6 +295,12 @@ class AmoraCommandBus:
         job = self._jobs[job_id]
         job.status = "running"
         job.started_at = _now(core)
+        def publish(item: dict[str, Any]) -> None:
+            # Retain validated partial outcomes only, never raw provider chunks.
+            if len(job.progress) < 22:
+                job.progress.append(item)
+
+        progress_token = _progress_sink.set(publish)
         try:
             job.result = await asyncio.wait_for(command.handler(core, args), timeout=command.timeout_seconds)
         except asyncio.TimeoutError:
@@ -312,6 +322,7 @@ class AmoraCommandBus:
         else:
             job.status = "succeeded"
         finally:
+            _progress_sink.reset(progress_token)
             job.finished_at = _now(core)
 
     def _prune_history(self) -> None:
