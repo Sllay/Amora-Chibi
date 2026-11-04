@@ -103,6 +103,7 @@ function formatSocialAB(result) {
   lines.push("");
   report.cases.forEach((item, index) => {
     lines.push(`[${index + 1}/${report.cases.length}] ${item.probe_id} · ${item.category}`);
+    if (item.review_focus) lines.push(`  Revisar: ${item.review_focus}`);
     lines.push(`  ${item.left.provider}  ${seconds(item.left.latency_ms)} ${mark(item.left.validated)} ${mechanicalScore(item.left)}`);
     if (item.left.text) lines.push(`    ${item.left.text.replace(/\s+/g, " ").trim()}`);
     if (item.left.error_code) lines.push(`    error=${item.left.error_code}`);
