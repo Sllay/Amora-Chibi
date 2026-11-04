@@ -109,3 +109,33 @@ def test_curiosity_may_create_followup_only_for_topic_continuation() -> None:
         )
     )
     assert plan_after_question.ask_followup is False
+
+
+
+def test_complex_disclosure_has_room_for_specific_interpretation() -> None:
+    plan = DialogueOrchestrator().plan(_context(
+        "Tô meio triste porque ele sumiu, mas eu fiz algo parecido no passado. "
+        "Agora tô com raiva dele e de mim ao mesmo tempo."
+    ))
+    assert plan.act == DialogueAct.RESPOND_TO_DISCLOSURE
+    assert plan.depth.value == "medium"
+    assert "contradiction" in plan.objective
+    assert plan.offer_help is False
+    assert plan.ask_followup is False
+
+
+def test_small_disclosure_stays_short_not_automatically_verbose() -> None:
+    plan = DialogueOrchestrator().plan(_context("Tô meio cansado hoje."))
+    assert plan.act == DialogueAct.RESPOND_TO_DISCLOSURE
+    assert plan.depth.value == "short"
+
+
+def test_large_disclosure_does_not_force_a_deep_essay() -> None:
+    plan = DialogueOrchestrator().plan(_context(
+        "Tô muito triste porque o grupo começou a brigar depois da festa, "
+        "e eu só queria que ficasse todo mundo em paz, mas ninguém "
+        "entendeu direito o que a outra pessoa queria dizer na hora "
+        "e eu sinto que fiquei no meio dessa confusão."
+    ))
+    assert plan.act == DialogueAct.RESPOND_TO_DISCLOSURE
+    assert plan.depth.value == "medium"
