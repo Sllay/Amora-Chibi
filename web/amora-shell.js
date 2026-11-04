@@ -91,7 +91,17 @@ function formatSocialAB(result) {
 
 function formatJob(job) {
   if (job.status === "queued") return `amora> ${job.command}\n[queued] aguardando execução…`;
-  if (job.status === "running") return `amora> ${job.command}\n[running] executando dentro do Core…`;
+  if (job.status === "running") {
+    const progress = Array.isArray(job.progress) ? job.progress : [];
+    const lines = [`amora> ${job.command}`, `[running] ${progress.length} resposta(s) concluída(s)`];
+    for (const item of progress) {
+      lines.push(`[${item.probe_id}] ${item.provider} · ${seconds(item.latency_ms)} · ${item.validated ? "✓" : "✗"}`);
+      if (item.text) lines.push(`  ${String(item.text).replace(/\\s+/g, " ").trim()}`);
+      if (item.error_code) lines.push(`  error=${item.error_code}`);
+    }
+    lines.push("Aguardando próxima resposta…");
+    return lines.join("\\n");
+  }
   if (job.status === "timed_out") return `amora> ${job.command}\n[timeout] ${job.error_code || "COMMAND_TIMEOUT"}`;
   if (job.status === "failed") {
     const details = job.error_details && Object.keys(job.error_details).length
