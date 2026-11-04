@@ -278,7 +278,7 @@ async def test_mistral_sse_reassembles_visible_json_without_reasoning(tmp_path: 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["accept"] == "text/event-stream"
         assert json.loads(request.content)["stream"] is True
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text="\\n\\n".join(events))
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text="\n\n".join(events))
 
     original_client = httpx.AsyncClient
     def mock_client(*args, **kwargs):
