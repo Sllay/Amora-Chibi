@@ -21,7 +21,7 @@ from amora.cognition import (
 )
 from amora.conversation import ConversationEngine, ConversationStore
 from amora.emotion import EmotionEngine, EmotionStore
-from amora.events import AsyncEventBus
+from amora.events import AsyncEventBus, PrivacyScope
 from amora.identity import (
     DeviceIdentity,
     DeviceTrust,
@@ -39,7 +39,7 @@ from amora.messaging import (
     PlatformPresenceController,
     SocialAttentionRouter,
 )
-from amora.models import ModelRouter
+from amora.models import ModelRouter, TaskClass
 from amora.observability import configure_logging
 from amora.operations import OperationMonitor
 from amora.pairing import PairingManager
@@ -343,6 +343,12 @@ class AmoraCore:
             and self.secrets.get("CLOUDFLARE_ACCOUNT_ID") is not None
         )
         openrouter_provider = self.models.descriptor("openrouter")
+        social_candidates = self.models.ranked_candidates(
+            TaskClass.SOCIAL_DIALOGUE,
+            privacy_scope=PrivacyScope.PERSONAL,
+            remote_processing_allowed=True,
+            require_structured_output=True,
+        )
         return {
             "status": "ok" if integrity == "ok" else "degraded",
             "version": __version__,
@@ -385,6 +391,7 @@ class AmoraCore:
             "active_sessions": self.database.active_session_count(self.clock.now()),
             "primary_person": bk.id if bk else None,
             "model_providers_registered": self.models.provider_count,
+            "social_primary_provider": social_candidates[0].name if social_candidates else "none",
             "model_provider_names": [item.name for item in self.models.descriptors()],
             "social_participant_count": len(self.social.scene.participants),
             "social_active_addressee": self.social.scene.active_addressee,
