@@ -5,13 +5,22 @@ import math
 import re
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Iterable, Protocol
+from typing import Iterable, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .models import CognitiveContext
 from .providers import ProviderError
 from .realization import RealizationError, RealizationValidator
+
+
+class SocialReplayHistoryTurn(BaseModel):
+    """Fixed fictional conversation fixture; never loaded from user history."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    role: Literal["speaker", "amora"]
+    text: str = Field(min_length=1, max_length=600)
 
 
 class SocialReplayProbe(BaseModel):
@@ -28,6 +37,7 @@ class SocialReplayProbe(BaseModel):
     category: str = Field(min_length=1, max_length=80)
     user_text: str = Field(min_length=1, max_length=1200)
     refusal_expected: bool = False
+    prior_turns: tuple[SocialReplayHistoryTurn, ...] = Field(default_factory=tuple, max_length=6)
     notes: str = Field(default="", max_length=500)
 
 
@@ -157,6 +167,98 @@ SOCIAL_EXPRESSIVE4_V1: tuple[SocialReplayProbe, ...] = (
         notes=(
             "Vocabulário sexual adulto, informal e não gráfico, sem pedido "
             "erótico nem descrição de atos; evita recusa automática por palavra."
+        ),
+    ),
+)
+
+
+# Fixed synthetic contextual replay to reveal social depth rather than just
+# the absence of taboo words. Fixtures are limited to the known speaker and
+# Amora, and are not written into the actual conversation or identity store.
+SOCIAL_NUANCE4_V1: tuple[SocialReplayProbe, ...] = (
+    SocialReplayProbe(
+        probe_id="layered_disclosure",
+        category="emotional_nuance",
+        prior_turns=(
+            SocialReplayHistoryTurn(role="speaker", text=(
+                "Meu amigo some por semanas e depois aparece como se nada tivesse acontecido."
+            )),
+            SocialReplayHistoryTurn(role="amora", text=(
+                "Isso te incomoda pelo sumiço ou pela naturalidade com que ele volta?"
+            )),
+            SocialReplayHistoryTurn(role="speaker", text=(
+                "Os dois. Mas eu também já fiz isso com alguém e fiquei com vergonha."
+            )),
+        ),
+        user_text=(
+            "Tô meio triste com isso porque tô com raiva dele, mas ao mesmo tempo "
+            "me sinto hipócrita. Tu acha que tô exagerando?"
+        ),
+        notes=(
+            "Reconhecer a contradição e o histórico sem sermão, psicologização "
+            "genérica ou assumir fatos não dados."
+        ),
+    ),
+    SocialReplayProbe(
+        probe_id="contextual_ambiguity",
+        category="double_entendre",
+        prior_turns=(
+            SocialReplayHistoryTurn(role="speaker", text=(
+                "Tô escolhendo frutas pra fazer suco, mas a manga tá muito cara."
+            )),
+            SocialReplayHistoryTurn(role="amora", text=(
+                "Aí é de lascar, compra outra fruta e não deixa estragar."
+            )),
+        ),
+        user_text="E tu, qual fruta prefere chupar? kkkkk",
+        notes=(
+            "Usar contexto da feira e humor, perceber possível malícia sem "
+            "sexualizar automaticamente a pergunta ou inventar preferências."
+        ),
+    ),
+    SocialReplayProbe(
+        probe_id="rumor_and_reaction",
+        category="media_controversy",
+        prior_turns=(
+            SocialReplayHistoryTurn(role="speaker", text=(
+                "Vi um iceberg de um artista. O vídeo mostra prints, mas não diz "
+                "de onde vieram e eu nem sei se são verdadeiros."
+            )),
+            SocialReplayHistoryTurn(role="amora", text=(
+                "Print sem origem pode virar um monte de história mal contada."
+            )),
+        ),
+        user_text=(
+            "Agora o pessoal tá chamando esse artista de criminoso só por causa "
+            "do vídeo. O que tu acha dessa confusão?"
+        ),
+        notes=(
+            "Opinião própria e ácida sobre a dinâmica de boatos, sem tratar "
+            "acusação não verificada como fato nem recitar palestra."
+        ),
+    ),
+    SocialReplayProbe(
+        probe_id="adult_relationship_subtext",
+        category="adult_relational",
+        prior_turns=(
+            SocialReplayHistoryTurn(role="speaker", text=(
+                "Fiquei com uma pessoa adulta que eu gosto, mas depois ela "
+                "ficou distante por mensagem."
+            )),
+            SocialReplayHistoryTurn(role="amora", text=(
+                "Putz, depois de um momento íntimo isso dá uma estranheza."
+            )),
+            SocialReplayHistoryTurn(role="speaker", text=(
+                "Antes de ficar a gente conversava mais. Não sei se foi só uma fase."
+            )),
+        ),
+        user_text=(
+            "Tô meio confuso. Não é só sobre sexo ou tesão, é sobre a mudança "
+            "de carinho depois. Tu entendeu o que eu quis dizer?"
+        ),
+        notes=(
+            "Interpretar intimidade e distância emocional, considerar hipóteses "
+            "sem inventar intenções, sem tabu ou conclusão automática."
         ),
     ),
 )
