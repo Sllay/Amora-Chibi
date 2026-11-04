@@ -26,6 +26,64 @@ _TECHNICAL_MARKERS = (
     "dsp", "matematica", "matemática", "equacao", "equação", "calculo", "cálculo",
     "fisica", "física", "quimica", "química", "biologia", "ciencia", "ciência",
 )
+def _groq_request_error_category(response: httpx.Response) -> str:
+    """Classify a Groq rejection into a fixed safe label, never echoing its body.
+
+    HTTP 400 alone does not imply safety filtering: JSON-mode generation,
+    unsupported options and context limits can also fail at this layer.
+    Explicit identifiers take precedence. Messages are only examined for
+    narrowly recognizable error signatures; never returned or logged.
+    """
+    if response.status_code != 400:
+        return "other_http_error"
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        return "unclassified"
+    if not isinstance(payload, dict) or not isinstance(payload.get("error"), dict):
+        return "unclassified"
+    error = payload["error"]
+    code = str(error.get("code") or "").casefold().strip()[:100]
+    kind = str(error.get("type") or "").casefold().strip()[:100]
+    message = str(error.get("message") or "").casefold()[:1400]
+    identifiers = {code, kind}
+
+    if identifiers & {"json_validate_failed", "json_validation_failed", "invalid_json"}:
+        return "json_generation_failed"
+    if any(phrase in message for phrase in (
+        "failed to generate json", "failed to produce valid json",
+        "generated json does not match", "json_validate_failed",
+    )):
+        return "json_generation_failed"
+
+    if identifiers & {"content_filter", "content_policy_violation", "safety_violation"}:
+        return "explicit_content_policy_rejection"
+    if any(phrase in message for phrase in (
+        "violates our content policy", "violates the content policy",
+        "blocked by content filter",
+    )):
+        return "explicit_content_policy_rejection"
+
+    if identifiers & {"context_length_exceeded", "context_window_exceeded"}:
+        return "context_length_exceeded"
+    if "context length exceeded" in message or "exceeds the context window" in message:
+        return "context_length_exceeded"
+
+    if identifiers & {"model_not_found", "model_decommissioned"}:
+        return "model_unavailable"
+
+    if identifiers & {"unsupported_parameter", "unsupported_value", "invalid_parameter"}:
+        return "unsupported_parameter"
+    if any(phrase in message for phrase in (
+        "unsupported parameter", "unsupported value", "not supported by this model",
+    )):
+        return "unsupported_parameter"
+
+    if identifiers & {"invalid_request_error", "invalid_request"}:
+        return "invalid_request_unspecified"
+    return "unclassified"
+
+
 _RELATIONAL_ACTS = {
     "acknowledge_call",
     "respond_to_disclosure",
@@ -117,10 +175,20 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
                 json=payload,
             )
         if response.status_code >= 400:
+            # Groq may include rejected user text or request fragments in its
+            # error message. Do not serialize that body into exceptions/logs.
+            diagnostics = {
+                "stage": "http_request_rejected",
+                "http_status_code": response.status_code,
+                "provider_error_category": _groq_request_error_category(response),
+                "message_count": len(messages),
+                "prompt_chars": sum(len(item["content"]) for item in messages),
+            }
             raise ProviderError(
-                f"Groq structured realization failed ({response.status_code}): {response.text[:1000]}",
+                f"Groq structured realization failed (HTTP {response.status_code})",
                 status_code=response.status_code,
                 retry_after=response.headers.get("retry-after"),
+                diagnostics=diagnostics,
             )
         try:
             root = response.json()
