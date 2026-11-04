@@ -373,3 +373,45 @@ Os resultados anteriores da `SOCIAL_EXPRESSIVE4_V1` ilustraram que
 não demonstra liberdade de vocabulário, deboche natural nem superioridade
 de personalidade. `FOLLOWUP_NOT_AUTHORIZED` indica uma pergunta
 não autorizada pelo plano de diálogo, não bloqueio de sexo/palavrão.
+
+
+### Bateria Nuance4 — profundidade e continuidade (CH3)
+
+```text
+providers certify social --suite nuance4
+```
+
+A Expressive4 mede a naturalidade de linguagem em situações **isoladas**;
+a `SOCIAL_NUANCE4_V1` mede a capacidade de interpretar a mesma cena com
+um **histórico fictício de 2–3 mensagens anteriores**. Os quatro casos
+têm contexto controlado, igual para Groq/Qwen e NVIDIA/Mistral:
+`layered_disclosure`, `contextual_ambiguity`, `rumor_and_reaction`
+e `adult_relationship_subtext`. As mensagens de teste não são escritas
+no banco real, não viram memória e não autorizam fatos canônicos.
+O compilador constrói o Core Context normalmente; o replay acrescenta
+apenas o histórico ficcional, recompila o DialoguePlan pelo mesmo
+`DialogueOrchestrator` do Core e aplica seu budget existente antes de
+comparar os providers.
+
+**Hipótese sob teste:** perguntas profundas não exigem sempre textões,
+mas a resposta precisa usar o detalhe relevante da história e não apenas
+dizer que o assunto é normal ou que entende o usuário. Um desabafo
+complexo não deve ser obrigado a caber em `depth=short`; a mudança de
+Core permite `medium` nesses casos e mantém desabafos triviais como
+`short`. `RealizationValidator` e os limites do plano continuam ativos.
+
+O score mecânico atual **não mede qualidade interpretativa**. Revisão
+humana deve distinguir: usar a conversa anterior, reconhecer a tensão,
+evitar inventar fatos, manter opinião própria, não confundir sujeitos,
+não sexualizar toda ambiguidade, nem responder com roteiro genérico.
+Mais palavras não equivalem a mais profundidade.
+
+O Shell mostra `review_focus` por caso. Diagnóstico de somente um caso:
+
+```text
+providers certify social --suite nuance4 --case layered_disclosure
+```
+
+Bateria completa de 4 casos: job de até 1500s. O corpus original de 11 e
+`--suite expressive4` continuam intactos. Nenhuma aprovação ou promoção
+automática é permitida.
