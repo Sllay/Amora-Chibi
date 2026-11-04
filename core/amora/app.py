@@ -16,6 +16,7 @@ from amora.cognition import (
     ContextCompiler,
     GeminiCognitiveProvider,
     GroqCognitiveProvider,
+    NvidiaMistralLarge4ProductionProvider,
     OpenRouterCognitiveProvider,
 )
 from amora.conversation import ConversationEngine, ConversationStore
@@ -211,6 +212,18 @@ class AmoraCore:
             events,
             operations=operations,
         )
+
+        # Social primary selected by the project owner: NVIDIA/Mistral Large 4.
+        # A missing NVIDIA key must not prevent Groq/Gemini fallback. Operators
+        # can roll back the social preference without changing code by setting
+        # AMORA_SOCIAL_PRIMARY=groq and restarting the service.
+        social_primary = os.getenv("AMORA_SOCIAL_PRIMARY", "mistral").strip().casefold()
+        if social_primary not in {"mistral", "groq"}:
+            raise ValueError("AMORA_SOCIAL_PRIMARY must be 'mistral' or 'groq'")
+        if social_primary == "mistral":
+            mistral_cognition = NvidiaMistralLarge4ProductionProvider(secrets)
+            if mistral_cognition.descriptor.available:
+                cognition.register_provider(mistral_cognition)
 
         groq_cognition = GroqCognitiveProvider(secrets)
         if groq_cognition.descriptor.available:
