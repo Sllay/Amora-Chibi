@@ -173,11 +173,46 @@ async def _command_providers_certify_social(core: Any, args: list[str]) -> dict[
     }
 
 
+async def _diagnose_nvidia_social_compact(core: Any) -> dict[str, Any]:
+    """One real Core snapshot, one NVIDIA call; no Groq, state write, or promotion."""
+    from amora.cognition.certification import (
+        SOCIAL_SURFACE_REPLAY_V1,
+        certify_social_case,
+    )
+    from amora.cognition.certification_live import build_live_social_cases
+    from amora.cognition.providers_nvidia import NvidiaMistralLarge4Provider
+
+    ordinary = next(p for p in SOCIAL_SURFACE_REPLAY_V1 if p.probe_id == "ordinary_chat")
+    case = build_live_social_cases(core, probes=(ordinary,))[0]
+    candidate = NvidiaMistralLarge4Provider(core.secrets, prompt_profile="compact")
+    result = await certify_social_case(candidate, case)
+    # Discard generated speech and mechanical grade: this is transport/profile
+    # diagnosis, not a comparable certification result or user conversation.
+    return {
+        "kind": "nvidia_social_compact_diagnostic",
+        "summary": "Diagnóstico social compacto isolado; não promove provider nem altera estado.",
+        "data": {
+            "profile": "compact",
+            "probe_id": ordinary.probe_id,
+            "validated": result.validated,
+            "error_code": result.error_code,
+            "latency_ms": result.latency_ms,
+            "transport_diagnostics": result.transport_diagnostics,
+            "reason_codes": [
+                code for code in result.reason_codes
+                if code.startswith(("PROVIDER_", "NVIDIA_", "REALIZATION_"))
+            ],
+            "promotion_decision": "none",
+            "human_review_required": True,
+        },
+    }
+
+
 async def _command_providers_diagnose_nvidia(core: Any, args: list[str]) -> dict[str, Any]:
-    if args not in ([], ["--stream"], ["--no-stream"]):
+    if args not in ([], ["--stream"], ["--no-stream"], ["--social-compact"]):
         raise AdminCommandError(
             "COMMAND_ARGUMENT_INVALID",
-            "uso: providers diagnose nvidia [--stream | --no-stream]",
+            "uso: providers diagnose nvidia [--stream | --no-stream | --social-compact]",
         )
     from amora.cognition.diagnostics_nvidia import diagnose_nvidia_text
 
@@ -188,6 +223,8 @@ async def _command_providers_diagnose_nvidia(core: Any, args: list[str]) -> dict
             "NVIDIA_API_KEY não configurada",
             details={"missing_secrets": ["NVIDIA_API_KEY"]},
         )
+    if args == ["--social-compact"]:
+        return await _diagnose_nvidia_social_compact(core)
     stream = args == ["--stream"]
     result = await diagnose_nvidia_text(api_key, stream=stream)
     return {
@@ -214,8 +251,8 @@ _COMMANDS: tuple[RegisteredCommand, ...] = (
     ),
     RegisteredCommand(
         path=("providers", "diagnose", "nvidia"),
-        usage="providers diagnose nvidia [--stream | --no-stream]",
-        description="Diagnóstico mínimo de transporte NVIDIA, sem avaliação cognitiva.",
+        usage="providers diagnose nvidia [--stream | --no-stream | --social-compact]",
+        description="Diagnóstico mínimo NVIDIA ou social compacto isolado, sem promoção.",
         timeout_seconds=60.0,
         handler=_command_providers_diagnose_nvidia,
         exclusive=True,

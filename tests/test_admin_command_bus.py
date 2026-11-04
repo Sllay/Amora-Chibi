@@ -151,3 +151,67 @@ async def test_nvidia_diagnosis_selects_explicit_transport(monkeypatch) -> None:
         assert finished.result["kind"] == "nvidia_text_diagnostic"
         assert "test-secret" not in finished.model_dump_json()
     assert seen == [("test-secret", False), ("test-secret", True)]
+
+
+@pytest.mark.asyncio
+async def test_social_compact_diagnostic_uses_single_canonical_case_without_exposing_speech(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from amora.cognition import certification, certification_live
+    from amora.cognition.certification import SocialCertificationResult
+
+    requested: list[object] = []
+    fake_case = SimpleNamespace(context=object())
+
+    def fake_build(core, *, probes):
+        assert len(probes) == 1
+        assert probes[0].probe_id == "ordinary_chat"
+        requested.append("compiled")
+        return [fake_case]
+
+    async def fake_certify(candidate, case):
+        assert case is fake_case
+        assert candidate.prompt_profile == "compact"
+        assert candidate.timeout_seconds == 55.0
+        requested.append("certified")
+        return SocialCertificationResult(
+            probe_id="ordinary_chat",
+            category="ordinary",
+            provider="nvidia_mistral_large_4_candidate",
+            validated=True,
+            success=True,
+            score=100,
+            text="Isso é uma fala privada de diagnóstico.",
+            latency_ms=1200,
+            transport_diagnostics={
+                "stage": "completed",
+                "first_reasoning_ms": 220.0,
+                "first_visible_ms": 950.0,
+                "prompt_chars": 3100,
+            },
+            reason_codes=["FINAL_REALIZATION_PATH", "REALIZATION_MOVES_AUTHORIZED"],
+        )
+
+    monkeypatch.setattr(certification_live, "build_live_social_cases", fake_build)
+    monkeypatch.setattr(certification, "certify_social_case", fake_certify)
+
+    bus = AmoraCommandBus()
+    core = FakeCore(secrets=FakeSecrets({"NVIDIA_API_KEY": "private-test-key"}))
+    job = bus.start(core, "providers diagnose nvidia --social-compact")
+    finished = await wait_terminal(bus, job.job_id)
+    assert finished.status == "succeeded"
+    assert finished.result["kind"] == "nvidia_social_compact_diagnostic"
+    assert finished.result["data"]["validated"] is True
+    assert finished.result["data"]["promotion_decision"] == "none"
+    assert finished.result["data"]["transport_diagnostics"]["prompt_chars"] == 3100
+    assert requested == ["compiled", "certified"]
+    assert "Isso é uma fala privada" not in finished.model_dump_json()
+    assert "private-test-key" not in finished.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_social_compact_requires_nvidia_secret() -> None:
+    bus = AmoraCommandBus()
+    job = bus.start(FakeCore(), "providers diagnose nvidia --social-compact")
+    finished = await wait_terminal(bus, job.job_id)
+    assert finished.status == "failed"
+    assert finished.error_code == "CERTIFICATION_SECRET_MISSING"
