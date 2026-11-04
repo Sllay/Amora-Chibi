@@ -18,6 +18,16 @@ from amora.voice.cloud import FishGeminiVoiceBackend
 from amora.voice.local_amora import AmoraLocalVoiceRenderer, LocalVoiceUnavailable, MODEL_ID, NUM_STEPS, VOICE_ID
 
 
+# The shared security middleware has a 90s HTTP processing deadline.
+# NVIDIA/Mistral social generation may take 20-60+ seconds and its adapter's
+# independent safety cap (95s) cannot protect a synchronous Safari request.
+# Bound ONLY the Web turn's provider attempts below that deadline, reserving
+# time for Groq fallthrough, Core persistence and the HTTP reply. Do not
+# change the provider's broader certification limits or security middleware.
+WEB_PROVIDER_ATTEMPT_BUDGET_SECONDS = 65.0
+WEB_PROVIDER_TOTAL_BUDGET_SECONDS = 76.0
+
+
 class WebTextTurnRequest(BaseModel):
     text: str = Field(min_length=1, max_length=12000)
     speaker_id: str = "PERSON_BK"
@@ -172,6 +182,11 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
         metadata: dict[str, object] = {
             "speech_device_id": "WEB_SAFARI",
             "explicit_surface_target": "ENTITY_AMORA",
+            # The caller must finish before SecurityMiddleware's fixed HTTP
+            # timeout. This budget includes all social provider attempts;
+            # the first Mistral attempt cannot consume the whole request.
+            "provider_attempt_budget_seconds": WEB_PROVIDER_ATTEMPT_BUDGET_SECONDS,
+            "provider_total_budget_seconds": WEB_PROVIDER_TOTAL_BUDGET_SECONDS,
         }
         if request.test_mode:
             metadata.update(
