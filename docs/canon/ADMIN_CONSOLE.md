@@ -153,3 +153,21 @@ memory inspect ...
 Cada nova operação deve ter ownership explícito e não pode transformar o Shell em acesso genérico ao sistema operacional.
 
 Streaming de progresso por evento/SSE/WebSocket pode substituir polling quando houver necessidade real, preservando o mesmo contrato de job.
+
+
+### Progresso de certificação e NVIDIA SSE (CH3)
+
+O job `providers certify social` publica no campo `progress` de
+`GET /v1/operator/commands/{job_id}` cada **resultado de provider já
+validado ou falhado**, mesmo enquanto o outro provider está em execução.
+O Shell atualiza esse histórico por polling. Não transmite JSON incompleto
+ou texto de raciocínio antes da validação canônica. A execução A/B
+permanece sequencial e mantém a ordem alternada determinística.
+
+O adaptador candidato NVIDIA usa `stream=true` via SSE, agrega
+`choices[].delta.content` até concluir o JSON e ignora
+`reasoning_content`. O prazo de **55 segundos é total por chamada**
+(`asyncio.timeout`), não reiniciado quando chegam tokens. Streaming
+não garante redução da latência total nem conclusão em 55 segundos.
+A certificação inteira ainda tem limite de job de 300 segundos,
+independente dos deadlines individuais. Falhas não promovem provider.
