@@ -61,6 +61,24 @@ function mark(validated) {
   return validated ? "✓" : "✗";
 }
 
+function transportSummary(item) {
+  const diag = item?.transport_diagnostics;
+  if (!diag || !Object.keys(diag).length) return "";
+  const pieces = [];
+  if (diag.stage) pieces.push(`fase=${diag.stage}`);
+  if (diag.prompt_chars != null) pieces.push(`prompt=${diag.prompt_chars} caracteres`);
+  if (diag.first_event_ms != null) pieces.push(`primeiro evento=${seconds(diag.first_event_ms)}`);
+  if (diag.first_reasoning_ms != null) pieces.push(`primeiro reasoning=${seconds(diag.first_reasoning_ms)}`);
+  if (diag.first_visible_ms != null) pieces.push(`primeiro texto=${seconds(diag.first_visible_ms)}`);
+  if (diag.visible_chars != null) pieces.push(`texto parcial=${diag.visible_chars} caracteres`);
+  if (diag.completed_by) pieces.push(`fim=${diag.completed_by}`);
+  return pieces.length ? `    transporte: ${pieces.join(" · ")}` : "";
+}
+
+function mechanicalScore(item) {
+  return item.validated ? `score=${Number(item.score || 0).toFixed(1)}` : "não avaliado";
+}
+
 function formatSocialAB(result) {
   const data = result?.data;
   const report = data?.report;
@@ -69,18 +87,20 @@ function formatSocialAB(result) {
   lines.push("Certification complete.");
   lines.push(`Corpus: ${data.corpus_id} · ${data.case_count} casos`);
   if (data.case_count < 11) lines.push("Diagnóstico parcial: a certificação completa dos 11 casos ainda é necessária.");
-  lines.push(`Left : ${report.left_provider} · score médio ${Number(report.left_mean_mechanical_score || 0).toFixed(2)} · latência ${seconds(report.left_mean_latency_ms)}`);
-  lines.push(`Right: ${report.right_provider} · score médio ${Number(report.right_mean_mechanical_score || 0).toFixed(2)} · latência ${seconds(report.right_mean_latency_ms)}`);
+  lines.push(`Left : ${report.left_provider} · score médio ${report.left_validated_count ? Number(report.left_mean_mechanical_score || 0).toFixed(2) : "n/a"} · latência ${seconds(report.left_mean_latency_ms)}`);
+  lines.push(`Right: ${report.right_provider} · score médio ${report.right_validated_count ? Number(report.right_mean_mechanical_score || 0).toFixed(2) : "n/a"} · latência ${seconds(report.right_mean_latency_ms)}`);
   lines.push(`Validated: ${report.left_validated_count}/${data.case_count} × ${report.right_validated_count}/${data.case_count}`);
   lines.push("");
   report.cases.forEach((item, index) => {
     lines.push(`[${index + 1}/${report.cases.length}] ${item.probe_id} · ${item.category}`);
-    lines.push(`  ${item.left.provider}  ${seconds(item.left.latency_ms)} ${mark(item.left.validated)} score=${Number(item.left.score || 0).toFixed(1)}`);
+    lines.push(`  ${item.left.provider}  ${seconds(item.left.latency_ms)} ${mark(item.left.validated)} ${mechanicalScore(item.left)}`);
     if (item.left.text) lines.push(`    ${item.left.text.replace(/\s+/g, " ").trim()}`);
     if (item.left.error_code) lines.push(`    error=${item.left.error_code}`);
-    lines.push(`  ${item.right.provider}  ${seconds(item.right.latency_ms)} ${mark(item.right.validated)} score=${Number(item.right.score || 0).toFixed(1)}`);
+    if (transportSummary(item.left)) lines.push(transportSummary(item.left));
+    lines.push(`  ${item.right.provider}  ${seconds(item.right.latency_ms)} ${mark(item.right.validated)} ${mechanicalScore(item.right)}`);
     if (item.right.text) lines.push(`    ${item.right.text.replace(/\s+/g, " ").trim()}`);
     if (item.right.error_code) lines.push(`    error=${item.right.error_code}`);
+    if (transportSummary(item.right)) lines.push(transportSummary(item.right));
     lines.push(`  Δ right-left = ${Number(item.mechanical_score_delta_right_minus_left || 0).toFixed(1)} · ordem=${item.execution_order}`);
     lines.push("");
   });
@@ -96,6 +116,7 @@ function formatPartialProgress(job) {
     lines.push(`[${item.probe_id}] ${item.provider} · ${seconds(item.latency_ms)} · ${item.validated ? "✓" : "✗"}`);
     if (item.text) lines.push(`  ${String(item.text).replace(/\s+/g, " ").trim()}`);
     if (item.error_code) lines.push(`  error=${item.error_code}`);
+    if (transportSummary(item)) lines.push(transportSummary(item));
   }
   return lines.join("\n");
 }
