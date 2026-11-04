@@ -49,7 +49,7 @@ async def wait_terminal(bus: AmoraCommandBus, job_id, *, attempts: int = 20):
 
 def test_catalog_contains_only_explicit_commands() -> None:
     catalog = {item.path: item for item in command_catalog()}
-    assert set(catalog) == {"help", "status", "providers certify social"}
+    assert set(catalog) == {"help", "status", "providers certify social", "providers diagnose nvidia"}
     assert catalog["providers certify social"].exclusive is True
     assert catalog["providers certify social"].permission == "operator"
 
@@ -120,3 +120,34 @@ async def test_social_certification_rejects_unknown_case_without_provider_call()
     assert finished.status == "failed"
     assert finished.error_code == "CERTIFICATION_CASE_NOT_FOUND"
     assert "ordinary_chat" in finished.error_details["available_cases"]
+
+
+@pytest.mark.asyncio
+async def test_nvidia_diagnosis_requires_secret_without_exposing_values() -> None:
+    bus = AmoraCommandBus()
+    job = bus.start(FakeCore(), "providers diagnose nvidia")
+    finished = await wait_terminal(bus, job.job_id)
+    assert finished.status == "failed"
+    assert finished.error_code == "CERTIFICATION_SECRET_MISSING"
+    assert finished.error_details == {"missing_secrets": ["NVIDIA_API_KEY"]}
+
+
+@pytest.mark.asyncio
+async def test_nvidia_diagnosis_selects_explicit_transport(monkeypatch) -> None:
+    from amora.cognition import diagnostics_nvidia
+    seen = []
+
+    async def fake_diagnose(key: str, *, stream: bool):
+        seen.append((key, stream))
+        return {"stream": stream, "status_code": 200, "exact_match": True}
+
+    monkeypatch.setattr(diagnostics_nvidia, "diagnose_nvidia_text", fake_diagnose)
+    core = FakeCore(secrets=FakeSecrets({"NVIDIA_API_KEY": "test-secret"}))
+    bus = AmoraCommandBus()
+    for command in ("providers diagnose nvidia", "providers diagnose nvidia --stream"):
+        job = bus.start(core, command)
+        finished = await wait_terminal(bus, job.job_id)
+        assert finished.status == "succeeded"
+        assert finished.result["kind"] == "nvidia_text_diagnostic"
+        assert "test-secret" not in finished.model_dump_json()
+    assert seen == [("test-secret", False), ("test-secret", True)]

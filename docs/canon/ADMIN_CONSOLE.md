@@ -171,3 +171,18 @@ O adaptador candidato NVIDIA usa `stream=true` via SSE, agrega
 não garante redução da latência total nem conclusão em 55 segundos.
 A certificação inteira ainda tem limite de job de 300 segundos,
 independente dos deadlines individuais. Falhas não promovem provider.
+
+### Diagnóstico NVIDIA isolado (CH3)
+
+Use primeiro `providers diagnose nvidia` para reproduzir o payload textual
+mínimo do Amodex (`stream=false`, `reasoning_effort=high`,
+`max_tokens=4096`, `temperature=0.5`, `top_p=1`,
+penalidades zero, sem `response_format`). Depois use
+`providers diagnose nvidia --stream` para comparar o mesmo prompt com SSE.
+
+Cada comando tem prazo total de 55 segundos na chamada e retorna apenas
+HTTP status, tempo total, tempo até primeiro fragmento visível (SSE),
+resultado de comparação exata com `AMODEX_DIAG_TEXT_OK` e código seguro
+de falha. Não imprime chave, texto bruto ou raciocínio; não altera o
+Core nem promove provider. Evite repetir em sequência sem necessidade.
+A certificação social continua separada em `providers certify social`.
