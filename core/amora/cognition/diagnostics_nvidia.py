@@ -85,7 +85,15 @@ async def diagnose_nvidia_text(
                                     if sum(map(len, pieces)) > 16384:
                                         return _result(started, stream, status_code, first_content_ms, False, "CONTENT_LIMIT")
                     else:
-                        data = response.json()
+                        # httpx.AsyncClient.stream() exposes an unread response.
+                        # Response.json() raises ResponseNotRead until we consume it.
+                        # Bound body size to keep this diagnostic predictable.
+                        body = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            body.extend(chunk)
+                            if len(body) > 131_072:
+                                return _result(started, stream, status_code, first_content_ms, False, "CONTENT_LIMIT")
+                        data = json.loads(body)
                         content = data["choices"][0]["message"]["content"]
                         if not isinstance(content, str):
                             return _result(started, stream, status_code, first_content_ms, False, "INVALID_RESPONSE")
