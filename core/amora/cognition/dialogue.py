@@ -52,6 +52,9 @@ class DialoguePlan(BaseModel):
     depth: DialogueDepth = DialogueDepth.MEDIUM
     response_moves: list[str] = Field(default_factory=list)
     ask_followup: bool = False
+    # A single conversational check of an interpretation is different from
+    # initiating an unsolicited follow-up topic or asking for more information.
+    allow_reflective_question: bool = False
     offer_help: bool = False
     style_register: str = "casual"
     tone_tags: list[str] = Field(default_factory=list)
@@ -75,7 +78,10 @@ class DialogueOrchestrator:
     )
     _DISCLOSURE_RE = re.compile(
         r"\b(to|tou|estou|tava|estava)\s+(?:meio\s+|muito\s+|bem\s+)?"
-        r"(cansad|triste|feliz|ansios|estressad|irritad|animad|desanimad|com sono|com fome|mal|bem)"
+        r"(cansad|triste|feliz|ansios|estressad|irritad|animad|desanimad|confus|com sono|com fome|mal|bem)"
+    )
+    _REFLECTIVE_CONFIRMATION_RE = re.compile(
+        r"\b(?:tu|voce|vc)\s+(?:entendeu|entende|sacou|pegou)\b"
     )
     _QUESTION_START_RE = re.compile(
         r"^(por que|porque|pq|como|quando|onde|quem|qual|quais|quanto|quantos|quanta|quantas|"
@@ -276,6 +282,7 @@ class DialogueOrchestrator:
             disclosure_depth = self._depth(text)
             if disclosure_depth == DialogueDepth.DEEP:
                 disclosure_depth = DialogueDepth.MEDIUM
+            allow_reflective = self._reflective_confirmation_invited(context, text, raw)
             return DialoguePlan(
                 act=DialogueAct.RESPOND_TO_DISCLOSURE,
                 objective=(
@@ -286,13 +293,20 @@ class DialogueOrchestrator:
                 depth=disclosure_depth,
                 response_moves=["acknowledge_disclosure", "share_relational_reaction"],
                 ask_followup=False,
+                allow_reflective_question=allow_reflective,
                 offer_help=False,
                 style_register=style,
                 tone_tags=tone,
                 stance="present",
                 relational_attitude=attitude,
-                closing_mode="statement",
-                reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "PERSONAL_DISCLOSURE", "PRESENCE_BEFORE_HELP"],
+                closing_mode="natural" if allow_reflective else "statement",
+                reason_codes=[
+                    "LOCAL_DIALOGUE_ORCHESTRATOR", "PERSONAL_DISCLOSURE", "PRESENCE_BEFORE_HELP",
+                    *(
+                        ["REFLECTIVE_CONFIRMATION_INVITED"]
+                        if allow_reflective else []
+                    ),
+                ],
             )
 
         if self._DISAGREE_RE.search(text):
@@ -344,19 +358,24 @@ class DialogueOrchestrator:
             )
 
         if "?" in raw or self._QUESTION_START_RE.search(text):
+            allow_reflective = self._reflective_confirmation_invited(context, text, raw)
             return DialoguePlan(
                 act=DialogueAct.ANSWER_QUESTION,
                 objective="answer the user's question directly and stay in the current relationship/topic",
                 depth=self._depth(text),
                 response_moves=["answer_question", "relate_to_context_if_relevant"],
                 ask_followup=False,
+                allow_reflective_question=allow_reflective,
                 offer_help=False,
                 style_register=style,
                 tone_tags=tone,
                 stance="direct",
                 relational_attitude=attitude,
-                closing_mode="statement",
-                reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "DIRECT_QUESTION"],
+                closing_mode="natural" if allow_reflective else "statement",
+                reason_codes=[
+                    "LOCAL_DIALOGUE_ORCHESTRATOR", "DIRECT_QUESTION",
+                    *(["REFLECTIVE_CONFIRMATION_INVITED"] if allow_reflective else []),
+                ],
             )
 
         ask_followup = self._curiosity_high(context) and not self._last_amora_turn_was_question(context)
@@ -378,6 +397,21 @@ class DialogueOrchestrator:
                 "TOPIC_CONTINUATION",
                 "CURIOSITY_FOLLOWUP" if ask_followup else "NO_FORCED_FOLLOWUP",
             ],
+        )
+
+    def _reflective_confirmation_invited(
+        self, context: CognitiveContext, text: str, raw: str
+    ) -> bool:
+        """Use explicit conversational context, not random permission to ask.
+
+        Asking if Amora understood, with prior context, may warrant one brief
+        confirmation question. This is not an authorization for an unprompted
+        follow-up or a generic assistant-style offer.
+        """
+        return (
+            bool(context.recent_messages)
+            and raw.rstrip().endswith("?")
+            and bool(self._REFLECTIVE_CONFIRMATION_RE.search(text))
         )
 
     @staticmethod
