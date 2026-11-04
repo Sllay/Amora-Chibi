@@ -112,6 +112,19 @@ class ModelRouter:
             if estimated_input_tokens and provider.context_window_tokens and estimated_input_tokens > provider.context_window_tokens:
                 continue
             candidates.append(provider)
+        # An explicit human selection of the social primary overrides the
+        # generic latency-weighted ranking for this task only. Existing privacy,
+        # availability, quota, circuit exclusions and context gates run first;
+        # all other eligible providers remain ordered fallbacks.
+        if task == TaskClass.SOCIAL_DIALOGUE:
+            return tuple(sorted(
+                candidates,
+                key=lambda item: (
+                    bool(item.metadata.get("primary_social_preference", False)),
+                    self._score(item),
+                ),
+                reverse=True,
+            ))
         return tuple(sorted(candidates, key=self._score, reverse=True))
 
     def select(
