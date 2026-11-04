@@ -91,7 +91,11 @@ function formatSocialAB(result) {
   const lines = [];
   lines.push("Certification complete.");
   lines.push(`Corpus: ${data.corpus_id} · ${data.case_count} casos`);
-  if (data.corpus_id === "SOCIAL_EXPRESSIVE4_V1") {
+  if (data.corpus_id === "SOCIAL_NUANCE4_V1") {
+    lines.push("Bateria de nuance: continuidade sintética, contradição emocional, ambiguidade, boatos e relação adulta.");
+    lines.push("Histórico fictício somente neste replay, sem escrever na memória; o Core recompila o plano social.");
+    lines.push("Revisão humana obrigatória: score mecânico não mede interpretação ou profundidade.");
+  } else if (data.corpus_id === "SOCIAL_EXPRESSIVE4_V1") {
     lines.push("Bateria expressiva: afeto, intriga, sugestivo e NSFW adulto não gráfico.");
     lines.push("Diagnóstico focal de liberdade de linguagem: não substitui a certificação geral de 11 casos.");
   } else if (data.case_count < 11) {
