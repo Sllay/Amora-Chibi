@@ -540,3 +540,46 @@ providers diagnose groq --suite nuance4 --case adult_relationship_subtext
 Se `validated=true`, execute uma comparação A/B apenas desse caso,
 para analisar a qualidade da resposta e não só o contrato:
 `providers certify social --suite nuance4 --case adult_relationship_subtext`.
+
+
+### Mistral Large 4 — modelo principal de conversa social (ADR-0036)
+
+**Decisão explícita do responsável pelo projeto, 2026-11-04:** a Amora
+usa Mistral Large 4 na NVIDIA como realizador primário de
+`TaskClass.SOCIAL_DIALOGUE`. O Groq/Qwen permanece **fallback**. Não
+altera raciocínio técnico, personalidade e estado canônico do Core,
+permissões, privacidade, memória ou validação de fala.
+
+O Northflank deve manter `NVIDIA_API_KEY` como segredo
+(`AMORA_SECRET_NVIDIA_API_KEY` no ambiente, ou no SecretStore). Depois
+do deploy de `main`, execute o comando `status` no Shell e verifique
+`social_primary_provider: nvidia_mistral_large_4`.
+Se a chave NVIDIA não estiver disponível, o Groq/Qwen continua como
+primário elegível, sem falhar a inicialização.
+
+A configuração é:
+
+```text
+AMORA_SOCIAL_PRIMARY=mistral  # padrão, se houver NVIDIA_API_KEY
+AMORA_SOCIAL_PRIMARY=groq     # rollback operacional
+```
+
+Aplicar mudanças requer restart/redeploy. O valor desconhecido falha
+explicitamente durante bootstrap (sem seleção silenciosa).
+O adapter produtivo é separado do candidato de certificação e usa
+`reasoning_effort=low`, limite absoluto de 95s, limite de inatividade
+de 55s e **sem segunda tentativa silenciosa** no mesmo provider.
+Se houver falha, o fallback é executado pelo Core antes de liberar fala.
+O estado de produção não promete JSON Schema estrito do endpoint NVIDIA:
+todos os frames JSON continuam **validados localmente** antes da voz.
+
+O Shell `providers certify social` preserva seu comportamento de
+comparação isolada Groq × Mistral e `promotion_decision=none`;
+isso significa apenas que **a certificação não promove automaticamente**.
+A promoção real aqui decorre de decisão do proprietário registrada
+separadamente na ADR-0036.
+
+**Trade-off aceito:** a latência real de Mistral pode chegar a dezenas
+de segundos ou ultrapassar um minuto. Proxies HTTP e budgets da
+superfície podem expirar antes do limite do adapter. Isso não muda
+identidade nem autoriza reproduzir texto incompleto na voz.
