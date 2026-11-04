@@ -52,6 +52,7 @@ def test_catalog_contains_only_explicit_commands() -> None:
     assert set(catalog) == {"help", "status", "providers certify social", "providers diagnose nvidia"}
     assert catalog["providers certify social"].exclusive is True
     assert catalog["providers certify social"].permission == "operator"
+    assert catalog["providers certify social"].timeout_seconds == 480.0
 
 
 def test_registry_rejects_shell_text_instead_of_executing_it() -> None:
@@ -215,3 +216,25 @@ async def test_social_compact_requires_nvidia_secret() -> None:
     finished = await wait_terminal(bus, job.job_id)
     assert finished.status == "failed"
     assert finished.error_code == "CERTIFICATION_SECRET_MISSING"
+
+
+
+@pytest.mark.asyncio
+async def test_nvidia_activity_aware_jobs_have_correct_bounded_budgets() -> None:
+    core = FakeCore()
+    bus = AmoraCommandBus()
+    single = bus.start(core, "providers certify social --case ordinary_chat")
+    assert single.timeout_seconds == 480.0
+    await wait_terminal(bus, single.job_id)
+
+    full = bus.start(core, "providers certify social")
+    assert full.timeout_seconds == 3600.0
+    await wait_terminal(bus, full.job_id)
+
+    compact = bus.start(core, "providers diagnose nvidia --social-compact")
+    assert compact.timeout_seconds == 300.0
+    await wait_terminal(bus, compact.job_id)
+
+    minimal = bus.start(core, "providers diagnose nvidia --stream")
+    assert minimal.timeout_seconds == 60.0
+    await wait_terminal(bus, minimal.job_id)

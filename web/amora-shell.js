@@ -66,6 +66,11 @@ function transportSummary(item) {
   if (!diag || !Object.keys(diag).length) return "";
   const pieces = [];
   if (diag.stage) pieces.push(`fase=${diag.stage}`);
+  if (diag.timeout_kind) pieces.push(`timeout=${diag.timeout_kind}`);
+  if (diag.idle_timeout_seconds != null) pieces.push(`inatividade limite=${diag.idle_timeout_seconds}s`);
+  if (diag.silence_ms != null) pieces.push(`silêncio final=${seconds(diag.silence_ms)}`);
+  if (diag.reasoning_events != null) pieces.push(`eventos reasoning=${diag.reasoning_events}`);
+  if (diag.visible_events != null) pieces.push(`eventos visíveis=${diag.visible_events}`);
   if (diag.prompt_chars != null) pieces.push(`prompt=${diag.prompt_chars} caracteres`);
   if (diag.first_event_ms != null) pieces.push(`primeiro evento=${seconds(diag.first_event_ms)}`);
   if (diag.first_reasoning_ms != null) pieces.push(`primeiro reasoning=${seconds(diag.first_reasoning_ms)}`);

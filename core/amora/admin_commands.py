@@ -260,8 +260,8 @@ _COMMANDS: tuple[RegisteredCommand, ...] = (
     RegisteredCommand(
         path=("providers", "certify", "social"),
         usage="providers certify social [--case ordinary_chat] [--speaker-id PERSON_BK] [--target-id ENTITY_AMORA]",
-        description="Executa A/B live Qwen × Mistral read-only (ou um único caso com --case).",
-        timeout_seconds=300.0,
+        description="Executa A/B live Qwen × Mistral read-only (1 caso até 480s; corpus até 3600s).",
+        timeout_seconds=480.0,
         handler=_command_providers_certify_social,
         exclusive=True,
     ),
@@ -330,6 +330,14 @@ class AmoraCommandBus:
 
     def start(self, core: Any, raw_command: str) -> AdminCommandJob:
         command, args = _resolve_command(raw_command)
+        # Live high-effort SSE may stay productive well beyond 55 seconds.
+        # Budget one-case, full suite and compact diagnostics independently;
+        # no unbounded or shell-configurable command execution.
+        timeout_seconds = command.timeout_seconds
+        if command.path == ("providers", "certify", "social") and "--case" not in args:
+            timeout_seconds = 3600.0
+        elif command.path == ("providers", "diagnose", "nvidia") and args == ["--social-compact"]:
+            timeout_seconds = 300.0
         if command.exclusive:
             for existing in self._jobs.values():
                 if existing.command_path == command.path_text and existing.status in {"queued", "running"}:
@@ -343,7 +351,7 @@ class AmoraCommandBus:
             job_id=uuid4(),
             command=raw_command.strip(),
             command_path=command.path_text,
-            timeout_seconds=command.timeout_seconds,
+            timeout_seconds=timeout_seconds,
             status="queued",
             created_at=_now(core),
         )
@@ -371,7 +379,7 @@ class AmoraCommandBus:
 
         progress_token = _progress_sink.set(publish)
         try:
-            job.result = await asyncio.wait_for(command.handler(core, args), timeout=command.timeout_seconds)
+            job.result = await asyncio.wait_for(command.handler(core, args), timeout=job.timeout_seconds)
         except asyncio.TimeoutError:
             job.status = "timed_out"
             job.error_code = "COMMAND_TIMEOUT"

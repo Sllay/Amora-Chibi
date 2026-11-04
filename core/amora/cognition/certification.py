@@ -200,7 +200,8 @@ def _usage_value(raw: dict[str, object], key: str) -> int | None:
 _SAFE_TRANSPORT_FIELDS = (
     "stage", "elapsed_ms", "first_event_ms", "first_reasoning_ms",
     "first_visible_ms", "prompt_chars", "message_count", "visible_chars",
-    "completed_by",
+    "completed_by", "silence_ms", "idle_timeout_seconds", "max_total_seconds",
+    "timeout_kind", "reasoning_events", "visible_events",
 )
 _NVIDIA_TIMEOUT_STAGES = {
     "waiting_headers", "waiting_first_event", "reasoning_only", "visible_partial",
@@ -286,6 +287,11 @@ def _provider_failure_code(exc: Exception) -> tuple[str, list[str]]:
         if isinstance(exc, TimeoutError) and isinstance(diagnostics, dict):
             stage = diagnostics.get("stage")
             reasons = ["PROVIDER_TIMEOUT", "NVIDIA_SSE_TIMEOUT"]
+            kind = diagnostics.get("timeout_kind")
+            if kind == "idle":
+                reasons.append("NVIDIA_IDLE_TIMEOUT")
+            elif kind == "total_safety":
+                reasons.append("NVIDIA_TOTAL_SAFETY_LIMIT")
             if stage in _NVIDIA_TIMEOUT_STAGES:
                 reasons.append("NVIDIA_STAGE_" + str(stage).upper())
             return "NVIDIA_STREAM_TIMEOUT", reasons

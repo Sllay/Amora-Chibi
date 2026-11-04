@@ -409,3 +409,160 @@ def test_nvidia_compact_diagnostic_rejects_unknown_profile(tmp_path: Path) -> No
             _secret_store(tmp_path, configured=True),
             prompt_profile="invalid",
         )
+
+
+@pytest.mark.asyncio
+async def test_nvidia_active_reasoning_resets_idle_clock(tmp_path: Path, monkeypatch) -> None:
+    """High-effort model may think longer than 55s total while emitting tokens."""
+    import asyncio
+    import httpx
+    from amora.cognition import providers_nvidia
+
+    content = json.dumps({
+        "moves": [{"kind": "answer_question", "text": "Entendi, papis."}],
+        "closing": "statement",
+    })
+
+    class ActiveReasoningBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for _ in range(4):
+                await asyncio.sleep(0.085)
+                yield (
+                    "data: " + json.dumps({"choices": [
+                        {"delta": {"reasoning_content": "private reasoning token"}}
+                    ]}) + "\n\n"
+                ).encode()
+            yield (
+                "data: " + json.dumps({"choices": [
+                    {"delta": {"content": content}, "finish_reason": "stop"}
+                ]}) + "\n\n"
+            ).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["reasoning_effort"] == "high"
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=ActiveReasoningBody())
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        providers_nvidia.httpx, "AsyncClient",
+        lambda *args, **kwargs: original_client(*args, transport=httpx.MockTransport(handler), **kwargs),
+    )
+    provider = NvidiaMistralLarge4Provider(
+        _secret_store(tmp_path, configured=True),
+        timeout_seconds=0.20,
+        max_total_seconds=1.2,
+    )
+    started = __import__("time").perf_counter()
+    result = await provider.realize(_context())
+    assert __import__("time").perf_counter() - started > 0.20
+    assert result["moves"][0]["text"] == "Entendi, papis."
+    metrics = result["_usage"]["transport_diagnostics"]
+    assert metrics["reasoning_events"] == 4
+    assert metrics["first_reasoning_ms"] is not None
+    assert metrics["timeout_kind"] is None
+    assert metrics["completed_by"] == "finish_reason"
+    assert "private reasoning token" not in str(metrics)
+
+
+@pytest.mark.asyncio
+async def test_nvidia_heartbeat_does_not_reset_idle_clock(tmp_path: Path, monkeypatch) -> None:
+    """Comments / role-only frames are not proof of useful model progress."""
+    import asyncio
+    import httpx
+    from amora.cognition import providers_nvidia
+
+    class HeartbeatsOnlyBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (
+                "data: " + json.dumps({
+                    "choices": [{"delta": {"reasoning_content": "not for logs"}}]
+                }) + "\n\n"
+            ).encode()
+            for _ in range(30):
+                await asyncio.sleep(0.025)
+                yield b": heartbeat\n\n"
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        providers_nvidia.httpx, "AsyncClient",
+        lambda *args, **kwargs: original_client(
+            *args,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    stream=HeartbeatsOnlyBody(),
+                )
+            ),
+            **kwargs,
+        ),
+    )
+    provider = NvidiaMistralLarge4Provider(
+        _secret_store(tmp_path, configured=True),
+        timeout_seconds=0.14,
+        max_total_seconds=1.0,
+    )
+    with pytest.raises(NvidiaStreamTimeout) as raised:
+        await provider.realize(_context())
+    metrics = raised.value.diagnostics
+    assert metrics["timeout_kind"] == "idle"
+    assert metrics["stage"] == "reasoning_only"
+    assert metrics["reasoning_events"] == 1
+    assert metrics["visible_events"] == 0
+    assert metrics["silence_ms"] >= 120
+    assert "not for logs" not in str(metrics)
+
+
+@pytest.mark.asyncio
+async def test_nvidia_active_reasoning_still_has_total_safety_guard(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+    import httpx
+    from amora.cognition import providers_nvidia
+
+    class EndlessReasoningBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            while True:
+                await asyncio.sleep(0.045)
+                yield (
+                    "data: " + json.dumps({
+                        "choices": [{"delta": {"reasoning_content": "private"}}]
+                    }) + "\n\n"
+                ).encode()
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        providers_nvidia.httpx, "AsyncClient",
+        lambda *args, **kwargs: original_client(
+            *args,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    stream=EndlessReasoningBody(),
+                )
+            ),
+            **kwargs,
+        ),
+    )
+    provider = NvidiaMistralLarge4Provider(
+        _secret_store(tmp_path, configured=True),
+        timeout_seconds=0.20,
+        max_total_seconds=0.36,
+    )
+    with pytest.raises(NvidiaStreamTimeout) as raised:
+        await provider.realize(_context())
+    metrics = raised.value.diagnostics
+    assert metrics["timeout_kind"] == "total_safety"
+    assert metrics["reasoning_events"] >= 3
+    assert metrics["silence_ms"] < 200
+
+
+def test_nvidia_idle_timeout_and_total_guard_are_distinct(tmp_path: Path) -> None:
+    provider = NvidiaMistralLarge4Provider(_secret_store(tmp_path, configured=True))
+    assert provider.timeout_seconds == 55.0
+    assert provider.max_total_seconds == 270.0
+    with pytest.raises(ValueError, match="total > idle"):
+        NvidiaMistralLarge4Provider(
+            _secret_store(tmp_path, configured=True),
+            timeout_seconds=55.0, max_total_seconds=30.0,
+        )
