@@ -173,26 +173,27 @@ async def _command_providers_certify_social(core: Any, args: list[str]) -> dict[
     }
 
 
-async def _diagnose_nvidia_social_compact(core: Any) -> dict[str, Any]:
-    """One real Core snapshot, one NVIDIA call; no Groq, state write, or promotion."""
-    from amora.cognition.certification import (
-        SOCIAL_SURFACE_REPLAY_V1,
-        certify_social_case,
-    )
+async def _diagnose_nvidia_social_profile(
+    core: Any, *, profile: str, reasoning_effort: str,
+) -> dict[str, Any]:
+    """One real Core snapshot + one NVIDIA call; no Groq or state writes."""
+    from amora.cognition.certification import SOCIAL_SURFACE_REPLAY_V1, certify_social_case
     from amora.cognition.certification_live import build_live_social_cases
     from amora.cognition.providers_nvidia import NvidiaMistralLarge4Provider
 
     ordinary = next(p for p in SOCIAL_SURFACE_REPLAY_V1 if p.probe_id == "ordinary_chat")
     case = build_live_social_cases(core, probes=(ordinary,))[0]
-    candidate = NvidiaMistralLarge4Provider(core.secrets, prompt_profile="compact")
+    candidate = NvidiaMistralLarge4Provider(
+        core.secrets, prompt_profile=profile, reasoning_effort=reasoning_effort
+    )
     result = await certify_social_case(candidate, case)
-    # Discard generated speech and mechanical grade: this is transport/profile
-    # diagnosis, not a comparable certification result or user conversation.
+    # Do not expose speech, private reasoning or mechanical grade in a diagnostic.
     return {
-        "kind": "nvidia_social_compact_diagnostic",
-        "summary": "Diagnóstico social compacto isolado; não promove provider nem altera estado.",
+        "kind": f"nvidia_social_{profile}_diagnostic",
+        "summary": "Sonda social isolada; sem alteração de estado ou promoção.",
         "data": {
-            "profile": "compact",
+            "profile": profile,
+            "reasoning_effort": reasoning_effort,
             "probe_id": ordinary.probe_id,
             "validated": result.validated,
             "error_code": result.error_code,
@@ -208,13 +209,54 @@ async def _diagnose_nvidia_social_compact(core: Any) -> dict[str, Any]:
     }
 
 
+async def _audit_nvidia_social_prompt(core: Any) -> dict[str, Any]:
+    """Compile the same Core case locally, return no literal conversational data."""
+    from amora.cognition.certification import SOCIAL_SURFACE_REPLAY_V1
+    from amora.cognition.certification_live import build_live_social_cases
+    from amora.cognition.providers_nvidia import audit_nvidia_social_prompt
+
+    ordinary = next(p for p in SOCIAL_SURFACE_REPLAY_V1 if p.probe_id == "ordinary_chat")
+    case = build_live_social_cases(core, probes=(ordinary,))[0]
+    return {
+        "kind": "nvidia_social_prompt_audit",
+        "summary": "Auditoria local de tamanho por seção, sem rede ou texto privado.",
+        "data": {
+            "probe_id": ordinary.probe_id,
+            **audit_nvidia_social_prompt(case.context),
+        },
+    }
+
+
 async def _command_providers_diagnose_nvidia(core: Any, args: list[str]) -> dict[str, Any]:
-    if args not in ([], ["--stream"], ["--no-stream"], ["--social-compact"]):
+    from amora.cognition.diagnostics_nvidia import diagnose_nvidia_text
+
+    # Keep parser intentionally closed: no arbitrary endpoint, model or prompt.
+    remaining = list(args)
+    effort: str | None = None
+    if "--effort" in remaining:
+        if remaining.count("--effort") != 1:
+            raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "--effort repetido")
+        i = remaining.index("--effort")
+        if i + 1 >= len(remaining) or remaining[i + 1] not in {"low", "medium", "high"}:
+            raise AdminCommandError(
+                "COMMAND_ARGUMENT_INVALID", "--effort deve ser low, medium ou high"
+            )
+        effort = remaining[i + 1]
+        remaining = remaining[:i] + remaining[i + 2:]
+
+    allowed = (
+        [], ["--stream"], ["--no-stream"], ["--social-compact"],
+        ["--social-canonical"], ["--prompt-audit"],
+    )
+    if remaining not in allowed or (remaining == ["--prompt-audit"] and effort is not None):
         raise AdminCommandError(
             "COMMAND_ARGUMENT_INVALID",
-            "uso: providers diagnose nvidia [--stream | --no-stream | --social-compact]",
+            "uso: providers diagnose nvidia [--stream | --no-stream | --social-compact | --social-canonical | --prompt-audit] [--effort low|medium|high]",
         )
-    from amora.cognition.diagnostics_nvidia import diagnose_nvidia_text
+
+    if remaining == ["--prompt-audit"]:
+        # No API credential or remote call needed for a read-only size audit.
+        return await _audit_nvidia_social_prompt(core)
 
     api_key = core.secrets.get("NVIDIA_API_KEY")
     if not api_key:
@@ -223,10 +265,20 @@ async def _command_providers_diagnose_nvidia(core: Any, args: list[str]) -> dict
             "NVIDIA_API_KEY não configurada",
             details={"missing_secrets": ["NVIDIA_API_KEY"]},
         )
-    if args == ["--social-compact"]:
-        return await _diagnose_nvidia_social_compact(core)
-    stream = args == ["--stream"]
-    result = await diagnose_nvidia_text(api_key, stream=stream)
+
+    if remaining in (["--social-compact"], ["--social-canonical"]):
+        return await _diagnose_nvidia_social_profile(
+            core,
+            profile="compact" if remaining == ["--social-compact"] else "canonical",
+            reasoning_effort=effort or "low",
+        )
+
+    stream = remaining == ["--stream"]
+    if effort is None:
+        # Preserve the historical minimal benchmark (high) unless explicitly set.
+        result = await diagnose_nvidia_text(api_key, stream=stream)
+    else:
+        result = await diagnose_nvidia_text(api_key, stream=stream, reasoning_effort=effort)
     return {
         "kind": "nvidia_text_diagnostic",
         "summary": "Diagnóstico NVIDIA concluído (sem alterar certificação ou Core).",
@@ -251,8 +303,8 @@ _COMMANDS: tuple[RegisteredCommand, ...] = (
     ),
     RegisteredCommand(
         path=("providers", "diagnose", "nvidia"),
-        usage="providers diagnose nvidia [--stream | --no-stream | --social-compact]",
-        description="Diagnóstico mínimo NVIDIA ou social compacto isolado, sem promoção.",
+        usage="providers diagnose nvidia [--stream | --no-stream | --social-compact | --social-canonical | --prompt-audit] [--effort low|medium|high]",
+        description="Teste de esforço NVIDIA ou auditoria local do prompt; sem promoção.",
         timeout_seconds=60.0,
         handler=_command_providers_diagnose_nvidia,
         exclusive=True,
@@ -336,7 +388,9 @@ class AmoraCommandBus:
         timeout_seconds = command.timeout_seconds
         if command.path == ("providers", "certify", "social") and "--case" not in args:
             timeout_seconds = 3600.0
-        elif command.path == ("providers", "diagnose", "nvidia") and args == ["--social-compact"]:
+        elif command.path == ("providers", "diagnose", "nvidia") and (
+            "--social-compact" in args or "--social-canonical" in args
+        ):
             timeout_seconds = 300.0
         if command.exclusive:
             for existing in self._jobs.values():

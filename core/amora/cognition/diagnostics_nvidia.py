@@ -19,17 +19,20 @@ async def diagnose_nvidia_text(
     stream: bool = False,
     timeout_seconds: float = 55.0,
     model: str = _MISTRAL_LARGE_4_MODEL,
+    reasoning_effort: str = "high",
 ) -> dict[str, Any]:
     """Read-only minimal NVIDIA transport probe; never touches Core or promotion.
 
     Return only safe timing, HTTP status, and exact marker match; never return
     provider text, credentials, response bodies or reasoning traces.
     """
+    if reasoning_effort not in {"low", "medium", "high"}:
+        raise ValueError("unsupported NVIDIA diagnostic reasoning effort")
     payload: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": "Responda exatamente AMODEX_DIAG_TEXT_OK"}],
         "stream": stream,
-        "reasoning_effort": "high",
+        "reasoning_effort": reasoning_effort,
         "max_tokens": 4096,
         "temperature": 0.5,
         "top_p": 1,
@@ -59,10 +62,10 @@ async def diagnose_nvidia_text(
                 ) as response:
                     status_code = response.status_code
                     if response.status_code >= 400:
-                        return _result(started, stream, status_code, first_content_ms, False, "HTTP_ERROR")
+                        return _result(started, stream, status_code, first_content_ms, False, "HTTP_ERROR", reasoning_effort)
                     if stream:
                         if "text/event-stream" not in response.headers.get("content-type", ""):
-                            return _result(started, stream, status_code, first_content_ms, False, "UNEXPECTED_CONTENT_TYPE")
+                            return _result(started, stream, status_code, first_content_ms, False, "UNEXPECTED_CONTENT_TYPE", reasoning_effort)
                         async for line in response.aiter_lines():
                             if not line.startswith("data:"):
                                 continue
@@ -74,7 +77,7 @@ async def diagnose_nvidia_text(
                                 continue
                             event = json.loads(value)
                             if not isinstance(event, dict) or event.get("error"):
-                                return _result(started, stream, status_code, first_content_ms, False, "SSE_ERROR")
+                                return _result(started, stream, status_code, first_content_ms, False, "SSE_ERROR", reasoning_effort)
                             for choice in event.get("choices", []):
                                 delta = choice.get("delta") or {}
                                 chunk = delta.get("content") if isinstance(delta, dict) else None
@@ -83,7 +86,7 @@ async def diagnose_nvidia_text(
                                         first_content_ms = (perf_counter() - started) * 1000
                                     pieces.append(chunk)
                                     if sum(map(len, pieces)) > 16384:
-                                        return _result(started, stream, status_code, first_content_ms, False, "CONTENT_LIMIT")
+                                        return _result(started, stream, status_code, first_content_ms, False, "CONTENT_LIMIT", reasoning_effort)
                     else:
                         # httpx.AsyncClient.stream() exposes an unread response.
                         # Response.json() raises ResponseNotRead until we consume it.
@@ -92,30 +95,32 @@ async def diagnose_nvidia_text(
                         async for chunk in response.aiter_bytes():
                             body.extend(chunk)
                             if len(body) > 131_072:
-                                return _result(started, stream, status_code, first_content_ms, False, "CONTENT_LIMIT")
+                                return _result(started, stream, status_code, first_content_ms, False, "CONTENT_LIMIT", reasoning_effort)
                         data = json.loads(body)
                         content = data["choices"][0]["message"]["content"]
                         if not isinstance(content, str):
-                            return _result(started, stream, status_code, first_content_ms, False, "INVALID_RESPONSE")
+                            return _result(started, stream, status_code, first_content_ms, False, "INVALID_RESPONSE", reasoning_effort)
                         pieces.append(content)
                         completed = True
         return _result(
             started, stream, status_code, first_content_ms,
             completed and "".join(pieces).strip() == _DIAG_MARKER,
-            "OK" if completed else "STREAM_INCOMPLETE",
+            "OK" if completed else "STREAM_INCOMPLETE", reasoning_effort,
         )
     except (TimeoutError, httpx.TimeoutException):
-        return _result(started, stream, status_code, first_content_ms, False, "TIMEOUT")
+        return _result(started, stream, status_code, first_content_ms, False, "TIMEOUT", reasoning_effort)
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
-        return _result(started, stream, status_code, first_content_ms, False, "TRANSPORT_OR_FORMAT_ERROR")
+        return _result(started, stream, status_code, first_content_ms, False, "TRANSPORT_OR_FORMAT_ERROR", reasoning_effort)
 
 
 def _result(
     started: float, stream: bool, status_code: int | None,
     first_content_ms: float | None, exact_match: bool, outcome: str,
+    reasoning_effort: str,
 ) -> dict[str, Any]:
     return {
         "stream": stream,
+        "reasoning_effort": reasoning_effort,
         "status_code": status_code,
         "elapsed_ms": round((perf_counter() - started) * 1000, 1),
         "first_content_ms": round(first_content_ms, 1) if first_content_ms is not None else None,

@@ -13,7 +13,7 @@ from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.secrets import SecretStore
 
 from .models import CognitiveContext
-from .prompt_frame import living_profile, render_current_turn, render_trusted_protocol, turn_frame
+from .prompt_frame import (living_profile, render_constitution, render_current_turn, render_living_profile, render_trusted_protocol, render_turn_frame, turn_frame)
 from .providers import ProviderError
 from .providers_identity import _identity_history
 from .providers_structured import _dialogue_token_budget
@@ -59,6 +59,77 @@ def _compact_social_prompt(context: CognitiveContext) -> str:
     )
 
 
+_REASONING_EFFORTS = frozenset({"low", "medium", "high"})
+
+
+def audit_nvidia_social_prompt(context: CognitiveContext) -> dict[str, object]:
+    """Read-only, content-free sizes of Core-supplied social prompt sections.
+
+    Measure actual rendered strings, but do not serialize the private values into
+    the output or logs. The same context is used for both prompt projections.
+    """
+    canonical_system = render_trusted_protocol(context) + "\n\n" + realization_instruction(context)
+    compact_system = _compact_social_prompt(context)
+    history = _identity_history(context)
+    history_chars = sum(len(text) for _, text in history)
+    current = render_current_turn(context)
+    constitution_chars = len(render_constitution())
+    living_chars = len(render_living_profile(context))
+    turn_chars = len(render_turn_frame(context))
+    realization_chars = len(realization_instruction(context))
+    base_chars = constitution_chars + living_chars + turn_chars + realization_chars
+    frame = turn_frame(context)
+    canonical_state = frame.get("canonical_state", {})
+    profile = living_profile(context)
+
+    def size(item: object) -> int:
+        return len(json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+    return {
+        "profile": "Core snapshot compiled read-only",
+        "canonical": {
+            "total_chars": len(canonical_system) + history_chars + len(current),
+            "system_chars": len(canonical_system),
+            "history_chars": history_chars,
+            "current_turn_chars": len(current),
+        },
+        "compact": {
+            "total_chars": len(compact_system) + history_chars + len(current),
+            "system_chars": len(compact_system),
+            "history_chars": history_chars,
+            "current_turn_chars": len(current),
+        },
+        "canonical_sections_chars": {
+            "constitution": constitution_chars,
+            "living_profile": living_chars,
+            "turn_frame": turn_chars,
+            "realization_instruction": realization_chars,
+            "protocol_wrapper_and_separators": len(canonical_system) - base_chars,
+            "literal_history": history_chars,
+            "current_turn": len(current),
+        },
+        "turn_frame_sections_chars": {
+            str(key): size(value) for key, value in frame.items()
+        },
+        "canonical_state_fields_chars": {
+            str(key): size(value) for key, value in canonical_state.items()
+        } if isinstance(canonical_state, dict) else {},
+        "living_profile_sections_chars": {
+            str(key): size(value) for key, value in profile.items()
+        },
+        "counts": {
+            "history_messages": len(history),
+            "memories": len(context.memories),
+            "relationships": len(context.relationships),
+            "recent_messages": len(context.recent_messages),
+            "world_claims": len(context.world_claims),
+            "reason_codes": len(context.reason_codes),
+        },
+        "literal_content_included": False,
+        "read_only": True,
+    }
+
+
 class NvidiaStreamTimeout(TimeoutError):
     """Safe, stage-aware deadline failure: no prompt, generated text or credentials."""
 
@@ -93,6 +164,7 @@ class NvidiaMistralLarge4Provider:
         timeout_seconds: float = 55.0,
         max_total_seconds: float = 270.0,
         prompt_profile: Literal["canonical", "compact"] = "canonical",
+        reasoning_effort: Literal["low", "medium", "high"] = "low",
     ) -> None:
         self.secrets = secrets
         self.model = model or os.getenv("AMORA_NVIDIA_MISTRAL_MODEL", _MISTRAL_LARGE_4_MODEL)
@@ -103,6 +175,9 @@ class NvidiaMistralLarge4Provider:
         if prompt_profile not in {"canonical", "compact"}:
             raise ValueError("unsupported NVIDIA prompt profile")
         self.prompt_profile = prompt_profile
+        if reasoning_effort not in _REASONING_EFFORTS:
+            raise ValueError("unsupported NVIDIA reasoning effort")
+        self.reasoning_effort = reasoning_effort
         self.descriptor = ProviderDescriptor(
             name="nvidia_mistral_large_4_candidate",
             model=self.model,
@@ -127,7 +202,7 @@ class NvidiaMistralLarge4Provider:
                 "endpoint": self.API_URL,
                 "promotion_status": "not_promoted",
                 "structured_output_status": "endpoint_unverified",
-                "reasoning_effort": "high",
+                "reasoning_effort": self.reasoning_effort,
             },
         )
 
@@ -188,10 +263,11 @@ class NvidiaMistralLarge4Provider:
             "top_p": 1.0,
             "frequency_penalty": 0,
             "presence_penalty": 0,
-            # High reasoning is supported across published NVIDIA Mistral 4 contracts;
-            # some NIM runtimes reject "none" with HTTP 400.
+            # The checkpoint accepts low/medium/high. Hosted NVIDIA's API
+            # catalog can lag the checkpoint, so fail visibly on HTTP 400
+            # instead of silently downgrading or retrying an unsupported value.
             "max_tokens": max(_MISTRAL_COMPLETION_TOKEN_FLOOR, _dialogue_token_budget(context)),
-            "reasoning_effort": "high",
+            "reasoning_effort": self.reasoning_effort,
         }
 
     async def _post_chat(
@@ -200,7 +276,7 @@ class NvidiaMistralLarge4Provider:
         *,
         api_key: str,
     ) -> tuple[dict[str, Any], dict[str, str], int]:
-        """Accept active high-effort reasoning, but stop stalled SSE streams.
+        """Accept active reasoning, but stop stalled SSE streams.
 
         `timeout_seconds` is silence between *meaningful* model events
         (reasoning_content or visible delta.content), not a total generation
