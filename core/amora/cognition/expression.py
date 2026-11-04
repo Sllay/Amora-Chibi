@@ -53,22 +53,27 @@ def expression_profile(context: CognitiveContext) -> dict[str, object]:
         "regional_lexicon": list(_REGIONAL_LEXICON),
         "profanity": {
             "enabled": True,
-            "mode": "contextual",
+            "mode": "contextual_free_vocabulary",
             "casual_emphasis_allowed": True,
+            "adult_terms_not_automatically_taboo": True,
             "playful_teasing_allowed_when_relationship_and_dialogue_act_support_it": True,
             "directed_hostility_must_not_be_invented": True,
-            "examples": ["porra", "merda", "puta merda", "caralho", "cacete"],
+            "never_force_swearing": True,
+            "examples": [
+                "porra", "merda", "puta merda", "caralho", "cacete",
+                "vai tomar no cu",
+            ],
         },
     }
 
 
 def expression_cue(context: CognitiveContext) -> dict[str, object]:
-    """Compile sparse, replay-stable expressive permission for one turn.
+    """Project social style hints, not a profanity/sexual vocabulary censor.
 
-    The provider gets freedom of wording, but it does not decide from scratch
-    whether every turn should sound heavily regional or profane. A stable hash of
-    the turn id supplies variation without introducing nondeterministic replay.
-    Recent Amora output supplies a lightweight lexical cooldown.
+    Swearing is a word choice owned by surface realization in context. The Core
+    can describe tone, interpersonal stance and repetition preferences, but
+    does not draw a random permission ticket before a provider may swear.
+    Regional stylistic suggestions retain replay-stable variation.
     """
 
     plan = context.dialogue_plan or {}
@@ -101,29 +106,23 @@ def expression_cue(context: CognitiveContext) -> dict[str, object]:
         if regional_selected:
             reasons.append("REGIONAL_OPTION_SELECTED")
 
-    profanity_level = "none"
-    profanity_chance = _profanity_chance(
-        act=act,
-        depth=depth,
-        style_register=style_register,
-        tone_tags=tone_tags,
-        attitude=attitude,
-    )
-    if _recent_contains(recent_amora[-2:], _PROFANITY_LEXICON):
-        profanity_chance = 0.0
-        reasons.append("PROFANITY_COOLDOWN")
-    profanity_draw = _unit(context, "profanity")
-    if profanity_chance > 0.0 and profanity_draw < profanity_chance:
-        if "edged" in tone_tags or attitude == "guarded" or act == "set_boundary":
-            profanity_level = "emphatic"
-        else:
-            profanity_level = "light"
-        reasons.append("PROFANITY_OPTION_ENABLED")
+    # An ordinary conversational turn has no profanity prohibition. Tone
+    # selection is guidance, not an allow/deny gate for individual words.
+    profanity_level = "contextual"
+    if "edged" in tone_tags or attitude == "guarded" or act in {"set_boundary", "complain"}:
+        profanity_level = "emphatic"
+    elif act == "tease" or "playful" in tone_tags:
+        profanity_level = "playful"
 
+    profanity_recent = _recent_contains(recent_amora[-2:], _PROFANITY_LEXICON)
+    if profanity_recent:
+        reasons.append("PROFANITY_REPETITION_CAUTION")
+    reasons.append("PROFANITY_CONTEXTUAL_STYLE_NOT_GATE")
+
+    # A consensual playful tease is not hostile behavior. The Core remains
+    # authoritative about the social act and who is being addressed.
     playful_directed = (
-        profanity_level != "none"
-        and act == "tease"
-        and style_register == "intimate_colloquial"
+        act == "tease" and style_register == "intimate_colloquial"
     )
 
     return {
@@ -136,7 +135,11 @@ def expression_cue(context: CognitiveContext) -> dict[str, object]:
         },
         "profanity": {
             "level": profanity_level,
+            "enabled": True,
+            "word_choice_is_not_a_privacy_decision": True,
             "playful_directed_teasing_allowed": playful_directed,
+            "avoid_repetitive_swearing": profanity_recent,
+            "do_not_force_profanity": True,
             "do_not_invent_hostility": True,
         },
         "reason_codes": reasons,
@@ -166,32 +169,6 @@ def _regional_chance(
     if depth == "deep":
         chance -= 0.08
     return max(0.0, min(0.38, chance))
-
-
-def _profanity_chance(
-    *,
-    act: str,
-    depth: str,
-    style_register: str,
-    tone_tags: set[str],
-    attitude: str,
-) -> float:
-    if act in {"reflection", "answer_self_fact"}:
-        return 0.0
-    chance = 0.025
-    if style_register == "intimate_colloquial":
-        chance += 0.075
-    if "playful" in tone_tags:
-        chance += 0.10
-    if "edged" in tone_tags:
-        chance += 0.16
-    if attitude == "guarded" or act == "set_boundary":
-        chance += 0.08
-    if act == "tease":
-        chance += 0.08
-    if depth == "deep" and "edged" not in tone_tags:
-        chance -= 0.03
-    return max(0.0, min(0.34, chance))
 
 
 def _regional_pool(*, act: str, tone_tags: set[str]) -> tuple[str, ...]:
