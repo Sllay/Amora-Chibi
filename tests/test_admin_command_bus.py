@@ -404,3 +404,52 @@ async def test_expressive4_rejects_unknown_suite_case_and_duplicate_options() ->
         assert final.error_code == expected
         if expected == "CERTIFICATION_CASE_NOT_FOUND":
             assert len(final.error_details["available_cases"]) == 4
+
+
+
+def test_nuance4_parser_defaults_and_rejects_unknown_suites() -> None:
+    assert _parse_social_certification_args(["--suite", "nuance4"]) == (
+        "PERSON_BK", "ENTITY_AMORA", None, "nuance4"
+    )
+
+
+@pytest.mark.asyncio
+async def test_nuance4_selects_only_four_contextual_cases(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from amora.cognition import certification_live
+
+    seen = []
+
+    async def fake_ab(core, *, speaker_id, target_id, probes, corpus_id, on_result):
+        ids = tuple(p.probe_id for p in probes)
+        seen.append((corpus_id, ids))
+        return SimpleNamespace(model_dump=lambda **kwargs: {
+            "corpus_id": corpus_id,
+            "case_count": len(ids),
+            "report": {"cases": []},
+            "promotion_decision": "none",
+            "human_review_required": True,
+        })
+
+    monkeypatch.setattr(certification_live, "run_live_social_ab", fake_ab)
+    bus = AmoraCommandBus()
+    job = bus.start(FakeCore(), "providers certify social --suite nuance4")
+    assert job.timeout_seconds == 1500.0
+    finished = await wait_terminal(bus, job.job_id)
+    assert finished.status == "succeeded"
+    assert finished.result["data"]["case_count"] == 4
+    assert seen == [("SOCIAL_NUANCE4_V1", (
+        "layered_disclosure", "contextual_ambiguity",
+        "rumor_and_reaction", "adult_relationship_subtext",
+    ))]
+
+    single = bus.start(FakeCore(), "providers certify social --suite nuance4 --case contextual_ambiguity")
+    assert single.timeout_seconds == 480.0
+    assert (await wait_terminal(bus, single.job_id)).status == "succeeded"
+    assert seen[-1] == ("SOCIAL_NUANCE4_V1", ("contextual_ambiguity",))
+
+    invalid = bus.start(FakeCore(), "providers certify social --suite nuance4 --case ordinary_chat")
+    final = await wait_terminal(bus, invalid.job_id)
+    assert final.status == "failed"
+    assert final.error_code == "CERTIFICATION_CASE_NOT_FOUND"
+    assert len(final.error_details["available_cases"]) == 4

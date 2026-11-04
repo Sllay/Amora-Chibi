@@ -271,3 +271,90 @@ def test_expressive4_corpus_is_fixed_adult_non_graphic_and_distinct_from_full11(
     assert "buceta" in probes[3].user_text
     assert "Papo entre adultos" in probes[3].user_text
     assert "Uma pessoa adulta" in probes[2].user_text
+
+
+
+def test_nuance4_isolated_history_is_used_by_real_core_without_persistence(tmp_path, monkeypatch) -> None:
+    from amora.app import AmoraCore
+    from amora.cognition.certification import SOCIAL_NUANCE4_V1
+    from amora.cognition.certification_live import (
+        NUANCE_CORPUS_ID, NUANCE_SESSION_ID, build_live_social_cases,
+    )
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap()
+    try:
+        before = core.cognition.store.message_count()
+        cases = build_live_social_cases(
+            core, probes=SOCIAL_NUANCE4_V1, corpus_id=NUANCE_CORPUS_ID
+        )
+        after = core.cognition.store.message_count()
+        assert before == after
+        assert len(cases) == 4
+        assert len({c.probe.probe_id for c in cases}) == 4
+        assert {c.probe.category for c in cases} == {
+            "emotional_nuance", "double_entendre", "media_controversy",
+            "adult_relational",
+        }
+        for case in cases:
+            context = case.context
+            assert len(context.recent_messages) == len(case.probe.prior_turns)
+            assert all(item["source"] == "certification_fixture" for item in context.recent_messages)
+            assert "SYNTHETIC_CERTIFICATION_HISTORY_NOT_PERSISTED" in context.reason_codes
+            assert "LIVE_PROVIDER_CERTIFICATION_READ_ONLY" in context.reason_codes
+            expected = core.cognition.compiler.dialogue.plan(context)
+            assert "speaker_identity" in context.dialogue_plan
+            assert "input_acir" in context.dialogue_plan
+            assert context.dialogue_plan["act"] == expected.act.value
+            assert context.dialogue_plan["depth"] == expected.depth.value
+            assert all(
+                item["speaker_id"] in {"PERSON_BK", "ENTITY_AMORA"}
+                for item in context.recent_messages
+            )
+            assert core.cognition.store.list_messages(session_id=NUANCE_SESSION_ID) == []
+
+        assert cases[0].context.dialogue_plan["act"] == "respond_to_disclosure"
+        assert cases[0].context.dialogue_plan["depth"] == "medium"
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_nuance4_ab_uses_identical_context_per_provider(tmp_path, monkeypatch) -> None:
+    from amora.app import AmoraCore
+    from amora.cognition.certification import SOCIAL_NUANCE4_V1
+    from amora.cognition.certification_live import NUANCE_CORPUS_ID, run_live_social_ab
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap()
+    try:
+        class PlanAwareTrackingRealizer(TrackingRealizer):
+            async def realize(self, context: CognitiveContext) -> dict[str, object]:
+                self.seen_context_ids.append(id(context))
+                self.seen_context_payloads.append(context.model_dump(mode="json"))
+                kind = context.dialogue_plan["response_moves"][0]
+                return {
+                    "moves": [{"kind": kind, "text": self.text}],
+                    "closing": "statement",
+                }
+
+        left = PlanAwareTrackingRealizer("groq-fixture", "Nossa, essa contradição pega mesmo.")
+        right = PlanAwareTrackingRealizer("mistral-fixture", "Eu entendi tua dúvida, papis.")
+        result = await run_live_social_ab(
+            core,
+            left_provider=left,
+            right_provider=right,
+            probes=SOCIAL_NUANCE4_V1,
+            corpus_id=NUANCE_CORPUS_ID,
+        )
+        assert result.case_count == 4
+        assert result.corpus_id == NUANCE_CORPUS_ID
+        assert result.promotion_decision == "none"
+        assert "SYNTHETIC_MULTITURN_CONTEXT_NOT_PERSISTED" in result.reason_codes
+        assert left.seen_context_payloads == right.seen_context_payloads
+        assert all(len(c["recent_messages"]) >= 2 for c in left.seen_context_payloads)
+        assert all(item.review_focus for item in result.report.cases)
+        assert result.report.left_validated_count == 4
+        assert result.report.right_validated_count == 4
+    finally:
+        core.close()

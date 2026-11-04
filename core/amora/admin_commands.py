@@ -119,7 +119,7 @@ def _parse_social_certification_args(args: list[str]) -> tuple[str, str, str | N
                 "COMMAND_ARGUMENT_INVALID",
                 f"argumento não suportado: {option}",
                 details={
-                    "usage": "providers certify social [--suite expressive4|full11] "
+                    "usage": "providers certify social [--suite nuance4|expressive4|full11] "
                     "[--case affection_warmth] [--speaker-id PERSON_BK] "
                     "[--target-id ENTITY_AMORA]"
                 },
@@ -141,10 +141,10 @@ def _parse_social_certification_args(args: list[str]) -> tuple[str, str, str | N
         else:
             suite = value
         index += 2
-    if suite not in {"expressive4", "full11"}:
+    if suite not in {"nuance4", "expressive4", "full11"}:
         raise AdminCommandError(
             "CERTIFICATION_SUITE_NOT_FOUND", "bateria de certificação inexistente",
-            details={"available_suites": ["expressive4", "full11"]},
+            details={"available_suites": ["nuance4", "expressive4", "full11"]},
         )
     return speaker_id, target_id, probe_id, suite
 
@@ -154,17 +154,21 @@ async def _command_providers_certify_social(core: Any, args: list[str]) -> dict[
 
     from amora.cognition.certification import (
         SOCIAL_EXPRESSIVE4_V1,
+        SOCIAL_NUANCE4_V1,
         SOCIAL_SURFACE_REPLAY_V1,
     )
     from amora.cognition.certification_live import (
         CORPUS_ID,
         EXPRESSIVE_CORPUS_ID,
+        NUANCE_CORPUS_ID,
         LiveCertificationConfigurationError,
         run_live_social_ab,
     )
 
     if suite == "expressive4":
         corpus_id, suite_probes = EXPRESSIVE_CORPUS_ID, SOCIAL_EXPRESSIVE4_V1
+    elif suite == "nuance4":
+        corpus_id, suite_probes = NUANCE_CORPUS_ID, SOCIAL_NUANCE4_V1
     else:
         corpus_id, suite_probes = CORPUS_ID, SOCIAL_SURFACE_REPLAY_V1
     if probe_id is not None and not any(p.probe_id == probe_id for p in suite_probes):
@@ -338,8 +342,8 @@ _COMMANDS: tuple[RegisteredCommand, ...] = (
     ),
     RegisteredCommand(
         path=("providers", "certify", "social"),
-        usage="providers certify social [--suite expressive4|full11] [--case CASE_ID] [--speaker-id PERSON_BK] [--target-id ENTITY_AMORA]",
-        description="A/B Qwen × Mistral: 4 cenários expressivos ou corpus original de 11; read-only.",
+        usage="providers certify social [--suite nuance4|expressive4|full11] [--case CASE_ID] [--speaker-id PERSON_BK] [--target-id ENTITY_AMORA]",
+        description="A/B Qwen × Mistral: 4 cenários de nuance, 4 expressivos ou 11 originais; read-only.",
         timeout_seconds=480.0,
         handler=_command_providers_certify_social,
         exclusive=True,
@@ -415,7 +419,7 @@ class AmoraCommandBus:
         timeout_seconds = command.timeout_seconds
         if command.path == ("providers", "certify", "social") and "--case" not in args:
             # Four 270-second NVIDIA calls plus Groq/429 budget; bounded.
-            timeout_seconds = 1500.0 if "expressive4" in args else 3600.0
+            timeout_seconds = 1500.0 if any(x in args for x in ("nuance4", "expressive4")) else 3600.0
         elif command.path == ("providers", "diagnose", "nvidia") and (
             "--social-compact" in args or "--social-canonical" in args
         ):

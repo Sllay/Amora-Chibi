@@ -5,6 +5,7 @@ import asyncio
 import json
 import sys
 from typing import Any, Callable, Iterable, Literal
+from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,8 +20,10 @@ from .providers_structured import GroqCognitiveProvider
 
 CORPUS_ID = "SOCIAL_SURFACE_REPLAY_V1"
 EXPRESSIVE_CORPUS_ID = "SOCIAL_EXPRESSIVE4_V1"
+NUANCE_CORPUS_ID = "SOCIAL_NUANCE4_V1"
 CERTIFICATION_SESSION_ID = "certification:ch3:social_surface_replay_v1"
 EXPRESSIVE_SESSION_ID = "certification:ch3:social_expressive4_v1"
+NUANCE_SESSION_ID = "certification:ch3:social_nuance4_v1"
 
 
 def _session_for_corpus(corpus_id: str) -> str:
@@ -29,6 +32,8 @@ def _session_for_corpus(corpus_id: str) -> str:
         return CERTIFICATION_SESSION_ID
     if corpus_id == EXPRESSIVE_CORPUS_ID:
         return EXPRESSIVE_SESSION_ID
+    if corpus_id == NUANCE_CORPUS_ID:
+        return NUANCE_SESSION_ID
     raise ValueError("unsupported social certification corpus")
 
 
@@ -48,7 +53,7 @@ class LiveSocialABReport(BaseModel):
     schema_version: Literal["amora.provider-certification.social-ab.v1"] = (
         "amora.provider-certification.social-ab.v1"
     )
-    corpus_id: Literal["SOCIAL_SURFACE_REPLAY_V1", "SOCIAL_EXPRESSIVE4_V1"] = CORPUS_ID
+    corpus_id: Literal["SOCIAL_SURFACE_REPLAY_V1", "SOCIAL_EXPRESSIVE4_V1", "SOCIAL_NUANCE4_V1"] = CORPUS_ID
     speaker_id: str
     target_id: str = "ENTITY_AMORA"
     session_id: str = CERTIFICATION_SESSION_ID
@@ -95,6 +100,46 @@ def build_live_social_cases(
             },
         )
         context = compiler.compile(request)
+        if probe.prior_turns:
+            # Synthetic fictional history exists ONLY inside this certification
+            # context, never in the user's conversation, memory or world store.
+            # Replay both providers over the same fully recomputed Core plan.
+            fixtures: list[dict[str, object]] = []
+            for index, item in enumerate(probe.prior_turns):
+                is_amora = item.role == "amora"
+                fixtures.append({
+                    "turn_id": str(uuid5(
+                        NAMESPACE_URL, f"amora:{corpus_id}:{probe.probe_id}:{index}"
+                    )),
+                    "speaker_id": target_id if is_amora else speaker_id,
+                    "addressee_id": speaker_id if is_amora else target_id,
+                    "source": "certification_fixture",
+                    "status": "spoken" if is_amora else "received",
+                    "text": item.text,
+                })
+            context.recent_messages = fixtures
+            original_plan = context.dialogue_plan
+            new_plan = compiler.dialogue.plan(context).model_dump(mode="json")
+            # Preserve trusted speaker identity and ACIR input projected by the
+            # compiler; recomputing the act must not discard canonical metadata.
+            for key in ("speaker_identity", "input_acir"):
+                if key in original_plan:
+                    new_plan[key] = original_plan[key]
+            context.dialogue_plan = new_plan
+            previous_reasons = set(original_plan.get("reason_codes") or [])
+            context.reason_codes = [
+                code for code in context.reason_codes
+                if code not in previous_reasons and not code.startswith("DIALOGUE_ACT_")
+            ]
+            context.reason_codes.extend(
+                code for code in new_plan.get("reason_codes") or []
+                if code not in context.reason_codes
+            )
+            context.reason_codes.append("SYNTHETIC_CERTIFICATION_HISTORY_NOT_PERSISTED")
+            context.reason_codes.append(
+                "DIALOGUE_ACT_" + str(new_plan["act"]).upper()
+            )
+            context = compiler._fit_budget(context)
         if "LIVE_PROVIDER_CERTIFICATION_READ_ONLY" not in context.reason_codes:
             context.reason_codes.append("LIVE_PROVIDER_CERTIFICATION_READ_ONLY")
         cases.append(SocialCertificationCase(probe=probe, context=context))
@@ -152,6 +197,10 @@ async def run_live_social_ab(
         report=report,
         reason_codes=[
             "FIXED_SOCIAL_REPLAY_CORPUS",
+            *(
+                ["SYNTHETIC_MULTITURN_CONTEXT_NOT_PERSISTED"]
+                if corpus_id == NUANCE_CORPUS_ID else []
+            ),
             *(
                 ["FOCUSED_EXPRESSIVE4_NOT_FULL_CERTIFICATION"]
                 if corpus_id == EXPRESSIVE_CORPUS_ID else []
