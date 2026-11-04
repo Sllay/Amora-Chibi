@@ -14,7 +14,7 @@ from amora.cognition.certification import (
 )
 from amora.cognition.models import CognitiveContext
 from amora.cognition.providers import ProviderError
-from amora.cognition.providers_nvidia import NvidiaMistralLarge4Provider, NvidiaStreamTimeout
+from amora.cognition.providers_nvidia import NvidiaMistralLarge4Provider, NvidiaStreamTimeout, audit_nvidia_social_prompt
 from amora.events import PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.secrets import SecretStore
@@ -221,7 +221,7 @@ async def test_mistral_candidate_payload_keeps_secret_out_and_trusted_context_se
     payload = provider.captured_payload
     assert payload is not None
     assert payload["model"] == "mistralai/mistral-large-4-1t-a52b"
-    assert payload["reasoning_effort"] == "high"
+    assert payload["reasoning_effort"] == "low"
     assert payload["max_tokens"] >= 4096
     assert payload["stream"] is True
     assert payload["temperature"] == 0.5
@@ -387,7 +387,7 @@ def test_nvidia_compact_diagnostic_preserves_core_snapshot_and_local_contract(tm
     compact_provider = NvidiaMistralLarge4Provider(secrets, prompt_profile="compact")
     compact = compact_provider._payload(context)
 
-    assert canonical["reasoning_effort"] == compact["reasoning_effort"] == "high"
+    assert canonical["reasoning_effort"] == compact["reasoning_effort"] == "low"
     assert canonical["max_tokens"] == compact["max_tokens"] == 4096
     assert canonical["stream"] is compact["stream"] is True
     assert canonical["messages"][-1] == compact["messages"][-1]
@@ -439,7 +439,7 @@ async def test_nvidia_active_reasoning_resets_idle_clock(tmp_path: Path, monkeyp
             ).encode()
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert json.loads(request.content)["reasoning_effort"] == "high"
+        assert json.loads(request.content)["reasoning_effort"] == "low"
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=ActiveReasoningBody())
 
     original_client = httpx.AsyncClient
@@ -566,3 +566,39 @@ def test_nvidia_idle_timeout_and_total_guard_are_distinct(tmp_path: Path) -> Non
             _secret_store(tmp_path, configured=True),
             timeout_seconds=55.0, max_total_seconds=30.0,
         )
+
+
+
+def test_mistral_effort_is_selectable_and_rejects_unsupported_values(tmp_path: Path) -> None:
+    store = _secret_store(tmp_path, configured=True)
+    context = _context()
+    for effort in ("low", "medium", "high"):
+        provider = NvidiaMistralLarge4Provider(store, reasoning_effort=effort)
+        assert provider.reasoning_effort == effort
+        assert provider.descriptor.metadata["reasoning_effort"] == effort
+        assert provider._payload(context)["reasoning_effort"] == effort
+        assert provider._payload(context)["max_tokens"] == 4096
+    with pytest.raises(ValueError, match="unsupported NVIDIA reasoning effort"):
+        NvidiaMistralLarge4Provider(store, reasoning_effort="none")
+
+
+def test_mistral_prompt_audit_reports_sizes_without_private_text(tmp_path: Path) -> None:
+    ctx = _context(text="Texto privado de teste de auditoria")
+    ctx.memories = []
+    audit = audit_nvidia_social_prompt(ctx)
+
+    assert audit["read_only"] is True
+    assert audit["literal_content_included"] is False
+    assert audit["canonical"]["total_chars"] > audit["compact"]["total_chars"]
+    assert audit["canonical"]["system_chars"] > 0
+    assert audit["canonical"]["total_chars"] == sum(
+        audit["canonical_sections_chars"].values()
+    )
+    assert audit["canonical_sections_chars"]["turn_frame"] > 0
+    assert audit["canonical_state_fields_chars"]["relationships"] > 0
+    assert audit["counts"]["relationships"] == 1
+    serialized = json.dumps(audit, ensure_ascii=False)
+    assert "Texto privado de teste" not in serialized
+    assert "father" not in serialized
+    assert "canonical_name" not in serialized
+    assert "PERSON_BK" not in serialized
