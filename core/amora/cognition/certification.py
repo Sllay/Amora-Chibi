@@ -119,7 +119,7 @@ class SocialCertificationResult(BaseModel):
     success: bool = False
     validated: bool = False
     text: str = ""
-    score: float = Field(default=0.0, ge=0.0, le=100.0)
+    score: float | None = Field(default=None, ge=0.0, le=100.0)
     latency_ms: float | None = Field(default=None, ge=0.0)
     input_tokens: int | None = None
     output_tokens: int | None = None
