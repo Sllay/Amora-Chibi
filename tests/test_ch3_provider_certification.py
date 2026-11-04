@@ -267,12 +267,12 @@ async def test_mistral_candidate_requires_secret_at_call_time(tmp_path: Path) ->
 async def test_mistral_sse_reassembles_visible_json_without_reasoning(tmp_path: Path) -> None:
     import httpx
 
+    content = json.dumps({"moves": [{"kind": "answer_question", "text": "Oi"}], "closing": "statement"})
     events = [
-        'data: {"choices":[{"delta":{"reasoning_content":"hidden thought"}}]}',
-        'data: {"choices":[{"delta":{"content":"{\\"moves\\":"}}]}',
-        'data: {"choices":[{"delta":{"content":"[ {\\"kind\\":\\"answer_question\\",\\"text\\":\\"Oi\\")} }]}',
-        'data: {"choices":[{"delta":{"content":"}]}"}}]}',
-        'data: [DONE]',
+        "data: " + json.dumps({"choices": [{"delta": {"reasoning_content": "hidden thought"}}]}),
+        "data: " + json.dumps({"choices": [{"delta": {"content": content[:20]}}]}),
+        "data: " + json.dumps({"choices": [{"delta": {"content": content[20:]}}]}),
+        "data: [DONE]",
     ]
     # Exercise the real httpx SSE transport using an in-process mock.
     def handler(request: httpx.Request) -> httpx.Response:
