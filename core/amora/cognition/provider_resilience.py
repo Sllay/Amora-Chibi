@@ -193,6 +193,10 @@ def wrap_resilient_provider(provider: Any) -> Any:
         return provider
     if not callable(getattr(provider, "realize", None)):
         return provider
-    # Production structured social realization opts into one repair attempt while
-    # direct ResilientProviderProxy callers retain transport-only semantics.
+    if provider.descriptor.name == "nvidia_mistral_large_4":
+        # Mistral may spend 20-60s in visible/reasoning output. Another
+        # transparent transport/validation retry could multiply voice latency
+        # or tie up the turn for minutes. Fail over to Groq instead.
+        return ResilientProviderProxy(provider, max_retries=0, max_validation_retries=0)
+    # Fast structured providers retain one bounded repair attempt.
     return ResilientProviderProxy(provider, max_validation_retries=1)

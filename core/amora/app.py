@@ -16,11 +16,12 @@ from amora.cognition import (
     ContextCompiler,
     GeminiCognitiveProvider,
     GroqCognitiveProvider,
+    NvidiaMistralLarge4ProductionProvider,
     OpenRouterCognitiveProvider,
 )
 from amora.conversation import ConversationEngine, ConversationStore
 from amora.emotion import EmotionEngine, EmotionStore
-from amora.events import AsyncEventBus
+from amora.events import AsyncEventBus, PrivacyScope
 from amora.identity import (
     DeviceIdentity,
     DeviceTrust,
@@ -38,7 +39,7 @@ from amora.messaging import (
     PlatformPresenceController,
     SocialAttentionRouter,
 )
-from amora.models import ModelRouter
+from amora.models import ModelRouter, TaskClass
 from amora.observability import configure_logging
 from amora.operations import OperationMonitor
 from amora.pairing import PairingManager
@@ -212,6 +213,18 @@ class AmoraCore:
             operations=operations,
         )
 
+        # Social primary selected by the project owner: NVIDIA/Mistral Large 4.
+        # A missing NVIDIA key must not prevent Groq/Gemini fallback. Operators
+        # can roll back the social preference without changing code by setting
+        # AMORA_SOCIAL_PRIMARY=groq and restarting the service.
+        social_primary = os.getenv("AMORA_SOCIAL_PRIMARY", "mistral").strip().casefold()
+        if social_primary not in {"mistral", "groq"}:
+            raise ValueError("AMORA_SOCIAL_PRIMARY must be 'mistral' or 'groq'")
+        if social_primary == "mistral":
+            mistral_cognition = NvidiaMistralLarge4ProductionProvider(secrets)
+            if mistral_cognition.descriptor.available:
+                cognition.register_provider(mistral_cognition)
+
         groq_cognition = GroqCognitiveProvider(secrets)
         if groq_cognition.descriptor.available:
             cognition.register_provider(groq_cognition)
@@ -330,6 +343,12 @@ class AmoraCore:
             and self.secrets.get("CLOUDFLARE_ACCOUNT_ID") is not None
         )
         openrouter_provider = self.models.descriptor("openrouter")
+        social_candidates = self.models.ranked_candidates(
+            TaskClass.SOCIAL_DIALOGUE,
+            privacy_scope=PrivacyScope.PERSONAL,
+            remote_processing_allowed=True,
+            require_structured_output=True,
+        )
         return {
             "status": "ok" if integrity == "ok" else "degraded",
             "version": __version__,
@@ -372,6 +391,7 @@ class AmoraCore:
             "active_sessions": self.database.active_session_count(self.clock.now()),
             "primary_person": bk.id if bk else None,
             "model_providers_registered": self.models.provider_count,
+            "social_primary_provider": social_candidates[0].name if social_candidates else "none",
             "model_provider_names": [item.name for item in self.models.descriptors()],
             "social_participant_count": len(self.social.scene.participants),
             "social_active_addressee": self.social.scene.active_addressee,

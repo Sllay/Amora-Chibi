@@ -60,7 +60,7 @@ Baseline de providers até promoção explícita baseada em evidência:
 
 - social dialogue: **Qwen 3.8 27B**;
 - reasoning specialist: **GPT-OSS 120B**;
-- Mistral Large 4 via NVIDIA: **candidato somente**, não promovido.
+- Mistral Large 4 via NVIDIA: **social primary promovido por decisão explícita do usuário em 2026-11-04 (ADR-0036)**; Groq/Qwen é fallback; Mistral para reasoning continua não promovido.
 
 ## 5. Response Modality Competition — ATIVA
 

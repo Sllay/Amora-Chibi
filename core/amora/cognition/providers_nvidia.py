@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import replace
 from time import perf_counter
 from typing import Any, Literal
 
@@ -452,6 +453,54 @@ class NvidiaMistralLarge4Provider:
             },
             response_headers,
             status_code,
+        )
+
+
+
+class NvidiaMistralLarge4ProductionProvider(NvidiaMistralLarge4Provider):
+    """User-selected social primary; Core still validates every generated frame.
+
+    Unlike the read-only certification candidate, this adapter may participate
+    in social routing. NVIDIA's hosted endpoint has NOT been proven to enforce
+    strict JSON Schema: 'supports_structured_output' here means the adapter
+    returns a JSON realization for LOCAL strict validation, not that NVIDIA
+    itself guarantees schema adherence. Invalid frames never reach speech.
+    """
+
+    def __init__(
+        self,
+        secrets: SecretStore,
+        *,
+        model: str | None = None,
+        timeout_seconds: float = 55.0,
+        max_total_seconds: float = 95.0,
+        reasoning_effort: Literal["low", "medium", "high"] = "low",
+    ) -> None:
+        super().__init__(
+            secrets,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            max_total_seconds=max_total_seconds,
+            prompt_profile="canonical",
+            reasoning_effort=reasoning_effort,
+        )
+        self.descriptor = replace(
+            self.descriptor,
+            name="nvidia_mistral_large_4",
+            quality=0.95,
+            latency_score=0.10,  # Real CH3 observations: 20-60s for a turn.
+            priority=15,
+            supports_structured_output=True,
+            metadata={
+                **self.descriptor.metadata,
+                "role": "primary_social_realizer",
+                "promotion_status": "user_selected_social_primary",
+                "structured_output_status": "core_validated_json_unverified_host_schema",
+                "structured_contract": "local_realization_validator_required",
+                "primary_social_preference": True,
+                "production_max_total_seconds": max_total_seconds,
+                "certification_only": False,
+            },
         )
 
 
