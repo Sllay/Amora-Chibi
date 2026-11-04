@@ -303,6 +303,8 @@ def test_nuance4_isolated_history_is_used_by_real_core_without_persistence(tmp_p
             assert "SYNTHETIC_CERTIFICATION_HISTORY_NOT_PERSISTED" in context.reason_codes
             assert "LIVE_PROVIDER_CERTIFICATION_READ_ONLY" in context.reason_codes
             expected = core.cognition.compiler.dialogue.plan(context)
+            assert "speaker_identity" in context.dialogue_plan
+            assert "input_acir" in context.dialogue_plan
             assert context.dialogue_plan["act"] == expected.act.value
             assert context.dialogue_plan["depth"] == expected.depth.value
             assert all(
