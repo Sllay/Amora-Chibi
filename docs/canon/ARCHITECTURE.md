@@ -826,3 +826,24 @@ eventos continuam administrativos. Limites ASGI e de borda protegem recursos;
 semântica, identidade, memória e voz não mudam. Scans e controles de execução não
 certificam um deploy: os gates e achados atuais estão em
 `docs/engineering/security/PREDEPLOY.md`.
+
+
+### Web/Safari síncrono — budget de provider social (CH3)
+
+A rota Web de texto `POST /v1/web/utterance` aguarda o Core concluir
+o `RealizationFrame` validado antes de responder e enfileirar a fala.
+O middleware HTTP tem deadline fixo de 90s; o Mistral produtivo pode
+gerar por até 95s. Por isso o Web atribui budgets locais (sem
+alterar outros callers e sem aumentar o deadline HTTP):
+`provider_attempt_budget_seconds=65`,
+`provider_total_budget_seconds=76`. O primeiro controla uma tentativa
+individual, o segundo limita a soma de tentativas para permitir
+fallback Groq e persistência do turno. O Core continua validando o
+quadro inteiro antes de falar.
+
+Esse limite é uma mitigação de 504 na superfície síncrona, não garantia
+de SLA sob lentidão de storage ou proxy externo. Caso a latência do
+provider torne o Web impraticável, evoluir para jobs de turno
+assíncronos, identificados e observáveis, em vez de alongar
+indefinidamente o request HTTP. Incidente e testes:
+`docs/engineering/reviews/WEB_MISTRAL_HTTP_TIMEOUT_2026-11-04.md`.
