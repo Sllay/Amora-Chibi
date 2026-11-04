@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from amora.api import create_api
 from amora.app import AmoraCore
 from amora.time import SimulatedClock
+from amora.models import TaskClass
 from amora.web import routes as web_routes
 
 
@@ -108,7 +109,7 @@ def test_mistral_deadline_falls_back_to_groq_before_web_http_timeout(tmp_path, m
         slow = DelayedMistral()
         fast = FastGroq()
         assert core.cognition.router.ranked_candidates(
-            __import__("amora.models", fromlist=["TaskClass"]).TaskClass.SOCIAL_DIALOGUE,
+            TaskClass.SOCIAL_DIALOGUE,
             require_structured_output=True,
         )[0].name == "nvidia_mistral_large_4"
         core.cognition._providers["nvidia_mistral_large_4"] = slow
