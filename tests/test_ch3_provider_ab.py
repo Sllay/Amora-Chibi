@@ -302,9 +302,6 @@ def test_nuance4_isolated_history_is_used_by_real_core_without_persistence(tmp_p
             assert all(item["source"] == "certification_fixture" for item in context.recent_messages)
             assert "SYNTHETIC_CERTIFICATION_HISTORY_NOT_PERSISTED" in context.reason_codes
             assert "LIVE_PROVIDER_CERTIFICATION_READ_ONLY" in context.reason_codes
-            assert context.dialogue_plan == {
-                **context.dialogue_plan
-            }
             expected = core.cognition.compiler.dialogue.plan(context)
             assert context.dialogue_plan["act"] == expected.act.value
             assert context.dialogue_plan["depth"] == expected.depth.value
@@ -329,8 +326,18 @@ async def test_nuance4_ab_uses_identical_context_per_provider(tmp_path, monkeypa
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap()
     try:
-        left = TrackingRealizer("groq-fixture", "Nossa, essa contradição pega mesmo.")
-        right = TrackingRealizer("mistral-fixture", "Eu entendi tua dúvida, papis.")
+        class PlanAwareTrackingRealizer(TrackingRealizer):
+            async def realize(self, context: CognitiveContext) -> dict[str, object]:
+                self.seen_context_ids.append(id(context))
+                self.seen_context_payloads.append(context.model_dump(mode="json"))
+                kind = context.dialogue_plan["response_moves"][0]
+                return {
+                    "moves": [{"kind": kind, "text": self.text}],
+                    "closing": "statement",
+                }
+
+        left = PlanAwareTrackingRealizer("groq-fixture", "Nossa, essa contradição pega mesmo.")
+        right = PlanAwareTrackingRealizer("mistral-fixture", "Eu entendi tua dúvida, papis.")
         result = await run_live_social_ab(
             core,
             left_provider=left,
