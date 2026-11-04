@@ -66,6 +66,8 @@ function transportSummary(item) {
   if (!diag || !Object.keys(diag).length) return "";
   const pieces = [];
   if (diag.stage) pieces.push(`fase=${diag.stage}`);
+  if (diag.http_status_code != null) pieces.push(`HTTP=${diag.http_status_code}`);
+  if (diag.provider_error_category) pieces.push(`categoria=${diag.provider_error_category}`);
   if (diag.timeout_kind) pieces.push(`timeout=${diag.timeout_kind}`);
   if (diag.idle_timeout_seconds != null) pieces.push(`inatividade limite=${diag.idle_timeout_seconds}s`);
   if (diag.silence_ms != null) pieces.push(`silêncio final=${seconds(diag.silence_ms)}`);
