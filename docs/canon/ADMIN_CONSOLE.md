@@ -583,3 +583,35 @@ separadamente na ADR-0036.
 de segundos ou ultrapassar um minuto. Proxies HTTP e budgets da
 superfície podem expirar antes do limite do adapter. Isso não muda
 identidade nem autoriza reproduzir texto incompleto na voz.
+
+
+### Correção da observabilidade do Shell `status` (CH3)
+
+O `status` administrativo antes expunha **somente** `core.readiness()`:
+`{"status":"ready","storage":"libsql"}`. O campo
+`social_primary_provider` estava no `AmoraCore.health_report()`, mas
+não no resultado do comando do Shell. Portanto, o campo ausente
+**não indicava** que Mistral estivesse inativo.
+
+A partir desta correção, `status` mantém o `readiness` existente e,
+quando houver roteador de cognição, adiciona:
+
+- `social_primary_provider`: primeiro provider do ranking social configurado;
+- `social_fallback_providers`: nomes dos demais providers elegíveis;
+- `social_routing_scope="configured_personal_remote"`: informa que o
+  ranking supõe uma conversa `PERSONAL` com processamento remoto
+  autorizado e saída estruturada.
+
+Para confirmar no Northflank após deploy do `main`:
+
+```text
+status
+```
+
+Com `AMORA_SOCIAL_PRIMARY=mistral` (padrão) e chave NVIDIA presente,
+`social_primary_provider` deverá ser `nvidia_mistral_large_4`.
+O status não expõe tokens, prompt, conversas, perfis ou corpo de
+respostas. Esse valor descreve o **ranking configurado**, não garante
+que uma mensagem específica use Mistral: privacidade, limites do
+contexto, circuit breaker, quota e timeouts podem mudar a escolha
+ou provocar fallback em cada turno.
