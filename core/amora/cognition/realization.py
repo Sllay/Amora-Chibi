@@ -79,10 +79,21 @@ class RealizationValidator:
         if not combined:
             raise RealizationError("EMPTY_REALIZATION", "realization has no speakable text")
 
+        # A one-off reflective confirmation is not a new follow-up agenda.
+        # The Core grants it only in a narrow, context-aware social plan. The
+        # validator remains strict for other acts, generic follow-ups and
+        # prompts with multiple questions.
+        reflective_confirmation = (
+            bool(plan.get("allow_reflective_question", False))
+            and str(plan.get("act") or "") in {"respond_to_disclosure", "answer_question"}
+            and closing_mode == "natural"
+            and combined.endswith("?")
+            and combined.count("?") == 1
+        )
         if not ask_followup:
-            if frame.closing == RealizationClosing.QUESTION:
+            if frame.closing == RealizationClosing.QUESTION and not reflective_confirmation:
                 raise RealizationError("FOLLOWUP_NOT_AUTHORIZED", "question closing is not authorized")
-            if combined.rstrip().endswith("?"):
+            if combined.rstrip().endswith("?") and not reflective_confirmation:
                 raise RealizationError("FOLLOWUP_NOT_AUTHORIZED", "realization ends in an unauthorized question")
             if any(kind in {"ask_followup", "ask_question", "request_more"} for kind in emitted_kinds):
                 raise RealizationError("FOLLOWUP_NOT_AUTHORIZED", "follow-up move is not authorized")
@@ -110,6 +121,7 @@ class RealizationValidator:
                 "REALIZATION_SCHEMA_VALID",
                 "REALIZATION_MOVES_AUTHORIZED",
                 "DIALOGUE_PLAN_ENFORCED_LOCALLY",
+                *(("REFLECTIVE_CONFIRMATION_AUTHORIZED",) if reflective_confirmation else ()),
             ),
         )
 
@@ -210,7 +222,14 @@ def realization_instruction(context: CognitiveContext) -> str:
         "Prefira frases curtas, contrações e ritmo de conversa. Para depth=short, em geral uma ou duas frases bastam; "
         "para depth=medium, evite palestra; depth=deep permite explicar mais sem virar artigo. "
         "Não termine oferecendo ajuda nem perguntando 'mais alguma coisa?' se o plano não autorizou isso. "
-        f"ask_followup={bool(plan.get('ask_followup', False))}; "
+        + (
+            "Se combinar com o contexto, pode terminar com UMA pergunta breve para confirmar "
+            "a interpretação que você acabou de expressar; não use pergunta genérica, "
+            "não mude de assunto e não crie move ask_followup. Também pode terminar afirmando. "
+            if plan.get("allow_reflective_question", False)
+            else "Se ask_followup for falso, evite terminar em pergunta. "
+        )
+        + f"ask_followup={bool(plan.get('ask_followup', False))}; "
         f"offer_help={bool(plan.get('offer_help', False))}; "
         f"closing_mode={plan.get('closing_mode', 'natural')}. "
         "Não crie nenhum move, objetivo social, fato ou pergunta fora do plano."
