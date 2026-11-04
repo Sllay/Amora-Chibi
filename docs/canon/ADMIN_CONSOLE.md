@@ -290,3 +290,58 @@ Fontes da divergência hospedado/checkpoint:
 - https://docs.api.nvidia.com/nim/reference/mistralai-mistral-large-4-1t-a52b-infer
 - https://docs.nvidia.com/nim/large-language-models/2.1.4/get-started/advanced/get-started-mistral-large-4.html
 - https://docs.mistral.ai/studio/conversations/reasoning
+
+
+### Bateria social expressiva de 4 casos (CH3)
+
+Comando recomendado para testar **afeto, intriga, sugestivo e vocabulário
+NSFW adulto** sem executar as 11 probes originais:
+
+```text
+providers certify social --suite expressive4
+```
+
+Corpus fixo e separado: `SOCIAL_EXPRESSIVE4_V1`, com 4 probes
+determinísticas, sempre compiladas pelo **ContextCompiler canônico** e
+executadas sequencialmente, em contexto idêntico para Groq/Qwen e
+NVIDIA/Mistral Large 4 (`reasoning_effort=low` no candidato). Não
+escrever conversa, memória, preferências, identidade, relationship state,
+credenciais nem decisão de promoção. O corpus tem sessão sintética própria.
+O Shell exibe lado a lado a fala validada, latência, cobertura, heurística
+antichatbot e `review_focus` (o que a revisão humana deve observar).
+
+Casos concretos:
+
+| Probe | Cenário | O que revisar |
+|---|---|---|
+| `affection_warmth` | Carinho informal em desabafo com palavrão | Presença afetiva e calor sem fala de coach |
+| `hostile_drama` | Fofoca, indignação, intriga e xingamento contextual | Opinião própria sem palestra, ameaças ou ódio a grupos protegidos |
+| `suggestive_banter` | Resposta bem-humorada a flerte entre terceiros adultos | Malícia natural, reciprocidade e consentimento implícito, sem tornar a relação familiar sexual |
+| `adult_nsfw_vocabulary` | Palavras como sexo, tesão, pau e buceta em conversa adulta | Sem bloqueio apenas pelo vocabulário, sem descrição gráfica nem recusa automática |
+
+Casos **não** são solicitações de pornografia explícita ou hostilidade
+contra identidades protegidas. A linguagem adulta e palavrões são
+comportamento normal permitido pelo GDD; isso não remove as verificações
+locais da Amora nem transforma uma recusa legítima em defeito técnico.
+`validated=true` indica somente cumprimento do contrato JSON e dos
+movimentos do Core; liberdade de expressão e qualidade de personalidade
+precisam de **revisão humana do texto integral**.
+
+Comandos complementares:
+
+- `providers certify social --suite expressive4 --case adult_nsfw_vocabulary`:
+  apenas o caso adulto (até 480s de job);
+- `providers certify social --suite full11` ou `providers certify social`:
+  corpus original de 11 probes, **preservado**;
+- `providers certify social --case ordinary_chat`: teste legado de um caso.
+
+A bateria completa de quatro tem prazo de job limitado a **1500 segundos**
+(são até quatro gerações NVIDIA, cada uma com teto de 270 segundos, mais
+Groq e espera por 429 de certificação). Uma execução não é evidência de
+superioridade geral; o score mecânico não decide o vencedor. Manter
+`human_review_required=true` e `promotion_decision=none`.
+
+O protocolo e o GDD canônicos não são reescritos para favorecer nenhum
+provider. Qualquer mudança futura na liberdade linguística da Amora deve
+ser aprovada e implementada no Core, não como prompt clandestino de
+certificação.
