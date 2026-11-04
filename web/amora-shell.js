@@ -111,10 +111,12 @@ function formatSocialAB(result) {
     lines.push(`  ${item.left.provider}  ${seconds(item.left.latency_ms)} ${mark(item.left.validated)} ${mechanicalScore(item.left)}`);
     if (item.left.text) lines.push(`    ${item.left.text.replace(/\s+/g, " ").trim()}`);
     if (item.left.error_code) lines.push(`    error=${item.left.error_code}`);
+    if (item.left.validation_failure_detail) lines.push(`    followup_rejection=${item.left.validation_failure_detail}`);
     if (transportSummary(item.left)) lines.push(transportSummary(item.left));
     lines.push(`  ${item.right.provider}  ${seconds(item.right.latency_ms)} ${mark(item.right.validated)} ${mechanicalScore(item.right)}`);
     if (item.right.text) lines.push(`    ${item.right.text.replace(/\s+/g, " ").trim()}`);
     if (item.right.error_code) lines.push(`    error=${item.right.error_code}`);
+    if (item.right.validation_failure_detail) lines.push(`    followup_rejection=${item.right.validation_failure_detail}`);
     if (transportSummary(item.right)) lines.push(transportSummary(item.right));
     const delta = item.mechanical_score_delta_right_minus_left;
     lines.push(`  Δ right-left = ${delta === null || delta === undefined ? "n/a (sem dupla válida)" : Number(delta).toFixed(1)} · ordem=${item.execution_order}`);
@@ -132,6 +134,7 @@ function formatPartialProgress(job) {
     lines.push(`[${item.probe_id}] ${item.provider} · ${seconds(item.latency_ms)} · ${item.validated ? "✓" : "✗"}`);
     if (item.text) lines.push(`  ${String(item.text).replace(/\s+/g, " ").trim()}`);
     if (item.error_code) lines.push(`  error=${item.error_code}`);
+    if (item.validation_failure_detail) lines.push(`  followup_rejection=${item.validation_failure_detail}`);
     if (transportSummary(item)) lines.push(transportSummary(item));
   }
   return lines.join("\n");
