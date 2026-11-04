@@ -173,3 +173,26 @@ async def test_live_ab_never_waits_past_quota_budget(monkeypatch) -> None:
     assert report.left_validated_count == 0
     assert report.cases[0].left.error_code == "PROVIDER_HTTP_429"
     assert report.right_validated_count == 1
+
+
+@pytest.mark.asyncio
+async def test_ab_publishes_each_provider_result_before_next_call() -> None:
+    seen: list[str] = []
+
+    class OrderedRealizer(TrackingRealizer):
+        async def realize(self, context: CognitiveContext) -> dict[str, object]:
+            seen.append("call:" + self.descriptor.name)
+            return await super().realize(context)
+
+    left = OrderedRealizer("left", "Oi, pai.")
+    right = OrderedRealizer("right", "Oi, pai.")
+    report = await compare_social_suite(
+        left, right, [_case("progress", "Oi")],
+        on_result=lambda item: seen.append("result:" + item.provider),
+    )
+    assert len(report.cases) == 1
+    assert len(seen) == 4
+    assert seen[0].startswith("call:")
+    assert seen[1] == seen[0].replace("call:", "result:")
+    assert seen[2].startswith("call:")
+    assert seen[3] == seen[2].replace("call:", "result:")
