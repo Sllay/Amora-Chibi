@@ -521,3 +521,59 @@ async def test_groq_diagnostic_requires_case_and_only_groq_secret() -> None:
     finished = await wait_terminal(bus, no_secret.job_id)
     assert finished.error_code == "CERTIFICATION_SECRET_MISSING"
     assert finished.error_details == {"missing_secrets": ["GROQ_API_KEY"]}
+
+
+
+@pytest.mark.asyncio
+async def test_status_shows_configured_mistral_primary_without_exposing_secrets(tmp_path, monkeypatch) -> None:
+    from amora.app import AmoraCore
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "mistral-home"))
+    monkeypatch.setenv("AMORA_SECRET_NVIDIA_API_KEY", "NVIDIA_SECRET_DO_NOT_PRINT")
+    monkeypatch.setenv("AMORA_SECRET_GROQ_API_KEY", "GROQ_SECRET_DO_NOT_PRINT")
+    monkeypatch.delenv("AMORA_SOCIAL_PRIMARY", raising=False)
+    core = AmoraCore.bootstrap()
+    try:
+        bus = AmoraCommandBus()
+        job = bus.start(core, "status")
+        finished = await wait_terminal(bus, job.job_id)
+        assert finished.status == "succeeded"
+        assert finished.result["kind"] == "core_status"
+        assert finished.result["readiness"]["status"] == "ready"
+        assert finished.result["social_primary_provider"] == "nvidia_mistral_large_4"
+        assert "groq" in finished.result["social_fallback_providers"]
+        assert finished.result["social_routing_scope"] == "configured_personal_remote"
+        serialized = finished.model_dump_json()
+        assert "NVIDIA_SECRET_DO_NOT_PRINT" not in serialized
+        assert "GROQ_SECRET_DO_NOT_PRINT" not in serialized
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_status_reflects_groq_rollback_and_missing_nvidia(tmp_path, monkeypatch) -> None:
+    from amora.app import AmoraCore
+
+    monkeypatch.setenv("AMORA_SECRET_NVIDIA_API_KEY", "NVIDIA_SECRET_DO_NOT_PRINT")
+    monkeypatch.setenv("AMORA_SECRET_GROQ_API_KEY", "GROQ_SECRET_DO_NOT_PRINT")
+    monkeypatch.setenv("AMORA_SOCIAL_PRIMARY", "groq")
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "rollback-home"))
+    core = AmoraCore.bootstrap()
+    try:
+        bus = AmoraCommandBus()
+        finished = await wait_terminal(bus, bus.start(core, "status").job_id)
+        assert finished.result["social_primary_provider"] == "groq"
+        assert "nvidia_mistral_large_4" not in finished.result["social_fallback_providers"]
+    finally:
+        core.close()
+
+    monkeypatch.delenv("AMORA_SECRET_NVIDIA_API_KEY", raising=False)
+    monkeypatch.setenv("AMORA_SOCIAL_PRIMARY", "mistral")
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "no-nvidia-home"))
+    core = AmoraCore.bootstrap()
+    try:
+        bus = AmoraCommandBus()
+        finished = await wait_terminal(bus, bus.start(core, "status").job_id)
+        assert finished.result["social_primary_provider"] == "groq"
+    finally:
+        core.close()
