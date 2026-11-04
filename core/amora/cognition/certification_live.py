@@ -4,13 +4,13 @@ import argparse
 import asyncio
 import json
 import sys
-from typing import Any, Iterable, Literal
+from typing import Any, Callable, Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from amora.events import PrivacyScope
 
-from .certification import SOCIAL_SURFACE_REPLAY_V1, SocialCertificationCase, SocialReplayProbe, SocialRealizer
+from .certification import SOCIAL_SURFACE_REPLAY_V1, SocialCertificationCase, SocialCertificationResult, SocialReplayProbe, SocialRealizer
 from .certification_ab import SocialABReport, compare_social_suite
 from .models import CognitiveRequest
 from .providers_nvidia import NvidiaMistralLarge4Provider
@@ -103,6 +103,7 @@ async def run_live_social_ab(
     left_provider: SocialRealizer | None = None,
     right_provider: SocialRealizer | None = None,
     probes: Iterable[SocialReplayProbe] = SOCIAL_SURFACE_REPLAY_V1,
+    on_result: Callable[[SocialCertificationResult], None] | None = None,
 ) -> LiveSocialABReport:
     """Run Qwen baseline × Mistral candidate over identical read-only Core contexts.
 
@@ -125,7 +126,7 @@ async def run_live_social_ab(
     # Shared quota-wait budget is bounded below the Shell's 300s job timeout.
     # Honor provider Retry-After only when supplied, never retry HTTP 400.
     report = await compare_social_suite(
-        left, right, cases, rate_limit_retry_budget_seconds=120.0
+        left, right, cases, rate_limit_retry_budget_seconds=120.0, on_result=on_result
     )
     return LiveSocialABReport(
         speaker_id=speaker_id,

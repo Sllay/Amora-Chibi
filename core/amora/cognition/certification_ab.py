@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Iterable, Literal
+from typing import Callable, Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,6 +69,7 @@ async def compare_social_case(
     case: SocialCertificationCase,
     *,
     retry_budget: CertificationRetryBudget | None = None,
+    on_result: Callable[[SocialCertificationResult], None] | None = None,
 ) -> SocialABCaseResult:
     """Compare two providers against one identical context snapshot.
 
@@ -81,11 +82,15 @@ async def compare_social_case(
     left_first = int(fingerprint[-1], 16) % 2 == 0
     if left_first:
         left = await certify_social_case(left_provider, case, retry_budget=retry_budget)
+        if on_result: on_result(left)
         right = await certify_social_case(right_provider, case, retry_budget=retry_budget)
+        if on_result: on_result(right)
         execution_order: Literal["left_first", "right_first"] = "left_first"
     else:
         right = await certify_social_case(right_provider, case, retry_budget=retry_budget)
+        if on_result: on_result(right)
         left = await certify_social_case(left_provider, case, retry_budget=retry_budget)
+        if on_result: on_result(left)
         execution_order = "right_first"
 
     return SocialABCaseResult(
@@ -111,6 +116,7 @@ async def compare_social_suite(
     cases: Iterable[SocialCertificationCase],
     *,
     rate_limit_retry_budget_seconds: float = 0.0,
+    on_result: Callable[[SocialCertificationResult], None] | None = None,
 ) -> SocialABReport:
     case_results: list[SocialABCaseResult] = []
     retry_budget = (
@@ -118,7 +124,7 @@ async def compare_social_suite(
         if rate_limit_retry_budget_seconds > 0 else None
     )
     for case in cases:
-        case_results.append(await compare_social_case(left_provider, right_provider, case, retry_budget=retry_budget))
+        case_results.append(await compare_social_case(left_provider, right_provider, case, retry_budget=retry_budget, on_result=on_result))
 
     left_name = case_results[0].left.provider if case_results else type(left_provider).__name__
     right_name = case_results[0].right.provider if case_results else type(right_provider).__name__

@@ -89,15 +89,26 @@ function formatSocialAB(result) {
   return lines.join("\n");
 }
 
+function formatPartialProgress(job) {
+  const progress = Array.isArray(job.progress) ? job.progress : [];
+  const lines = [`${progress.length} resposta(s) concluída(s)`];
+  for (const item of progress) {
+    lines.push(`[${item.probe_id}] ${item.provider} · ${seconds(item.latency_ms)} · ${item.validated ? "✓" : "✗"}`);
+    if (item.text) lines.push(`  ${String(item.text).replace(/\s+/g, " ").trim()}`);
+    if (item.error_code) lines.push(`  error=${item.error_code}`);
+  }
+  return lines.join("\n");
+}
+
 function formatJob(job) {
   if (job.status === "queued") return `amora> ${job.command}\n[queued] aguardando execução…`;
-  if (job.status === "running") return `amora> ${job.command}\n[running] executando dentro do Core…`;
-  if (job.status === "timed_out") return `amora> ${job.command}\n[timeout] ${job.error_code || "COMMAND_TIMEOUT"}`;
+  if (job.status === "running") return `amora> ${job.command}\n[running] ${formatPartialProgress(job)}\nAguardando próxima resposta…`;
+  if (job.status === "timed_out") return `amora> ${job.command}\n[timeout] ${job.error_code || "COMMAND_TIMEOUT"}\n${formatPartialProgress(job)}`;
   if (job.status === "failed") {
     const details = job.error_details && Object.keys(job.error_details).length
       ? `\n${JSON.stringify(job.error_details, null, 2)}`
       : "";
-    return `amora> ${job.command}\n[failed] ${job.error_code || "COMMAND_FAILED"} · ${job.error_type || "error"}${details}`;
+    return `amora> ${job.command}\n[failed] ${job.error_code || "COMMAND_FAILED"} · ${job.error_type || "error"}${details}\n${formatPartialProgress(job)}`;
   }
   if (job.result?.kind === "social_provider_ab") return `amora> ${job.command}\n\n${formatSocialAB(job.result)}`;
   if (job.result?.kind === "command_help") {

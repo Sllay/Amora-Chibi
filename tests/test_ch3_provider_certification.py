@@ -223,7 +223,10 @@ async def test_mistral_candidate_payload_keeps_secret_out_and_trusted_context_se
     assert payload["model"] == "mistralai/mistral-large-4-1t-a52b"
     assert payload["reasoning_effort"] == "high"
     assert payload["max_tokens"] >= 4096
-    assert payload["stream"] is False
+    assert payload["stream"] is True
+    assert payload["temperature"] == 0.5
+    assert payload["top_p"] == 1.0
+    assert provider.timeout_seconds == 55.0
     assert "response_format" not in payload
     serialized = json.dumps(payload, ensure_ascii=False)
     assert "unit-test-nvidia-key" not in serialized
@@ -258,3 +261,37 @@ async def test_mistral_candidate_requires_secret_at_call_time(tmp_path: Path) ->
 
     with pytest.raises(ProviderError, match="NVIDIA_API_KEY is not configured"):
         await provider.realize(_context())
+
+
+@pytest.mark.asyncio
+async def test_mistral_sse_reassembles_visible_json_without_reasoning(tmp_path: Path) -> None:
+    import httpx
+
+    content = json.dumps({"moves": [{"kind": "answer_question", "text": "Oi"}], "closing": "statement"})
+    events = [
+        "data: " + json.dumps({"choices": [{"delta": {"reasoning_content": "hidden thought"}}]}),
+        "data: " + json.dumps({"choices": [{"delta": {"content": content[:20]}}]}),
+        "data: " + json.dumps({"choices": [{"delta": {"content": content[20:]}}]}),
+        "data: [DONE]",
+    ]
+    # Exercise the real httpx SSE transport using an in-process mock.
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["accept"] == "text/event-stream"
+        assert json.loads(request.content)["stream"] is True
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text="\n\n".join(events))
+
+    original_client = httpx.AsyncClient
+    def mock_client(*args, **kwargs):
+        return original_client(*args, transport=httpx.MockTransport(handler), **kwargs)
+
+    from amora.cognition import providers_nvidia
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(providers_nvidia.httpx, "AsyncClient", mock_client)
+    try:
+        provider = NvidiaMistralLarge4Provider(_secret_store(tmp_path, configured=True))
+        root, _, status = await provider._post_chat(provider._payload(_context()), api_key="test")
+    finally:
+        monkey.undo()
+    assert status == 200
+    assert "reasoning_content" not in root["choices"][0]["message"]["content"]
+    assert root["choices"][0]["message"]["content"].startswith('{"moves":')
