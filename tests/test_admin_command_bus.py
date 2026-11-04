@@ -172,6 +172,7 @@ async def test_social_compact_diagnostic_uses_single_canonical_case_without_expo
     async def fake_certify(candidate, case):
         assert case is fake_case
         assert candidate.prompt_profile == "compact"
+        assert candidate.reasoning_effort == "low"
         assert candidate.timeout_seconds == 55.0
         requested.append("certified")
         return SocialCertificationResult(
@@ -238,3 +239,79 @@ async def test_nvidia_activity_aware_jobs_have_correct_bounded_budgets() -> None
     minimal = bus.start(core, "providers diagnose nvidia --stream")
     assert minimal.timeout_seconds == 60.0
     await wait_terminal(bus, minimal.job_id)
+
+
+
+@pytest.mark.asyncio
+async def test_nvidia_low_effort_minimal_flag_is_passed_without_fallback(monkeypatch) -> None:
+    from amora.cognition import diagnostics_nvidia
+    sent: list[tuple[bool, str]] = []
+
+    async def fake_diagnose(key: str, *, stream: bool, reasoning_effort: str):
+        assert key == "private-key"
+        sent.append((stream, reasoning_effort))
+        return {
+            "stream": stream, "reasoning_effort": reasoning_effort,
+            "status_code": 400, "outcome": "HTTP_ERROR",
+        }
+
+    monkeypatch.setattr(diagnostics_nvidia, "diagnose_nvidia_text", fake_diagnose)
+    bus = AmoraCommandBus()
+    core = FakeCore(secrets=FakeSecrets({"NVIDIA_API_KEY": "private-key"}))
+    job = bus.start(core, "providers diagnose nvidia --stream --effort low")
+    finished = await wait_terminal(bus, job.job_id)
+    assert finished.status == "succeeded"
+    assert finished.result["data"]["status_code"] == 400
+    assert finished.result["data"]["outcome"] == "HTTP_ERROR"
+    assert sent == [(True, "low")]
+    assert "private-key" not in finished.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_nvidia_prompt_audit_is_offline_and_needs_no_nvidia_key(monkeypatch) -> None:
+    from amora import admin_commands
+    inspected: list[object] = []
+
+    async def fake_audit(core):
+        inspected.append(core)
+        return {
+            "kind": "nvidia_social_prompt_audit",
+            "data": {"canonical": {"total_chars": 8283}, "literal_content_included": False},
+        }
+
+    monkeypatch.setattr(admin_commands, "_audit_nvidia_social_prompt", fake_audit)
+    core = FakeCore()  # deliberately no NVIDIA_API_KEY
+    bus = AmoraCommandBus()
+    job = bus.start(core, "providers diagnose nvidia --prompt-audit")
+    finished = await wait_terminal(bus, job.job_id)
+    assert finished.status == "succeeded"
+    assert inspected == [core]
+    assert finished.result["kind"] == "nvidia_social_prompt_audit"
+    assert finished.result["data"]["literal_content_included"] is False
+
+
+@pytest.mark.asyncio
+async def test_nvidia_effort_parser_rejects_unknown_or_audit_override() -> None:
+    core = FakeCore()
+    for text in (
+        "providers diagnose nvidia --effort none",
+        "providers diagnose nvidia --effort",
+        "providers diagnose nvidia --effort high --effort low",
+        "providers diagnose nvidia --prompt-audit --effort low",
+    ):
+        bus = AmoraCommandBus()
+        job = bus.start(core, text)
+        done = await wait_terminal(bus, job.job_id)
+        assert done.status == "failed"
+        assert done.error_code == "COMMAND_ARGUMENT_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_nvidia_canonical_low_effort_profile_has_bounded_job_timeout() -> None:
+    core = FakeCore()
+    bus = AmoraCommandBus()
+    job = bus.start(core, "providers diagnose nvidia --social-canonical --effort low")
+    assert job.timeout_seconds == 300.0
+    result = await wait_terminal(bus, job.job_id)
+    assert result.status == "failed"  # missing NVIDIA secret; no call made
+    assert result.error_code == "CERTIFICATION_SECRET_MISSING"
