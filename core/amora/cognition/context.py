@@ -25,20 +25,63 @@ class ProviderPrivacyGate:
         return request.remote_processing_allowed and request.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET}
 
     @staticmethod
-    def memory_allowed(memory, *, remote: bool) -> bool:
+    def memory_allowed(memory, *, remote: bool, recipient_id: str | None = None) -> bool:
+        """Protect ownership/audience, independently of the topic's vocabulary.
+
+        Remote-processing consent is not a license to disclose a memory to a
+        different participant. Unowned PERSONAL memories without an identified
+        provenance actor are withheld until their audience can be established.
+        """
         if memory.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
             return False
         if remote and not memory.remote_processing_allowed:
             return False
-        return True
+        if memory.privacy_scope == PrivacyScope.PUBLIC:
+            return True
+
+        audience = set(getattr(memory, "audience", ()) or ())
+        owner = getattr(memory, "owner_entity_id", None)
+        actor = getattr(getattr(memory, "provenance", None), "actor_id", None)
+        if not recipient_id:
+            return False
+        if owner == recipient_id or recipient_id in audience:
+            return True
+        if owner or audience:
+            return False
+        return actor == recipient_id
 
     @staticmethod
-    def claim_allowed(claim, *, remote: bool) -> bool:
+    def claim_allowed(claim, *, remote: bool, recipient_id: str | None = None) -> bool:
+        """Nonpublic world facts are not exported as gossip about third parties."""
         if claim.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
             return False
         if remote and not claim.remote_processing_allowed:
             return False
-        return True
+        if claim.privacy_scope == PrivacyScope.PUBLIC:
+            return True
+        if not recipient_id:
+            return False
+        if claim.subject_id not in {recipient_id, "ENTITY_AMORA"}:
+            return False
+        source = getattr(claim, "source_entity_id", None)
+        return source in {None, recipient_id, "ENTITY_AMORA"}
+
+    @staticmethod
+    def message_allowed(message, *, remote: bool, recipient_id: str) -> bool:
+        """One shared session is not permission to share another person's DM."""
+        if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+            return False
+        if remote and not message.remote_processing_allowed:
+            return False
+        if message.privacy_scope == PrivacyScope.PUBLIC:
+            return True
+        return (
+            message.speaker_id == recipient_id
+            or (
+                message.speaker_id == "ENTITY_AMORA"
+                and message.addressee_id == recipient_id
+            )
+        )
 
 
 class ContextCompiler:
@@ -107,14 +150,14 @@ class ContextCompiler:
         memories: list[ContextMemory] = []
         for hit in self.memory.recall(MemoryQuery(text=request.text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78)):
             item = hit.memory
-            if self.privacy_gate.memory_allowed(item, remote=remote):
+            if self.privacy_gate.memory_allowed(item, remote=remote, recipient_id=request.speaker_id):
                 memories.append(ContextMemory(id=str(item.id), kind=item.kind.value, content=item.summary or item.content,
                                               score=hit.score, confidence=item.provenance.confidence,
                                               privacy_scope=item.privacy_scope.value, reason_codes=hit.reason_codes))
 
         claims: list[dict[str, Any]] = []
         for claim in self.world.current_state():
-            if not self.privacy_gate.claim_allowed(claim, remote=remote):
+            if not self.privacy_gate.claim_allowed(claim, remote=remote, recipient_id=request.speaker_id):
                 continue
             if claim.subject_id not in entity_ids | {"ENTITY_AMORA", None} and len(claims) >= 4:
                 continue
@@ -133,9 +176,9 @@ class ContextCompiler:
         for message in persisted_messages:
             if str(message.turn_id) == str(request.turn_id) or str(message.turn_id) in test_turn_ids:
                 continue
-            if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
-                continue
-            if remote and not message.remote_processing_allowed:
+            if not self.privacy_gate.message_allowed(
+                message, remote=remote, recipient_id=request.speaker_id
+            ):
                 continue
             text = message.spoken_text or message.normalized_text or message.raw_text
             if text:
@@ -147,14 +190,18 @@ class ContextCompiler:
 
         relationships: list[dict[str, Any]] = []
         for relation in self.identities.relationships:
-            if request.speaker_id not in {relation.source, relation.target} and "ENTITY_AMORA" not in {relation.source, relation.target}:
+            # A relation Amora has with someone else is not automatically
+            # public to the current participant.
+            if request.speaker_id not in {relation.source, relation.target}:
                 continue
             relationships.append({"source": relation.source, "relation_type": relation.relation_type,
                                   "target": relation.target, "confidence": relation.confidence})
 
         self_snapshot = self.self_model.snapshot()
         if remote:
-            allowed_layers = {"core_identity", "traits", "preferences", "relationships", "current_state"}
+            # Cross-person self-relationship maps are not safe to expose
+            # wholesale. Recipient-scoped relationships are projected above.
+            allowed_layers = {"core_identity", "traits", "preferences", "current_state"}
             self_snapshot = {key: value for key, value in self_snapshot.items() if key in allowed_layers}
             reasons.append("SELF_MODEL_REMOTE_LAYER_ALLOWLIST")
 
