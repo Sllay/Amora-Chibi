@@ -417,6 +417,17 @@ Princípio:
 
 A Amora pode brincar, discordar, provocar, xingar e expressar emoção sem o Privacy Firewall agir como filtro de personalidade.
 
+**Privacy Firewall não é filtro de palavrão, flerte não gráfico, assunto adulto ou humor ácido.**
+Seu objetivo é controlar exposição e destinatários de dados (por exemplo CPF,
+telefones, credenciais, API keys e informações pessoais de terceiros) e exigir
+as permissões apropriadas para o compartilhamento/uso remoto. A camada de
+expressão fornece orientação de estilo **sem sortear autorização para dizer
+uma palavra**. Um convite explícito e contextual para uma provocação amistosa
+pode ser reconhecido como ato social de brincadeira, mas não obriga a Amora a
+xingar, nem autoriza ataques gratuitos ou a inventar hostilidade. Outras
+restrições de segurança ou de consentimento, quando pertinentes, são
+independentes da política de privacidade.
+
 AUTH nunca deve ser enviado para modelo remoto.
 
 Permissão de contar algo a alguém e permissão de enviar esse dado a um provider remoto são decisões independentes.
