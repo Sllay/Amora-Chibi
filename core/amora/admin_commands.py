@@ -173,6 +173,30 @@ async def _command_providers_certify_social(core: Any, args: list[str]) -> dict[
     }
 
 
+async def _command_providers_diagnose_nvidia(core: Any, args: list[str]) -> dict[str, Any]:
+    if args not in ([], ["--stream"], ["--no-stream"]):
+        raise AdminCommandError(
+            "COMMAND_ARGUMENT_INVALID",
+            "uso: providers diagnose nvidia [--stream | --no-stream]",
+        )
+    from amora.cognition.diagnostics_nvidia import diagnose_nvidia_text
+
+    api_key = core.secrets.get("NVIDIA_API_KEY")
+    if not api_key:
+        raise AdminCommandError(
+            "CERTIFICATION_SECRET_MISSING",
+            "NVIDIA_API_KEY não configurada",
+            details={"missing_secrets": ["NVIDIA_API_KEY"]},
+        )
+    stream = args == ["--stream"]
+    result = await diagnose_nvidia_text(api_key, stream=stream)
+    return {
+        "kind": "nvidia_text_diagnostic",
+        "summary": "Diagnóstico NVIDIA concluído (sem alterar certificação ou Core).",
+        "data": result,
+    }
+
+
 _COMMANDS: tuple[RegisteredCommand, ...] = (
     RegisteredCommand(
         path=("help",),
@@ -187,6 +211,14 @@ _COMMANDS: tuple[RegisteredCommand, ...] = (
         description="Mostra readiness do Core sem abrir shell do host.",
         timeout_seconds=5.0,
         handler=_command_status,
+    ),
+    RegisteredCommand(
+        path=("providers", "diagnose", "nvidia"),
+        usage="providers diagnose nvidia [--stream | --no-stream]",
+        description="Diagnóstico mínimo de transporte NVIDIA, sem avaliação cognitiva.",
+        timeout_seconds=60.0,
+        handler=_command_providers_diagnose_nvidia,
+        exclusive=True,
     ),
     RegisteredCommand(
         path=("providers", "certify", "social"),
