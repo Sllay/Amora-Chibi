@@ -91,11 +91,15 @@ class NvidiaMistralLarge4Provider:
         *,
         model: str | None = None,
         timeout_seconds: float = 55.0,
+        max_total_seconds: float = 270.0,
         prompt_profile: Literal["canonical", "compact"] = "canonical",
     ) -> None:
         self.secrets = secrets
         self.model = model or os.getenv("AMORA_NVIDIA_MISTRAL_MODEL", _MISTRAL_LARGE_4_MODEL)
-        self.timeout_seconds = timeout_seconds
+        if timeout_seconds <= 0 or max_total_seconds <= timeout_seconds:
+            raise ValueError("NVIDIA timeout bounds must be positive and total > idle")
+        self.timeout_seconds = timeout_seconds  # Silence between meaningful SSE tokens.
+        self.max_total_seconds = max_total_seconds  # Independent resource guard.
         if prompt_profile not in {"canonical", "compact"}:
             raise ValueError("unsupported NVIDIA prompt profile")
         self.prompt_profile = prompt_profile
@@ -196,38 +200,53 @@ class NvidiaMistralLarge4Provider:
         *,
         api_key: str,
     ) -> tuple[dict[str, Any], dict[str, str], int]:
-        """Consume SSE under one bounded deadline with safe stage telemetry.
+        """Accept active high-effort reasoning, but stop stalled SSE streams.
 
-        A finish_reason='stop' is authoritative even if an upstream proxy keeps
-        its SSE connection open without sending [DONE]. Partial or truncated JSON
-        is never accepted by the local realization validator.
+        `timeout_seconds` is silence between *meaningful* model events
+        (reasoning_content or visible delta.content), not a total generation
+        deadline. Keep-alive comments and role-only SSE events never extend it.
+        An independent `max_total_seconds` guard bounds stuck/overlong jobs.
+        Never expose private reasoning or incomplete JSON.
         """
         started = perf_counter()
+        last_activity = started
         messages = payload.get("messages") or []
         prompt_chars = sum(
             len(item.get("content", ""))
             for item in messages
             if isinstance(item, dict) and isinstance(item.get("content"), str)
         )
-        timeout = httpx.Timeout(self.timeout_seconds, connect=min(10.0, self.timeout_seconds))
+        transport_timeout = httpx.Timeout(
+            self.timeout_seconds,
+            connect=min(10.0, self.timeout_seconds),
+        )
         content_parts: list[str] = []
         usage: dict[str, Any] = {}
         response_headers: dict[str, str] = {}
         status_code = 0
         visible_chars = 0
+        reasoning_events = 0
+        visible_events = 0
         first_event_ms: float | None = None
         first_reasoning_ms: float | None = None
         first_visible_ms: float | None = None
         completed_by: str | None = None
         stage = "waiting_headers"
 
-        def telemetry() -> dict[str, object]:
+        def telemetry(*, timeout_kind: str | None = None) -> dict[str, object]:
+            now = perf_counter()
             return {
                 "stage": stage,
-                "elapsed_ms": round((perf_counter() - started) * 1000, 1),
+                "elapsed_ms": round((now - started) * 1000, 1),
+                "silence_ms": round((now - last_activity) * 1000, 1),
+                "idle_timeout_seconds": self.timeout_seconds,
+                "max_total_seconds": self.max_total_seconds,
+                "timeout_kind": timeout_kind,
                 "first_event_ms": round(first_event_ms, 1) if first_event_ms is not None else None,
                 "first_reasoning_ms": round(first_reasoning_ms, 1) if first_reasoning_ms is not None else None,
                 "first_visible_ms": round(first_visible_ms, 1) if first_visible_ms is not None else None,
+                "reasoning_events": reasoning_events,
+                "visible_events": visible_events,
                 "prompt_chars": prompt_chars,
                 "message_count": len(messages),
                 "visible_chars": visible_chars,
@@ -235,8 +254,9 @@ class NvidiaMistralLarge4Provider:
             }
 
         try:
-            async with asyncio.timeout(self.timeout_seconds):
-                async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            # Safety guard is deliberately distinct from the idle limit.
+            async with asyncio.timeout(self.max_total_seconds):
+                async with httpx.AsyncClient(timeout=transport_timeout, follow_redirects=False) as client:
                     async with client.stream(
                         "POST",
                         self.API_URL,
@@ -257,15 +277,30 @@ class NvidiaMistralLarge4Provider:
                             )
                         if "text/event-stream" not in response.headers.get("content-type", ""):
                             raise ProviderError("NVIDIA Mistral expected SSE stream")
+
                         stage = "waiting_first_event"
-                        async for line in response.aiter_lines():
+                        last_activity = perf_counter()  # Headers received.
+                        lines = response.aiter_lines().__aiter__()
+                        while True:
+                            remaining = self.timeout_seconds - (perf_counter() - last_activity)
+                            if remaining <= 0:
+                                raise NvidiaStreamTimeout(telemetry(timeout_kind="idle"))
+                            try:
+                                # Even frequent non-data SSE keepalives cannot
+                                # repeatedly reset the meaningful inactivity limit.
+                                line = await asyncio.wait_for(lines.__anext__(), timeout=remaining)
+                            except StopAsyncIteration:
+                                completed_by = "stream_closed"
+                                stage = "completed"
+                                break
                             if not line.startswith("data:"):
                                 continue
                             data = line[5:].strip()
                             if not data:
                                 continue
+                            now = perf_counter()
                             if first_event_ms is None:
-                                first_event_ms = (perf_counter() - started) * 1000.0
+                                first_event_ms = (now - started) * 1000.0
                             if data == "[DONE]":
                                 completed_by = "done"
                                 stage = "completed"
@@ -281,6 +316,7 @@ class NvidiaMistralLarge4Provider:
                             if isinstance(event.get("usage"), dict):
                                 usage = event["usage"]
 
+                            meaningful = False
                             for choice in event.get("choices") or []:
                                 if not isinstance(choice, dict):
                                     continue
@@ -289,14 +325,18 @@ class NvidiaMistralLarge4Provider:
                                     continue
                                 reasoning = delta.get("reasoning_content")
                                 if isinstance(reasoning, str) and reasoning:
+                                    meaningful = True
+                                    reasoning_events += 1
                                     if first_reasoning_ms is None:
-                                        first_reasoning_ms = (perf_counter() - started) * 1000.0
+                                        first_reasoning_ms = (now - started) * 1000.0
                                     if first_visible_ms is None:
                                         stage = "reasoning_only"
                                 piece = delta.get("content")
                                 if isinstance(piece, str) and piece:
+                                    meaningful = True
+                                    visible_events += 1
                                     if first_visible_ms is None:
-                                        first_visible_ms = (perf_counter() - started) * 1000.0
+                                        first_visible_ms = (now - started) * 1000.0
                                     visible_chars += len(piece)
                                     if visible_chars > 100_000:
                                         raise ProviderError("NVIDIA Mistral SSE content too large")
@@ -310,14 +350,21 @@ class NvidiaMistralLarge4Provider:
                                     completed_by = "finish_reason"
                                     stage = "completed"
                                     break
+
+                            if meaningful:
+                                last_activity = perf_counter()
                             if completed_by is not None:
                                 break
-                        # Explicit EOS from the server, or normal stream close.
-                        if completed_by is None:
-                            completed_by = "stream_closed"
-                            stage = "completed"
+        except NvidiaStreamTimeout:
+            raise
         except (TimeoutError, httpx.TimeoutException) as exc:
-            raise NvidiaStreamTimeout(telemetry()) from exc
+            elapsed = perf_counter() - started
+            kind = (
+                "total_safety"
+                if elapsed >= self.max_total_seconds - 0.005
+                else "idle"
+            )
+            raise NvidiaStreamTimeout(telemetry(timeout_kind=kind)) from exc
 
         if not content_parts:
             raise ProviderError("NVIDIA Mistral SSE returned no visible content")
@@ -330,6 +377,7 @@ class NvidiaMistralLarge4Provider:
             response_headers,
             status_code,
         )
+
 
 def _optional_int(value: object) -> int | None:
     if value is None:
