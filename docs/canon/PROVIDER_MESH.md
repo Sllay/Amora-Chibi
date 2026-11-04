@@ -61,29 +61,35 @@ AMORA CORE
 
 Cada papel é certificado separadamente.
 
-### Baseline atual
+### Social primary atual (decisão explícita de 2026-11-04, ADR-0036)
 
-- **social dialogue:** Qwen 3.8 27B no caminho Groq configurado;
-- **reasoning specialist:** GPT-OSS 120B;
-- **Mistral Large 4 / NVIDIA (`mistralai/mistral-large-4-1t-a52b`): CANDIDATO**, não promovido;
-- Cloudflare Workers AI, Gemini, OpenRouter e fallback local continuam eixos
-  substituíveis conforme capability, health, privacy, custo e certificação.
-
-Se o Mistral vencer o CH3:
+- **social dialogue:** Mistral Large 4 via NVIDIA (`mistralai/mistral-large-4-1t-a52b`) selecionado pelo usuário, quando `NVIDIA_API_KEY` existe.
+- **social fallback:** Groq/Qwen 3.8 27B permanece registrado e disponível; Gemini e outros providers continuam conforme suas regras existentes.
+- **reasoning specialist:** GPT-OSS 120B via Groq. **Mistral não foi promovido para reasoning.**
+- **candidato de certificação:** `NvidiaMistralLarge4Provider` permanece separado da instância produtiva `NvidiaMistralLarge4ProductionProvider`.
 
 ```text
-dialogue:
-Mistral Large 4
-→ recovery do primary
-→ Qwen fallback
+SOCIAL_DIALOGUE:
+Mistral Large 4 (NVIDIA) — PRIMARY
+  → falha, timeout, quota ou circuito aberto
+  → Groq/Qwen — FALLBACK
 
-reasoning:
-Mistral Large 4
-→ recovery do primary
-→ GPT-OSS 120B fallback
+REASONING:
+GPT-OSS 120B — não alterado
 ```
 
-Essa ordem é **resultado de benchmark**, nunca identidade canônica.
+Padrão `AMORA_SOCIAL_PRIMARY=mistral`; para rollback operacional,
+`AMORA_SOCIAL_PRIMARY=groq` seguido de reinício. Sem chave NVIDIA,
+Groq segue como primary. O campo `social_primary_provider` do status
+identifica qual candidato ficou em primeiro lugar de fato.
+
+A seleção é **autorizada pelo usuário**, não por score automático. A latência
+alta foi conscientemente aceita. Adaptador produtivo usa até 95s totais
+por chamada, 55s de inatividade entre eventos úteis e não repete chamadas
+lentas de Mistral automaticamente: ao falhar, libera o fallback.
+O contrato JSON do endpoint NVIDIA não foi comprovado como JSON Schema
+estrito: a fala só é liberada após `RealizationValidator` local e
+nenhum Core guardrail ou PrivacyGate foi removido.
 
 ---
 
