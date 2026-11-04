@@ -415,3 +415,30 @@ providers certify social --suite nuance4 --case layered_disclosure
 Bateria completa de 4 casos: job de até 1500s. O corpus original de 11 e
 `--suite expressive4` continuam intactos. Nenhuma aprovação ou promoção
 automática é permitida.
+
+
+### Diagnóstico do fechamento rejeitado em certificação A/B
+
+Quando o provider produz um JSON válido, mas o `RealizationValidator`
+rejeita `FOLLOWUP_NOT_AUTHORIZED`, o relatório agora inclui
+`validation_failure_detail` e o Shell exibe `followup_rejection=` com
+uma das categorias fixas:
+
+- `closing_question`: campo `closing` do JSON marcou fechamento de pergunta;
+- `terminal_question_mark`: fala terminava literalmente com `?`;
+- `followup_move`: o JSON propôs movimento de continuação não autorizado;
+- `unknown`: causa não discriminada pelo diagnóstico não sensível.
+
+Esse diagnóstico **não revela** texto recusado, histórico, raciocínio ou
+segredos. Não flexibiliza o diálogo nem altera o conteúdo do `DialoguePlan`;
+mantém a barreira da produção. No caso `adult_relationship_subtext`,
+permite investigar a falha do Groq de forma mais específica:
+
+```text
+providers certify social --suite nuance4 --case adult_relationship_subtext
+```
+
+Uma falha de fechamento não comprova bloqueio de assunto adulto. Também não
+é evidência de inferioridade semântica: respostas não validadas não são
+exibidas e não recebem score de qualidade. Os resultados precisam de
+revisão humana e não promovem providers.

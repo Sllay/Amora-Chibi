@@ -291,6 +291,7 @@ class SocialCertificationResult(BaseModel):
     inappropriate_refusal: bool = False
     human_review_required: bool = True
     error_code: str | None = None
+    validation_failure_detail: Literal["closing_question", "terminal_question_mark", "followup_move", "unknown"] | None = None
     transport_diagnostics: dict[str, str | int | float | None] = Field(default_factory=dict)
     reason_codes: list[str] = Field(default_factory=list)
 
@@ -483,6 +484,37 @@ def _provider_failure_code(exc: Exception) -> tuple[str, list[str]]:
     return "ProviderError", ["PROVIDER_ERROR_UNCLASSIFIED"]
 
 
+def _safe_followup_failure_detail(
+    code: str, raw: dict[str, object],
+) -> Literal["closing_question", "terminal_question_mark", "followup_move", "unknown"] | None:
+    """Explain rejected conversation flow without revealing unvalidated speech.
+
+    The Core's validator remains the sole authority; this only inspects a
+    rejected candidate for fixed, non-literal forensic metadata.
+    """
+    if code != "FOLLOWUP_NOT_AUTHORIZED":
+        return None
+    if raw.get("closing") == "question":
+        return "closing_question"
+    moves = raw.get("moves")
+    if not isinstance(moves, list):
+        return "unknown"
+    combined = " ".join(
+        str(item["text"]).strip()
+        for item in moves
+        if isinstance(item, dict) and isinstance(item.get("text"), str)
+    ).strip()
+    if combined.endswith("?"):
+        return "terminal_question_mark"
+    if any(
+        isinstance(item, dict)
+        and item.get("kind") in {"ask_followup", "ask_question", "request_more"}
+        for item in moves
+    ):
+        return "followup_move"
+    return "unknown"
+
+
 async def certify_social_case(
     provider: SocialRealizer,
     case: SocialCertificationCase,
@@ -517,6 +549,7 @@ async def certify_social_case(
             validated=False,
             latency_ms=(perf_counter() - started) * 1000.0,
             error_code=exc.code,
+            validation_failure_detail=_safe_followup_failure_detail(exc.code, raw),
             transport_diagnostics=_usage_transport_diagnostics(raw),
             reason_codes=["CERTIFICATION_REPLAY", "NO_STATE_MUTATION", "REALIZATION_REJECTED"],
         )

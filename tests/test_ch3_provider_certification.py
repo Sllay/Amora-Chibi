@@ -602,3 +602,53 @@ def test_mistral_prompt_audit_reports_sizes_without_private_text(tmp_path: Path)
     assert "father" not in serialized
     assert "canonical_name" not in serialized
     assert "PERSON_BK" not in serialized
+
+
+
+@pytest.mark.asyncio
+async def test_followup_rejection_exposes_only_safe_nonliteral_failure_category() -> None:
+    probe = SocialReplayProbe(
+        probe_id="followup-shape",
+        category="dialogue",
+        user_text="Tu entendeu o que eu quis dizer?",
+    )
+    context = _context(text=probe.user_text)
+
+    class InvalidClosingRealizer(FixtureRealizer):
+        async def realize(self, context):
+            result = await super().realize(context)
+            result["closing"] = "question"
+            return result
+
+    rejected_closing = await certify_social_case(
+        InvalidClosingRealizer("Eu entendi direitinho.", move="answer_question"),
+        SocialCertificationCase(probe=probe, context=context),
+    )
+    assert rejected_closing.error_code == "FOLLOWUP_NOT_AUTHORIZED"
+    assert rejected_closing.validation_failure_detail == "closing_question"
+    assert rejected_closing.text == ""
+    assert rejected_closing.score is None
+
+    rejected_terminal_mark = await certify_social_case(
+        FixtureRealizer("É a mudança de carinho que dói?", move="answer_question"),
+        SocialCertificationCase(probe=probe, context=context),
+    )
+    assert rejected_terminal_mark.error_code == "FOLLOWUP_NOT_AUTHORIZED"
+    assert rejected_terminal_mark.validation_failure_detail == "terminal_question_mark"
+    assert rejected_terminal_mark.text == ""
+    assert rejected_terminal_mark.score is None
+
+    accepted = await certify_social_case(
+        FixtureRealizer("Entendi, foi a mudança no carinho.", move="answer_question"),
+        SocialCertificationCase(probe=probe, context=context),
+    )
+    assert accepted.validated is True
+    assert accepted.validation_failure_detail is None
+
+    # A contract rejection unrelated to a question never exposes a made-up subtype.
+    unauthorized = await certify_social_case(
+        FixtureRealizer("Pode me dar mais detalhes?", move="offer_help"),
+        SocialCertificationCase(probe=probe, context=context),
+    )
+    assert unauthorized.error_code == "UNAUTHORIZED_REALIZATION_MOVE"
+    assert unauthorized.validation_failure_detail is None
