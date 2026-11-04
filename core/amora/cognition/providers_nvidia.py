@@ -14,7 +14,6 @@ from amora.secrets import SecretStore
 
 from .models import CognitiveContext
 from .prompt_frame import render_current_turn, render_trusted_protocol
-from .providers import GroqCognitiveProvider as BaseLanguageProvider
 from .providers import ProviderError
 from .providers_identity import _identity_history
 from .providers_structured import _dialogue_token_budget
@@ -25,6 +24,15 @@ _NVIDIA_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 _MISTRAL_LARGE_4_MODEL = "mistralai/mistral-large-4-1t-a52b"
 # Mistral reasoning tokens share max_tokens with the visible structured answer.
 _MISTRAL_COMPLETION_TOKEN_FLOOR = 4096
+
+
+class NvidiaStreamTimeout(TimeoutError):
+    """Safe, stage-aware deadline failure: no prompt, generated text or credentials."""
+
+    def __init__(self, diagnostics: dict[str, object]) -> None:
+        self.diagnostics = diagnostics
+        stage = str(diagnostics.get("stage") or "unknown")
+        super().__init__(f"NVIDIA stream timeout at stage {stage}")
 
 
 class NvidiaMistralLarge4Provider:
@@ -112,17 +120,16 @@ class NvidiaMistralLarge4Provider:
             "remaining_tokens": response_headers.get("x-ratelimit-remaining-tokens"),
             "transport": "nvidia_chat_completions",
             "certification_only": True,
+            "transport_diagnostics": root.get("_transport_diagnostics") or {},
         }
         return parsed
 
     def _payload(self, context: CognitiveContext) -> dict[str, object]:
-        trusted = (
-            BaseLanguageProvider._system_prompt()
-            + "\n\n"
-            + render_trusted_protocol(context)
-            + "\n\n"
-            + realization_instruction(context)
-        )
+        # The Core protocol and realization contract already enforce identity,
+        # authority, spoken style and JSON. The generic legacy system prompt
+        # repeats those instructions and ambiguously says output must be speech,
+        # which conflicts with the required JSON envelope.
+        trusted = render_trusted_protocol(context) + "\n\n" + realization_instruction(context)
         messages: list[dict[str, str]] = [{"role": "system", "content": trusted}]
         messages.extend(
             {"role": role, "content": content}
@@ -149,77 +156,140 @@ class NvidiaMistralLarge4Provider:
         *,
         api_key: str,
     ) -> tuple[dict[str, Any], dict[str, str], int]:
-        """Consume NVIDIA SSE and reconstruct the final chat-completion response.
+        """Consume SSE under one bounded deadline with safe stage telemetry.
 
-        The 55-second limit is a *total wall-clock deadline*, not an idle-read
-        timeout that resets on each token. Partial JSON is never certified.
+        A finish_reason='stop' is authoritative even if an upstream proxy keeps
+        its SSE connection open without sending [DONE]. Partial or truncated JSON
+        is never accepted by the local realization validator.
         """
+        started = perf_counter()
+        messages = payload.get("messages") or []
+        prompt_chars = sum(
+            len(item.get("content", ""))
+            for item in messages
+            if isinstance(item, dict) and isinstance(item.get("content"), str)
+        )
         timeout = httpx.Timeout(self.timeout_seconds, connect=min(10.0, self.timeout_seconds))
         content_parts: list[str] = []
         usage: dict[str, Any] = {}
         response_headers: dict[str, str] = {}
         status_code = 0
-        total_chars = 0
-        async with asyncio.timeout(self.timeout_seconds):
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-                async with client.stream(
-                    "POST",
-                    self.API_URL,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                        "Accept": "text/event-stream",
-                    },
-                    json=payload,
-                ) as response:
-                    status_code = response.status_code
-                    response_headers = dict(response.headers)
-                    if status_code >= 400:
-                        raise ProviderError(
-                            f"NVIDIA Mistral HTTP {status_code}",
-                            status_code=status_code,
-                            retry_after=response.headers.get("retry-after"),
-                        )
-                    if "text/event-stream" not in response.headers.get("content-type", ""):
-                        raise ProviderError("NVIDIA Mistral expected SSE stream")
-                    async for line in response.aiter_lines():
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if data == "[DONE]":
-                            break
-                        if not data:
-                            continue
-                        try:
-                            event = json.loads(data)
-                        except (ValueError, TypeError) as exc:
-                            raise ProviderError("NVIDIA Mistral invalid SSE JSON") from exc
-                        if not isinstance(event, dict):
-                            raise ProviderError("NVIDIA Mistral invalid SSE event")
-                        if event.get("error"):
-                            raise ProviderError("NVIDIA Mistral SSE provider error")
-                        if isinstance(event.get("usage"), dict):
-                            usage = event["usage"]
-                        for choice in event.get("choices", []):
-                            if not isinstance(choice, dict):
+        visible_chars = 0
+        first_event_ms: float | None = None
+        first_reasoning_ms: float | None = None
+        first_visible_ms: float | None = None
+        completed_by: str | None = None
+        stage = "waiting_headers"
+
+        def telemetry() -> dict[str, object]:
+            return {
+                "stage": stage,
+                "elapsed_ms": round((perf_counter() - started) * 1000, 1),
+                "first_event_ms": round(first_event_ms, 1) if first_event_ms is not None else None,
+                "first_reasoning_ms": round(first_reasoning_ms, 1) if first_reasoning_ms is not None else None,
+                "first_visible_ms": round(first_visible_ms, 1) if first_visible_ms is not None else None,
+                "prompt_chars": prompt_chars,
+                "message_count": len(messages),
+                "visible_chars": visible_chars,
+                "completed_by": completed_by,
+            }
+
+        try:
+            async with asyncio.timeout(self.timeout_seconds):
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+                    async with client.stream(
+                        "POST",
+                        self.API_URL,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                            "Accept": "text/event-stream",
+                        },
+                        json=payload,
+                    ) as response:
+                        status_code = response.status_code
+                        response_headers = dict(response.headers)
+                        if status_code >= 400:
+                            raise ProviderError(
+                                f"NVIDIA Mistral HTTP {status_code}",
+                                status_code=status_code,
+                                retry_after=response.headers.get("retry-after"),
+                            )
+                        if "text/event-stream" not in response.headers.get("content-type", ""):
+                            raise ProviderError("NVIDIA Mistral expected SSE stream")
+                        stage = "waiting_first_event"
+                        async for line in response.aiter_lines():
+                            if not line.startswith("data:"):
                                 continue
-                            delta = choice.get("delta") or {}
-                            if not isinstance(delta, dict):
+                            data = line[5:].strip()
+                            if not data:
                                 continue
-                            piece = delta.get("content")
-                            if isinstance(piece, str):
-                                total_chars += len(piece)
-                                if total_chars > 100_000:
-                                    raise ProviderError("NVIDIA Mistral SSE content too large")
-                                content_parts.append(piece)
+                            if first_event_ms is None:
+                                first_event_ms = (perf_counter() - started) * 1000.0
+                            if data == "[DONE]":
+                                completed_by = "done"
+                                stage = "completed"
+                                break
+                            try:
+                                event = json.loads(data)
+                            except (ValueError, TypeError) as exc:
+                                raise ProviderError("NVIDIA Mistral invalid SSE JSON") from exc
+                            if not isinstance(event, dict):
+                                raise ProviderError("NVIDIA Mistral invalid SSE event")
+                            if event.get("error"):
+                                raise ProviderError("NVIDIA Mistral SSE provider error")
+                            if isinstance(event.get("usage"), dict):
+                                usage = event["usage"]
+
+                            for choice in event.get("choices") or []:
+                                if not isinstance(choice, dict):
+                                    continue
+                                delta = choice.get("delta") or {}
+                                if not isinstance(delta, dict):
+                                    continue
+                                reasoning = delta.get("reasoning_content")
+                                if isinstance(reasoning, str) and reasoning:
+                                    if first_reasoning_ms is None:
+                                        first_reasoning_ms = (perf_counter() - started) * 1000.0
+                                    if first_visible_ms is None:
+                                        stage = "reasoning_only"
+                                piece = delta.get("content")
+                                if isinstance(piece, str) and piece:
+                                    if first_visible_ms is None:
+                                        first_visible_ms = (perf_counter() - started) * 1000.0
+                                    visible_chars += len(piece)
+                                    if visible_chars > 100_000:
+                                        raise ProviderError("NVIDIA Mistral SSE content too large")
+                                    content_parts.append(piece)
+                                    stage = "visible_partial"
+
+                                finish_reason = choice.get("finish_reason")
+                                if finish_reason is not None:
+                                    if finish_reason != "stop":
+                                        raise ProviderError("NVIDIA Mistral SSE generation incomplete")
+                                    completed_by = "finish_reason"
+                                    stage = "completed"
+                                    break
+                            if completed_by is not None:
+                                break
+                        # Explicit EOS from the server, or normal stream close.
+                        if completed_by is None:
+                            completed_by = "stream_closed"
+                            stage = "completed"
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            raise NvidiaStreamTimeout(telemetry()) from exc
+
         if not content_parts:
             raise ProviderError("NVIDIA Mistral SSE returned no visible content")
         return (
-            {"choices": [{"message": {"content": "".join(content_parts)}}], "usage": usage},
+            {
+                "choices": [{"message": {"content": "".join(content_parts)}}],
+                "usage": usage,
+                "_transport_diagnostics": telemetry(),
+            },
             response_headers,
             status_code,
         )
-
 
 def _optional_int(value: object) -> int | None:
     if value is None:
