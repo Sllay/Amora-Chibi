@@ -164,7 +164,7 @@ O Shell atualiza esse histórico por polling. Não transmite JSON incompleto
 ou texto de raciocínio antes da validação canônica. A execução A/B
 permanece sequencial e mantém a ordem alternada determinística.
 
-O adaptador candidato NVIDIA usa `stream=true` via SSE, agrega
+O adaptador candidato NVIDIA (certificação, ainda não promovido) usa `stream=true` via SSE, agrega
 `choices[].delta.content` até concluir o JSON e ignora
 `reasoning_content`. O prazo de **55 segundos agora mede inatividade real**, renovado por
 cada fragmento não vazio de `reasoning_content` ou `delta.content`.
@@ -193,8 +193,7 @@ A certificação social continua separada em `providers certify social`.
 ### Diagnóstico de geração social NVIDIA (CH3)
 
 A certificação social continua usando o **mesmo contexto canônico** para ambos
-os providers e não promove nenhum automaticamente. O adaptador Mistral mantém
-`reasoning_effort=high`, `max_tokens>=4096`, SSE, timeout **por inatividade** de 55s e teto total de 270s,
+os providers e não promove nenhum automaticamente. O adaptador Mistral usa `reasoning_effort=low` **apenas no candidato experimental**, `max_tokens>=4096`, SSE, timeout **por inatividade** de 55s e teto total de 270s,
 mas não duplica o antigo prompt genérico que conflitava com o contrato JSON.
 O leitor encerra ao receber `finish_reason=stop` (ou `[DONE]`) e rejeita
 `finish_reason` de geração truncada.
@@ -253,6 +252,41 @@ automaticamente após timeout.
 - **Conclusão válida**: somente `finish_reason=stop`, `[DONE]` ou
   encerramento normal do stream com conteúdo JSON validado. Toda validação
   de estrutura e de autorização dos movimentos continua pertencendo ao Core.
-- `reasoning_effort=high` e `max_tokens>=4096` permanecem inalterados;
+- `max_tokens>=4096` permanece inalterado; o candidato social experimental passou a `reasoning_effort=low` e aceita explicitamente `medium`/`high` nas sondas;
   não há promoção automática, registro de conteúdo de reasoning ou retries
   automáticos de timeout.
+
+
+### Experimento de esforço LOW e auditoria do prompt (CH3)
+
+O candidato **NVIDIA Mistral Large 4, ainda sem promoção**, usa agora
+`reasoning_effort=low` como padrão de certificação. Não altera o Qwen/Groq
+já ativo na Amora nem a decisão de Core sobre a profundidade cognitiva. O
+esforço é configurável apenas na classe do provider e nas sondas autorizadas,
+não por texto arbitrário vindo da conversa. `medium` e `high` continuam
+acessíveis para comparações isoladas.
+
+**Compatibilidade pendente:** o fabricante Mistral e o guia de NIM dedicado
+ao Large 4 documentam `low|medium|high`; a página do **API Catalog hosted
+mistralai/mistral-large-4-1t-a52b** ainda enumera `none|high`. Não é
+garantido que o endpoint atual aceite `low`/`medium`. A implementação
+preserva a resposta HTTP (por exemplo 400) como falha de contrato/serviço e
+**não faz fallback silencioso para high ou none**, nem repete a chamada.
+
+Ordem sugerida para testar, sem executar corpus de 11 casos:
+
+1. `providers diagnose nvidia --stream --effort low` — prompt mínimo, comprova suporte real com custo pequeno; resposta inclui esforço, HTTP e comparação do marcador;
+2. `providers diagnose nvidia --prompt-audit` — compila localmente o caso `ordinary_chat`, sem NVIDIA_API_KEY e **sem requisição remota**. Retorna apenas contagens e tamanhos em caracteres de constitution, living profile, turn frame, instrução de realização, histórico e texto atual, além da decomposição do estado; nunca inclui o conteúdo privado;
+3. Se `low` for aceito no endpoint: `providers diagnose nvidia --social-compact --effort low` para um caso social Core, sem Groq e sem expor fala;
+4. Opcional: `providers diagnose nvidia --social-canonical --effort low` para comparar contra o protocolo canônico com **o mesmo esforço**. `--effort medium` e `--effort high` são explicitamente aceitos nesses diagnósticos.
+
+As sondas sociais retornam `validated`, `error_code`, `latency_ms`,
+telemetria de SSE e nível solicitado; não retornam conteúdo, raciocínio
+nem score cognitivo. Os dados da auditoria mostram caracteres reais, não
+contagem exata de tokens. **Latência de medium não é média aritmética de low e high**:
+medir separadamente antes de promover ou automatizar roteamento de esforço.
+
+Fontes da divergência hospedado/checkpoint:
+- https://docs.api.nvidia.com/nim/reference/mistralai-mistral-large-4-1t-a52b-infer
+- https://docs.nvidia.com/nim/large-language-models/2.1.4/get-started/advanced/get-started-mistral-large-4.html
+- https://docs.mistral.ai/studio/conversations/reasoning
