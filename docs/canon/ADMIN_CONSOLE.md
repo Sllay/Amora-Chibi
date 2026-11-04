@@ -481,3 +481,25 @@ O baseline Groq/Qwen usa `response_format={"type":"json_object"}`,
 Groq descreve que o modo JSON Object ocasionalmente pode falhar e retornar
 erro. Migrar para JSON Schema estrito é possibilidade **se confirmada
 compatibilidade**, mas deve ocorrer em PR separado, com A/B e regressões.
+
+
+### Diagnóstico Groq isolado: sem chamada NVIDIA
+
+Para investigar o HTTP 400 sem gastar tempo e quota do Mistral:
+
+```text
+providers diagnose groq --suite nuance4 --case adult_relationship_subtext
+```
+
+Essa sonda executa **apenas o Groq/Qwen**, uma única vez, com o mesmo
+ContextCompiler/DialoguePlan e histórico ficcional da Nuance4. Timeout do
+job: 65s (Groq usa timeout próprio de 30s para a realização). Não escreve
+histórico, estado ou memória. Não revela **nem mesmo fala validada**:
+retorna `validated`, `latency_ms`, `error_code`, categoria de erro segura
+e `validation_failure_detail` quando aplicável.
+
+O comando exige `--case` (um teste só), aceita corpora fechados
+`nuance4`, `expressive4` e `full11`, e precisa apenas de `GROQ_API_KEY`.
+Não tenta contornar recusas, não repete HTTP 400 automaticamente, não toca
+na decisão de promoção e não aciona a NVIDIA. Se quiser comparar as
+**falas naturais** depois, execute a certificação A/B usual.
