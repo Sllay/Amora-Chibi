@@ -22,6 +22,7 @@ class SocialABCaseResult(BaseModel):
 
     probe_id: str
     category: str
+    review_focus: str = ""
     context_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     execution_order: Literal["left_first", "right_first"]
     left: SocialCertificationResult
@@ -96,6 +97,7 @@ async def compare_social_case(
     return SocialABCaseResult(
         probe_id=case.probe.probe_id,
         category=case.probe.category,
+        review_focus=case.probe.notes,
         context_fingerprint=fingerprint,
         execution_order=execution_order,
         left=left,
