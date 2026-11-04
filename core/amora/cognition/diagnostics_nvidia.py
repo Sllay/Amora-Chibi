@@ -85,7 +85,7 @@ async def diagnose_nvidia_text(
                                     if sum(map(len, pieces)) > 16384:
                                         return _result(started, stream, status_code, first_content_ms, False, "CONTENT_LIMIT")
                     else:
-                        data = await response.json() if asyncio.iscoroutinefunction(response.json) else response.json()
+                        data = response.json()
                         content = data["choices"][0]["message"]["content"]
                         if not isinstance(content, str):
                             return _result(started, stream, status_code, first_content_ms, False, "INVALID_RESPONSE")
