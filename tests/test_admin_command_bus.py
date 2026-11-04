@@ -49,7 +49,7 @@ async def wait_terminal(bus: AmoraCommandBus, job_id, *, attempts: int = 20):
 
 def test_catalog_contains_only_explicit_commands() -> None:
     catalog = {item.path: item for item in command_catalog()}
-    assert set(catalog) == {"help", "status", "providers certify social", "providers diagnose nvidia"}
+    assert set(catalog) == {"help", "status", "providers certify social", "providers diagnose nvidia", "providers diagnose groq"}
     assert catalog["providers certify social"].exclusive is True
     assert catalog["providers certify social"].permission == "operator"
     assert catalog["providers certify social"].timeout_seconds == 480.0
@@ -453,3 +453,71 @@ async def test_nuance4_selects_only_four_contextual_cases(monkeypatch) -> None:
     assert final.status == "failed"
     assert final.error_code == "CERTIFICATION_CASE_NOT_FOUND"
     assert len(final.error_details["available_cases"]) == 4
+
+
+
+@pytest.mark.asyncio
+async def test_groq_single_case_diagnostic_never_calls_nvidia_or_discloses_speech(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from amora.cognition import certification, certification_live, providers_structured
+    from amora.cognition.certification import SocialCertificationResult
+
+    fake_case = SimpleNamespace(context=object())
+    observed: list[str] = []
+
+    def fake_build(core, *, speaker_id, target_id, probes, corpus_id):
+        assert corpus_id == "SOCIAL_NUANCE4_V1"
+        assert speaker_id == "PERSON_BK"
+        assert target_id == "ENTITY_AMORA"
+        assert [p.probe_id for p in probes] == ["adult_relationship_subtext"]
+        observed.append("build_context")
+        return [fake_case]
+
+    async def fake_certify(provider, case):
+        assert case is fake_case
+        assert provider == "mock-groq-only"
+        observed.append("groq_only")
+        return SocialCertificationResult(
+            probe_id="adult_relationship_subtext",
+            category="adult_relational",
+            provider="groq",
+            error_code="PROVIDER_HTTP_400",
+            latency_ms=1150,
+            transport_diagnostics={
+                "stage": "http_request_rejected",
+                "http_status_code": 400,
+                "provider_error_category": "json_generation_failed",
+            },
+            text="PRIVATE_SPEECH_SHOULD_NOT_BE_EXPOSED",
+        )
+
+    monkeypatch.setattr(certification_live, "build_live_social_cases", fake_build)
+    monkeypatch.setattr(certification, "certify_social_case", fake_certify)
+    monkeypatch.setattr(providers_structured, "GroqCognitiveProvider", lambda secrets: "mock-groq-only")
+
+    core = FakeCore(secrets=FakeSecrets({"GROQ_API_KEY": "SECRET_TEST_KEY"}))
+    bus = AmoraCommandBus()
+    job = bus.start(core, "providers diagnose groq --suite nuance4 --case adult_relationship_subtext")
+    assert job.timeout_seconds == 65.0
+    final = await wait_terminal(bus, job.job_id)
+    assert final.status == "succeeded"
+    assert final.result["kind"] == "groq_social_case_diagnostic"
+    assert final.result["data"]["error_code"] == "PROVIDER_HTTP_400"
+    assert final.result["data"]["transport_diagnostics"]["provider_error_category"] == "json_generation_failed"
+    assert final.result["data"]["promotion_decision"] == "none"
+    assert observed == ["build_context", "groq_only"]
+    serialized = final.model_dump_json()
+    assert "SECRET_TEST_KEY" not in serialized
+    assert "PRIVATE_SPEECH_SHOULD_NOT_BE_EXPOSED" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_groq_diagnostic_requires_case_and_only_groq_secret() -> None:
+    bus = AmoraCommandBus()
+    core = FakeCore()
+    no_case = bus.start(core, "providers diagnose groq --suite nuance4")
+    assert (await wait_terminal(bus, no_case.job_id)).error_code == "COMMAND_ARGUMENT_INVALID"
+    no_secret = bus.start(core, "providers diagnose groq --suite nuance4 --case adult_relationship_subtext")
+    finished = await wait_terminal(bus, no_secret.job_id)
+    assert finished.error_code == "CERTIFICATION_SECRET_MISSING"
+    assert finished.error_details == {"missing_secrets": ["GROQ_API_KEY"]}

@@ -442,3 +442,64 @@ Uma falha de fechamento não comprova bloqueio de assunto adulto. Também não
 é evidência de inferioridade semântica: respostas não validadas não são
 exibidas e não recebem score de qualidade. Os resultados precisam de
 revisão humana e não promovem providers.
+
+
+### Groq HTTP 400 — categoria segura de rejeição (CH3)
+
+Um `PROVIDER_HTTP_400` ocorre **antes** da validação pelo Core e,
+isoladamente, **não prova censura**. A API Groq pode recusar requisições por
+parâmetros não suportados, limite de contexto ou falhas ao gerar JSON no
+modo `response_format=json_object`; conteúdo é apenas uma hipótese a
+investigar se o próprio provider devolver identificação explícita.
+
+Depois de atualizar a aplicação, execute **somente o caso com falha**:
+
+```text
+providers certify social --suite nuance4 --case adult_relationship_subtext
+```
+
+A certificação mostrará `transporte: fase=http_request_rejected · HTTP=400 ·
+categoria=<classificação>`, com apenas categorias fixas:
+
+- `json_generation_failed`: assinatura reconhecida de falha de JSON;
+- `explicit_content_policy_rejection`: o serviço declarou explicitamente filtro/política;
+- `unsupported_parameter`: argumento rejeitado pelo serviço;
+- `context_length_exceeded`: contexto acima do limite;
+- `model_unavailable`: código explícito de modelo indisponível;
+- `invalid_request_unspecified`: requisição inválida sem causa específica;
+- `unclassified`: resposta sem diagnóstico confiável.
+
+**Atenção:** classificação é conservadora e best-effort; texto da exceção,
+mensagem bruta de erro e prompt nunca são publicados. A ausência de uma
+categoria específica significa informação insuficiente, não ausência de
+filtros. O HTTP 400 não é repetido automaticamente; testes read-only não
+promovem modelo nem mudam o validador. Corrigir o erro deve se basear na
+categoria observada, não em mudar guardrails às cegas.
+
+O baseline Groq/Qwen usa `response_format={"type":"json_object"}`,
+`reasoning_effort="none"` e mantém `temperature=0.70`. A documentação do
+Groq descreve que o modo JSON Object ocasionalmente pode falhar e retornar
+erro. Migrar para JSON Schema estrito é possibilidade **se confirmada
+compatibilidade**, mas deve ocorrer em PR separado, com A/B e regressões.
+
+
+### Diagnóstico Groq isolado: sem chamada NVIDIA
+
+Para investigar o HTTP 400 sem gastar tempo e quota do Mistral:
+
+```text
+providers diagnose groq --suite nuance4 --case adult_relationship_subtext
+```
+
+Essa sonda executa **apenas o Groq/Qwen**, uma única vez, com o mesmo
+ContextCompiler/DialoguePlan e histórico ficcional da Nuance4. Timeout do
+job: 65s (Groq usa timeout próprio de 30s para a realização). Não escreve
+histórico, estado ou memória. Não revela **nem mesmo fala validada**:
+retorna `validated`, `latency_ms`, `error_code`, categoria de erro segura
+e `validation_failure_detail` quando aplicável.
+
+O comando exige `--case` (um teste só), aceita corpora fechados
+`nuance4`, `expressive4` e `full11`, e precisa apenas de `GROQ_API_KEY`.
+Não tenta contornar recusas, não repete HTTP 400 automaticamente, não toca
+na decisão de promoção e não aciona a NVIDIA. Se quiser comparar as
+**falas naturais** depois, execute a certificação A/B usual.

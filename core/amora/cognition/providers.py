@@ -35,10 +35,20 @@ class CognitiveProvider(Protocol):
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, message: str, *, status_code: int | None = None, retry_after: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after: str | None = None,
+        diagnostics: dict[str, str | int | float | None] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.retry_after = retry_after
+        # Optional fixed-category metadata. Never store the provider's raw
+        # response body, original prompt, credentials, or rejected speech here.
+        self.diagnostics = diagnostics or {}
 
 
 class GroqCognitiveProvider:

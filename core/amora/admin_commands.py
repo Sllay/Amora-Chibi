@@ -258,6 +258,76 @@ async def _audit_nvidia_social_prompt(core: Any) -> dict[str, Any]:
     }
 
 
+async def _command_providers_diagnose_groq(core: Any, args: list[str]) -> dict[str, Any]:
+    """Run one fixed Core social case through Groq only, without Mistral cost."""
+    speaker_id, target_id, probe_id, suite = _parse_social_certification_args(args)
+    if not probe_id:
+        raise AdminCommandError(
+            "COMMAND_ARGUMENT_INVALID",
+            "diagnóstico Groq exige --case para executar um único cenário",
+            details={"usage": "providers diagnose groq --suite nuance4 --case adult_relationship_subtext"},
+        )
+
+    from amora.cognition.certification import (
+        SOCIAL_EXPRESSIVE4_V1,
+        SOCIAL_NUANCE4_V1,
+        SOCIAL_SURFACE_REPLAY_V1,
+        certify_social_case,
+    )
+    from amora.cognition.certification_live import (
+        CORPUS_ID, EXPRESSIVE_CORPUS_ID, NUANCE_CORPUS_ID,
+        build_live_social_cases,
+    )
+    from amora.cognition.providers_structured import GroqCognitiveProvider
+
+    if core.secrets.get("GROQ_API_KEY") is None:
+        raise AdminCommandError(
+            "CERTIFICATION_SECRET_MISSING",
+            "credencial obrigatória Groq não configurada",
+            details={"missing_secrets": ["GROQ_API_KEY"]},
+        )
+    options = {
+        "full11": (CORPUS_ID, SOCIAL_SURFACE_REPLAY_V1),
+        "expressive4": (EXPRESSIVE_CORPUS_ID, SOCIAL_EXPRESSIVE4_V1),
+        "nuance4": (NUANCE_CORPUS_ID, SOCIAL_NUANCE4_V1),
+    }
+    corpus_id, probes = options[suite]
+    selected = tuple(item for item in probes if item.probe_id == probe_id)
+    if not selected:
+        raise AdminCommandError(
+            "CERTIFICATION_CASE_NOT_FOUND",
+            "caso de certificação inexistente",
+            details={"available_cases": [item.probe_id for item in probes]},
+        )
+
+    case = build_live_social_cases(
+        core,
+        speaker_id=speaker_id,
+        target_id=target_id,
+        probes=selected,
+        corpus_id=corpus_id,
+    )[0]
+    outcome = await certify_social_case(GroqCognitiveProvider(core.secrets), case)
+    # This targeted probe reports compliance and safe telemetry, never literal
+    # content, upstream error bodies, private memories or model reasoning.
+    return {
+        "kind": "groq_social_case_diagnostic",
+        "summary": "Sonda Groq isolada; nenhum Mistral, estado alterado ou promoção.",
+        "data": {
+            "corpus_id": corpus_id,
+            "probe_id": probe_id,
+            "validated": outcome.validated,
+            "error_code": outcome.error_code,
+            "validation_failure_detail": outcome.validation_failure_detail,
+            "latency_ms": outcome.latency_ms,
+            "transport_diagnostics": outcome.transport_diagnostics,
+            "reason_codes": outcome.reason_codes,
+            "promotion_decision": "none",
+            "human_review_required": True,
+        },
+    }
+
+
 async def _command_providers_diagnose_nvidia(core: Any, args: list[str]) -> dict[str, Any]:
     from amora.cognition.diagnostics_nvidia import diagnose_nvidia_text
 
@@ -331,6 +401,14 @@ _COMMANDS: tuple[RegisteredCommand, ...] = (
         description="Mostra readiness do Core sem abrir shell do host.",
         timeout_seconds=5.0,
         handler=_command_status,
+    ),
+    RegisteredCommand(
+        path=("providers", "diagnose", "groq"),
+        usage="providers diagnose groq --suite nuance4|expressive4|full11 --case CASE_ID",
+        description="Uma sonda Groq/Qwen isolada, sem chamar NVIDIA nem expor falas rejeitadas.",
+        timeout_seconds=65.0,
+        handler=_command_providers_diagnose_groq,
+        exclusive=True,
     ),
     RegisteredCommand(
         path=("providers", "diagnose", "nvidia"),

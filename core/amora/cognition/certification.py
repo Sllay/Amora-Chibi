@@ -365,6 +365,7 @@ _SAFE_TRANSPORT_FIELDS = (
     "first_visible_ms", "prompt_chars", "message_count", "visible_chars",
     "completed_by", "silence_ms", "idle_timeout_seconds", "max_total_seconds",
     "timeout_kind", "reasoning_events", "visible_events",
+    "http_status_code", "provider_error_category",
 )
 _NVIDIA_TIMEOUT_STAGES = {
     "waiting_headers", "waiting_first_event", "reasoning_only", "visible_partial",
