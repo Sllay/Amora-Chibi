@@ -96,11 +96,11 @@ function formatJob(job) {
     const lines = [`amora> ${job.command}`, `[running] ${progress.length} resposta(s) concluída(s)`];
     for (const item of progress) {
       lines.push(`[${item.probe_id}] ${item.provider} · ${seconds(item.latency_ms)} · ${item.validated ? "✓" : "✗"}`);
-      if (item.text) lines.push(`  ${String(item.text).replace(/\\s+/g, " ").trim()}`);
+      if (item.text) lines.push(`  ${String(item.text).replace(/\s+/g, " ").trim()}`);
       if (item.error_code) lines.push(`  error=${item.error_code}`);
     }
     lines.push("Aguardando próxima resposta…");
-    return lines.join("\\n");
+    return lines.join("\n");
   }
   if (job.status === "timed_out") return `amora> ${job.command}\n[timeout] ${job.error_code || "COMMAND_TIMEOUT"}`;
   if (job.status === "failed") {
