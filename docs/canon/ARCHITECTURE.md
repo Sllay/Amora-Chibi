@@ -595,9 +595,38 @@ Identidade de laboratório aprovada não equivale a produto fisicamente certific
 
 ---
 
+### 14.x Realização contextual e autoria do vocabulário
+
+A `LivingProfile` e a `ExpressionCue` orientam escolhas linguísticas,
+não aplicam blacklist de palavrões nem sorteios de autorização. O provider
+pode produzir linguagem adulta, sarcasmo e duplo sentido de acordo com a
+história efetivamente projetada, identidade, participantes e ato social do
+Core. Perguntas ambíguas não são sexualizadas por padrão. Reações a mídia
+pesada podem ter juízo próprio sem trocar relatos não verificados por fatos.
+Validadores estruturais continuam cobrando `DialoguePlan` e fechamento
+autorizado, não policiando o vocabulário por palavras-chave.
+
+---
+
 ## 15. Privacidade e secrets
 
 Privacy controla fluxo de informação, não personalidade.
+
+O `ProviderPrivacyGate` agora verifica destinatário além de `privacy_scope`
+e autorização remota: memórias PERSONAL/PRIVATE dependem de titular,
+público autorizado ou proveniência identificada; fatos não públicos de
+terceiros não entram indiscriminadamente no contexto; histórico de sessão
+compartilhada não dá acesso a mensagens privadas de outros participantes.
+Relações com terceiros e mapa completo de relações internas não são enviados
+ao provider do interlocutor atual apenas por envolverem Amora. Dados PUBLIC
+continuam elegíveis segundo consentimento remoto. Esse controle de acesso
+não observa palavrões ou tópicos sexuais.
+
+Uma mensagem antiga sem proprietário/audiência confiáveis não é prova
+de consentimento para revelá-la. São necessárias auditorias adicionais de
+proveniência de mídia, rotulagem de captação incidental e filtro de saída
+para dados pessoais textuais; proteção contra vazamento não se esgota
+na montagem de prompt.
 
 Separar:
 
