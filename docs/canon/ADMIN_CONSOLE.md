@@ -166,11 +166,13 @@ permanece sequencial e mantém a ordem alternada determinística.
 
 O adaptador candidato NVIDIA usa `stream=true` via SSE, agrega
 `choices[].delta.content` até concluir o JSON e ignora
-`reasoning_content`. O prazo de **55 segundos é total por chamada**
-(`asyncio.timeout`), não reiniciado quando chegam tokens. Streaming
-não garante redução da latência total nem conclusão em 55 segundos.
-A certificação inteira ainda tem limite de job de 300 segundos,
-independente dos deadlines individuais. Falhas não promovem provider.
+`reasoning_content`. O prazo de **55 segundos agora mede inatividade real**, renovado por
+cada fragmento não vazio de `reasoning_content` ou `delta.content`.
+Mensagens de heartbeat, comentários e deltas vazios **não** mantêm um
+stream preso eternamente. Independentemente desse prazo, um **teto total de
+270 segundos por chamada** protege contra geração interminável.
+A certificação de **um caso** tem prazo de job de 480 segundos; o corpus
+**completo de 11 casos**, 3600 segundos. Falhas não promovem provider.
 
 ### Diagnóstico NVIDIA isolado (CH3)
 
@@ -192,7 +194,7 @@ A certificação social continua separada em `providers certify social`.
 
 A certificação social continua usando o **mesmo contexto canônico** para ambos
 os providers e não promove nenhum automaticamente. O adaptador Mistral mantém
-`reasoning_effort=high`, `max_tokens>=4096`, SSE e deadline **total** de 55s,
+`reasoning_effort=high`, `max_tokens>=4096`, SSE, timeout **por inatividade** de 55s e teto total de 270s,
 mas não duplica o antigo prompt genérico que conflitava com o contrato JSON.
 O leitor encerra ao receber `finish_reason=stop` (ou `[DONE]`) e rejeita
 `finish_reason` de geração truncada.
@@ -220,7 +222,7 @@ requisição NVIDIA no caso `ordinary_chat` compilado pelo próprio Core. Usa a
 mesma identidade, perfil, relações, memórias, estado, DialoguePlan e histórico
 literal do caso canônico, mas com instruções condensadas, em vez do texto
 integral do protocolo. Preserva `stream=true`, `reasoning_effort=high`,
-`max_tokens>=4096`, limite total de 55 segundos e o mesmo
+`max_tokens>=4096`, inatividade de 55s, teto total de 270s e o mesmo
 `RealizationValidator`. Não realiza Groq A/B e não altera a certificação
 oficial: a saída não inclui texto gerado nem nota, apenas `validated`,
 `error_code`, latência, estágio e contagens/tempos seguros de transporte.
@@ -232,3 +234,25 @@ e `none`; apesar de outros endpoints ou instalações do Mistral Large 4
 documentarem `low` e `medium`, não assumir suporte desses valores no
 endpoint hospedado usado pela Amora. Nunca trocar para `none`
 automaticamente após timeout.
+
+
+### Política de timeout por atividade NVIDIA (CH3)
+
+- **Atividade real** = fragmentos SSE com `choices[].delta.reasoning_content`
+  ou `choices[].delta.content` não vazios. Cada fragmento reinicia o prazo
+  de **55s sem atividade**; alto raciocínio não é confundido com congelamento.
+- **Sem progresso** por 55s: `NVIDIA_STREAM_TIMEOUT` com
+  `timeout_kind=idle`, estágio seguro e contagem de eventos, nunca texto
+  do raciocínio. Heartbeats e campos de papel do assistant não renovam prazo.
+- **Teto de segurança**: 270s por chamada, mesmo com geração ativa;
+  `timeout_kind=total_safety`. Isso limita custo e recursos sem depender
+  de um stream que pode nunca terminar. Não é garantia de conclusão.
+- **Jobs Shell**: diagnóstico de transporte básico 60s; sonda social
+  compacta 300s; A/B com `--case` 480s; A/B dos 11 casos 3600s.
+  O deadline do Command Bus continua independente do deadline do provider.
+- **Conclusão válida**: somente `finish_reason=stop`, `[DONE]` ou
+  encerramento normal do stream com conteúdo JSON validado. Toda validação
+  de estrutura e de autorização dos movimentos continua pertencendo ao Core.
+- `reasoning_effort=high` e `max_tokens>=4096` permanecem inalterados;
+  não há promoção automática, registro de conteúdo de reasoning ou retries
+  automáticos de timeout.
