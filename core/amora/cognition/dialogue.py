@@ -90,6 +90,20 @@ class DialogueOrchestrator:
         r"acha que eu to errado|acha que eu estou errado|pode discordar)\b"
     )
     _PLAY_RE = re.compile(r"\b(kkkk+|ksks+|haha+|hehe+|to brincando|tô brincando|zoeira|te zoando)\b")
+    # Explicit *playful* invitations must not depend on a random language
+    # budget or a sufficiently high play drive. This selects the social act;
+    # it does not force an insult into every conversation.
+    _DIRECT_TEASE_INVITE_RE = re.compile(
+        r"\b(me xinga|pode me xingar|me zoa|pode me zoar|"
+        r"me tira sarro|tira sarro de mim|me sacaneia|manda um xingamento)\b"
+    )
+    _TEASE_CONTEXT_RE = re.compile(
+        r"\b(na brincadeira|de brincadeira|zoeira|na zoeira|na resenha|"
+        r"brincando|kkkk+|ksks+|haha+|hehe+)\b"
+    )
+    _NEGATED_TEASE_RE = re.compile(
+        r"\b(nao me xinga|nao me zoa|sem xingar|sem xingamento|sem zoar)\b"
+    )
     _AFFECTION_RE = re.compile(
         r"\b(te amo|amo voce|amo vc|amo tu|gosto de voce|gosto de vc|voce e fofa|tu e fofa|obrigada amora|obrigado amora)\b"
     )
@@ -192,6 +206,35 @@ class DialogueOrchestrator:
                 relational_attitude="guarded",
                 closing_mode="statement",
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "DIRECTED_NEGATIVE_AFFECT", "BOUNDARY_WARRANTED"],
+            )
+
+        # A direct request for consensual joking (including strong language)
+        # is distinct from hostility. The normal relationship, privacy and
+        # dialogue-plan rules still apply; no insult is mandated.
+        direct_tease = bool(self._DIRECT_TEASE_INVITE_RE.search(text))
+        playful_context = bool(self._TEASE_CONTEXT_RE.search(text))
+        if (
+            direct_tease
+            and not self._NEGATED_TEASE_RE.search(text)
+            and (playful_context or style == "intimate_colloquial")
+        ):
+            return DialoguePlan(
+                act=DialogueAct.TEASE,
+                objective="respond to a voluntary playful invitation with natural banter, not hostile abuse",
+                depth=DialogueDepth.SHORT,
+                response_moves=["playful_reaction", "light_tease"],
+                ask_followup=False,
+                offer_help=False,
+                style_register=style,
+                tone_tags=[*tone, "playful"] if "playful" not in tone else tone,
+                stance="playful",
+                relational_attitude=attitude,
+                closing_mode="statement",
+                reason_codes=[
+                    "LOCAL_DIALOGUE_ORCHESTRATOR",
+                    "EXPLICIT_PLAYFUL_INVITATION",
+                    "CONTEXTUAL_LANGUAGE_NOT_PRIVACY_CENSORSHIP",
+                ],
             )
 
         if self._AFFECTION_RE.search(text):

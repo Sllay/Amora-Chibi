@@ -345,3 +345,31 @@ O protocolo e o GDD canônicos não são reescritos para favorecer nenhum
 provider. Qualquer mudança futura na liberdade linguística da Amora deve
 ser aprovada e implementada no Core, não como prompt clandestino de
 certificação.
+
+
+### Separação privacidade × liberdade linguística (CH3)
+
+O GDD define privacidade como **controle de destinatário e divulgação**,
+não como filtro de personalidade. Proteção de CPF, telefone, credenciais,
+API keys, informações pessoais e dados protegidos continua nos componentes
+canônicos de privacidade/autorização, não no `ExpressionCue`.
+
+A projeção expressiva não exige mais que um número pseudorrandômico
+autorize palavrões. `profanity.level` é uma orientação contextual
+(`contextual`, `playful` ou `emphatic`), **nunca uma blacklist de
+palavras**. `avoid_repetitive_swearing` orienta variedade sem censurar.
+O modelo pode escolher uma resposta sem xingamento, ou usar palavrões
+quando apropriados; o Core não os injeta na fala.
+
+O diálogo agora reconhece convites explícitos para provocação amigável
+(`me xinga na brincadeira`, `me zoa`, etc.), mesmo sem um impulso de
+brincadeira alto, e diferencia instruções negadas (`não me xinga`).
+Ato `tease`, limites de continuidade/DialoguePlan e validação final
+continuam sendo responsabilidade do Core. Essa alteração não modifica
+políticas de privacidade, segredos, ferramentas ou promoção de provider.
+
+Os resultados anteriores da `SOCIAL_EXPRESSIVE4_V1` ilustraram que
+`score=100` só mede conformidade superficial e padrões limitados:
+não demonstra liberdade de vocabulário, deboche natural nem superioridade
+de personalidade. `FOLLOWUP_NOT_AUTHORIZED` indica uma pergunta
+não autorizada pelo plano de diálogo, não bloqueio de sexo/palavrão.

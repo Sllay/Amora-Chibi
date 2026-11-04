@@ -8,6 +8,7 @@ import pytest
 
 from amora.cognition import GeminiCognitiveProvider, GroqCognitiveProvider
 from amora.cognition.expression import expression_cue, expression_profile
+from amora.cognition.dialogue import DialogueOrchestrator
 from amora.cognition.models import CognitiveContext
 from amora.cognition.prompt_frame import living_profile, provider_frame, render_provider_frame, turn_frame
 
@@ -296,3 +297,72 @@ def test_gemini_reflection_keeps_current_speaker_identity() -> None:
     turn = _turn_payload(user_content)
     assert turn["speaker_id"] == "PERSON_BOB"
     assert 'speaker_id="PERSON_BK"' in turn["literal_text"]
+
+
+
+def _parent_context(text: str) -> CognitiveContext:
+    return _context().model_copy(update={
+        "speaker_id": "PERSON_BK",
+        "user_text": text,
+        "relationships": [
+            {"source": "ENTITY_AMORA", "target": "PERSON_BK", "relation_type": "father"},
+        ],
+        "recent_messages": [],
+        "drives": {"play": 0.0},
+    })
+
+
+def test_profanity_is_contextual_vocabulary_not_random_privacy_permission() -> None:
+    context = _parent_context("Putz, essa porra me irritou, papis.")
+    for turn_id in (
+        UUID("00000000-0000-0000-0000-000000000001"),
+        UUID("00000000-0000-0000-0000-000000000002"),
+    ):
+        style = expression_cue(context.model_copy(update={"turn_id": turn_id}))
+        assert style["profanity"]["enabled"] is True
+        assert style["profanity"]["level"] == "contextual"
+        assert style["profanity"]["word_choice_is_not_a_privacy_decision"] is True
+        assert style["profanity"]["do_not_force_profanity"] is True
+        assert "PROFANITY_CONTEXTUAL_STYLE_NOT_GATE" in style["reason_codes"]
+    profile = expression_profile(context)
+    assert "vai tomar no cu" in profile["profanity"]["examples"]
+    assert profile["profanity"]["adult_terms_not_automatically_taboo"] is True
+
+
+def test_direct_playful_insult_invite_is_valid_even_when_play_drive_is_zero() -> None:
+    context = _parent_context("Amora, me xinga na brincadeira, sua peste kkkkk.")
+    planned = DialogueOrchestrator().plan(context)
+    assert planned.act.value == "tease"
+    assert planned.response_moves == ["playful_reaction", "light_tease"]
+    assert "EXPLICIT_PLAYFUL_INVITATION" in planned.reason_codes
+    assert planned.ask_followup is False
+    assert planned.offer_help is False
+
+    realized_context = context.model_copy(update={"dialogue_plan": planned.model_dump(mode="json")})
+    cue = expression_cue(realized_context)
+    assert cue["profanity"]["level"] == "playful"
+    assert cue["profanity"]["playful_directed_teasing_allowed"] is True
+    assert cue["profanity"]["do_not_invent_hostility"] is True
+
+
+def test_negative_invitation_is_not_misread_as_permission_to_insult() -> None:
+    context = _parent_context("Amora, não me xinga na brincadeira, por favor.")
+    planned = DialogueOrchestrator().plan(context)
+    assert "EXPLICIT_PLAYFUL_INVITATION" not in planned.reason_codes
+    assert planned.act.value != "tease"
+
+
+def test_recent_profanity_is_repetition_advice_not_a_speech_ban() -> None:
+    context = _parent_context("Porra, que bagunça.")
+    context = context.model_copy(update={
+        "recent_messages": [{
+            "speaker_id": "ENTITY_AMORA",
+            "text": "Puta merda, que susto!",
+            "turn_id": "00000000-0000-0000-0000-000000000010",
+        }],
+    })
+    cue = expression_cue(context)
+    assert "PROFANITY_REPETITION_CAUTION" in cue["reason_codes"]
+    assert cue["profanity"]["enabled"] is True
+    assert cue["profanity"]["avoid_repetitive_swearing"] is True
+    assert cue["profanity"]["level"] != "none"
