@@ -101,7 +101,8 @@ function formatSocialAB(result) {
     if (item.right.text) lines.push(`    ${item.right.text.replace(/\s+/g, " ").trim()}`);
     if (item.right.error_code) lines.push(`    error=${item.right.error_code}`);
     if (transportSummary(item.right)) lines.push(transportSummary(item.right));
-    lines.push(`  Δ right-left = ${Number(item.mechanical_score_delta_right_minus_left || 0).toFixed(1)} · ordem=${item.execution_order}`);
+    const delta = item.mechanical_score_delta_right_minus_left;
+    lines.push(`  Δ right-left = ${delta === null || delta === undefined ? "n/a (sem dupla válida)" : Number(delta).toFixed(1)} · ordem=${item.execution_order}`);
     lines.push("");
   });
   lines.push("Human review required.");
