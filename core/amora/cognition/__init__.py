@@ -34,7 +34,7 @@ from .providers_identity import (
     GeminiCognitiveProvider,
     GroqCognitiveProvider,
 )
-from .providers_nvidia import NvidiaMistralLarge4Provider
+from .providers_nvidia import NvidiaMistralLarge4Provider, NvidiaMistralLarge4ProductionProvider
 from .providers_openrouter import OpenRouterCognitiveProvider
 from .proposals import ActionSuggestion, BeliefHypothesisProposal, CognitiveProposalBundle, MemoryProposal
 # Preserve the historical layered-runtime imports as explicit architectural
@@ -73,6 +73,7 @@ __all__ = [
     "MessageSource",
     "MessageStatus",
     "NvidiaMistralLarge4Provider",
+    "NvidiaMistralLarge4ProductionProvider",
     "OpenRouterCognitiveProvider",
     "ProviderDelta",
     "ProviderError",
