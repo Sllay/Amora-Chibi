@@ -97,11 +97,32 @@ async def _command_status(core: Any, args: list[str]) -> dict[str, Any]:
     if args:
         raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "status não aceita argumentos")
     readiness = core.readiness()
-    return {
+    result: dict[str, Any] = {
         "kind": "core_status",
         "summary": f"Core: {readiness.get('status', 'unknown')}",
         "readiness": readiness,
     }
+
+    # Read only the router's *configured* social ranking. Do not call
+    # health_report(), which performs expensive integrity checks and exposes a
+    # much broader internal state, or reveal credentials/provider request data.
+    # Per-turn circuit cooldowns and privacy decisions may change the winner.
+    cognition = getattr(core, "cognition", None)
+    router = getattr(cognition, "router", None)
+    if router is not None:
+        from amora.events import PrivacyScope
+        from amora.models import TaskClass
+
+        candidates = router.ranked_candidates(
+            TaskClass.SOCIAL_DIALOGUE,
+            privacy_scope=PrivacyScope.PERSONAL,
+            remote_processing_allowed=True,
+            require_structured_output=True,
+        )
+        result["social_primary_provider"] = candidates[0].name if candidates else "none"
+        result["social_fallback_providers"] = [item.name for item in candidates[1:]]
+        result["social_routing_scope"] = "configured_personal_remote"
+    return result
 
 
 def _parse_social_certification_args(args: list[str]) -> tuple[str, str, str | None, str]:
