@@ -211,3 +211,24 @@ calculados quando os dois lados foram validados. O Shell apresenta `n/a`
 ou `não avaliado` para falhas. A cobertura validada e a revisão humana
 permanecem obrigatórias. Evite repetir casos sem necessidade; diagnóstico
 online só é concluído com evidência real da execução.
+
+
+### Sonda social compacta NVIDIA (experimento CH3)
+
+O diagnóstico `providers diagnose nvidia --social-compact` executa **uma**
+requisição NVIDIA no caso `ordinary_chat` compilado pelo próprio Core. Usa a
+mesma identidade, perfil, relações, memórias, estado, DialoguePlan e histórico
+literal do caso canônico, mas com instruções condensadas, em vez do texto
+integral do protocolo. Preserva `stream=true`, `reasoning_effort=high`,
+`max_tokens>=4096`, limite total de 55 segundos e o mesmo
+`RealizationValidator`. Não realiza Groq A/B e não altera a certificação
+oficial: a saída não inclui texto gerado nem nota, apenas `validated`,
+`error_code`, latência, estágio e contagens/tempos seguros de transporte.
+A projeção compacta é **experimental**; não ativar como padrão nem promover
+provider sem prova real de que melhora resposta e qualidade social.
+
+A referência do endpoint NVIDIA API Catalog expõe `reasoning_effort=high`
+e `none`; apesar de outros endpoints ou instalações do Mistral Large 4
+documentarem `low` e `medium`, não assumir suporte desses valores no
+endpoint hospedado usado pela Amora. Nunca trocar para `none`
+automaticamente após timeout.
