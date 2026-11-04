@@ -28,7 +28,7 @@ async def test_minimal_diagnostic_matches_amodex_payload_and_marker(monkeypatch,
             ]
             return httpx.Response(
                 200, headers={"content-type": "text/event-stream"},
-                text="\\n\\n".join(events),
+                text="\n\n".join(events),
             )
         return httpx.Response(200, json={"choices": [{"message": {"content": marker}}]})
 
