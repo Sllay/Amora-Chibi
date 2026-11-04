@@ -172,6 +172,10 @@ async def test_live_ab_never_waits_past_quota_budget(monkeypatch) -> None:
     assert left.calls == 1
     assert report.left_validated_count == 0
     assert report.cases[0].left.error_code == "PROVIDER_HTTP_429"
+    assert report.cases[0].left.score is None
+    assert report.cases[0].mechanical_score_delta_right_minus_left is None
+    assert report.left_mean_mechanical_score == 0.0  # zero valid samples, not a quality score
+    assert report.right_mean_mechanical_score == 100.0
     assert report.right_validated_count == 1
 
 

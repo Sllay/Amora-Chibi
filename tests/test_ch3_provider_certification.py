@@ -14,7 +14,7 @@ from amora.cognition.certification import (
 )
 from amora.cognition.models import CognitiveContext
 from amora.cognition.providers import ProviderError
-from amora.cognition.providers_nvidia import NvidiaMistralLarge4Provider
+from amora.cognition.providers_nvidia import NvidiaMistralLarge4Provider, NvidiaStreamTimeout
 from amora.events import PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.secrets import SecretStore
@@ -234,6 +234,7 @@ async def test_mistral_candidate_payload_keeps_secret_out_and_trusted_context_se
     assert isinstance(messages, list)
     assert messages[0]["role"] == "system"
     assert "AMORA PROVIDER PROTOCOL" in messages[0]["content"]
+    assert "Você presta um serviço cognitivo de linguagem" not in messages[0]["content"]
     assert "AMORA TURN FRAME" in messages[0]["content"]
     assert messages[-1]["role"] == "user"
     assert "AMORA CONVERSATION TURN" in messages[-1]["content"]
@@ -295,3 +296,85 @@ async def test_mistral_sse_reassembles_visible_json_without_reasoning(tmp_path: 
     assert status == 200
     assert "reasoning_content" not in root["choices"][0]["message"]["content"]
     assert root["choices"][0]["message"]["content"].startswith('{"moves":')
+
+
+
+@pytest.mark.asyncio
+async def test_nvidia_sse_finishes_at_stop_without_waiting_for_done(tmp_path: Path, monkeypatch) -> None:
+    """Some SSE gateways delay [DONE] after an explicit stop finish reason."""
+    import httpx
+    import asyncio
+    from amora.cognition import providers_nvidia
+
+    content = json.dumps({"moves": [{"kind": "answer_question", "text": "Oi"}], "closing": "statement"})
+    class KeepAliveBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield ("data: " + json.dumps({
+                "choices": [{"delta": {"reasoning_content": "private"}}]
+            }) + "\n\n").encode()
+            yield ("data: " + json.dumps({
+                "choices": [{"delta": {"content": content}, "finish_reason": "stop"}]
+            }) + "\n\n").encode()
+            await asyncio.sleep(1.0)
+            yield b"data: [DONE]\n\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=KeepAliveBody())
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        providers_nvidia.httpx, "AsyncClient",
+        lambda *args, **kwargs: original_client(*args, transport=httpx.MockTransport(handler), **kwargs),
+    )
+    provider = NvidiaMistralLarge4Provider(_secret_store(tmp_path, configured=True), timeout_seconds=0.15)
+    started = __import__("time").perf_counter()
+    raw = await provider.realize(_context())
+    elapsed = __import__("time").perf_counter() - started
+    assert elapsed < 0.15
+    assert raw["moves"][0]["text"] == "Oi"
+    diagnostics = raw["_usage"]["transport_diagnostics"]
+    assert diagnostics["completed_by"] == "finish_reason"
+    assert diagnostics["stage"] == "completed"
+    assert diagnostics["first_reasoning_ms"] is not None
+    assert diagnostics["first_visible_ms"] is not None
+    assert diagnostics["prompt_chars"] > 100
+    assert "private" not in str(diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_nvidia_reasoning_only_deadline_is_classified_and_safe(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+    import httpx
+    from amora.cognition import providers_nvidia
+
+    class DelayedBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield ("data: " + json.dumps({
+                "choices": [{"delta": {"reasoning_content": "secret reasoning"}}]
+            }) + "\n\n").encode()
+            await asyncio.sleep(0.5)
+            yield b"data: [DONE]\n\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=DelayedBody())
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        providers_nvidia.httpx, "AsyncClient",
+        lambda *args, **kwargs: original_client(*args, transport=httpx.MockTransport(handler), **kwargs),
+    )
+    provider = NvidiaMistralLarge4Provider(_secret_store(tmp_path, configured=True), timeout_seconds=0.04)
+    case = SocialCertificationCase(
+        probe=SocialReplayProbe(probe_id="reasoning_stall", category="ordinary", user_text="oi"),
+        context=_context(),
+    )
+    result = await certify_social_case(provider, case)
+    assert result.error_code == "NVIDIA_STREAM_TIMEOUT"
+    assert result.validated is False
+    assert "PROVIDER_TIMEOUT" in result.reason_codes
+    assert "NVIDIA_STAGE_REASONING_ONLY" in result.reason_codes
+    assert result.transport_diagnostics["stage"] == "reasoning_only"
+    assert result.transport_diagnostics["first_reasoning_ms"] is not None
+    assert result.transport_diagnostics["first_visible_ms"] is None
+    assert "secret reasoning" not in str(result.model_dump())
+    assert "unit-test-nvidia-key" not in str(result.model_dump())

@@ -186,3 +186,28 @@ resultado de comparação exata com `AMODEX_DIAG_TEXT_OK` e código seguro
 de falha. Não imprime chave, texto bruto ou raciocínio; não altera o
 Core nem promove provider. Evite repetir em sequência sem necessidade.
 A certificação social continua separada em `providers certify social`.
+
+
+### Diagnóstico de geração social NVIDIA (CH3)
+
+A certificação social continua usando o **mesmo contexto canônico** para ambos
+os providers e não promove nenhum automaticamente. O adaptador Mistral mantém
+`reasoning_effort=high`, `max_tokens>=4096`, SSE e deadline **total** de 55s,
+mas não duplica o antigo prompt genérico que conflitava com o contrato JSON.
+O leitor encerra ao receber `finish_reason=stop` (ou `[DONE]`) e rejeita
+`finish_reason` de geração truncada.
+
+Os resultados de `providers certify social --case ordinary_chat` agora incluem
+telemetria **sem conteúdo** (`prompt_chars`, `message_count`,
+`first_event_ms`, `first_reasoning_ms`, `first_visible_ms`,
+`visible_chars`, `stage`, `completed_by`). Em caso de timeout,
+`NVIDIA_STREAM_TIMEOUT` distingue `waiting_headers`,
+`waiting_first_event`, `reasoning_only` e `visible_partial`.
+Não há texto bruto, tokens de raciocínio ou segredos na telemetria.
+
+**Falha técnica não é nota de qualidade:** casos sem realização validada têm
+`score=null`, não entram nas médias mecânicas, e deltas A/B só são
+calculados quando os dois lados foram validados. O Shell apresenta `n/a`
+ou `não avaliado` para falhas. A cobertura validada e a revisão humana
+permanecem obrigatórias. Evite repetir casos sem necessidade; diagnóstico
+online só é concluído com evidência real da execução.

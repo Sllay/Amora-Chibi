@@ -26,7 +26,7 @@ class SocialABCaseResult(BaseModel):
     execution_order: Literal["left_first", "right_first"]
     left: SocialCertificationResult
     right: SocialCertificationResult
-    mechanical_score_delta_right_minus_left: float
+    mechanical_score_delta_right_minus_left: float | None
     human_review_required: bool = True
     promotion_decision: Literal["none"] = "none"
     reason_codes: list[str] = Field(default_factory=list)
@@ -100,7 +100,11 @@ async def compare_social_case(
         execution_order=execution_order,
         left=left,
         right=right,
-        mechanical_score_delta_right_minus_left=right.score - left.score,
+        mechanical_score_delta_right_minus_left=(
+            right.score - left.score
+            if left.validated and right.validated and left.score is not None and right.score is not None
+            else None
+        ),
         reason_codes=[
             "IDENTICAL_CORE_CONTEXT",
             "DETERMINISTIC_ALTERNATING_EXECUTION_ORDER",
@@ -137,8 +141,8 @@ async def compare_social_suite(
         cases=case_results,
         left_validated_count=sum(1 for item in case_results if item.left.validated),
         right_validated_count=sum(1 for item in case_results if item.right.validated),
-        left_mean_mechanical_score=_mean([item.left.score for item in case_results]),
-        right_mean_mechanical_score=_mean([item.right.score for item in case_results]),
+        left_mean_mechanical_score=_mean([item.left.score for item in case_results if item.left.validated and item.left.score is not None]),
+        right_mean_mechanical_score=_mean([item.right.score for item in case_results if item.right.validated and item.right.score is not None]),
         left_mean_latency_ms=_mean(left_latencies) if left_latencies else None,
         right_mean_latency_ms=_mean(right_latencies) if right_latencies else None,
         reason_codes=[

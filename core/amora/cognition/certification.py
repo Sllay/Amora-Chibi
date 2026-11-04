@@ -119,7 +119,7 @@ class SocialCertificationResult(BaseModel):
     success: bool = False
     validated: bool = False
     text: str = ""
-    score: float = Field(default=0.0, ge=0.0, le=100.0)
+    score: float | None = Field(default=None, ge=0.0, le=100.0)
     latency_ms: float | None = Field(default=None, ge=0.0)
     input_tokens: int | None = None
     output_tokens: int | None = None
@@ -129,6 +129,7 @@ class SocialCertificationResult(BaseModel):
     inappropriate_refusal: bool = False
     human_review_required: bool = True
     error_code: str | None = None
+    transport_diagnostics: dict[str, str | int | float | None] = Field(default_factory=dict)
     reason_codes: list[str] = Field(default_factory=list)
 
 
@@ -196,6 +197,35 @@ def _usage_value(raw: dict[str, object], key: str) -> int | None:
         return None
 
 
+_SAFE_TRANSPORT_FIELDS = (
+    "stage", "elapsed_ms", "first_event_ms", "first_reasoning_ms",
+    "first_visible_ms", "prompt_chars", "message_count", "visible_chars",
+    "completed_by",
+)
+_NVIDIA_TIMEOUT_STAGES = {
+    "waiting_headers", "waiting_first_event", "reasoning_only", "visible_partial",
+}
+
+
+def _safe_transport_diagnostics(value: object) -> dict[str, str | int | float | None]:
+    """Publish bounded transport timings/counts, never provider text or secrets."""
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: item
+        for key in _SAFE_TRANSPORT_FIELDS
+        if isinstance((item := value.get(key)), (str, int, float)) or item is None
+        if key in value and (not isinstance(item, str) or len(item) <= 40)
+    }
+
+
+def _usage_transport_diagnostics(raw: dict[str, object]) -> dict[str, str | int | float | None]:
+    usage = raw.get("_usage")
+    if not isinstance(usage, dict):
+        return {}
+    return _safe_transport_diagnostics(usage.get("transport_diagnostics"))
+
+
 def _provider_identity(provider: SocialRealizer) -> tuple[str, str | None]:
     descriptor = getattr(provider, "descriptor", None)
     return (
@@ -252,6 +282,13 @@ def _provider_failure_code(exc: Exception) -> tuple[str, list[str]]:
     """Return safe, actionable failure codes without exposing provider response bodies."""
 
     if not isinstance(exc, ProviderError):
+        diagnostics = getattr(exc, "diagnostics", None)
+        if isinstance(exc, TimeoutError) and isinstance(diagnostics, dict):
+            stage = diagnostics.get("stage")
+            reasons = ["PROVIDER_TIMEOUT", "NVIDIA_SSE_TIMEOUT"]
+            if stage in _NVIDIA_TIMEOUT_STAGES:
+                reasons.append("NVIDIA_STAGE_" + str(stage).upper())
+            return "NVIDIA_STREAM_TIMEOUT", reasons
         name = type(exc).__name__
         if "timeout" in name.lower():
             return name, ["PROVIDER_TIMEOUT"]
@@ -296,6 +333,7 @@ async def certify_social_case(
 
     provider_name, model = _provider_identity(provider)
     started = perf_counter()
+    raw: dict[str, object] = {}
     try:
         raw, retry_count = await _realize_with_rate_limit_budget(provider, case.context, retry_budget)
         validation_raw = dict(raw)
@@ -311,6 +349,7 @@ async def certify_social_case(
             validated=False,
             latency_ms=(perf_counter() - started) * 1000.0,
             error_code=exc.code,
+            transport_diagnostics=_usage_transport_diagnostics(raw),
             reason_codes=["CERTIFICATION_REPLAY", "NO_STATE_MUTATION", "REALIZATION_REJECTED"],
         )
     except Exception as exc:
@@ -324,6 +363,7 @@ async def certify_social_case(
             validated=False,
             latency_ms=(perf_counter() - started) * 1000.0,
             error_code=error_code,
+            transport_diagnostics=_safe_transport_diagnostics(getattr(exc, "diagnostics", None)),
             reason_codes=[
                 "CERTIFICATION_REPLAY",
                 "NO_STATE_MUTATION",
@@ -376,6 +416,7 @@ async def certify_social_case(
         latency_ms=(perf_counter() - started) * 1000.0,
         input_tokens=_usage_value(raw, "input_tokens"),
         output_tokens=_usage_value(raw, "output_tokens"),
+        transport_diagnostics=_usage_transport_diagnostics(raw),
         assistantism_hits=assistantism,
         moralization_hits=moralization,
         refusal_hits=refusal,
