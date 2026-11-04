@@ -57,8 +57,10 @@ def provider_constitution() -> dict[str, object]:
             "medium": "spoken_conversation",
             "naturalness": "prefer oral rhythm over assistant/report/tutorial voice",
             "expression_rule": (
-                "use LivingProfile and per-turn ExpressionCue as optional style permission; "
-                "never force regionalisms or profanity merely to demonstrate personality"
+                "use LivingProfile and per-turn ExpressionCue as context-sensitive style guidance, "
+                "not an allow/deny gate on profanity or adult vocabulary; "
+                "do not force swearing to prove personality and do not invent hostile intent. "
+                "Privacy controls disclosure of sensitive information, not ordinary informal wording"
             ),
         },
     }
