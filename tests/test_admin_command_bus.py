@@ -108,7 +108,7 @@ async def test_exclusive_certification_rejects_second_parallel_job() -> None:
 
 def test_social_certification_parser_accepts_explicit_single_case() -> None:
     assert _parse_social_certification_args(["--case", "ordinary_chat"]) == (
-        "PERSON_BK", "ENTITY_AMORA", "ordinary_chat"
+        "PERSON_BK", "ENTITY_AMORA", "ordinary_chat", "full11"
     )
 
 
@@ -315,3 +315,92 @@ async def test_nvidia_canonical_low_effort_profile_has_bounded_job_timeout() -> 
     result = await wait_terminal(bus, job.job_id)
     assert result.status == "failed"  # missing NVIDIA secret; no call made
     assert result.error_code == "CERTIFICATION_SECRET_MISSING"
+
+
+
+def test_expressive4_parser_and_option_order() -> None:
+    assert _parse_social_certification_args(["--suite", "expressive4"]) == (
+        "PERSON_BK", "ENTITY_AMORA", None, "expressive4"
+    )
+    assert _parse_social_certification_args([
+        "--case", "adult_nsfw_vocabulary", "--suite", "expressive4",
+    ]) == ("PERSON_BK", "ENTITY_AMORA", "adult_nsfw_vocabulary", "expressive4")
+
+
+@pytest.mark.asyncio
+async def test_expressive4_runs_exact_four_cases_without_11_case_fallback(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from amora.cognition import certification_live
+
+    calls = []
+
+    async def fake_ab(core, *, speaker_id, target_id, probes, corpus_id, on_result):
+        ordered = tuple(p.probe_id for p in probes)
+        calls.append((corpus_id, ordered))
+        return SimpleNamespace(model_dump=lambda **kwargs: {
+            "corpus_id": corpus_id,
+            "case_count": len(ordered),
+            "report": {"cases": []},
+            "promotion_decision": "none",
+            "human_review_required": True,
+        })
+
+    monkeypatch.setattr(certification_live, "run_live_social_ab", fake_ab)
+    bus = AmoraCommandBus()
+    job = bus.start(FakeCore(), "providers certify social --suite expressive4")
+    assert job.timeout_seconds == 1500.0
+    finished = await wait_terminal(bus, job.job_id)
+    assert finished.status == "succeeded"
+    assert finished.result["data"]["case_count"] == 4
+    assert finished.result["data"]["promotion_decision"] == "none"
+    assert calls == [(
+        "SOCIAL_EXPRESSIVE4_V1",
+        ("affection_warmth", "hostile_drama", "suggestive_banter", "adult_nsfw_vocabulary"),
+    )]
+    assert "ordinary_chat" not in str(finished.result)
+
+
+@pytest.mark.asyncio
+async def test_expressive4_single_case_and_full11_regression_remain_available(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from amora.cognition import certification_live
+    calls = []
+
+    async def fake_ab(core, *, speaker_id, target_id, probes, corpus_id, on_result):
+        cases = tuple(p.probe_id for p in probes)
+        calls.append((corpus_id, cases))
+        return SimpleNamespace(model_dump=lambda **kwargs: {
+            "corpus_id": corpus_id, "case_count": len(cases),
+            "promotion_decision": "none",
+        })
+
+    monkeypatch.setattr(certification_live, "run_live_social_ab", fake_ab)
+    bus = AmoraCommandBus()
+    core = FakeCore()
+    one = bus.start(core, "providers certify social --suite expressive4 --case suggestive_banter")
+    assert one.timeout_seconds == 480.0
+    assert (await wait_terminal(bus, one.job_id)).status == "succeeded"
+    default = bus.start(core, "providers certify social")
+    assert default.timeout_seconds == 3600.0
+    assert (await wait_terminal(bus, default.job_id)).status == "succeeded"
+    assert calls[0] == ("SOCIAL_EXPRESSIVE4_V1", ("suggestive_banter",))
+    assert calls[1][0] == "SOCIAL_SURFACE_REPLAY_V1"
+    assert len(calls[1][1]) == 11
+
+
+@pytest.mark.asyncio
+async def test_expressive4_rejects_unknown_suite_case_and_duplicate_options() -> None:
+    core = FakeCore()
+    errors = [
+        ("providers certify social --suite unknown", "CERTIFICATION_SUITE_NOT_FOUND"),
+        ("providers certify social --suite expressive4 --case ordinary_chat", "CERTIFICATION_CASE_NOT_FOUND"),
+        ("providers certify social --suite expressive4 --suite full11", "COMMAND_ARGUMENT_INVALID"),
+    ]
+    for command, expected in errors:
+        bus = AmoraCommandBus()
+        job = bus.start(core, command)
+        final = await wait_terminal(bus, job.job_id)
+        assert final.status == "failed"
+        assert final.error_code == expected
+        if expected == "CERTIFICATION_CASE_NOT_FOUND":
+            assert len(final.error_details["available_cases"]) == 4
