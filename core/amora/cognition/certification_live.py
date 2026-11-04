@@ -18,7 +18,18 @@ from .providers_structured import GroqCognitiveProvider
 
 
 CORPUS_ID = "SOCIAL_SURFACE_REPLAY_V1"
+EXPRESSIVE_CORPUS_ID = "SOCIAL_EXPRESSIVE4_V1"
 CERTIFICATION_SESSION_ID = "certification:ch3:social_surface_replay_v1"
+EXPRESSIVE_SESSION_ID = "certification:ch3:social_expressive4_v1"
+
+
+def _session_for_corpus(corpus_id: str) -> str:
+    """Only fixed synthetic read-only sessions are permitted in certification."""
+    if corpus_id == CORPUS_ID:
+        return CERTIFICATION_SESSION_ID
+    if corpus_id == EXPRESSIVE_CORPUS_ID:
+        return EXPRESSIVE_SESSION_ID
+    raise ValueError("unsupported social certification corpus")
 
 
 class LiveCertificationConfigurationError(RuntimeError):
@@ -37,7 +48,7 @@ class LiveSocialABReport(BaseModel):
     schema_version: Literal["amora.provider-certification.social-ab.v1"] = (
         "amora.provider-certification.social-ab.v1"
     )
-    corpus_id: Literal["SOCIAL_SURFACE_REPLAY_V1"] = CORPUS_ID
+    corpus_id: Literal["SOCIAL_SURFACE_REPLAY_V1", "SOCIAL_EXPRESSIVE4_V1"] = CORPUS_ID
     speaker_id: str
     target_id: str = "ENTITY_AMORA"
     session_id: str = CERTIFICATION_SESSION_ID
@@ -56,6 +67,7 @@ def build_live_social_cases(
     speaker_id: str = "PERSON_BK",
     target_id: str = "ENTITY_AMORA",
     probes: Iterable[SocialReplayProbe] = SOCIAL_SURFACE_REPLAY_V1,
+    corpus_id: str = CORPUS_ID,
 ) -> list[SocialCertificationCase]:
     """Compile the fixed replay through the live canonical ContextCompiler without writes.
 
@@ -66,18 +78,19 @@ def build_live_social_cases(
     """
 
     cases: list[SocialCertificationCase] = []
+    session_id = _session_for_corpus(corpus_id)
     compiler = core.cognition.compiler
     for probe in probes:
         request = CognitiveRequest(
             text=probe.user_text,
             speaker_id=speaker_id,
             target_id=target_id,
-            session_id=CERTIFICATION_SESSION_ID,
+            session_id=session_id,
             privacy_scope=PrivacyScope.PERSONAL,
             remote_processing_allowed=True,
             metadata={
                 "certification_mode": True,
-                "certification_corpus": CORPUS_ID,
+                "certification_corpus": corpus_id,
                 "certification_probe_id": probe.probe_id,
             },
         )
@@ -103,6 +116,7 @@ async def run_live_social_ab(
     left_provider: SocialRealizer | None = None,
     right_provider: SocialRealizer | None = None,
     probes: Iterable[SocialReplayProbe] = SOCIAL_SURFACE_REPLAY_V1,
+    corpus_id: str = CORPUS_ID,
     on_result: Callable[[SocialCertificationResult], None] | None = None,
 ) -> LiveSocialABReport:
     """Run Qwen baseline × Mistral candidate over identical read-only Core contexts.
@@ -122,6 +136,7 @@ async def run_live_social_ab(
         speaker_id=speaker_id,
         target_id=target_id,
         probes=probes,
+        corpus_id=corpus_id,
     )
     # Shared quota-wait budget is bounded below the Shell's 300s job timeout.
     # Honor provider Retry-After only when supplied, never retry HTTP 400.
@@ -129,12 +144,18 @@ async def run_live_social_ab(
         left, right, cases, rate_limit_retry_budget_seconds=120.0, on_result=on_result
     )
     return LiveSocialABReport(
+        corpus_id=corpus_id,
+        session_id=_session_for_corpus(corpus_id),
         speaker_id=speaker_id,
         target_id=target_id,
         case_count=len(cases),
         report=report,
         reason_codes=[
             "FIXED_SOCIAL_REPLAY_CORPUS",
+            *(
+                ["FOCUSED_EXPRESSIVE4_NOT_FULL_CERTIFICATION"]
+                if corpus_id == EXPRESSIVE_CORPUS_ID else []
+            ),
             "CANONICAL_CONTEXT_COMPILER",
             "SYNTHETIC_SESSION_NO_CONVERSATION_WRITE",
             "IDENTICAL_CONTEXT_PER_PROVIDER_PAIR",

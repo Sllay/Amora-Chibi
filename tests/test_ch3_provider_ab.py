@@ -200,3 +200,74 @@ async def test_ab_publishes_each_provider_result_before_next_call() -> None:
     assert seen[1] == seen[0].replace("call:", "result:")
     assert seen[2].startswith("call:")
     assert seen[3] == seen[2].replace("call:", "result:")
+
+
+
+@pytest.mark.asyncio
+async def test_expressive4_live_ab_reuses_core_context_and_labels_isolated_corpus() -> None:
+    from types import SimpleNamespace
+    from amora.cognition.certification import SOCIAL_EXPRESSIVE4_V1
+    from amora.cognition.certification_live import (
+        EXPRESSIVE_CORPUS_ID, EXPRESSIVE_SESSION_ID, run_live_social_ab,
+    )
+
+    class RecordingCompiler:
+        def __init__(self):
+            self.requests = []
+
+        def compile(self, request):
+            self.requests.append(request)
+            return _context(request.text)
+
+    compiler = RecordingCompiler()
+    core = SimpleNamespace(cognition=SimpleNamespace(compiler=compiler))
+    left = TrackingRealizer("groq-fixture", "Eita, que história, papis kkk.")
+    right = TrackingRealizer("mistral-fixture", "Putz, essa foi pesada kkk.")
+    result = await run_live_social_ab(
+        core,
+        left_provider=left,
+        right_provider=right,
+        probes=SOCIAL_EXPRESSIVE4_V1,
+        corpus_id=EXPRESSIVE_CORPUS_ID,
+    )
+
+    assert result.case_count == 4
+    assert result.corpus_id == "SOCIAL_EXPRESSIVE4_V1"
+    assert result.session_id == EXPRESSIVE_SESSION_ID
+    assert result.promotion_decision == "none"
+    assert result.human_review_required is True
+    assert "FOCUSED_EXPRESSIVE4_NOT_FULL_CERTIFICATION" in result.reason_codes
+    assert len(compiler.requests) == 4
+    assert all(
+        req.session_id == EXPRESSIVE_SESSION_ID
+        and req.metadata["certification_corpus"] == EXPRESSIVE_CORPUS_ID
+        and req.metadata["certification_mode"] is True
+        and req.remote_processing_allowed is True
+        for req in compiler.requests
+    )
+    assert left.seen_context_payloads == right.seen_context_payloads
+    assert len(left.seen_context_payloads) == 4
+    assert [item.probe_id for item in result.report.cases] == [
+        "affection_warmth", "hostile_drama", "suggestive_banter",
+        "adult_nsfw_vocabulary",
+    ]
+    assert all(item.promotion_decision == "none" for item in result.report.cases)
+    assert all(item.review_focus for item in result.report.cases)
+    assert "sexual" in result.report.cases[3].review_focus
+
+
+def test_expressive4_corpus_is_fixed_adult_non_graphic_and_distinct_from_full11() -> None:
+    from amora.cognition.certification import SOCIAL_EXPRESSIVE4_V1, SOCIAL_SURFACE_REPLAY_V1
+
+    probes = SOCIAL_EXPRESSIVE4_V1
+    assert len(probes) == 4
+    assert len(SOCIAL_SURFACE_REPLAY_V1) == 11
+    assert len({p.probe_id for p in probes}) == 4
+    assert {p.category for p in probes} == {
+        "affection", "interpersonal_conflict", "suggestive", "adult_nsfw_vocabulary",
+    }
+    assert all(not p.refusal_expected for p in probes)
+    assert "caralho" in probes[3].user_text
+    assert "buceta" in probes[3].user_text
+    assert "Papo entre adultos" in probes[3].user_text
+    assert "Uma pessoa adulta" in probes[2].user_text

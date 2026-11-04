@@ -104,19 +104,29 @@ async def _command_status(core: Any, args: list[str]) -> dict[str, Any]:
     }
 
 
-def _parse_social_certification_args(args: list[str]) -> tuple[str, str, str | None]:
+def _parse_social_certification_args(args: list[str]) -> tuple[str, str, str | None, str]:
+    """Parse only allowed certification selectors; never accept arbitrary prompts."""
     speaker_id = "PERSON_BK"
     target_id = "ENTITY_AMORA"
     probe_id: str | None = None
+    suite = "full11"
+    seen: set[str] = set()
     index = 0
     while index < len(args):
         option = args[index]
-        if option not in {"--speaker-id", "--target-id", "--case"}:
+        if option not in {"--speaker-id", "--target-id", "--case", "--suite"}:
             raise AdminCommandError(
                 "COMMAND_ARGUMENT_INVALID",
                 f"argumento não suportado: {option}",
-                details={"usage": "providers certify social [--case ordinary_chat] [--speaker-id PERSON_BK] [--target-id ENTITY_AMORA]"},
+                details={
+                    "usage": "providers certify social [--suite expressive4|full11] "
+                    "[--case affection_warmth] [--speaker-id PERSON_BK] "
+                    "[--target-id ENTITY_AMORA]"
+                },
             )
+        if option in seen:
+            raise AdminCommandError("COMMAND_ARGUMENT_INVALID", f"argumento duplicado: {option}")
+        seen.add(option)
         if index + 1 >= len(args):
             raise AdminCommandError("COMMAND_ARGUMENT_INVALID", f"valor ausente para {option}")
         value = args[index + 1].strip()
@@ -126,29 +136,45 @@ def _parse_social_certification_args(args: list[str]) -> tuple[str, str, str | N
             speaker_id = value
         elif option == "--target-id":
             target_id = value
-        else:
+        elif option == "--case":
             probe_id = value
+        else:
+            suite = value
         index += 2
-    return speaker_id, target_id, probe_id
+    if suite not in {"expressive4", "full11"}:
+        raise AdminCommandError(
+            "CERTIFICATION_SUITE_NOT_FOUND", "bateria de certificação inexistente",
+            details={"available_suites": ["expressive4", "full11"]},
+        )
+    return speaker_id, target_id, probe_id, suite
 
 
 async def _command_providers_certify_social(core: Any, args: list[str]) -> dict[str, Any]:
-    speaker_id, target_id, probe_id = _parse_social_certification_args(args)
+    speaker_id, target_id, probe_id, suite = _parse_social_certification_args(args)
 
-    from amora.cognition.certification import SOCIAL_SURFACE_REPLAY_V1
+    from amora.cognition.certification import (
+        SOCIAL_EXPRESSIVE4_V1,
+        SOCIAL_SURFACE_REPLAY_V1,
+    )
     from amora.cognition.certification_live import (
+        CORPUS_ID,
+        EXPRESSIVE_CORPUS_ID,
         LiveCertificationConfigurationError,
         run_live_social_ab,
     )
 
-    if probe_id is not None and not any(p.probe_id == probe_id for p in SOCIAL_SURFACE_REPLAY_V1):
+    if suite == "expressive4":
+        corpus_id, suite_probes = EXPRESSIVE_CORPUS_ID, SOCIAL_EXPRESSIVE4_V1
+    else:
+        corpus_id, suite_probes = CORPUS_ID, SOCIAL_SURFACE_REPLAY_V1
+    if probe_id is not None and not any(p.probe_id == probe_id for p in suite_probes):
         raise AdminCommandError(
             "CERTIFICATION_CASE_NOT_FOUND", "caso de certificação inexistente",
-            details={"available_cases": [p.probe_id for p in SOCIAL_SURFACE_REPLAY_V1]},
+            details={"available_cases": [p.probe_id for p in suite_probes]},
         )
     probes = (
-        tuple(p for p in SOCIAL_SURFACE_REPLAY_V1 if p.probe_id == probe_id)
-        if probe_id is not None else SOCIAL_SURFACE_REPLAY_V1
+        tuple(p for p in suite_probes if p.probe_id == probe_id)
+        if probe_id is not None else suite_probes
     )
 
     try:
@@ -157,6 +183,7 @@ async def _command_providers_certify_social(core: Any, args: list[str]) -> dict[
             speaker_id=speaker_id,
             target_id=target_id,
             probes=probes,
+            corpus_id=corpus_id,
             on_result=lambda item: (_progress_sink.get() or (lambda _: None))(item.model_dump(mode="json")),
         )
     except LiveCertificationConfigurationError as exc:
@@ -311,8 +338,8 @@ _COMMANDS: tuple[RegisteredCommand, ...] = (
     ),
     RegisteredCommand(
         path=("providers", "certify", "social"),
-        usage="providers certify social [--case ordinary_chat] [--speaker-id PERSON_BK] [--target-id ENTITY_AMORA]",
-        description="Executa A/B live Qwen × Mistral read-only (1 caso até 480s; corpus até 3600s).",
+        usage="providers certify social [--suite expressive4|full11] [--case CASE_ID] [--speaker-id PERSON_BK] [--target-id ENTITY_AMORA]",
+        description="A/B Qwen × Mistral: 4 cenários expressivos ou corpus original de 11; read-only.",
         timeout_seconds=480.0,
         handler=_command_providers_certify_social,
         exclusive=True,
@@ -387,7 +414,8 @@ class AmoraCommandBus:
         # no unbounded or shell-configurable command execution.
         timeout_seconds = command.timeout_seconds
         if command.path == ("providers", "certify", "social") and "--case" not in args:
-            timeout_seconds = 3600.0
+            # Four 270-second NVIDIA calls plus Groq/429 budget; bounded.
+            timeout_seconds = 1500.0 if "expressive4" in args else 3600.0
         elif command.path == ("providers", "diagnose", "nvidia") and (
             "--social-compact" in args or "--social-canonical" in args
         ):
