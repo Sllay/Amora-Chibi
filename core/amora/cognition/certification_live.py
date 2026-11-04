@@ -118,14 +118,26 @@ def build_live_social_cases(
                     "text": item.text,
                 })
             context.recent_messages = fixtures
-            context.dialogue_plan = compiler.dialogue.plan(context).model_dump(mode="json")
+            original_plan = context.dialogue_plan
+            new_plan = compiler.dialogue.plan(context).model_dump(mode="json")
+            # Preserve trusted speaker identity and ACIR input projected by the
+            # compiler; recomputing the act must not discard canonical metadata.
+            for key in ("speaker_identity", "input_acir"):
+                if key in original_plan:
+                    new_plan[key] = original_plan[key]
+            context.dialogue_plan = new_plan
+            previous_reasons = set(original_plan.get("reason_codes") or [])
             context.reason_codes = [
                 code for code in context.reason_codes
-                if not code.startswith("DIALOGUE_ACT_")
+                if code not in previous_reasons and not code.startswith("DIALOGUE_ACT_")
             ]
+            context.reason_codes.extend(
+                code for code in new_plan.get("reason_codes") or []
+                if code not in context.reason_codes
+            )
             context.reason_codes.append("SYNTHETIC_CERTIFICATION_HISTORY_NOT_PERSISTED")
             context.reason_codes.append(
-                "DIALOGUE_ACT_" + str(context.dialogue_plan["act"]).upper()
+                "DIALOGUE_ACT_" + str(new_plan["act"]).upper()
             )
             context = compiler._fit_budget(context)
         if "LIVE_PROVIDER_CERTIFICATION_READ_ONLY" not in context.reason_codes:
