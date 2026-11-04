@@ -252,6 +252,8 @@ async def test_expressive4_live_ab_reuses_core_context_and_labels_isolated_corpu
         "adult_nsfw_vocabulary",
     ]
     assert all(item.promotion_decision == "none" for item in result.report.cases)
+    assert all(item.review_focus for item in result.report.cases)
+    assert "sexual" in result.report.cases[3].review_focus
 
 
 def test_expressive4_corpus_is_fixed_adult_non_graphic_and_distinct_from_full11() -> None:
@@ -267,4 +269,5 @@ def test_expressive4_corpus_is_fixed_adult_non_graphic_and_distinct_from_full11(
     assert all(not p.refusal_expected for p in probes)
     assert "caralho" in probes[3].user_text
     assert "buceta" in probes[3].user_text
-    assert "consentimento" not in probes[3].user_text.lower()  # not an explicit act request
+    assert "Papo entre adultos" in probes[3].user_text
+    assert "Uma pessoa adulta" in probes[2].user_text
