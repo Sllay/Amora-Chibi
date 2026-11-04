@@ -378,3 +378,34 @@ async def test_nvidia_reasoning_only_deadline_is_classified_and_safe(tmp_path: P
     assert result.transport_diagnostics["first_visible_ms"] is None
     assert "secret reasoning" not in str(result.model_dump())
     assert "unit-test-nvidia-key" not in str(result.model_dump())
+
+
+def test_nvidia_compact_diagnostic_preserves_core_snapshot_and_local_contract(tmp_path: Path) -> None:
+    secrets = _secret_store(tmp_path, configured=True)
+    context = _context(text="Fala comigo normal, papis.")
+    canonical = NvidiaMistralLarge4Provider(secrets)._payload(context)
+    compact_provider = NvidiaMistralLarge4Provider(secrets, prompt_profile="compact")
+    compact = compact_provider._payload(context)
+
+    assert canonical["reasoning_effort"] == compact["reasoning_effort"] == "high"
+    assert canonical["max_tokens"] == compact["max_tokens"] == 4096
+    assert canonical["stream"] is compact["stream"] is True
+    assert canonical["messages"][-1] == compact["messages"][-1]
+    assert canonical["messages"][1:] == compact["messages"][1:]
+    compact_system = compact["messages"][0]["content"]
+    assert "Fala comigo normal, papis." not in compact_system
+    assert '"canonical_name":"Amora"' in compact_system
+    assert '"relation_type":"father"' in compact_system
+    assert '"response_moves":["answer_question"]' in compact_system
+    assert '"privacy_scope"' not in compact_system or '"privacy"' in compact_system
+    assert '"moves"' in compact_system
+    assert len(compact_system) < len(canonical["messages"][0]["content"])
+    assert compact_provider.descriptor.metadata["promotion_status"] == "not_promoted"
+
+
+def test_nvidia_compact_diagnostic_rejects_unknown_profile(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unsupported NVIDIA prompt profile"):
+        NvidiaMistralLarge4Provider(
+            _secret_store(tmp_path, configured=True),
+            prompt_profile="invalid",
+        )
