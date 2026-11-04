@@ -270,10 +270,20 @@ class DialogueOrchestrator:
             )
 
         if self._DISCLOSURE_RE.search(text):
+            # A short "tô cansado" needs presence, not an essay. A layered
+            # disclosure needs room for a specific interpretation; forcing
+            # every disclosure to SHORT was causing generic one-liners.
+            disclosure_depth = self._depth(text)
+            if disclosure_depth == DialogueDepth.DEEP:
+                disclosure_depth = DialogueDepth.MEDIUM
             return DialoguePlan(
                 act=DialogueAct.RESPOND_TO_DISCLOSURE,
-                objective="react as a close conversational partner before trying to solve anything",
-                depth=DialogueDepth.SHORT,
+                objective=(
+                    "react as a close conversational partner; notice any tension "
+                    "or contradiction in the supplied context without rushing "
+                    "to solve it or inventing facts"
+                ),
+                depth=disclosure_depth,
                 response_moves=["acknowledge_disclosure", "share_relational_reaction"],
                 ask_followup=False,
                 offer_help=False,
