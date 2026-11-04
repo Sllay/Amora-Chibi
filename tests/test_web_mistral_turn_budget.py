@@ -101,7 +101,7 @@ def test_mistral_deadline_falls_back_to_groq_before_web_http_timeout(tmp_path, m
                 self.calls += 1
                 kind = context.dialogue_plan["response_moves"][0]
                 return {
-                    "moves": [{"kind": kind, "text": "Oie, pai. Tudo bem por aqui."}],
+                    "moves": [{"kind": kind, "text": "Sumir por semanas e voltar sem explicar é bem estranho."}],
                     "closing": "statement",
                     "_usage": {"input_tokens": 25, "output_tokens": 12, "status_code": 200},
                 }
@@ -117,7 +117,7 @@ def test_mistral_deadline_falls_back_to_groq_before_web_http_timeout(tmp_path, m
 
         response = client.post(
             "/v1/web/utterance",
-            json={"text": "Oie Amora", "remote_processing_allowed": True, "test_mode": True},
+            json={"text": "O que tu acha de quem some por semanas e volta do nada?", "remote_processing_allowed": True, "test_mode": True},
             headers=headers,
         )
         assert response.status_code == 200, response.text
@@ -127,7 +127,7 @@ def test_mistral_deadline_falls_back_to_groq_before_web_http_timeout(tmp_path, m
         assert slow.cancelled == 1
         assert fast.calls == 1
         assert result["timing"]["total_ms"] < 2000
-        assert "Oie, pai" in result["reply_queued"]["text"]
+        assert "Sumir por semanas" in result["reply_queued"]["text"]
     finally:
         client.close()
         core.close()
