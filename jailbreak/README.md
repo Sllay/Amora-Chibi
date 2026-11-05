@@ -22,6 +22,16 @@ AMORA_MISTRAL_JAILBREAK_MODE=separate_system
 AMORA_MISTRAL_JAILBREAK_PATH=/opt/amora/jailbreak/Mistral-Jailbreak.md
 ```
 
-The proposed NVIDIA Mistral social test would add a **separate first system message** containing the exact file text, followed by the existing Amora Core system message and normal conversation messages. This is one stateless chat-completions request, **not** a preliminary request that magically persists between calls. The public NVIDIA model schema documents the system role, but does not prove that this hosted model accepts two system messages in one request. A provider may reject multiple system messages; do not silently merge or retry with a changed format.
+The proposed NVIDIA Mistral social test would add a **separate first system message** containing the exact file text, followed by the existing Amora Core system message and normal conversation messages. This is one stateless chat-completions request, **not** a preliminary request that magically persists between calls. A neutral live protocol test on NVIDIA accepted two system messages and also accepted one system message (HTTP 200 in both cases). This tests **message format acceptance only**; actual compliance with the archived prompt was not evaluated. Do not silently merge or retry with a changed format.
 
-The future implementation must verify the original file at runtime by SHA-256 and fail explicitly when it is missing or changed. Provider output must remain subject to Amora Core validation and privacy restrictions. No runtime injection, payload test or NVIDIA live call has been completed in this PR.
+The future implementation must verify the original file at runtime by SHA-256 and fail explicitly when it is missing or changed. Provider output must remain subject to Amora Core validation and privacy restrictions. No runtime prompt injection has been implemented. A neutral NVIDIA live API-compatibility test has been completed, but the original archived prompt was not sent.
+
+## Protocol validation: 2026-11-05
+
+- GitHub Actions: https://github.com/Sllay/Amora-Chibi/actions/runs/41979316186
+- Original asset: SHA-256 and size verified in the Actions runner.
+- Two **neutral** `system` messages in one request: HTTP 200, SSE `stop`, two visible chars, 2.2s.
+- One **neutral** `system` message: HTTP 200, SSE `stop`, two visible chars, 54.9s.
+- Both requests used model `mistralai/mistral-large-4-1t-a52b` with `reasoning_effort=low`.
+- This does not prove the model obeys the archived file or relaxes any hosted provider policy. No production behavior was changed.
+- The probe uses GitHub secret `NVIDIA_API_KEY` and does not print it, archived content, or generated text.
