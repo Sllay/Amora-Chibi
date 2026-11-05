@@ -410,8 +410,19 @@ class SecurityMiddleware:
                     started = True
                 await secured_send(message)
 
+            # Streaming Safari turns can emit safe SSE progress while NVIDIA
+            # produces reasoning tokens. The ordinary 90s HTTP deadline must
+            # not cancel an active stream. Keep a separate large *safety*
+            # ceiling: the provider already enforces meaningful inactivity
+            # and bounded generation, and the Web Core caps failover.
+            social_stream = (
+                path == "/v1/web/utterance/stream"
+                and scope["method"] == "POST"
+                and not self.worker
+            )
+            http_deadline = 270 if social_stream else 90
             try:
-                async with asyncio.timeout(90):
+                async with asyncio.timeout(http_deadline):
                     await self.app(scope, bounded_receive, tracked_send)
             except TimeoutError:
                 if not started:
