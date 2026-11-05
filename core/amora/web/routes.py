@@ -294,7 +294,7 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
                         pass
 
             task.add_done_callback(forget)
-            yield 'event: accepted\\ndata: {"stage":"started"}\\n\\n'
+            yield 'event: accepted\ndata: {"stage":"started"}\n\n'
             try:
                 while not task.done():
                     next_update = asyncio.create_task(updates.get())
@@ -305,11 +305,11 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
                         )
                         if next_update in done:
                             stage = next_update.result()
-                            yield f"event: progress\\ndata: {json.dumps({'stage': stage})}\\n\\n"
+                            yield f"event: progress\ndata: {json.dumps({'stage': stage})}\n\n"
                         elif task not in done:
                             # This is a transport keepalive, NOT a claim that
                             # the provider has emitted a meaningful token.
-                            yield ': heartbeat\\n\\n'
+                            yield ': heartbeat\n\n'
                     finally:
                         if not next_update.done():
                             next_update.cancel()
@@ -320,15 +320,15 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
 
                 outcome = await task
                 yield (
-                    "event: completed\\ndata: "
+                    "event: completed\ndata: "
                     + json.dumps(outcome, ensure_ascii=False, separators=(",", ":"))
-                    + "\\n\\n"
+                    + "\n\n"
                 )
             except asyncio.CancelledError:
                 # Detached work continues; no unvalidated partial response sent.
                 raise
             except Exception:
-                yield 'event: failed\\ndata: {"error_code":"WEB_TURN_PROCESSING_FAILED"}\\n\\n'
+                yield 'event: failed\ndata: {"error_code":"WEB_TURN_PROCESSING_FAILED"}\n\n'
 
         return StreamingResponse(
             events(),
