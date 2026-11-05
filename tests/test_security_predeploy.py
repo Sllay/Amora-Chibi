@@ -607,8 +607,8 @@ def test_paired_web_token_can_stream_social_turn_but_cannot_expand_its_scope(clo
     streamed = client.post("/v1/web/utterance/stream", json=payload, headers=headers)
     assert streamed.status_code == 200, streamed.text
     assert "text/event-stream" in streamed.headers["content-type"]
-    assert 'event: accepted\\n' in streamed.text
-    assert 'event: completed\\n' in streamed.text
+    assert 'event: accepted\n' in streamed.text
+    assert 'event: completed\n' in streamed.text
 
     # Authorization stays strictly bound to the exact POST endpoint.
     assert client.post("/v1/web/utterance/stream", json=payload).status_code == 401
