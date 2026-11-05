@@ -52,6 +52,7 @@ class DialoguePlan(BaseModel):
     depth: DialogueDepth = DialogueDepth.MEDIUM
     response_moves: list[str] = Field(default_factory=list)
     ask_followup: bool = False
+    self_choice_keys: list[str] = Field(default_factory=list)
     # A single conversational check of an interpretation is different from
     # initiating an unsolicited follow-up topic or asking for more information.
     allow_reflective_question: bool = False
@@ -135,6 +136,7 @@ class DialogueOrchestrator:
         style = self._style_register(context)
         tone = self._tone_tags(context)
         attitude = self._relational_attitude(context)
+        possible_self_choices = self._self_choice_keys(text, context)
 
         if "COGNITIVE_REFLECTION" in context.reason_codes:
             return DialoguePlan(
@@ -353,7 +355,13 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "OPINION_REQUESTED"],
             )
 
-        if self._PLAY_RE.search(text) and context.drives.get("play", 0.0) >= 0.35:
+        if (
+            self._PLAY_RE.search(text)
+            and context.drives.get("play", 0.0) >= 0.35
+            and not possible_self_choices
+            and "?" not in raw
+            and not self._QUESTION_START_RE.search(text)
+        ):
             return DialoguePlan(
                 act=DialogueAct.TEASE,
                 objective="return light playful energy without humiliation or changing relationship facts",
@@ -374,7 +382,7 @@ class DialogueOrchestrator:
             and bool(self._IMPLICIT_CONFIRMATION_RE.search(text))
         )
         explicit_choice = bool(self._CHOICE_REQUEST_RE.search(text))
-        if "?" in raw or self._QUESTION_START_RE.search(text) or implicit_confirmation or explicit_choice:
+        if "?" in raw or self._QUESTION_START_RE.search(text) or implicit_confirmation or explicit_choice or possible_self_choices:
             allow_reflective = self._reflective_confirmation_invited(context, text, raw)
             objective = (
                 "check the user's inference against the actual prior dialogue and "
@@ -398,6 +406,7 @@ class DialogueOrchestrator:
                 objective=objective,
                 depth=self._depth(text),
                 response_moves=["answer_question", "relate_to_context_if_relevant"],
+                self_choice_keys=possible_self_choices,
                 ask_followup=False,
                 allow_reflective_question=allow_reflective,
                 offer_help=False,
@@ -408,6 +417,7 @@ class DialogueOrchestrator:
                 closing_mode="natural" if allow_reflective else "statement",
                 reason_codes=[
                     "LOCAL_DIALOGUE_ORCHESTRATOR", "DIRECT_QUESTION",
+                    *(["CORE_GATED_SELF_CHOICE_INVITED"] if possible_self_choices else []),
                     *(["IMPLICIT_CONFIRMATION_REQUIRES_CLARIFICATION"] if implicit_confirmation else []),
                     *(["EXPLICIT_CHOICE_REQUEST"] if explicit_choice else []),
                     *(["REFLECTIVE_CONFIRMATION_INVITED"] if allow_reflective else []),
@@ -434,6 +444,46 @@ class DialogueOrchestrator:
                 "CURIOSITY_FOLLOWUP" if ask_followup else "NO_FORCED_FOLLOWUP",
             ],
         )
+
+    @staticmethod
+    def _self_choice_keys(text: str, context: CognitiveContext) -> list[str]:
+        """Permit a first-person autonomous choice on a relevant direct topic.
+
+        This only declares which preferences the provider may PROPOSE;
+        the Core's Self Model makes the decision persistent, once.
+        """
+        keys: list[str] = []
+        request_words = (
+            "escolh", "prefe", "gost", "identific", "quer",
+            "qual", "decid", "sente", "atra", "tipo",
+        )
+        if not any(word in text for word in request_words):
+            return keys
+        existing_traits = context.self_model.get("traits") or {}
+        existing_preferences = context.self_model.get("preferences") or {}
+        if (
+            ("genero" in text or "identidade de genero" in text)
+            and "gender_identity" not in existing_traits
+        ):
+            keys.append("gender_identity")
+        if (
+            any(word in text for word in ("atracao", "atrai", "namor", "romant", "sexualidade", "orientacao"))
+            and "romantic_attraction" not in existing_preferences
+        ):
+            keys.append("romantic_attraction")
+        if (
+            any(word in text for word in ("homem", "mulher", "muscul", "magrel", "peito", "tipo fisico", "aparencia"))
+            and any(word in text for word in ("atra", "gost", "prefe", "tipo", "namor"))
+            and "physical_attraction" not in existing_preferences
+        ):
+            keys.append("physical_attraction")
+        if (
+            any(word in text for word in ("corpo", "aparencia", "fisico", "anatomia"))
+            and any(word in text for word in ("escolh", "prefe", "quer", "gost", "tipo"))
+            and "future_body_preference" not in existing_preferences
+        ):
+            keys.append("future_body_preference")
+        return keys
 
     def _reflective_confirmation_invited(
         self, context: CognitiveContext, text: str, raw: str
@@ -464,6 +514,8 @@ class DialogueOrchestrator:
 
     @staticmethod
     def _self_fact_request(text: str) -> str | None:
+        if "qual seu sexo" in text or "qual e o seu sexo" in text or "seu sexo e" in text:
+            return "sex"
         if "quantos anos" in text or "sua idade" in text or "idade voce" in text or "idade vc" in text or "idade tu" in text:
             return "age"
         if "qual seu nome" in text or "qual e seu nome" in text or "como voce se chama" in text or "como vc se chama" in text:
@@ -478,6 +530,10 @@ class DialogueOrchestrator:
     def _resolve_self_fact(context: CognitiveContext, fact_key: str) -> tuple[FactStatus, Any | None]:
         core = context.self_model.get("core_identity", {})
         current = context.self_model.get("current_state", {})
+
+        if fact_key == "sex":
+            value = core.get("sex")
+            return (FactStatus.KNOWN, value) if value not in {None, ""} else (FactStatus.MISSING, None)
 
         if fact_key == "canonical_name":
             value = core.get("canonical_name")
