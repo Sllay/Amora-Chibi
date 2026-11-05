@@ -14,6 +14,7 @@ from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.secrets import SecretStore
 
 from .models import CognitiveContext
+from .progress import report_social_progress
 from .prompt_frame import (living_profile, render_constitution, render_current_turn, render_living_profile, render_trusted_protocol, render_turn_frame, turn_frame)
 from .providers import ProviderError
 from .providers_identity import _identity_history
@@ -309,6 +310,8 @@ class NvidiaMistralLarge4Provider:
         first_visible_ms: float | None = None
         completed_by: str | None = None
         stage = "waiting_headers"
+        last_reported_stage = ""
+        last_progress_report = started
 
         def telemetry(*, timeout_kind: str | None = None) -> dict[str, object]:
             now = perf_counter()
@@ -430,6 +433,16 @@ class NvidiaMistralLarge4Provider:
 
                             if meaningful:
                                 last_activity = perf_counter()
+                                # Fixed statuses only; never forward reasoning
+                                # content or fragments of unvalidated JSON.
+                                public_stage = "writing" if visible_events else "reasoning"
+                                if (
+                                    public_stage != last_reported_stage
+                                    or last_activity - last_progress_report >= 3.0
+                                ):
+                                    report_social_progress(public_stage)
+                                    last_reported_stage = public_stage
+                                    last_progress_report = last_activity
                             if completed_by is not None:
                                 break
         except NvidiaStreamTimeout:
@@ -473,7 +486,7 @@ class NvidiaMistralLarge4ProductionProvider(NvidiaMistralLarge4Provider):
         *,
         model: str | None = None,
         timeout_seconds: float = 55.0,
-        max_total_seconds: float = 95.0,
+        max_total_seconds: float = 185.0,
         reasoning_effort: Literal["low", "medium", "high"] = "low",
     ) -> None:
         super().__init__(
