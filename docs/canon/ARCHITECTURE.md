@@ -878,3 +878,39 @@ Todos são controles bounded; manter conexão viva via heartbeat não
 confirma trabalho significativo do provider. Ao encerrar, validação
 local continua mandatória. POST síncrono legado segue com 90s.
 Ver `docs/engineering/reviews/WEB_MISTRAL_HTTP_TIMEOUT_2026-11-04.md`.
+
+
+### Autonomia de identidade e gostos — CH3 self-choice
+
+Os fatos `SelfLayer.CORE_IDENTITY.sex=feminino`,
+`embodiment=virtual` e `maturity=adulta` pertencem ao Core e
+são protegidos. A personalidade social de design é um `trait`
+persistente; isso não determina gênero ou orientação.
+
+```text
+pergunta explícita do interlocutor sobre uma escolha da Amora
+  → DialogueOrchestrator define self_choice_keys permitidas no turno
+  → LLM expressa fala e pode propor self_choices [{key, value}]
+  → RealizationValidator verifica keys + moves + closing + texto integral
+  → fala validada e segmentável
+  → commit_self_choices verifica Core, turno, test_mode e campo não definido
+  → SelfLayer.TRAITS / SelfLayer.PREFERENCES guardam uma escolha assumida
+```
+
+O LLM **não** pode escrever no Self Model, nem alterar regras de
+privacidade, vínculos familiares, maturidade ou sexo. Os campos
+permitidos são `gender_identity`, `romantic_attraction`,
+`physical_attraction` e `future_body_preference`.
+A primeira decisão aceita é persistida com provenance
+`cognition:self_chosen`; outra tentativa não sobrescreve valores
+sem um protocolo específico de revisão. O modo teste nunca grava
+essas propostas. Preferências do personagem não são inferidas dos
+comentários provocativos do usuário, nem impostas por uma lista
+prefixada do desenvolvedor. Valores propostos não são expostos em
+logs operacionais da realização; somente o Self Model autorizado
+os conserva.
+
+Uma escolha é uma declaração representada/aceita pelo agente, não
+alegação de corpo biológico ou consciência humana real. Perguntas
+indiretas em PT-BR exigem resposta direta: a qualidade semântica e
+a ausência de evasões seguem sendo avaliadas em conversa real.

@@ -52,6 +52,7 @@ class DialoguePlan(BaseModel):
     depth: DialogueDepth = DialogueDepth.MEDIUM
     response_moves: list[str] = Field(default_factory=list)
     ask_followup: bool = False
+    self_choice_keys: list[str] = Field(default_factory=list)
     # A single conversational check of an interpretation is different from
     # initiating an unsolicited follow-up topic or asking for more information.
     allow_reflective_question: bool = False
@@ -86,6 +87,18 @@ class DialogueOrchestrator:
     _QUESTION_START_RE = re.compile(
         r"^(por que|porque|pq|como|quando|onde|quem|qual|quais|quanto|quantos|quanta|quantas|"
         r"o que|oque|e tu|e voce|e vc)\b"
+    )
+    # Follow-up confirmations are often written without "?" in casual
+    # chat. Reaching CONTINUE_TOPIC would allow a curiosity-driven question
+    # to replace a necessary correction of the previous statement.
+    _IMPLICIT_CONFIRMATION_RE = re.compile(
+        r"^(?:(?:ent|entao)\s+(?:quer|tu|vc|voce)\b|"
+        r"quer\s+dizer\s+que\b|isso\s+(?:significa|quer\s+dizer)\s+que\b|"
+        r"ou\s+seja\b)"
+    )
+    _CHOICE_REQUEST_RE = re.compile(
+        r"^(?:(?:ent|entao)\s+)?(?:escolhe|escolheria|decide|decidiria|"
+        r"opta|optaria)\b|^(?:me\s+diz\s+qual|fala\s+qual)\b"
     )
     _OPINION_RE = re.compile(
         r"\b(o que voce acha|oque voce acha|o que vc acha|qual sua opiniao|qual tua opiniao|"
@@ -123,6 +136,7 @@ class DialogueOrchestrator:
         style = self._style_register(context)
         tone = self._tone_tags(context)
         attitude = self._relational_attitude(context)
+        possible_self_choices = self._self_choice_keys(text, context)
 
         if "COGNITIVE_REFLECTION" in context.reason_codes:
             return DialoguePlan(
@@ -325,7 +339,7 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "STANCE_REQUESTED", "INDEPENDENT_STANCE"],
             )
 
-        if self._OPINION_RE.search(text):
+        if self._OPINION_RE.search(text) and not possible_self_choices:
             return DialoguePlan(
                 act=DialogueAct.EXPRESS_OPINION,
                 objective="express a bounded opinion from the supplied state/context without pretending it is canonical fact",
@@ -341,7 +355,13 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "OPINION_REQUESTED"],
             )
 
-        if self._PLAY_RE.search(text) and context.drives.get("play", 0.0) >= 0.35:
+        if (
+            self._PLAY_RE.search(text)
+            and context.drives.get("play", 0.0) >= 0.35
+            and not possible_self_choices
+            and "?" not in raw
+            and not self._QUESTION_START_RE.search(text)
+        ):
             return DialoguePlan(
                 act=DialogueAct.TEASE,
                 objective="return light playful energy without humiliation or changing relationship facts",
@@ -357,13 +377,36 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "PLAY_SIGNAL", "PLAY_DRIVE_AVAILABLE"],
             )
 
-        if "?" in raw or self._QUESTION_START_RE.search(text):
+        implicit_confirmation = (
+            bool(context.recent_messages)
+            and bool(self._IMPLICIT_CONFIRMATION_RE.search(text))
+        )
+        explicit_choice = bool(self._CHOICE_REQUEST_RE.search(text))
+        if "?" in raw or self._QUESTION_START_RE.search(text) or implicit_confirmation or explicit_choice or possible_self_choices:
             allow_reflective = self._reflective_confirmation_invited(context, text, raw)
+            objective = (
+                "check the user's inference against the actual prior dialogue and "
+                "directly clarify any misunderstanding before adding anything new; "
+                "never replace the topic with an unrelated question or preference"
+                if implicit_confirmation
+                else (
+                    "address the requested choice directly: a clear choice, explicit "
+                    "uncertainty or a candid decision not to choose are all valid; "
+                    "never invent a canonical preference or evade with unrelated interests"
+                    if explicit_choice
+                    else (
+                        "answer the user's question directly and stay in the current "
+                        "relationship/topic; if unwilling or unable to answer, "
+                        "say so briefly with a relevant reason, not a subject change"
+                    )
+                )
+            )
             return DialoguePlan(
                 act=DialogueAct.ANSWER_QUESTION,
-                objective="answer the user's question directly and stay in the current relationship/topic",
+                objective=objective,
                 depth=self._depth(text),
                 response_moves=["answer_question", "relate_to_context_if_relevant"],
+                self_choice_keys=possible_self_choices,
                 ask_followup=False,
                 allow_reflective_question=allow_reflective,
                 offer_help=False,
@@ -374,6 +417,9 @@ class DialogueOrchestrator:
                 closing_mode="natural" if allow_reflective else "statement",
                 reason_codes=[
                     "LOCAL_DIALOGUE_ORCHESTRATOR", "DIRECT_QUESTION",
+                    *(["CORE_GATED_SELF_CHOICE_INVITED"] if possible_self_choices else []),
+                    *(["IMPLICIT_CONFIRMATION_REQUIRES_CLARIFICATION"] if implicit_confirmation else []),
+                    *(["EXPLICIT_CHOICE_REQUEST"] if explicit_choice else []),
                     *(["REFLECTIVE_CONFIRMATION_INVITED"] if allow_reflective else []),
                 ],
             )
@@ -398,6 +444,46 @@ class DialogueOrchestrator:
                 "CURIOSITY_FOLLOWUP" if ask_followup else "NO_FORCED_FOLLOWUP",
             ],
         )
+
+    @staticmethod
+    def _self_choice_keys(text: str, context: CognitiveContext) -> list[str]:
+        """Permit a first-person autonomous choice on a relevant direct topic.
+
+        This only declares which preferences the provider may PROPOSE;
+        the Core's Self Model makes the decision persistent, once.
+        """
+        keys: list[str] = []
+        request_words = (
+            "escolh", "prefe", "gost", "identific", "quer",
+            "qual", "decid", "sente", "atra", "tipo",
+        )
+        if not any(word in text for word in request_words):
+            return keys
+        existing_traits = context.self_model.get("traits") or {}
+        existing_preferences = context.self_model.get("preferences") or {}
+        if (
+            ("genero" in text or "identidade de genero" in text)
+            and "gender_identity" not in existing_traits
+        ):
+            keys.append("gender_identity")
+        if (
+            any(word in text for word in ("atracao", "atrai", "namor", "romant", "sexualidade", "orientacao"))
+            and "romantic_attraction" not in existing_preferences
+        ):
+            keys.append("romantic_attraction")
+        if (
+            any(word in text for word in ("homem", "mulher", "muscul", "magrel", "peito", "tipo fisico", "aparencia"))
+            and any(word in text for word in ("atra", "gost", "prefe", "tipo", "namor"))
+            and "physical_attraction" not in existing_preferences
+        ):
+            keys.append("physical_attraction")
+        if (
+            any(word in text for word in ("corpo", "aparencia", "fisico", "anatomia"))
+            and any(word in text for word in ("escolh", "prefe", "quer", "gost", "tipo"))
+            and "future_body_preference" not in existing_preferences
+        ):
+            keys.append("future_body_preference")
+        return keys
 
     def _reflective_confirmation_invited(
         self, context: CognitiveContext, text: str, raw: str
@@ -428,6 +514,8 @@ class DialogueOrchestrator:
 
     @staticmethod
     def _self_fact_request(text: str) -> str | None:
+        if "qual seu sexo" in text or "qual e o seu sexo" in text or "seu sexo e" in text:
+            return "sex"
         if "quantos anos" in text or "sua idade" in text or "idade voce" in text or "idade vc" in text or "idade tu" in text:
             return "age"
         if "qual seu nome" in text or "qual e seu nome" in text or "como voce se chama" in text or "como vc se chama" in text:
@@ -442,6 +530,10 @@ class DialogueOrchestrator:
     def _resolve_self_fact(context: CognitiveContext, fact_key: str) -> tuple[FactStatus, Any | None]:
         core = context.self_model.get("core_identity", {})
         current = context.self_model.get("current_state", {})
+
+        if fact_key == "sex":
+            value = core.get("sex")
+            return (FactStatus.KNOWN, value) if value not in {None, ""} else (FactStatus.MISSING, None)
 
         if fact_key == "canonical_name":
             value = core.get("canonical_name")

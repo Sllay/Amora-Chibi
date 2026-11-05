@@ -139,3 +139,68 @@ def test_large_disclosure_does_not_force_a_deep_essay() -> None:
     ))
     assert plan.act == DialogueAct.RESPOND_TO_DISCLOSURE
     assert plan.depth.value == "medium"
+
+
+
+def test_colloquial_inference_without_question_mark_stays_on_original_topic() -> None:
+    """Regression: 'ent quer dizer...' is a clarification, not an invitation to change topics."""
+    previous = [{
+        "turn_id": str(uuid4()),
+        "speaker_id": "ENTITY_AMORA",
+        "text": "Não tenho corpo biológico e não defini uma escolha corporal futura.",
+    }]
+    plan = DialogueOrchestrator().plan(_context(
+        "Ent quer dizer que tu já escolheu ter um corpo específico no futuro",
+        drives={"curiosity": 0.95},
+        recent=previous,
+    ))
+    assert plan.act == DialogueAct.ANSWER_QUESTION
+    assert plan.ask_followup is False
+    assert plan.offer_help is False
+    assert plan.closing_mode == "statement"
+    assert "IMPLICIT_CONFIRMATION_REQUIRES_CLARIFICATION" in plan.reason_codes
+    assert "clarify any misunderstanding" in plan.objective
+    assert "unrelated question" in plan.objective
+
+
+def test_repeated_choice_without_question_mark_is_direct_reply_not_curiosity_probe() -> None:
+    previous = [{
+        "turn_id": str(uuid4()),
+        "speaker_id": "ENTITY_AMORA",
+        "text": "Meu corpo futuro não está definido.",
+    }]
+    for message in ("Escolhe uma opção então", "Ent escolhe uma", "Me diz qual"):
+        plan = DialogueOrchestrator().plan(_context(
+            message, drives={"curiosity": 0.98}, recent=previous,
+        ))
+        assert plan.act == DialogueAct.ANSWER_QUESTION, message
+        assert plan.ask_followup is False
+        assert "EXPLICIT_CHOICE_REQUEST" in plan.reason_codes
+        assert "decision not to choose" in plan.objective
+        assert plan.offer_help is False
+
+
+def test_ordinary_turns_not_reclassified_as_implicit_questions() -> None:
+    previous = [{"speaker_id": "ENTITY_AMORA", "text": "Boa noite!"}]
+    for message in ("Ent eu fui dormir", "Hoje foi tranquilo", "Gosto de músicas"):
+        plan = DialogueOrchestrator().plan(_context(
+            message, drives={"curiosity": 0.0}, recent=previous,
+        ))
+        assert plan.act == DialogueAct.CONTINUE_TOPIC
+        assert "IMPLICIT_CONFIRMATION_REQUIRES_CLARIFICATION" not in plan.reason_codes
+
+
+def test_direct_question_cannot_redirect_to_unrelated_preference_by_instruction() -> None:
+    from amora.cognition.realization import realization_instruction
+    from amora.cognition.models import CognitiveContext
+
+    context = _context(
+        "Se pudesse ter um corpo no futuro, tu escolheria algum?",
+        recent=[{"speaker_id": "ENTITY_AMORA", "text": "Não tenho um corpo biológico."}],
+    )
+    context.dialogue_plan = DialogueOrchestrator().plan(context).model_dump(mode="json")
+    instruction = realization_instruction(context)
+    assert "não invente escolha canônica" in instruction
+    assert "Não substitua a resposta por hobbies" in instruction
+    assert "Manter um limite relacional é permitido" in instruction
+    assert "sem simular atração sexual por familiares" in instruction

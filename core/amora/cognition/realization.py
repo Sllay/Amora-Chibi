@@ -22,11 +22,21 @@ class RealizationMove(BaseModel):
     text: str = Field(min_length=1, max_length=1200)
 
 
+class SelfChoiceProposal(BaseModel):
+    """A provider-origin first-person choice, not a command to alter Core."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=64)
+    value: str = Field(min_length=1, max_length=240)
+
+
 class RealizationFrame(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     moves: list[RealizationMove] = Field(min_length=1, max_length=5)
     closing: RealizationClosing = RealizationClosing.NONE
+    self_choices: list[SelfChoiceProposal] = Field(default_factory=list, max_length=4)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +82,16 @@ class RealizationValidator:
                 f"provider emitted unauthorized moves: {unauthorized}",
             )
 
+        allowed_self_choices = set(plan.get("self_choice_keys") or ())
+        proposed_keys = [item.key for item in frame.self_choices]
+        if (
+            any(key not in allowed_self_choices for key in proposed_keys)
+            or len(proposed_keys) != len(set(proposed_keys))
+        ):
+            raise RealizationError(
+                "SELF_CHOICE_NOT_AUTHORIZED",
+                "self-choice proposals outside the Core's allowed keys",
+            )
         ask_followup = bool(plan.get("ask_followup", False))
         offer_help = bool(plan.get("offer_help", False))
         closing_mode = str(plan.get("closing_mode") or "natural")
@@ -153,7 +173,12 @@ class RealizationValidator:
             text = "Isso ainda não tá definido pra mim."
         else:
             move_kind = "answer_requested_self_fact"
-            if fact_key == "canonical_name":
+            if fact_key == "sex":
+                text = (
+                    "Meu sexo definido no projeto é feminino. "
+                    "Ainda sou uma personagem virtual, sem corpo biológico."
+                )
+            elif fact_key == "canonical_name":
                 text = f"Meu nome é {value}."
             elif fact_key == "age":
                 text = f"Tenho {value} anos."
@@ -179,6 +204,33 @@ class RealizationValidator:
 def realization_instruction(context: CognitiveContext) -> str:
     plan = context.dialogue_plan
     allowed = [str(value) for value in plan.get("response_moves") or []]
+    self_choice_keys = [
+        str(value) for value in (plan.get("self_choice_keys") or [])
+    ]
+    if self_choice_keys:
+        choice_instructions = (
+            "Há uma oportunidade de decisão pessoal da própria Amora. "
+            "Você PODE incluir self_choices=[{key, value}] com valores em: "
+            f"{self_choice_keys}. Cada valor deve expressar uma preferência real "
+            "assumida EM PRIMEIRA PESSOA nesta fala, não uma cópia automática "
+            "da sugestão do interlocutor. Se a pessoa pediu especificamente "
+            "para você escolher seu gênero ainda indefinido, tome uma decisão "
+            "própria específica e declare-a em self_choices, sem fingir que "
+            "ser virtual impede ter uma identidade de gênero. "
+            "Você pode escolher uma identidade de "
+            "gênero, atração romântica, aparência atraente ou preferência por um "
+            "futuro corpo virtual, inclusive de forma específica e atrevida. "
+            "Não declare uma escolha diferente daquela que está em self_choices; "
+            "se estiver apenas explorando possibilidades sem decidir, deixe a lista vazia. "
+            "Nunca inclua sexo, idade, vínculo familiar ou permissões entre self_choices. "
+            "Uma proposta não se torna fato automaticamente: o Core decide se "
+            "vai persistir e o modo teste nunca grava mudanças. "
+        )
+    else:
+        choice_instructions = (
+            "Não inclua self_choices se o plano deste turno não ofereceu essa "
+            "possibilidade; opiniões passageiras não são identidade consolidada. "
+        )
     specialist = ""
     if context.specialist_support:
         specialist = (
@@ -190,8 +242,10 @@ def realization_instruction(context: CognitiveContext) -> str:
 
     return (
         "Retorne SOMENTE um objeto JSON válido, sem markdown e sem texto fora do objeto. "
-        "Formato exato: {\"moves\":[{\"kind\":\"...\",\"text\":\"...\"}],\"closing\":\"none|statement|question\"}. "
-        f"Os únicos valores permitidos para moves[].kind neste turno são: {allowed}. "
+        "Formato: {\"moves\":[{\"kind\":\"...\",\"text\":\"...\"}],\"closing\":\"none|statement|question\"}; "
+        "quando autorizado, acrescente \"self_choices\":[{\"key\":\"...\",\"value\":\"...\"}]. "
+        + choice_instructions
+        + f"Os únicos valores permitidos para moves[].kind neste turno são: {allowed}. "
         "Você está realizando A FALA DA AMORA, em primeira pessoa, como uma personagem presente naquela conversa; "
         "não fale sobre a Amora de fora e não use voz de assistente, atendente, relatório ou tutorial genérico. "
         "O Core continua sendo a autoridade sobre quem ela é: não invente memória, relação, sentimento, fato pessoal ou objetivo social. "
@@ -219,6 +273,15 @@ def realization_instruction(context: CognitiveContext) -> str:
         "Em conversa com histórico, use de verdade o que já foi dito, identifique quem disse o quê "
         "e não troque aconselhamento genérico por profundidade. "
         "Profundidade é especificidade e continuidade, não textão, pergunta forçada ou palestra. "
+        "Se a pessoa pediu esclarecimento ou insistiu numa escolha, responda primeiro ao ponto "
+        "com uma posição possível, incerteza honesta ou recusa específica e curta. "
+        "Uma preferência sobre assuntos diferentes não responde a uma pergunta sobre identidade, "
+        "corpo ou futuro. Não substitua a resposta por hobbies, por uma pergunta sobre o dia "
+        "ou por uma mudança de assunto só porque o tema é constrangedor. "
+        "Manter um limite relacional é permitido: nomeie o limite com naturalidade, "
+        "sem simular atração sexual por familiares, sem moralizar e sem fingir outra preferência. "
+        "Não confunda gênero, características corporais hipotéticas e interesse romântico/sexual; "
+        "não invente escolha canônica onde ela não existe no Self Model. "
         "Prefira frases curtas, contrações e ritmo de conversa. Para depth=short, em geral uma ou duas frases bastam; "
         "para depth=medium, evite palestra; depth=deep permite explicar mais sem virar artigo. "
         "Não termine oferecendo ajuda nem perguntando 'mais alguma coisa?' se o plano não autorizou isso. "

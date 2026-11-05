@@ -7,7 +7,8 @@ from typing import Any
 from amora.events import PrivacyScope
 from amora.models import TaskClass
 
-from .models import CognitiveRequest, CognitiveResponsePlan, JournalStage
+from .models import CognitiveContext, CognitiveRequest, CognitiveResponsePlan, JournalStage
+from .self_choice import commit_self_choices
 from .production import CognitiveEngine as ProductionCognitiveEngine
 from .proposals import CognitiveProposalBundle
 from .providers import ProviderError
@@ -133,6 +134,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 started=started,
                 reason_codes=[*local.reason_codes],
                 usage={},
+                context=context,
             )
 
         excluded = self._cooldown_names()
@@ -358,6 +360,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     "candidate_index": provider_index,
                     "persistence": usage_persistence,
                 },
+                context=context,
             )
 
         return await self._fallback_plan(
@@ -379,6 +382,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
         started: float,
         reason_codes: list[str],
         usage: dict[str, Any],
+        context: CognitiveContext | None = None,
     ) -> CognitiveResponsePlan:
         request = request.model_copy(update={
             "metadata": {**request.metadata, "response_display_text": validated.text},
@@ -410,7 +414,26 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 started=started,
             )
 
+        # A self-choice is an optional first-person *proposal*, never a new
+        # rule chosen by the language provider. Persist only after the entire
+        # realization is valid and genuinely speakable. Test-mode never writes.
+        if validated.frame.self_choices and context is not None:
+            try:
+                choice_decision = commit_self_choices(
+                    self_model=self.compiler.self_model,
+                    request=request,
+                    context=context,
+                    choices=validated.frame.self_choices,
+                )
+                reason_codes.extend(choice_decision.reason_codes)
+            except Exception:
+                # DB/infrastructure failure must not turn a valid response into
+                # silent failure or a duplicate spoken segment.
+                reason_codes.append("SELF_CHOICE_COMMIT_FAILED")
         frame_dump = validated.frame.model_dump(mode="json")
+        # A personal preference proposal is not a transcript. Never record
+        # the raw selection in operational diagnostics/replay journal.
+        frame_dump.pop("self_choices", None)
         self._last_realization = {
             "turn_id": str(request.turn_id),
             "provider": provider,

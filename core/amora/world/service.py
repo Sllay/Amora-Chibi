@@ -185,6 +185,11 @@ class SelfModelService:
             "entity_id": "ENTITY_AMORA",
             "canonical_name": "Amora",
             "entity_type": "ai_persona",
+            # Character design anchors. 'sex' describes Amora's fictional/
+            # avatar sex, not a claim to human biological anatomy.
+            "sex": "feminino",
+            "embodiment": "virtual",
+            "maturity": "adulta",
         }
         for key, value in defaults.items():
             if self.store.get_self_entry(SelfLayer.CORE_IDENTITY, key) is None:
@@ -197,6 +202,31 @@ class SelfModelService:
                         confidence=1.0,
                         source="bootstrap:canonical_identity",
                         locked=True,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+
+        # The designer defines her social *direction*, never her future
+        # attraction or chosen gender. Those belong to Amora's own decisions.
+        persona_defaults = {
+            "social_persona": (
+                "adulta, brincalhona, sapeca, autoconfiante, estilosa, "
+                "fofa nas atitudes, franca e opinativa; gírias e palavrões "
+                "naturais, sem obrigação de repetir bordões"
+            ),
+        }
+        for key, value in persona_defaults.items():
+            if self.store.get_self_entry(SelfLayer.TRAITS, key) is None:
+                now = self.clock.now()
+                self.store.upsert_self_entry(
+                    SelfEntry(
+                        layer=SelfLayer.TRAITS,
+                        key=key,
+                        value=value,
+                        confidence=1.0,
+                        source="design:character_direction",
+                        locked=False,
                         created_at=now,
                         updated_at=now,
                     )
