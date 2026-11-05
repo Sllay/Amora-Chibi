@@ -26,6 +26,7 @@ class Element {
   setAttribute(key, value) { this.attributes[key] = value; }
   showModal() { this.open = true; }
   close() { this.open = false; }
+  querySelector() { return null; } // lightweight DOM stub: optional submit control
 }
 
 export async function app(local, options = {}) {
@@ -44,6 +45,13 @@ export async function app(local, options = {}) {
     if (path.endsWith('/audio')) return Response.json({ detail: 'VOICE_WORKER_UNAVAILABLE' }, { status: 503 });
     if (/\/(cancel|started|ack)$/.test(path)) return Response.json({});
     if (path === '/v1/web/utterance') return Response.json({});
+    if (path === '/v1/web/utterance/stream') {
+      return new Response(
+        'event: accepted\\ndata: {"stage":"started"}\\n\\n'
+        + 'event: completed\\ndata: {"reply_queued":null,"test_mode":true}\\n\\n',
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      );
+    }
     throw new Error(`Unexpected request ${path}`);
   };
   const window = { addEventListener(name, fn) { windowListeners[name] = fn; }, AudioContext: class {
@@ -57,7 +65,7 @@ export async function app(local, options = {}) {
   } };
   const context = vm.createContext({ BrowserState, WavPlayer, browserStorage: name => name === 'localStorage' ? local : storage(), window,
     document: { getElementById: id => nodes.get(id), createElement: () => new Element(), addEventListener() {} },
-    fetch, Headers, URL, URLSearchParams, AbortController, DOMException, performance, setTimeout, clearTimeout,
+    fetch, Headers, URL, URLSearchParams, AbortController, DOMException, performance, TextDecoder, setTimeout, clearTimeout,
     setInterval: fn => intervals.push(fn), requestAnimationFrame: fn => fn(),
   });
   vm.runInContext(source.replace(/^import .*;\n/gm, '').replaceAll('import.meta.url', '"https://amora.example/web/app-v2.js"'), context);
