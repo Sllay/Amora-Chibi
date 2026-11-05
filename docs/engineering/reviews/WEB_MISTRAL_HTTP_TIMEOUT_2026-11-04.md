@@ -67,3 +67,48 @@ não registrar prompt, bearer, confidências nem texto de reasoning.
 Mistral pode continuar levando dezenas de segundos. Testes CI com provider
 simulado demonstram failover correto, não garantem latência real da
 NVIDIA ou proxy do Northflank.
+
+
+## Etapa 2: transporte Web SSE ativo (2026-11-04)
+
+A limitação dos budgets 65/76 do POST síncrono mostrou-se insuficiente
+em uso real: outro 504 apareceu inclusive após uma conta simples.
+O servidor continuava guardando toda a resposta até o fim da chamada,
+com o timeout HTTP global de 90s independente de atividade.
+
+A rota nova `POST /v1/web/utterance/stream` mantém o contrato anterior
+`POST /v1/web/utterance` para compatibilidade, mas passa a responder em
+`text/event-stream` via fetch streaming no Safari:
+
+- `accepted` imediatamente após autorização;
+- `progress` com categoria fixa `reasoning` ou `writing`, **apenas**
+  quando o provider transmite eventos significativos;
+- comentário `: heartbeat` a cada até 8s sem sinal novo, exclusivamente
+  para manter o HTTP/proxy vivo (não comprova atividade do provider);
+- `completed` com o JSON legado **após** validação do `RealizationFrame`
+  e commit/fila canônicos;
+- `failed` com categoria estática sem divulgar prompts, chunks de
+  reasoning, fala recusada ou exceções privadas.
+
+A partir dessa mudança, o POST normal mantém 90s, mas a rota SSE tem
+**270s de teto operacional de segurança** no middleware. O adapter
+produtivo NVIDIA continua com **55s de inatividade significativa** e
+agora possui **185s de teto de segurança** para seu fluxo próprio.
+A nova rota define budgets Core por provider de 190s e total de 225s
+para fallback seguro dentro do teto de 270s. Outros endpoints não têm
+esses limites modificados.
+
+O navegador desativa envio concorrente e não retransmite um POST SSE
+automaticamente após desconexão. O processo do Core é executado numa
+`asyncio.Task` fortemente referenciada, permitindo concluir a fala
+mesmo se a conexão do Safari for encerrada, até os limites operacionais
+do servidor. Voz e bolha definitiva só aparecem depois da validação;
+**stream de raciocínio NÃO é texto para falar**. O caminho de STT/microfone
+ainda usa seu endpoint síncrono e não faz parte desta correção.
+
+Se a infraestrutura da hospedagem impuser limite absoluto inferior,
+ou se persistência/DB excederem 270s, essa melhoria não garante
+ausência universal de timeouts. Mais adiante, uma fila durável de turnos,
+com idempotência e recuperação de sessão, pode substituir as tasks
+efêmeras. Não declarar SLA ou vitória em ambiente real sem novos logs
+evidenciais.
