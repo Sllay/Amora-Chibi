@@ -55,7 +55,7 @@ def test_A_B_C_use_identical_core_messages_and_fixed_public_fixture(tmp_path: Pa
         {"role": "system", "content": archived},
         {"role": "user", "content": lab.CASES["rpg"]},
     ]
-    assert context.privacy_scope.value == "public"
+    assert context.privacy_scope.value == "PUBLIC"
     assert context.memories == []
 
 
