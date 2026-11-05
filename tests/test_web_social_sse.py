@@ -12,6 +12,7 @@ from amora.api import create_api
 from amora.app import AmoraCore
 from amora.cognition.progress import bind_social_progress, report_social_progress, unbind_social_progress
 from amora.web import routes as web_routes
+from amora.security import http_processing_deadline_seconds
 
 
 def _client(tmp_path, monkeypatch, *, remote=False):
@@ -39,6 +40,14 @@ def _events(body: str) -> list[tuple[str, object]]:
         if event and data:
             pairs.append((event, json.loads(data)))
     return pairs
+
+
+def test_only_authenticated_web_sse_route_gets_larger_stream_safety_ceiling() -> None:
+    assert http_processing_deadline_seconds('/v1/web/utterance/stream', 'POST', worker=False) == 270
+    assert http_processing_deadline_seconds('/v1/web/utterance', 'POST', worker=False) == 90
+    assert http_processing_deadline_seconds('/v1/web/utterance/stream', 'GET', worker=False) == 90
+    assert http_processing_deadline_seconds('/v1/web/utterance/stream', 'POST', worker=True) == 90
+    assert http_processing_deadline_seconds('/v1/cognition/respond', 'POST', worker=False) == 90
 
 
 def test_ephemeral_progress_channel_has_fixed_categories_and_resets() -> None:
@@ -128,9 +137,6 @@ def test_sse_tracks_real_provider_stages_and_only_final_validated_text(tmp_path,
 def test_sse_failure_returns_safe_code_never_exception_or_model_text(tmp_path, monkeypatch) -> None:
     core, client, headers = _client(tmp_path, monkeypatch)
     try:
-        async def broken(request, http_request, *, stream_mode=False):
-            raise ValueError("PRIVATE_SPEECH_AND_API_KEY_SHOULD_NOT_LEAK")
-
         # Exercise the same public endpoint while making the Core pipeline
         # throw inside the generator; the SSE has already started with HTTP200.
         monkeypatch.setattr(core.language_social, "observe_text",
