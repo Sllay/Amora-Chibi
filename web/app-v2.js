@@ -381,6 +381,7 @@ async function submitText(text) {
 
 $("textForm").addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (state.textSending) return; // Do not discard draft or duplicate an active social turn.
   const input = $("textInput");
   const text = input.value;
   input.value = "";
