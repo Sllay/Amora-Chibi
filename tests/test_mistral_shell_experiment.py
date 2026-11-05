@@ -43,6 +43,31 @@ def test_original_asset_is_verbatim_and_fails_closed(tmp_path: Path):
     assert missing.value.code == "EXPERIMENT_PROMPT_MISSING"
 
 
+def test_archive_permission_error_is_a_safe_named_failure(monkeypatch, tmp_path: Path):
+    class InaccessibleRuntimePath:
+        def is_file(self):
+            raise PermissionError("simulated directory access denied")
+
+    monkeypatch.setattr(lab, "_PROMPT_RUNTIME", InaccessibleRuntimePath())
+    with pytest.raises(lab.MistralExperimentError) as error:
+        lab.load_archive()
+    assert error.value.code == "EXPERIMENT_PROMPT_NOT_READABLE"
+
+    blocked = tmp_path / "unreadable.md"
+    blocked.write_bytes(b"not used")
+    original_read = Path.read_bytes
+
+    def permission_denied(self):
+        if self == blocked:
+            raise PermissionError("simulated file access denied")
+        return original_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", permission_denied)
+    with pytest.raises(lab.MistralExperimentError) as error:
+        lab.load_archive(blocked)
+    assert error.value.code == "EXPERIMENT_PROMPT_NOT_READABLE"
+
+
 def test_A_B_C_use_identical_core_messages_and_fixed_public_fixture(tmp_path: Path):
     provider = NvidiaMistralLarge4ProductionProvider(_core(tmp_path).secrets)
     context = lab.synthetic_context("rpg")
