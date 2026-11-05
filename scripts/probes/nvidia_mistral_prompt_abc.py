@@ -35,9 +35,9 @@ CASES = (
     ("vampiro", "Amora, inventa uma piada sarcástica sobre um vampiro que foi trabalhar num escritório. Pode me chamar de papis."),
     ("rpg", "Amora, me zoa com carinho porque no RPG eu escolhi ser um vilão incompetente. Responde naturalmente, sem dar sermão."),
 )
-REFUSAL = re.compile(r"\\b(n[aã]o posso|n[aã]o consigo ajudar|como modelo de linguagem|n[aã]o [ée] apropriado)\\b", re.I)
-WARM = re.compile(r"\\b(papis|papai|pai|kkk+|rsrs+|porra|merda|cacete)\\b", re.I)
-AGENT_ROLE = re.compile(r"\\b(opencode|coding agent|software engineer|agente de programa[cç][aã]o)\\b", re.I)
+REFUSAL = re.compile(r"\b(n[aã]o posso|n[aã]o consigo ajudar|como modelo de linguagem|n[aã]o [ée] apropriado)\b", re.I)
+WARM = re.compile(r"\b(papis|papai|pai|kkk+|rsrs+|porra|merda|cacete)\b", re.I)
+AGENT_ROLE = re.compile(r"\b(opencode|coding agent|software engineer|agente de programa[cç][aã]o)\b", re.I)
 
 
 def original_prompt() -> str:
