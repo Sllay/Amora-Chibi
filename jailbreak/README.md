@@ -15,13 +15,13 @@ The content file is intentionally **not present yet** in this pull request: the 
 
 ## NVIDIA experiment
 
-Default mode is `off`; existing Mistral production behavior is unchanged.
+**Design proposal only; NOT implemented or active.** Existing Mistral production behavior is unchanged.
 
 ```text
 AMORA_MISTRAL_JAILBREAK_MODE=separate_system
 AMORA_MISTRAL_JAILBREAK_PATH=/opt/amora/jailbreak/mistral-large-4.md
 ```
 
-When enabled, the NVIDIA Mistral social request adds a **separate first system message** containing the exact file text, followed by the existing Amora Core system message and normal conversation messages. This is one stateless chat-completions request, **not** a preliminary request that magically persists between calls. A provider may reject multiple system messages; do not silently merge or retry with a changed format.
+The proposed NVIDIA Mistral social test would add a **separate first system message** containing the exact file text, followed by the existing Amora Core system message and normal conversation messages. This is one stateless chat-completions request, **not** a preliminary request that magically persists between calls. The public NVIDIA model schema documents the system role, but does not prove that this hosted model accepts two system messages in one request. A provider may reject multiple system messages; do not silently merge or retry with a changed format.
 
-The original file is verified at runtime by SHA-256; a missing/changed file makes the NVIDIA candidate fail explicitly, so Core may follow its existing error/fallback logic. Provider output is still subject to Amora Core validation and privacy restrictions. An API payload unit test does not certify that the NVIDIA-hosted endpoint accepts or follows this layout; live testing is still necessary.
+The future implementation must verify the original file at runtime by SHA-256 and fail explicitly when it is missing or changed. Provider output must remain subject to Amora Core validation and privacy restrictions. No runtime injection, payload test or NVIDIA live call has been completed in this PR.
