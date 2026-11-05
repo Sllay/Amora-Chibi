@@ -1,0 +1,25 @@
+name: NVIDIA Mistral system-message compatibility
+
+on:
+  push:
+    branches:
+      - feat/mistral-jailbreak-catalog-20261105
+    paths:
+      - .github/workflows/nvidia-system-compat.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nvidia-message-protocol:
+    if: github.repository == 'Sllay/Amora-Chibi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact experimental branch
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Run two-vs-one system-message probe (no prompt content logged)
+        run: python3 scripts/probes/nvidia_system_compat.py
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
