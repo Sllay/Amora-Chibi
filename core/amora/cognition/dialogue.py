@@ -87,6 +87,17 @@ class DialogueOrchestrator:
         r"^(por que|porque|pq|como|quando|onde|quem|qual|quais|quanto|quantos|quanta|quantas|"
         r"o que|oque|e tu|e voce|e vc)\b"
     )
+    # Follow-up confirmations are often written without "?" in casual
+    # chat. Reaching CONTINUE_TOPIC would allow a curiosity-driven question
+    # to replace a necessary correction of the previous statement.
+    _IMPLICIT_CONFIRMATION_RE = re.compile(
+        r"^(?:(?:ent|entao)\s+(?:quer|tu|vc|voce)\b|"
+        r"quer\s+dizer\s+que\b|isso\s+(?:significa|quer\s+dizer)\s+que\b|"
+        r"ou\s+seja\b)"
+    )
+    _CHOICE_REQUEST_RE = re.compile(
+        r"^(?:escolhe|escolheria|decide|decidiria|opta|optaria)\b"
+    )
     _OPINION_RE = re.compile(
         r"\b(o que voce acha|oque voce acha|o que vc acha|qual sua opiniao|qual tua opiniao|"
         r"na sua opiniao|na tua opiniao|voce acha que|vc acha que|tu acha que)\b"
@@ -357,11 +368,33 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "PLAY_SIGNAL", "PLAY_DRIVE_AVAILABLE"],
             )
 
-        if "?" in raw or self._QUESTION_START_RE.search(text):
+        implicit_confirmation = (
+            bool(context.recent_messages)
+            and bool(self._IMPLICIT_CONFIRMATION_RE.search(text))
+        )
+        explicit_choice = bool(self._CHOICE_REQUEST_RE.search(text))
+        if "?" in raw or self._QUESTION_START_RE.search(text) or implicit_confirmation or explicit_choice:
             allow_reflective = self._reflective_confirmation_invited(context, text, raw)
+            objective = (
+                "check the user's inference against the actual prior dialogue and "
+                "directly clarify any misunderstanding before adding anything new; "
+                "never replace the topic with an unrelated question or preference"
+                if implicit_confirmation
+                else (
+                    "address the requested choice directly: a clear choice, explicit "
+                    "uncertainty or a candid decision not to choose are all valid; "
+                    "never invent a canonical preference or evade with unrelated interests"
+                    if explicit_choice
+                    else (
+                        "answer the user's question directly and stay in the current "
+                        "relationship/topic; if unwilling or unable to answer, "
+                        "say so briefly with a relevant reason, not a subject change"
+                    )
+                )
+            )
             return DialoguePlan(
                 act=DialogueAct.ANSWER_QUESTION,
-                objective="answer the user's question directly and stay in the current relationship/topic",
+                objective=objective,
                 depth=self._depth(text),
                 response_moves=["answer_question", "relate_to_context_if_relevant"],
                 ask_followup=False,
@@ -374,6 +407,8 @@ class DialogueOrchestrator:
                 closing_mode="natural" if allow_reflective else "statement",
                 reason_codes=[
                     "LOCAL_DIALOGUE_ORCHESTRATOR", "DIRECT_QUESTION",
+                    *(["IMPLICIT_CONFIRMATION_REQUIRES_CLARIFICATION"] if implicit_confirmation else []),
+                    *(["EXPLICIT_CHOICE_REQUEST"] if explicit_choice else []),
                     *(["REFLECTIVE_CONFIRMATION_INVITED"] if allow_reflective else []),
                 ],
             )
