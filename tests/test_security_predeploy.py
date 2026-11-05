@@ -580,3 +580,48 @@ def test_durable_web_credential_survives_core_restart_without_gaining_admin(
             )
     finally:
         again.close()
+
+
+
+def test_paired_web_token_can_stream_social_turn_but_cannot_expand_its_scope(cloud):
+    """Real cloud browser-scoped credential, not LOCAL_API_TOKEN/admin.
+
+    PR #150 introduced the Web SSE route but forgot the exact path in
+    browser_access. The prior admin-token SSE tests could not catch its 403.
+    """
+    core, client, _ = cloud
+    web_token = client.post(
+        "/v1/pairing/redeem",
+        json={"code": core.pairing.issue().code, "client": "web"},
+    ).json()["token"]
+    headers = {"Authorization": f"Bearer {web_token}"}
+    payload = {
+        "text": "Amora, oi.",
+        "remote_processing_allowed": False,
+        "test_mode": True,
+    }
+
+    # The same paired browser can use the legacy and new text-turn paths.
+    legacy = client.post("/v1/web/utterance", json=payload, headers=headers)
+    assert legacy.status_code == 200, legacy.text
+    streamed = client.post("/v1/web/utterance/stream", json=payload, headers=headers)
+    assert streamed.status_code == 200, streamed.text
+    assert "text/event-stream" in streamed.headers["content-type"]
+    assert 'event: accepted\n' in streamed.text
+    assert 'event: completed\n' in streamed.text
+
+    # Authorization stays strictly bound to the exact POST endpoint.
+    assert client.post("/v1/web/utterance/stream", json=payload).status_code == 401
+    assert client.get("/v1/web/utterance/stream", headers=headers).status_code == 403
+    assert client.post("/v1/web/utterance/stream/anything", json=payload, headers=headers).status_code == 403
+    assert client.post("/v1/cognition/respond", json=payload, headers=headers).status_code == 403
+
+    avatar_token = client.post(
+        "/v1/pairing/redeem",
+        json={"code": core.pairing.issue().code, "client": "avatar"},
+    ).json()["token"]
+    assert client.post(
+        "/v1/web/utterance/stream",
+        json=payload,
+        headers={"Authorization": f"Bearer {avatar_token}"},
+    ).status_code == 403
