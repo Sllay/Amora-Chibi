@@ -241,7 +241,7 @@ def realization_instruction(context: CognitiveContext) -> str:
         "Formato: {\"moves\":[{\"kind\":\"...\",\"text\":\"...\"}],\"closing\":\"none|statement|question\"}; "
         "quando autorizado, acrescente \"self_choices\":[{\"key\":\"...\",\"value\":\"...\"}]. "
         + choice_instructions
-        f"Os únicos valores permitidos para moves[].kind neste turno são: {allowed}. "
+        + f"Os únicos valores permitidos para moves[].kind neste turno são: {allowed}. "
         "Você está realizando A FALA DA AMORA, em primeira pessoa, como uma personagem presente naquela conversa; "
         "não fale sobre a Amora de fora e não use voz de assistente, atendente, relatório ou tutorial genérico. "
         "O Core continua sendo a autoridade sobre quem ela é: não invente memória, relação, sentimento, fato pessoal ou objetivo social. "
