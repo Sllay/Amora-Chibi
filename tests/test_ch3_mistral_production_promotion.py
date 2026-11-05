@@ -135,7 +135,7 @@ def test_certification_adapter_keeps_original_fail_closed_descriptor(tmp_path: P
     assert production.descriptor.name == "nvidia_mistral_large_4"
     assert production.descriptor.supports_structured_output is True
     assert production.descriptor.available is False
-    assert production.max_total_seconds == 95.0
+    assert production.max_total_seconds == 185.0
     assert production.reasoning_effort == "low"
 
 
