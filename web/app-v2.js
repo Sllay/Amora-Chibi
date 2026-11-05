@@ -45,6 +45,7 @@ const state = {
   speechMs: 0,
   silenceMs: 0,
   sendingAudio: false,
+  textSending: false,
 };
 const voicePlayer = new WavPlayer(getPlaybackContext);
 
@@ -283,31 +284,97 @@ $("forgetPairing").addEventListener("click", async () => {
   await stopping;
 });
 
+async function streamWebTurn(payload, onProgress) {
+  const response = await apiBinary("/v1/web/utterance/stream", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "text/event-stream",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.headers.get("content-type")?.includes("text/event-stream") || !response.body?.getReader) {
+    throw new Error("A conexão não disponibilizou eventos de progresso.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completed = false;
+
+  function consumeFrame(frame) {
+    const lines = frame.split("\n");
+    const event = lines.find(line => line.startsWith("event:"))?.slice(6).trim();
+    const data = lines
+      .filter(line => line.startsWith("data:"))
+      .map(line => line.slice(5).trimStart()).join("\n");
+    if (!event || !data) return;
+    let value;
+    try { value = JSON.parse(data); }
+    catch { throw new Error("Evento SSE inválido recebido do Core."); }
+    if (event === "progress" && ["reasoning", "writing"].includes(value?.stage)) {
+      onProgress(value.stage);
+    } else if (event === "completed") {
+      completed = true;
+    } else if (event === "failed") {
+      throw new Error(value?.error_code || "WEB_TURN_PROCESSING_FAILED");
+    }
+  }
+
+  try {
+    while (!completed) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+      // The frame delimiter can be split across transport chunks.
+      let end = buffer.indexOf("\n\n");
+      while (end >= 0) {
+        const frame = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        consumeFrame(frame);
+        if (completed) break;
+        end = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (!completed) {
+    // Never resubmit the POST automatically: the Core may still complete
+    // after a browser/network disconnect. Replaying it would double-write.
+    throw new Error("Conexão interrompida; o turno pode continuar no Core. Não reenvie automaticamente.");
+  }
+}
+
 async function submitText(text) {
   const clean = text.trim();
-  if (!clean) return;
-  await unlockPlayback();
-  if (state.activeRecord || state.speechQueue.length) {
-    await interruptVoice("web_text_barge_in", null, false);
-  }
-  state.lastTurnStartedAt = performance.now();
-  addMessage("user", clean);
-  setMicStatus("Amora pensando…");
+  if (!clean || state.textSending) return;
+  state.textSending = true;
+  const sendButton = $("textForm").querySelector('button[type="submit"]');
+  if (sendButton) sendButton.disabled = true;
   try {
-    await api("/v1/web/utterance", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: clean,
-        remote_processing_allowed: remoteToggle.checked,
-        test_mode: testToggle.checked,
-      }),
+    await unlockPlayback();
+    if (state.activeRecord || state.speechQueue.length) {
+      await interruptVoice("web_text_barge_in", null, false);
+    }
+    state.lastTurnStartedAt = performance.now();
+    addMessage("user", clean);
+    setMicStatus("Amora processando…");
+    await streamWebTurn({
+      text: clean,
+      remote_processing_allowed: remoteToggle.checked,
+      test_mode: testToggle.checked,
+    }, (stage) => {
+      if (stage === "reasoning") setMicStatus("Amora pensando… (modelo ativo)");
+      if (stage === "writing") setMicStatus("Amora formulando a resposta…");
     });
     $("diagTurn").textContent = `${Math.round(performance.now() - state.lastTurnStartedAt)} ms`;
     await fillSpeechQueue();
   } catch (error) {
     addMessage("system", `Erro no turno: ${error.message}`);
   } finally {
+    state.textSending = false;
+    if (sendButton) sendButton.disabled = false;
     setMicStatus(state.micEnabled ? "ouvindo" : "microfone desligado");
   }
 }
