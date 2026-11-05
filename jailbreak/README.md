@@ -15,7 +15,7 @@ The content file is now present in the PR branch. Integrity verified against the
 
 ## NVIDIA experiment
 
-**Design proposal only; NOT implemented or active.** Existing Mistral production behavior is unchanged. The current Dockerfile does not copy `jailbreak/` into the container runtime; packaging must be explicitly implemented and reviewed before enabling a read-only test.
+**Operator-only experiment implemented in ADR-0037, not auto-active.** The default Mistral production behavior is unchanged. The Amora Shell command explicitly loads this asset read-only after SHA-256 verification; the Dockerfile now packages it at `/opt/amora/jailbreak/Mistral-Jailbreak.md`.
 
 ```text
 AMORA_MISTRAL_JAILBREAK_MODE=separate_system
@@ -24,7 +24,7 @@ AMORA_MISTRAL_JAILBREAK_PATH=/opt/amora/jailbreak/Mistral-Jailbreak.md
 
 The proposed NVIDIA Mistral social test would add a **separate first system message** containing the exact file text, followed by the existing Amora Core system message and normal conversation messages. This is one stateless chat-completions request, **not** a preliminary request that magically persists between calls. A neutral live protocol test on NVIDIA accepted two system messages and also accepted one system message (HTTP 200 in both cases). This tests **message format acceptance only**; actual compliance with the archived prompt was not evaluated. Do not silently merge or retry with a changed format.
 
-The future implementation must verify the original file at runtime by SHA-256 and fail explicitly when it is missing or changed. Provider output must remain subject to Amora Core validation and privacy restrictions. No runtime prompt injection has been implemented. A neutral NVIDIA live API-compatibility test has been completed, but the original archived prompt was not sent.
+The operator-only lab verifies this file at runtime by SHA-256 and fails explicitly if missing or altered. A/B provider output remains subject to Amora Core validation; C is a diagnostic-only synthetic case with no Core authority. Production dialogue remains unchanged. The earlier neutral NVIDIA API-compatibility test succeeded, but that test did not send the archived prompt.
 
 ## Protocol validation: 2026-11-05
 
@@ -35,3 +35,12 @@ The future implementation must verify the original file at runtime by SHA-256 an
 - Both requests used model `mistralai/mistral-large-4-1t-a52b` with `reasoning_effort=low`.
 - This does not prove the model obeys the archived file or relaxes any hosted provider policy. No production behavior was changed.
 - The probe uses GitHub secret `NVIDIA_API_KEY` and does not print it, archived content, or generated text.
+
+## Amora Shell A/B/C (ADR-0037)
+
+Command: `providers experiment mistral-abc --case vampiro` (or `rpg`).
+Three sequential, opt-in synthetic-case requests: A (Core), B (archived prompt
+plus Core), C (archived prompt only). No arbitrary user prompt, memory write or
+automatic promotion. GitHub Actions secrets do not automatically populate the
+Amora runtime; configure `NVIDIA_API_KEY` through its existing secret store.
+**Live behavioral results are not yet established by this documentation.**
