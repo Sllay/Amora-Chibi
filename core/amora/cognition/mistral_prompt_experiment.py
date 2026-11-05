@@ -47,9 +47,13 @@ class MistralExperimentError(RuntimeError):
 
 def load_archive(path: Path | None = None) -> str:
     """Read exact bytes, never normalize or rewrite the checked-in file."""
-    asset = path or (_PROMPT_RUNTIME if _PROMPT_RUNTIME.is_file() else _PROMPT_DEV)
     try:
+        asset = path or (_PROMPT_RUNTIME if _PROMPT_RUNTIME.is_file() else _PROMPT_DEV)
         data = asset.read_bytes()
+    except PermissionError as exc:
+        # pathlib.is_file() may raise EACCES before read_bytes() is reached.
+        # Never leak a raw host filesystem error through an operator job.
+        raise MistralExperimentError("EXPERIMENT_PROMPT_NOT_READABLE") from exc
     except OSError as exc:
         raise MistralExperimentError("EXPERIMENT_PROMPT_MISSING") from exc
     if len(data) != 20884 or hashlib.sha256(data).hexdigest() != PROMPT_SHA256:

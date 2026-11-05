@@ -32,7 +32,10 @@ COPY --chmod=0444 config/voice_profiles.json /opt/venv/lib/python3.12/config/voi
 COPY --chmod=0444 config/people_profiles.json /opt/venv/lib/python3.12/config/people_profiles.json
 RUN chmod 0755 /opt/venv/lib/python3.12/config
 # Operator-only Mistral prompt experiment: immutable catalog asset, hash checked on read.
+# The non-root UID 10001 needs +x on parent directories to read a 0444 file.
+# Explicitly create/traverse the directory; never grant write to its contents.
 # This does not enable or alter the production chat provider.
+RUN install -d -m 0755 /opt/amora/jailbreak
 COPY --chmod=0444 jailbreak/Mistral-Jailbreak.md /opt/amora/jailbreak/Mistral-Jailbreak.md
 COPY web ./web
 # Static modules must be readable by the non-root runtime even from a private checkout.
