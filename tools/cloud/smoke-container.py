@@ -75,6 +75,15 @@ from pathlib import Path
 status=Path('/proc/self/status').read_text()
 assert 'CapEff:\t0000000000000000' in status
 assert 'NoNewPrivs:\t1' in status
+# Regression: the archived prompt must be readable by the real non-root
+# process with a read-only root filesystem, not only by Docker's build user.
+from amora.cognition.mistral_prompt_experiment import PROMPT_SHA256, load_archive
+import hashlib
+archive = Path('/opt/amora/jailbreak/Mistral-Jailbreak.md')
+assert archive.is_file(), 'experimental archive missing from container'
+assert archive.stat().st_mode & 0o777 == 0o444, 'archive must remain read-only'
+assert archive.parent.stat().st_mode & 0o111 == 0o111, 'directory must be traversable'
+assert hashlib.sha256(load_archive().encode('utf-8')).hexdigest() == PROMPT_SHA256
 try:
     Path('/home/amora/security-smoke-write').write_text('unexpected')
 except OSError as error:
