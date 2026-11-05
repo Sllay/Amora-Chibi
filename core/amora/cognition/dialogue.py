@@ -96,7 +96,8 @@ class DialogueOrchestrator:
         r"ou\s+seja\b)"
     )
     _CHOICE_REQUEST_RE = re.compile(
-        r"^(?:escolhe|escolheria|decide|decidiria|opta|optaria)\b"
+        r"^(?:(?:ent|entao)\s+)?(?:escolhe|escolheria|decide|decidiria|"
+        r"opta|optaria)\b|^(?:me\s+diz\s+qual|fala\s+qual)\b"
     )
     _OPINION_RE = re.compile(
         r"\b(o que voce acha|oque voce acha|o que vc acha|qual sua opiniao|qual tua opiniao|"
