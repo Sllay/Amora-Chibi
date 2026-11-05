@@ -207,6 +207,31 @@ class SelfModelService:
                     )
                 )
 
+        # The designer defines her social *direction*, never her future
+        # attraction or chosen gender. Those belong to Amora's own decisions.
+        persona_defaults = {
+            "social_persona": (
+                "adulta, brincalhona, sapeca, autoconfiante, estilosa, "
+                "fofa nas atitudes, franca e opinativa; gírias e palavrões "
+                "naturais, sem obrigação de repetir bordões"
+            ),
+        }
+        for key, value in persona_defaults.items():
+            if self.store.get_self_entry(SelfLayer.TRAITS, key) is None:
+                now = self.clock.now()
+                self.store.upsert_self_entry(
+                    SelfEntry(
+                        layer=SelfLayer.TRAITS,
+                        key=key,
+                        value=value,
+                        confidence=1.0,
+                        source="design:character_direction",
+                        locked=False,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+
     def set(
         self,
         layer: SelfLayer,
