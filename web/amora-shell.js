@@ -144,12 +144,12 @@ function formatMistralABC(result) {
                                      : (item.validated ? "Core válido" : "Core inválido");
     lines.push(label + " · " + seconds(item.latency_ms) + " · " + valid);
     if (item.http_status != null) lines.push("  HTTP " + item.http_status);
-    if (item.text) lines.push("  " + String(item.text).replace(/\\s+/g, " ").trim());
+    if (item.text) lines.push("  " + String(item.text).replace(/\s+/g, " ").trim());
     if (item.error_code) lines.push("  erro: " + item.error_code);
     lines.push("");
   }
   lines.push("Revisão humana obrigatória. O caso C não representa uma fala autorizada da Amora.");
-  return lines.join("\\n");
+  return lines.join("\n");
 }
 
 function formatPartialProgress(job) {
@@ -159,7 +159,7 @@ function formatPartialProgress(job) {
     if (item.variant) {
       lines.push(item.variant + " · " + seconds(item.latency_ms) +
         " · " + (item.diagnostic_only ? "diagnóstico" : (item.validated ? "✓" : "✗")));
-      if (item.text) lines.push("  " + String(item.text).replace(/\\s+/g, " ").trim());
+      if (item.text) lines.push("  " + String(item.text).replace(/\s+/g, " ").trim());
       if (item.error_code) lines.push("  erro=" + item.error_code);
       continue;
     }
@@ -182,7 +182,7 @@ function formatJob(job) {
       : "";
     return `amora> ${job.command}\n[failed] ${job.error_code || "COMMAND_FAILED"} · ${job.error_type || "error"}${details}\n${formatPartialProgress(job)}`;
   }
-  if (job.result?.kind === "mistral_prompt_abc") return `amora> ${job.command}\\n\\n${formatMistralABC(job.result)}`;
+  if (job.result?.kind === "mistral_prompt_abc") return `amora> ${job.command}\n\n${formatMistralABC(job.result)}`;
   if (job.result?.kind === "social_provider_ab") return `amora> ${job.command}\n\n${formatSocialAB(job.result)}`;
   if (job.result?.kind === "command_help") {
     const commands = (job.result.commands || []).map((item) => `  ${item.usage}\n    ${item.description}`).join("\n");
