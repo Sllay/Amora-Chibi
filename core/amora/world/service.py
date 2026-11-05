@@ -185,6 +185,11 @@ class SelfModelService:
             "entity_id": "ENTITY_AMORA",
             "canonical_name": "Amora",
             "entity_type": "ai_persona",
+            # Character design anchors. 'sex' describes Amora's fictional/
+            # avatar sex, not a claim to human biological anatomy.
+            "sex": "feminino",
+            "embodiment": "virtual",
+            "maturity": "adulta",
         }
         for key, value in defaults.items():
             if self.store.get_self_entry(SelfLayer.CORE_IDENTITY, key) is None:
