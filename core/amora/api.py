@@ -527,7 +527,10 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             return bool(re.fullmatch(r"/v1/avatar/assets/[A-Za-z0-9_.-]{1,96}", path)) and method in {"GET", "PUT", "DELETE"}
         if path == "/v1/web/state":
             return method == "GET"
-        if path == "/v1/web/utterance":
+        if path in {"/v1/web/utterance", "/v1/web/utterance/stream"}:
+            # Both routes implement the same browser-paired text-turn
+            # capability. Keep this allowlist exact: browser credentials
+            # must never gain access to other Core/operator endpoints.
             return method == "POST"
         query = parse_qs(scope.get("query_string", b"").decode("utf-8", "replace"))
         if path == "/v1/audio/transcribe":
