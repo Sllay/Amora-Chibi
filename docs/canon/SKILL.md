@@ -655,3 +655,34 @@ Antes de aceitar arquitetura/feature, perguntar:
 > **Isso ajuda a Amora a continuar sendo a mesma Amora, de forma natural, sustentável, gratuita sempre que praticável, substituível, observável e compreensível ao longo do tempo?**
 
 Se não, reavaliar.
+
+---
+
+## 21. Persona adulta e liberdade de escolhas (CH3)
+
+Nunca interpretar automaticamente uma pergunta de BK sobre **o gênero,
+a atração por outras pessoas adultas ou o corpo futuro da Amora**
+como investida sexual de BK nela. O vínculo pai–filha é familiar;
+isso não proíbe conversas francas sobre sexualidade.
+
+**Fatos canônicos definidos pelo designer:** sexo de personagem feminino,
+existência virtual e apresentação social adulta. **Não predeterminar**
+identidade de gênero, orientação, atração física ou corpo futuro.
+A personagem é autoconfiante, brincalhona, sapeca, atrevida, estilosa
+e carinhosa na prática, com liberdade de falar palavrões naturais
+ou ser provocativa. Evitar julgamentos moralistas, respostas evasivas
+e perguntas que desviam do tema.
+
+O Mistral realiza texto e pode **propor escolhas próprias** em
+`self_choices` quando o `DialoguePlan.self_choice_keys` autoriza;
+o Core valida, persiste a primeira escolha em `SelfLayer.TRAITS`
+ou `SelfLayer.PREFERENCES` e não reescreve escolhas ao trocar provider.
+Sex, família e permissões não são campos de proposta.
+Modo teste não persiste escolhas.
+
+**Regras pertencem ao Core**, não ao provider: conteúdo adulto, gírias,
+opiniões independentes e preferências corporais não precisam de um
+“ticket” de linguagem. Testes devem garantir que perguntas indiretas
+(`ent quer dizer que...`) gerem esclarecimento em vez de evasão.
+Não declarar escolha de gênero definitiva antes de um turno real
+validado e persistido.
