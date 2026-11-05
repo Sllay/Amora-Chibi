@@ -339,7 +339,7 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "STANCE_REQUESTED", "INDEPENDENT_STANCE"],
             )
 
-        if self._OPINION_RE.search(text):
+        if self._OPINION_RE.search(text) and not possible_self_choices:
             return DialoguePlan(
                 act=DialogueAct.EXPRESS_OPINION,
                 objective="express a bounded opinion from the supplied state/context without pretending it is canonical fact",
