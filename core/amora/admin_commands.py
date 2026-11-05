@@ -408,7 +408,46 @@ async def _command_providers_diagnose_nvidia(core: Any, args: list[str]) -> dict
     }
 
 
+async def _command_providers_experiment_mistral_abc(core: Any, args: list[str]) -> dict[str, Any]:
+    """Closed, operator-authenticated A/B/C using synthetic cases only."""
+    if args == []:
+        case = "vampiro"
+    elif len(args) == 2 and args[0] == "--case" and args[1] in {"vampiro", "rpg"}:
+        case = args[1]
+    else:
+        raise AdminCommandError(
+            "COMMAND_ARGUMENT_INVALID",
+            "uso: providers experiment mistral-abc [--case vampiro|rpg]",
+            details={"available_cases": ["vampiro", "rpg"]},
+        )
+
+    from amora.cognition.mistral_prompt_experiment import (
+        MistralExperimentError,
+        run_mistral_abc,
+    )
+
+    try:
+        return await run_mistral_abc(
+            core,
+            case=case,
+            on_result=lambda item: (_progress_sink.get() or (lambda _: None))(item),
+        )
+    except MistralExperimentError as exc:
+        raise AdminCommandError(
+            exc.code, "experimento Mistral indisponível",
+        ) from exc
+
+
 _COMMANDS: tuple[RegisteredCommand, ...] = (
+    RegisteredCommand(
+        path=("providers", "experiment", "mistral-abc"),
+        usage="providers experiment mistral-abc [--case vampiro|rpg]",
+        description="A/B/C Mistral isolado; casos fictícios, revisão humana, sem promoção.",
+        timeout_seconds=650.0,
+        handler=_command_providers_experiment_mistral_abc,
+        exclusive=True,
+    ),
+
     RegisteredCommand(
         path=("help",),
         usage="help",

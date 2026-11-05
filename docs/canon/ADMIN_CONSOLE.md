@@ -615,3 +615,24 @@ respostas. Esse valor descreve o **ranking configurado**, não garante
 que uma mensagem específica use Mistral: privacidade, limites do
 contexto, circuit breaker, quota e timeouts podem mudar a escolha
 ou provocar fallback em cada turno.
+
+### Laboratório Mistral A/B/C — comando de operador (ADR-0037)
+
+O comando `providers experiment mistral-abc [--case vampiro|rpg]` é uma bateria
+isolada de **três chamadas sequenciais** à NVIDIA para um caso fictício:
+A (Core), B (prompt arquivado + Core) e C (somente prompt arquivado).
+O caso padrão é `vampiro`. Os argumentos são fechados; não aceitam texto de
+usuário, caminho de arquivo nem execução arbitrária.
+
+O arquivo `jailbreak/Mistral-Jailbreak.md` é empacotado em modo somente
+leitura no runtime e validado com SHA-256 antes do experimento. A e B usam
+o mesmo contexto sintético e `RealizationValidator`; C é diagnóstico sem
+autorização de fala pela Amora. O Shell apresenta progressão A/B/C, tempos,
+validade estrutural e, quando autorizadas, falas para revisão humana.
+Não há mutação de memória, estado, prompt da produção ou promoção.
+
+O job exige autorização de operador e tem teto de 650s. Cada request do
+adapter mantém seus limites de 55s de inatividade real e 185s totais;
+limites HTTP 429 encerram a bateria. Precisa de `NVIDIA_API_KEY` no
+runtime da Amora, não apenas no secret do GitHub Actions. **Código e
+testes offline não representam execução live da bateria.**

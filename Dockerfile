@@ -31,6 +31,9 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --chmod=0444 config/voice_profiles.json /opt/venv/lib/python3.12/config/voice_profiles.json
 COPY --chmod=0444 config/people_profiles.json /opt/venv/lib/python3.12/config/people_profiles.json
 RUN chmod 0755 /opt/venv/lib/python3.12/config
+# Operator-only Mistral prompt experiment: immutable catalog asset, hash checked on read.
+# This does not enable or alter the production chat provider.
+COPY --chmod=0444 jailbreak/Mistral-Jailbreak.md /opt/amora/jailbreak/Mistral-Jailbreak.md
 COPY web ./web
 # Static modules must be readable by the non-root runtime even from a private checkout.
 RUN chmod -R a+rX /opt/amora/web
