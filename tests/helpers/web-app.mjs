@@ -47,8 +47,8 @@ export async function app(local, options = {}) {
     if (path === '/v1/web/utterance') return Response.json({});
     if (path === '/v1/web/utterance/stream') {
       return new Response(
-        'event: accepted\\ndata: {"stage":"started"}\\n\\n'
-        + 'event: completed\\ndata: {"reply_queued":null,"test_mode":true}\\n\\n',
+        'event: accepted\ndata: {"stage":"started"}\n\n'
+        + 'event: completed\ndata: {"reply_queued":null,"test_mode":true}\n\n',
         { headers: { 'Content-Type': 'text/event-stream' } },
       );
     }
