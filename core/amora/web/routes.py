@@ -318,6 +318,10 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
                             except asyncio.CancelledError:
                                 pass
 
+                # Deliver pending progress emitted immediately before completion.
+                while not updates.empty():
+                    stage = updates.get_nowait()
+                    yield f"event: progress\ndata: {json.dumps({'stage': stage})}\n\n"
                 outcome = await task
                 yield (
                     "event: completed\ndata: "
