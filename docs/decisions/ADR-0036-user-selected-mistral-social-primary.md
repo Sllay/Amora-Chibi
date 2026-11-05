@@ -63,3 +63,22 @@ monitoramento contínuo, **sem reabrir a escolha de primary** sem
 instrução explícita do usuário. Falha no provider, vazamento de dados,
 saída malformada ou desvio de identidade não são aceitos como preço
 da liberdade de vocabulário.
+
+### Emenda operacional: streaming da conversa Web (2026-11-04)
+
+Com Mistral como social primary, o Safari Lab exibiu HTTP 504
+mesmo com respostas curtas. O timeout HTTP absoluto de 90s
+era incompatível com raciocínio remoto lento. O caminho Web
+passou a usar SSE com progresso fixo e heartbeat. O adapter
+produtivo elevou **somente o teto absoluto de segurança de
+95s para 185s**; mantém **55s de inatividade significativa**
+(vinculada a eventos reais de reasoning/texto), Core validator,
+privacidade e failover. O middleware aplica safety cap de 270s
+**somente** ao endpoint SSE autenticado; POST síncrono mantém 90s.
+A resposta definitiva continua bloqueada até validação de
+todo o `RealizationFrame`.
+
+O aumento não é promessa de latência nem permissão para
+execução ilimitada. Em caso de timeout real de provider,
+o Core tenta alternativas dentro de 225s. A NVIDIA continua
+principal; nenhuma mudança de ranking foi feita.
