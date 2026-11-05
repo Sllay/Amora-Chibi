@@ -847,3 +847,34 @@ provider torne o Web impraticável, evoluir para jobs de turno
 assíncronos, identificados e observáveis, em vez de alongar
 indefinidamente o request HTTP. Incidente e testes:
 `docs/engineering/reviews/WEB_MISTRAL_HTTP_TIMEOUT_2026-11-04.md`.
+
+### Web/Safari com transporte de progresso SSE
+
+A recomendação anterior de budget Web síncrono (65s/76s vs HTTP
+90s) permanece apenas para clientes antigos usando
+`POST /v1/web/utterance`. O Safari Web atual utiliza
+`POST /v1/web/utterance/stream`, SSE autenticado, com:
+
+```text
+POST autenticado
+  → accepted imediato
+  → progress {reasoning|writing} apenas de eventos reais NVIDIA
+  → heartbeat de transporte, sem conteúdo privado
+  → Context + DialoguePlan + RealizationValidator local
+  → completed com resposta integral validada e fila de voz
+```
+
+O stream **não envia reasoning nem texto parcial não validado**.
+A página só marca uma fala como definitiva quando o `completed`
+contém o turno validado. A tarefa do Core permanece viva após
+desconexão do browser dentro dos limites operacionais; não há
+reenvio automático. As referências das tasks são efêmeras ao
+processo do servidor e não substituem fila persistente.
+
+Limites separados: stream middleware safety cap 270s,
+NVIDIA idle significativo 55s e safety total 185s,
+Core provider attempt 190s e total 225s.
+Todos são controles bounded; manter conexão viva via heartbeat não
+confirma trabalho significativo do provider. Ao encerrar, validação
+local continua mandatória. POST síncrono legado segue com 90s.
+Ver `docs/engineering/reviews/WEB_MISTRAL_HTTP_TIMEOUT_2026-11-04.md`.
