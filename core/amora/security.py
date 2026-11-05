@@ -166,6 +166,13 @@ class RateLimits:
         return True
 
 
+def http_processing_deadline_seconds(path: str, method: str, *, worker: bool) -> int:
+    """Exact SSE chat path gets a longer resource-safety cap, not generic bypass."""
+    if not worker and path == "/v1/web/utterance/stream" and method == "POST":
+        return 270
+    return 90
+
+
 class SecurityMiddleware:
     def __init__(
         self, app, *, settings, clock, authenticate, web_access=None, worker=False
@@ -410,8 +417,16 @@ class SecurityMiddleware:
                     started = True
                 await secured_send(message)
 
+            # Streaming Safari turns can emit safe SSE progress while NVIDIA
+            # produces reasoning tokens. The ordinary 90s HTTP deadline must
+            # not cancel an active stream. Keep a separate large *safety*
+            # ceiling: the provider already enforces meaningful inactivity
+            # and bounded generation, and the Web Core caps failover.
+            http_deadline = http_processing_deadline_seconds(
+                path, scope["method"], worker=self.worker
+            )
             try:
-                async with asyncio.timeout(90):
+                async with asyncio.timeout(http_deadline):
                     await self.app(scope, bounded_receive, tracked_send)
             except TimeoutError:
                 if not started:

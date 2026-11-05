@@ -60,7 +60,11 @@ test('progressive preview wraps fetch without stealing the app submit lifecycle'
   // app-v2 remains the sole owner of user-gesture playback unlock and of
   // claiming the canonical voice item after the POST completes.
   assert.match(app, /async function submitText\(text\)[\s\S]*?await unlockPlayback\(\)/);
-  assert.match(app, /await api\("\/v1\/web\/utterance"[\s\S]*?await fillSpeechQueue\(\)/);
+  assert.match(app, /await streamWebTurn\([\s\S]*?await fillSpeechQueue\(\)/);
+  assert.match(app, /\/v1\/web\/utterance\/stream/);
+  assert.match(app, /if \(!completed\)/); // no transparent replay after SSE disconnect
+  // The old preview shim remains for legacy synchronous clients only;
+  // current Safari receives fixed SSE activity, never unvalidated draft text.
 });
 
 test('partial preview is ephemeral and never persists the canonical reply', () => {

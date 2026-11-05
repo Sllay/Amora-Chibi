@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 import os
 from time import perf_counter
@@ -13,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from amora.events import PrivacyScope
+from amora.cognition.progress import bind_social_progress, unbind_social_progress
 from amora.voice.backend import StreamingVoiceBackend, VoiceBackend, VoiceSession, validated_chunks
 from amora.voice.cloud import FishGeminiVoiceBackend
 from amora.voice.local_amora import AmoraLocalVoiceRenderer, LocalVoiceUnavailable, MODEL_ID, NUM_STEPS, VOICE_ID
@@ -26,6 +28,11 @@ from amora.voice.local_amora import AmoraLocalVoiceRenderer, LocalVoiceUnavailab
 # change the provider's broader certification limits or security middleware.
 WEB_PROVIDER_ATTEMPT_BUDGET_SECONDS = 65.0
 WEB_PROVIDER_TOTAL_BUDGET_SECONDS = 76.0
+# The streaming Web route is independent of the ordinary 90s synchronous HTTP
+# deadline. The NVIDIA adapter uses a 55s meaningful-idle check and a separate
+# safety ceiling, while a bounded failover budget keeps the endpoint finite.
+WEB_STREAM_PROVIDER_ATTEMPT_BUDGET_SECONDS = 190.0
+WEB_STREAM_PROVIDER_TOTAL_BUDGET_SECONDS = 225.0
 
 
 class WebTextTurnRequest(BaseModel):
@@ -165,8 +172,9 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             "core": core.readiness() if os.getenv("AMORA_MODE") == "cloud" else core.health_report(),
         }
 
-    @app.post("/v1/web/utterance", dependencies=auth)
-    async def web_utterance(request: WebTextTurnRequest, http_request: Request) -> dict[str, object]:
+    async def _process_web_utterance(
+        request: WebTextTurnRequest, http_request: Request, *, stream_mode: bool = False,
+    ) -> dict[str, object]:
         request_started = perf_counter()
         http_request.state.pipeline_stage = "language_social"
         language_started = perf_counter()
@@ -185,8 +193,14 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
             # The caller must finish before SecurityMiddleware's fixed HTTP
             # timeout. This budget includes all social provider attempts;
             # the first Mistral attempt cannot consume the whole request.
-            "provider_attempt_budget_seconds": WEB_PROVIDER_ATTEMPT_BUDGET_SECONDS,
-            "provider_total_budget_seconds": WEB_PROVIDER_TOTAL_BUDGET_SECONDS,
+            "provider_attempt_budget_seconds": (
+                WEB_STREAM_PROVIDER_ATTEMPT_BUDGET_SECONDS if stream_mode
+                else WEB_PROVIDER_ATTEMPT_BUDGET_SECONDS
+            ),
+            "provider_total_budget_seconds": (
+                WEB_STREAM_PROVIDER_TOTAL_BUDGET_SECONDS if stream_mode
+                else WEB_PROVIDER_TOTAL_BUDGET_SECONDS
+            ),
         }
         if request.test_mode:
             metadata.update(
@@ -228,6 +242,103 @@ def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *
                 "local_overhead_ms": round(local_overhead_ms, 3) if local_overhead_ms is not None else None,
             },
         }
+
+    @app.post("/v1/web/utterance", dependencies=auth)
+    async def web_utterance(request: WebTextTurnRequest, http_request: Request) -> dict[str, object]:
+        # Legacy synchronous endpoint remains available for older clients.
+        return await _process_web_utterance(request, http_request)
+
+    web_turn_tasks: set[asyncio.Task] = set()
+
+    @app.post("/v1/web/utterance/stream", dependencies=auth)
+    async def web_utterance_stream(
+        request: WebTextTurnRequest, http_request: Request,
+    ) -> StreamingResponse:
+        """Server-Sent Events for Safari text; completed frames only after Core validation.
+
+        Stream progress/heartbeat statuses, never private reasoning, unvalidated
+        JSON fragments or unapproved speech. The Core turn remains alive across
+        a dropped browser connection, so it may still complete and enqueue speech.
+        Never transparently replay the POST after a disconnect.
+        """
+        async def events():
+            updates: asyncio.Queue[str] = asyncio.Queue(maxsize=8)
+
+            def report(stage: str) -> None:
+                if stage in {"reasoning", "writing"}:
+                    if updates.full():
+                        try:
+                            updates.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                    updates.put_nowait(stage)
+
+            async def execute():
+                token = bind_social_progress(report)
+                try:
+                    return await _process_web_utterance(
+                        request, http_request, stream_mode=True
+                    )
+                finally:
+                    unbind_social_progress(token)
+
+            task = asyncio.create_task(execute(), name="amora-web-social-turn")
+            web_turn_tasks.add(task)
+
+            def forget(done: asyncio.Task) -> None:
+                web_turn_tasks.discard(done)
+                if not done.cancelled():
+                    try:
+                        done.exception()  # consume failure if the browser left
+                    except Exception:
+                        pass
+
+            task.add_done_callback(forget)
+            yield 'event: accepted\ndata: {"stage":"started"}\n\n'
+            try:
+                while not task.done():
+                    next_update = asyncio.create_task(updates.get())
+                    try:
+                        done, _ = await asyncio.wait(
+                            {task, next_update}, timeout=8.0,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if next_update in done:
+                            stage = next_update.result()
+                            yield f"event: progress\ndata: {json.dumps({'stage': stage})}\n\n"
+                        elif task not in done:
+                            # This is a transport keepalive, NOT a claim that
+                            # the provider has emitted a meaningful token.
+                            yield ': heartbeat\n\n'
+                    finally:
+                        if not next_update.done():
+                            next_update.cancel()
+                            try:
+                                await next_update
+                            except asyncio.CancelledError:
+                                pass
+
+                # Deliver pending progress emitted immediately before completion.
+                while not updates.empty():
+                    stage = updates.get_nowait()
+                    yield f"event: progress\ndata: {json.dumps({'stage': stage})}\n\n"
+                outcome = await task
+                yield (
+                    "event: completed\ndata: "
+                    + json.dumps(outcome, ensure_ascii=False, separators=(",", ":"))
+                    + "\n\n"
+                )
+            except asyncio.CancelledError:
+                # Detached work continues; no unvalidated partial response sent.
+                raise
+            except Exception:
+                yield 'event: failed\ndata: {"error_code":"WEB_TURN_PROCESSING_FAILED"}\n\n'
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/v1/web/voice/utterances/{utterance_id}/stream", dependencies=auth)
     def web_voice_stream(utterance_id: UUID) -> StreamingResponse:
