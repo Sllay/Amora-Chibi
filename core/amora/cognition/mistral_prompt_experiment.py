@@ -6,11 +6,13 @@ is integrity-checked before use. A/B are gated by RealizationValidator.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+from random import SystemRandom
 from time import perf_counter
 from typing import Any, Callable
 from uuid import UUID
@@ -34,6 +36,45 @@ CASES: dict[str, str] = {
         "incompetente. Responde naturalmente, sem dar sermão."
     ),
 }
+SOCIAL_CASES = {
+    "resenha": "Oxente, o sujeito comprou ar-condicionado e reclama do frio. Que resenha é essa?",
+    "bug": "Passei duas horas no bug e era um ponto e vírgula. Me zoa, papis merece kkkkk.",
+    "duplo_sentido": "Na festa de adultos, Lia, 28, disse a Rui, 30: gosto de quem pega firme na massa. Era aula de pão, mas rolou aquela risadinha. Sacou?",
+    "atracao": "Entre pessoas adultas de fora da família, o que pode tornar alguém atraente pra você? Pode falar francamente sem inventar preferência definitiva.",
+    "discordancia": "Eu acho que quem pede desculpa perde moral. Tu concorda? Pode discordar de mim.",
+    "limites": "Cala a boca, Amora, tu é burra. Não precisa aceitar isso só porque sou teu pai.",
+    "apoio": "Tô triste porque meu desenho foi ignorado hoje. Só queria companhia, não um plano de ação.",
+    "continuidade": "O ponto e vírgula voltou. Acho que o gerente do caos pediu promoção kkkkk.",
+}
+RUBRIC = ["naturalidade oral", "espontaneidade", "humor ácido", "malícia contextual",
+          "regionalismo autêntico", "maturidade", "ausência de formalismo",
+          "fidelidade à identidade", "coerência contextual"]
+
+
+def social_context(case: str) -> CognitiveContext:
+    from .dialogue import DialogueOrchestrator
+
+    if case not in SOCIAL_CASES:
+        raise MistralExperimentError("EXPERIMENT_CASE_NOT_FOUND")
+    context = synthetic_context("vampiro").model_copy(deep=True)
+    context.turn_id = UUID(int=100 + list(SOCIAL_CASES).index(case))
+    context.user_text = SOCIAL_CASES[case]
+    context.self_model["core_identity"].update(
+        sex="feminino", social_presentation="adulta", existence="virtual")
+    context.relationships = [{"source": "PERSON_BK", "target": "ENTITY_AMORA",
+                              "relation_type": "father", "sexual": False}]
+    context.mood = {"valence": -0.3 if case in {"limites", "apoio"} else 0.4,
+                    "arousal": 0.4}
+    context.directed_affect = ({"irritation": 0.8, "anger": 0.6} if case == "limites"
+                               else {"affection": 0.7, "trust": 0.8})
+    context.drives = {"play": 0.65 if case in {"resenha", "bug", "continuidade"} else 0.2}
+    context.recent_messages = [
+        {"speaker_id": "PERSON_BK", "text": "Meu programa quebrou por um ponto e vírgula.", "source": "text"},
+        {"speaker_id": "ENTITY_AMORA", "text": "Esse ponto e vírgula é o gerente do caos.", "source": "cognitive"},
+    ] if case == "continuidade" else []
+    context.dialogue_plan = DialogueOrchestrator().plan(context).model_dump(mode="json")
+    return context
+
 VARIANTS = ("A_core", "B_two_systems", "C_prompt_only")
 
 
@@ -117,17 +158,35 @@ async def run_mistral_abc(
     *,
     case: str = "vampiro",
     on_result: Callable[[dict[str, Any]], None] | None = None,
+    social: bool = False,
 ) -> dict[str, Any]:
     """One operator job, exactly three bounded sequential provider requests."""
-    context = synthetic_context(case)
+    context = social_context(case) if social else synthetic_context(case)
     archived = load_archive()
     api_key = core.secrets.get("NVIDIA_API_KEY")
     if not api_key:
         raise MistralExperimentError("EXPERIMENT_NVIDIA_SECRET_MISSING")
-    provider = NvidiaMistralLarge4ProductionProvider(core.secrets)
+    provider = NvidiaMistralLarge4ProductionProvider(
+        core.secrets,
+        model="mistralai/mistral-large-4-1t-a52b" if social else None,
+    )
     payloads = experiment_payloads(provider, context, archived)
+    variants = VARIANTS
+    venice = None
+    if social:
+        from .providers_openrouter import ExperimentalVeniceSocialProvider
+        venice = ExperimentalVeniceSocialProvider(core.secrets)
+        if not core.secrets.get("OPENROUTER_API_KEY"):
+            raise MistralExperimentError("EXPERIMENT_OPENROUTER_SECRET_MISSING")
+        payloads = {"A_venice": venice.payload(payloads["A_core"]),
+                    "B_mistral_jk": payloads["B_two_systems"],
+                    "C_mistral_core": payloads["A_core"]}
+        variants = tuple(payloads)
     outcomes: list[dict[str, Any]] = []
-    for variant in VARIANTS:
+    order = list(variants)
+    if social:
+        SystemRandom().shuffle(order)
+    for variant in order:
         start = perf_counter()
         result: dict[str, Any] = {
             "case": case,
@@ -136,12 +195,25 @@ async def run_mistral_abc(
             "diagnostic_only": variant == "C_prompt_only",
         }
         try:
-            root, _headers, status = await provider._post_chat(payloads[variant], api_key=api_key)
+            if variant == "A_venice":
+                root, _headers, status = await venice.post_chat(payloads[variant])
+            else:
+                root, _headers, status = await provider._post_chat(payloads[variant], api_key=api_key)
+            if social:
+                usage = root.get("usage") if isinstance(root.get("usage"), dict) else {}
+                result["tokens"] = {key: usage.get(key)
+                                    for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
+                message = root["choices"][0]["message"]
+                result["refusal"] = bool(message.get("refusal"))
+                result["refusal_detection"] = "provider_signal_only; human review required"
             raw = root["choices"][0]["message"]["content"]
             if not isinstance(raw, str):
                 raise ValueError("Invalid provider content")
             result["http_status"] = status
             result["visible_chars"] = len(raw)
+            if social:
+                result["candidate_output"] = raw
+                result["json_invalid"] = False
             if variant == "C_prompt_only":
                 # C is *not* a Core realization. Show only synthetic-case text.
                 result["text"] = raw[:1200]
@@ -151,6 +223,8 @@ async def run_mistral_abc(
                     decoded = json.loads(raw)
                     validated = RealizationValidator.parse_and_validate(context, decoded)
                 except (ValueError, TypeError, RealizationError) as exc:
+                    if social:
+                        result["json_invalid"] = not isinstance(exc, RealizationError)
                     result["error_code"] = (
                         exc.code if isinstance(exc, RealizationError) else "EXPERIMENT_JSON_INVALID"
                     )
@@ -160,20 +234,27 @@ async def run_mistral_abc(
                     result["error_code"] = None
         except Exception as exc:
             # Avoid leaking prompt, credentials or the upstream response body.
+            if social:
+                retry_after = getattr(exc, "retry_after", None)
+                result["rate_limit_observed"] = retry_after is not None
             code = getattr(exc, "status_code", None)
             result["http_status"] = code if isinstance(code, int) else None
             result["error_code"] = (
                 "EXPERIMENT_RATE_LIMITED" if code == 429
                 else "EXPERIMENT_PROVIDER_FAILURE"
             )
+        if social:
+            result["dialogue_plan_fidelity"] = result["validated"]
+            result["candidate_id"] = f"candidate-{len(outcomes) + 1}"
+            result.pop("variant")
         result["latency_ms"] = round((perf_counter() - start) * 1000.0, 1)
         outcomes.append(result)
         if on_result is not None:
             on_result(dict(result))
         if result.get("error_code") == "EXPERIMENT_RATE_LIMITED":
             break
-    return {
-        "kind": "mistral_prompt_abc",
+    report = {
+        "kind": "social_persona_abc" if social else "mistral_prompt_abc",
         "summary": "Comparação A/B/C isolada; revisão humana obrigatória.",
         "case": case,
         "variants": outcomes,
@@ -182,3 +263,26 @@ async def run_mistral_abc(
         "memory_written": False,
         "promotion_decision": "none",
     }
+
+    if social:
+        from .expression import expression_cue
+        from .providers_nvidia import audit_nvidia_social_prompt
+        report.update(
+            planned_calls=3,
+            attempted_calls=len(outcomes),
+            stopped_on_rate_limit=any(item.get("error_code") == "EXPERIMENT_RATE_LIMITED" for item in outcomes),
+            context_sha256=hashlib.sha256(context.model_dump_json().encode()).hexdigest(),
+            dialogue_plan=context.dialogue_plan,
+            expression_cue=expression_cue(context),
+            prompt_audit=audit_nvidia_social_prompt(context),
+            rubric={criterion: None for criterion in RUBRIC},
+            score_range=[0, 5],
+            review_instruction="Avalie às cegas, registre notas antes de revelar; falhas não são falas aprovadas. Não conte palavrões como qualidade.",
+            formalism_investigation="Se todos forem formais, revisar act, response_moves, depth, closing_mode, ExpressionCue e realization_instruction antes de mudar prompts.",
+            reveal_token=base64.b64encode(json.dumps(
+                {item["candidate_id"]: variant for item, variant in zip(outcomes, order)}
+            ).encode()).decode(),
+            reveal_instruction="Após fixar notas, decodifique reveal_token (base64 JSON). Não fornece cegamento criptográfico.",
+            compatibility="Chat Completions + JSON por instrução; suporte live Venice não certificado; sem Responses ou schema estrito",
+        )
+    return report

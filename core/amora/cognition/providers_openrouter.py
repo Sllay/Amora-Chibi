@@ -161,3 +161,45 @@ def _header_int(response: Any, *names: str) -> int | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+class ExperimentalVeniceSocialProvider:
+    """Operator-only Chat Completions transport. Never registered in routing.
+
+    JSON is requested through the canonical instruction, not an unverified
+    response_format capability. Each call is one HTTP request without retries.
+    """
+
+    MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
+    API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    def __init__(self, secrets: Any) -> None:
+        self.secrets = secrets
+
+    def payload(self, canonical: dict[str, Any]) -> dict[str, Any]:
+        from copy import deepcopy
+        return {
+            "model": self.MODEL,
+            "messages": deepcopy(canonical["messages"]),
+            "temperature": canonical["temperature"],
+            "top_p": canonical["top_p"],
+            "max_tokens": canonical["max_tokens"],
+            "stream": False,
+            "provider": {"allow_fallbacks": False, "max_price": {"prompt": 0, "completion": 0}},
+        }
+
+    async def post_chat(self, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str], int]:
+        key = self.secrets.get("OPENROUTER_API_KEY")
+        if not key:
+            raise ProviderError("Venice experiment secret missing")
+        async with httpx.AsyncClient(timeout=httpx.Timeout(185, connect=10), follow_redirects=False) as client:
+            response = await client.post(self.API_URL, headers={
+                "Authorization": f"Bearer {key}", "Content-Type": "application/json",
+            }, json=payload)
+        if response.status_code >= 400:
+            raise ProviderError("Venice experiment HTTP failure", status_code=response.status_code,
+                                retry_after=response.headers.get("retry-after"))
+        root = response.json()
+        if not isinstance(root, dict) or root.get("error"):
+            raise ProviderError("Venice experiment invalid envelope")
+        return root, dict(response.headers), response.status_code

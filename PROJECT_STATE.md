@@ -327,3 +327,11 @@ Nenhum CH é `COMPLETED` até registrar:
 5. roadmap/canon/ADR afetados atualizados;
 6. próximo estado reduzido a no máximo três CHs ativos;
 7. nenhuma decisão crítica vivendo só no chat.
+
+## Experimento social Venice × Mistral+JK × Mistral (2026-11-07)
+
+Implementação isolada em `feat/social-persona-abc`; comando
+`providers experiment social-persona-abc --case ID`, oito fixtures sintéticas,
+mesmo Core protocol/DialoguePlan e revisão humana cega. Nenhuma promoção ou
+mudança do primary. Procedimento: `docs/experiments/SOCIAL_PERSONA_ABC.md`.
+Certificação live Venice pendente: catálogo OpenRouter bloqueado pela rede.
