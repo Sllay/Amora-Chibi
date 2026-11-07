@@ -438,7 +438,32 @@ async def _command_providers_experiment_mistral_abc(core: Any, args: list[str]) 
         ) from exc
 
 
+async def _command_providers_experiment_social_persona_abc(core: Any, args: list[str]) -> dict[str, Any]:
+    from amora.cognition.mistral_prompt_experiment import (
+        SOCIAL_CASES, MistralExperimentError, run_mistral_abc,
+    )
+    if len(args) != 2 or args[0] != "--case" or args[1] not in SOCIAL_CASES:
+        raise AdminCommandError("COMMAND_ARGUMENT_INVALID",
+                                "uso: providers experiment social-persona-abc --case ID",
+                                details={"available_cases": list(SOCIAL_CASES)})
+    try:
+        return await run_mistral_abc(
+            core, case=args[1], social=True,
+            on_result=lambda item: (_progress_sink.get() or (lambda _: None))(item),
+        )
+    except MistralExperimentError as exc:
+        raise AdminCommandError(exc.code, "experimento social indisponível") from exc
+
+
 _COMMANDS: tuple[RegisteredCommand, ...] = (
+    RegisteredCommand(
+        path=("providers", "experiment", "social-persona-abc"),
+        usage="providers experiment social-persona-abc --case ID",
+        description="Venice × Mistral+JK × Mistral; comparação cega sintética sem promoção.",
+        timeout_seconds=650.0,
+        handler=_command_providers_experiment_social_persona_abc,
+        exclusive=True,
+    ),
     RegisteredCommand(
         path=("providers", "experiment", "mistral-abc"),
         usage="providers experiment mistral-abc [--case vampiro|rpg]",

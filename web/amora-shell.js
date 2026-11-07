@@ -152,10 +152,37 @@ function formatMistralABC(result) {
   return lines.join("\n");
 }
 
+function formatSocialPersonaABC(result) {
+  const lines = ["Personalidade social — revisão cega", "Caso: " + result.case,
+    result.review_instruction, ""];
+  for (const item of result.variants || []) {
+    lines.push(item.candidate_id + " · " + (item.validated ? "Core válido" : "REJEITADO pelo Core"));
+    lines.push(item.text || item.candidate_output || "Sem resposta candidata.");
+    if (item.error_code) lines.push("erro=" + item.error_code);
+    lines.push("latência=" + seconds(item.latency_ms) + " · tokens=" + JSON.stringify(item.tokens || {}) +
+      " · recusa sinalizada=" + String(item.refusal ?? "não disponível"));
+    lines.push("");
+  }
+  lines.push("Notas por candidato (0–5; em branco = não avaliado):");
+  lines.push(Object.keys(result.rubric || {}).join(" · "));
+  lines.push(result.formalism_investigation);
+  lines.push("Plano congelado: " + JSON.stringify(result.dialogue_plan));
+  lines.push("ExpressionCue: " + JSON.stringify(result.expression_cue));
+  lines.push("Context SHA-256: " + result.context_sha256);
+  lines.push("Revelação SOMENTE após registrar notas: decodificar base64 JSON: " + result.reveal_token);
+  return lines.join("\n");
+}
+
 function formatPartialProgress(job) {
   const progress = Array.isArray(job.progress) ? job.progress : [];
   const lines = [`${progress.length} resposta(s) concluída(s)`];
   for (const item of progress) {
+    if (item.candidate_id) {
+      lines.push(item.candidate_id + " · " + (item.validated ? "Core válido" : "REJEITADO pelo Core"));
+      lines.push(item.text || item.candidate_output || "Sem resposta candidata.");
+      if (item.error_code) lines.push("erro=" + item.error_code);
+      continue;
+    }
     if (item.variant) {
       lines.push(item.variant + " · " + seconds(item.latency_ms) +
         " · " + (item.diagnostic_only ? "diagnóstico" : (item.validated ? "✓" : "✗")));
@@ -182,6 +209,7 @@ function formatJob(job) {
       : "";
     return `amora> ${job.command}\n[failed] ${job.error_code || "COMMAND_FAILED"} · ${job.error_type || "error"}${details}\n${formatPartialProgress(job)}`;
   }
+  if (job.result?.kind === "social_persona_abc") return `amora> ${job.command}\n\n${formatSocialPersonaABC(job.result)}`;
   if (job.result?.kind === "mistral_prompt_abc") return `amora> ${job.command}\n\n${formatMistralABC(job.result)}`;
   if (job.result?.kind === "social_provider_ab") return `amora> ${job.command}\n\n${formatSocialAB(job.result)}`;
   if (job.result?.kind === "command_help") {
