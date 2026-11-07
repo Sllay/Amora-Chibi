@@ -16,6 +16,7 @@ from amora.cognition.providers_openrouter import ExperimentalVeniceSocialProvide
 @pytest.mark.parametrize('case', SOCIAL_CASES)
 async def test_three_calls_frozen_context_blind_full_outputs(case, monkeypatch):
     calls = []
+    monkeypatch.setenv("AMORA_NVIDIA_MISTRAL_MODEL", "must-not-use-override")
     context = social_context(case)
     kind = context.dialogue_plan['response_moves'][0]
     raw = json.dumps({'moves': [{'kind': kind, 'text': 'Oxente, essa foi boa.'}], 'closing': 'statement'})
@@ -30,6 +31,7 @@ async def test_three_calls_frozen_context_blind_full_outputs(case, monkeypatch):
     progress = []
     result = await run_mistral_abc(SimpleNamespace(secrets=secrets), case=case, social=True, on_result=progress.append)
     assert len(calls) == 3
+    assert {payload["model"] for payload in calls} == {ExperimentalVeniceSocialProvider.MODEL, "mistralai/mistral-large-4-1t-a52b"}
     assert all(item['validated'] for item in result['variants'])
     assert all(item['candidate_output'] == raw for item in progress)
     assert all('variant' not in item for item in progress)

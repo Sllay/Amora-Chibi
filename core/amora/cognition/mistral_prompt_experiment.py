@@ -166,7 +166,10 @@ async def run_mistral_abc(
     api_key = core.secrets.get("NVIDIA_API_KEY")
     if not api_key:
         raise MistralExperimentError("EXPERIMENT_NVIDIA_SECRET_MISSING")
-    provider = NvidiaMistralLarge4ProductionProvider(core.secrets)
+    provider = NvidiaMistralLarge4ProductionProvider(
+        core.secrets,
+        model="mistralai/mistral-large-4-1t-a52b" if social else None,
+    )
     payloads = experiment_payloads(provider, context, archived)
     variants = VARIANTS
     venice = None
