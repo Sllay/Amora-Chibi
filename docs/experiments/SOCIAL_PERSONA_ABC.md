@@ -26,9 +26,11 @@ https://openrouter.ai/docs/api/reference/chat/send-chat-completion-request
 
 ## Procedimento
 
-1. Configure `NVIDIA_API_KEY` e `OPENROUTER_API_KEY` exclusivamente no
-   SecretStore do runtime da aplicação. Variáveis de processo não são fonte
-   de credencial deste experimento. Não coloque valores em relatórios.
+1. Disponibilize `NVIDIA_API_KEY` e `OPENROUTER_API_KEY` no `SecretStore`
+   do runtime. O `SecretStore.get()` consulta primeiro as variáveis de processo
+   `AMORA_SECRET_NVIDIA_API_KEY` e `AMORA_SECRET_OPENROUTER_API_KEY` e, na
+   ausência delas, seus arquivos secretos locais. Não registre os valores
+   das chaves em logs, prompts ou relatórios.
 2. Execute um caso por comando. Há no máximo três chamadas sequenciais,
    uma por variante, sem retries, sem fallback pago. O primeiro 429 encerra
    o caso; espere o prazo de quota antes de nova execução manual. Nenhuma
