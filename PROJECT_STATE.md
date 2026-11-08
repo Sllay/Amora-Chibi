@@ -335,3 +335,16 @@ Implementação isolada em `feat/social-persona-abc`; comando
 mesmo Core protocol/DialoguePlan e revisão humana cega. Nenhuma promoção ou
 mudança do primary. Procedimento: `docs/experiments/SOCIAL_PERSONA_ABC.md`.
 Certificação live Venice pendente: catálogo OpenRouter bloqueado pela rede.
+
+
+## Amora Virtual Human V2 A/B (2026-11-07)
+
+Implementação experimental em PR #157: arquivo de persona **somente em inglês**
+`jailbreak/Amora-Virtual-Human-V2.md`, prompt histórico mantido intacto.
+O comando `providers experiment amora-v2-ab --case ID` compara
+Mistral+Core original com Mistral+Core+V2, sem Venice/OpenRouter.
+Inclui casos novos de resenha adulta/mente poluída e revisão cega;
+não altera provider principal, memória, ações, identidade nem persistência.
+A tradução PT-BR não integra o repositório; somente foi enviada no chat.
+Gate pendente: CI do PR, deploy e execução NVIDIA live com revisão humana.
+Procedimento: `docs/experiments/AMORA_V2_AB.md`.
