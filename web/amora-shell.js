@@ -161,6 +161,12 @@ function formatSocialPersonaABC(result) {
     ? "Amora Virtual Human V2 — comparação A/B cega"
     : "Personalidade social — revisão cega", "Caso: " + result.case,
     result.review_instruction, ""];
+  if (result.transport_deadlines) {
+    lines.push("NVIDIA experimento: idle=" + result.transport_deadlines.idle_seconds +
+      "s · teto=" + result.transport_deadlines.max_total_seconds +
+      "s por chamada; produção inalterada.");
+    lines.push("");
+  }
   if (result.kind === "amora_v3_temperature_ab" && result.sampling_profiles) {
     const p = result.sampling_profiles;
     lines.push("Perfis em disputa (não vinculados a candidate-1/2 até a revelação):");
@@ -170,9 +176,28 @@ function formatSocialPersonaABC(result) {
     lines.push("");
   }
   for (const item of result.variants || []) {
-    lines.push(item.candidate_id + " · " + (item.validated ? "Core válido" : "REJEITADO pelo Core"));
-    lines.push(item.text || item.candidate_output || "Sem resposta candidata.");
+    const providerFailed = item.error_code === "EXPERIMENT_PROVIDER_FAILURE" ||
+      item.error_code === "EXPERIMENT_NVIDIA_TIMEOUT" ||
+      item.error_code === "EXPERIMENT_RATE_LIMITED";
+    const modelJsonInvalid = item.validation_status === "invalid_model_json" ||
+      item.error_code === "EXPERIMENT_JSON_INVALID";
+    const label = item.validated ? "Core válido"
+      : item.error_code === "EXPERIMENT_NVIDIA_TIMEOUT" ? "TIMEOUT NVIDIA · Core não executado"
+      : item.error_code === "EXPERIMENT_RATE_LIMITED" ? "RATE LIMIT NVIDIA · Core não executado"
+      : providerFailed ? "FALHA DO PROVEDOR · Core não executado"
+      : modelJsonInvalid ? "JSON INVÁLIDO · Core não executado"
+      : "REJEITADO pelo Core";
+    lines.push(item.candidate_id + " · " + label);
+    lines.push(item.text || item.candidate_output || (
+      providerFailed ? "Nenhuma fala recebida da NVIDIA." : "Sem resposta candidata."
+    ));
     if (item.error_code) lines.push("erro=" + item.error_code);
+    if (item.failure_stage) lines.push(
+      "etapa=" + item.failure_stage + " · timeout=" + (item.timeout_kind || "desconhecido")
+    );
+    if (item.stream_diagnostics) lines.push(
+      "stream (telemetria sem conteúdo): " + JSON.stringify(item.stream_diagnostics)
+    );
     if (item.calibration_overlap) {
       const overlap = item.calibration_overlap;
       lines.push("semelhança com exemplos V3: máximo=" + overlap.max_consecutive_example_words +
