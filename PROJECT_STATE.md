@@ -399,3 +399,18 @@ distinguem falha de transporte, JSON inválido e rejeição local legítima;
 Shell não afirma rejeição do Core antes de executar `RealizationValidator`.
 Prompts V2/V3 e `DialoguePlan` preservados. Certificação live e deploy
 pendentes. Esta alteração não comprova que NVIDIA responderá em 100s.
+
+## Auditoria forense Fase 1 — 2026-11-08
+
+Base remota confirmada `7504d23d0203b6821ae498f1d1439424f263a3ac`;
+branch `audit/phase1-core-forensics`. Relatório atual:
+`docs/audit/PHASE1_CORE_FORENSICS_2026-11-08.md`.
+Baseline Python928pass, container58pass, Chromium/SSE/auth local verificados.
+Diagnósticos estritos preservam defeitos abertos (não são correções): autoria
+indireta/self-choice, trimming, timeout mal atribuído, SECRET em raw event,
+parentesco father_of, replay Mistral e literal ACIR no system.
+Dois agentes personalizados persistidos e verificados via Codex config/read;
+sessões anteriores sem executor atuaram como revisores, execução pelo principal.
+Correções limitadas a expectativas de testes Shell e sua seleção no CI.
+Nenhuma alteração do Core produtivo ou dos arquivos V2/V3; nenhuma Fase 2/3,
+promoção, certificação live ou deploy. Estado de entrega/PR no relatório.

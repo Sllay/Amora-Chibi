@@ -1,0 +1,12 @@
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 2
+max_depth = 1
+
+[agents.amora_test]
+description = "amora test — testa personagem, contratos, integrações e entrega com evidências reproduzíveis."
+config_file = "agents/amora-test.toml"
+
+[agents.core_especionar]
+description = "core especionar — investiga arquitetura e causas reproduzíveis de bugs, sem alterar produção sem coordenação."
+config_file = "agents/core-especionar.toml"

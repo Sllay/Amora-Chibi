@@ -13,7 +13,8 @@ test('blind shell displays full valid and rejected outputs without model labels'
     { candidate_id: 'candidate-2', validated: false, candidate_output: 'JSON inválido', error_code: 'EXPERIMENT_JSON_INVALID' },
   ], rubric: { naturalidade: null }, reveal_token: 'opaque' });
   assert.ok(report.includes(text));
-  assert.ok(report.includes('REJEITADO pelo Core'));
+  assert.ok(report.includes('JSON INVÁLIDO · Core não executado'));
+  assert.ok(!report.includes('REJEITADO pelo Core'));
   assert.ok(report.includes('JSON inválido'));
   assert.ok(!report.includes('Venice'));
   assert.ok(!report.includes('Mistral'));

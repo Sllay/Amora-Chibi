@@ -26,7 +26,8 @@ test("V2 A/B has readable full blind candidates, no exposed provider labels", ()
   });
   assert.ok(formatted.includes("Amora Virtual Human V2"));
   assert.ok(formatted.includes(text));
-  assert.ok(formatted.includes("REJEITADO pelo Core"));
+  assert.ok(formatted.includes("JSON INVÁLIDO · Core não executado"));
+  assert.ok(!formatted.includes("REJEITADO pelo Core"));
   assert.ok(formatted.includes("non JSON"));
   assert.ok(!formatted.includes("Mistral"));
   assert.ok(!formatted.includes("A_core"));
