@@ -422,3 +422,29 @@ A API `https://api.github.com/repos/Sllay/Amora-Chibi` retornou `Forbidden`
 nesta retomada. A criação de PR será tentada com a branch publicada; em caso
 de nova recusa, o corpo ficará versionado em `docs/audit/PHASE1_PR_BODY.md`.
 O acesso Git pelo proxy funciona e não exige extrair ou trocar credenciais.
+
+### Resultado da publicação
+
+Branch publicada e verificada com `git ls-remote`:
+`audit/phase1-core-forensics`, commit de implementação
+`b949da05b04090c0217153190f3c6d0088c948d5`.
+Main remoto permaneceu `7504d23d0203b6821ae498f1d1439424f263a3ac`.
+
+Comando executado:
+
+```sh
+gh pr create --base main --head audit/phase1-core-forensics --title "AMORA Phase 1: forensic Core audit and two persistent Codex agents" --body-file docs/audit/PHASE1_PR_BODY.md
+```
+
+Resultado: exit1, `Post https://api.github.com/graphql: Forbidden`.
+Diagnóstico sem autenticação (`curl -I https://api.github.com`):
+`CONNECT tunnel failed, response 403`, indicando bloqueio no proxy antes da API.
+**PR não criado**, CI remoto não consultado. Não pedir token novo com base nisso:
+o acesso Git existente funcionou. Para concluir a publicação automática, o
+ambiente precisa permitir `api.github.com`; autenticação da API ainda terá
+que ser testada depois de remover esse bloqueio de rede.
+
+Alternativa manual, sem afirmar que já existe um PR:
+https://github.com/Sllay/Amora-Chibi/pull/new/audit/phase1-core-forensics
+
+O corpo está versionado em `PHASE1_PR_BODY.md`. Não foi feito merge ou deploy.
