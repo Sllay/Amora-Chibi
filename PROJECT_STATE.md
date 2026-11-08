@@ -359,3 +359,16 @@ providers experiment amora-v2-v3 --case sacanagem.
 Casos mais intensos e claros para malícia, palavrão, humor ácido e limites.
 Sem mudança na produção; revisão humana e certificado live pendentes.
 Docs: docs/experiments/AMORA_V2_V3_AB.md.
+
+
+## V3 dynamic sampling A/B (2026-11-07)
+
+Experimento de operador `providers experiment amora-v3-temperature
+--case safada [--temperature X] [--top-p Y] [--temperature-a X]
+[--top-p-a Y] [--temperature-b X] [--top-p-b Y]`.
+Mesma V3 inglesa autoral e mesmo Core; temperatura e top_p ajustáveis
+por comando com faixas verificadas, padrão A=0.50/1.00,
+B=0.75/1.00. Apresentação cega, limite 2 chamadas NVIDIA,
+métrica de cópia exata a partir dos GOOD exemplos V3,
+sem alterar provider principal nem prompts e sem promoção.
+Documento: `docs/experiments/AMORA_V3_TEMPERATURE_AB.md`.
