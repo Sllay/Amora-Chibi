@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .models import CognitiveContext
+from amora.language.attribution import analyze_addressing, personal_choice_requested, VERSION
 
 
 class DialogueAct(StrEnum):
@@ -53,6 +54,7 @@ class DialoguePlan(BaseModel):
     response_moves: list[str] = Field(default_factory=list)
     ask_followup: bool = False
     self_choice_keys: list[str] = Field(default_factory=list)
+    self_choice_evidence: dict[str, Any] | None = None
     # A single conversational check of an interpretation is different from
     # initiating an unsolicited follow-up topic or asking for more information.
     allow_reflective_question: bool = False
@@ -157,9 +159,10 @@ class DialogueOrchestrator:
         text = _normalize(raw)
         # Reported speech belongs to its literal speaker, not to Amora's addressee.
         # Real turn/floor authorization has already happened upstream.
-        addressed_raw = self._outside_reported_dialogue(raw)
+        attribution = analyze_addressing(raw, context.speaker_id, context.target_id)
+        addressed_raw = attribution.addressed_text
         addressed_text = _normalize(addressed_raw)
-        reported_scene = addressed_raw != raw
+        reported_scene = attribution.reported
         style = self._style_register(context)
         tone = self._tone_tags(context)
         attitude = self._relational_attitude(context)
@@ -509,6 +512,7 @@ class DialogueOrchestrator:
                 depth=self._depth(text),
                 response_moves=["answer_question", "relate_to_context_if_relevant"],
                 self_choice_keys=possible_self_choices,
+                self_choice_evidence=choice_evidence(context, possible_self_choices) if possible_self_choices else None,
                 ask_followup=False,
                 allow_reflective_question=allow_reflective,
                 offer_help=False,
@@ -553,19 +557,6 @@ class DialogueOrchestrator:
             ],
         )
 
-    @classmethod
-    def _outside_reported_dialogue(cls, raw: str) -> str:
-        """Exclude quoted third-party speech from direct-intent routing.
-
-        This does not erase scene content from user_text, context, or provider
-        input. Bare quotes and quoted excerpts without a speaker attribution
-        remain direct input. It is an attribution heuristic, not a replacement
-        for trusted multi-participant speaker/addressee metadata.
-        """
-        if not cls._REPORTED_DIALOGUE_RE.search(raw):
-            return raw
-        return cls._QUOTED_SPEECH_RE.sub(" ", raw)
-
     @staticmethod
     def _self_choice_keys(text: str, context: CognitiveContext) -> list[str]:
         """Permit a first-person autonomous choice on a relevant direct topic.
@@ -574,6 +565,8 @@ class DialogueOrchestrator:
         the Core's Self Model makes the decision persistent, once.
         """
         keys: list[str] = []
+        if not personal_choice_requested(text):
+            return keys
         request_words = (
             "escolh", "prefe", "gost", "identific", "quer",
             "qual", "decid", "sente", "atra", "tipo",
@@ -774,3 +767,11 @@ def _age_from_birth_date(value: Any, now: datetime) -> int | None:
         return None
     today = now.date()
     return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+
+
+def choice_evidence(context: CognitiveContext, keys: list[str]) -> dict[str, Any]:
+    import hashlib
+    return {"version": VERSION, "turn_id": str(context.turn_id),
+            "speaker_id": context.speaker_id, "target_id": context.target_id,
+            "input_sha256": hashlib.sha256(context.user_text.encode()).hexdigest(),
+            "subject_id": "ENTITY_AMORA", "keys": sorted(keys)}

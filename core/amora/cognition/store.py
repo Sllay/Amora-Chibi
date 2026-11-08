@@ -39,7 +39,7 @@ class CognitiveStore:
         redacted = self._is_redacted(item.privacy_scope)
         metadata = dict(item.metadata)
         if redacted:
-            metadata["content_redacted"] = True
+            metadata = {"content_redacted": True}
         values = (
             str(item.id), str(item.turn_id), item.speaker_id, item.addressee_id, item.source.value,
             None if redacted else item.raw_text,
@@ -136,7 +136,7 @@ class CognitiveStore:
         payload = {} if redacted else entry.payload
         metadata = dict(entry.metadata)
         if redacted:
-            metadata["content_redacted"] = True
+            metadata = {"content_redacted": True}
         values = (
             str(entry.id), str(entry.turn_id), entry.stage.value, entry.timestamp.isoformat(), entry.source,
             summary, json.dumps(entry.reason_codes, ensure_ascii=False),

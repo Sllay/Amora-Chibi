@@ -23,21 +23,18 @@ def context(text, **kwargs):
                             self_model={'core_identity': {'canonical_name': 'Amora'}}, **kwargs)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='F01: indirect third-party question becomes Amora self-fact')
 def test_indirect_question_does_not_request_amora_name():
     ctx = context('Lia perguntou a Rui qual seu nome, e ele respondeu Carlos. Achei estranho.')
     plan = DialogueOrchestrator().plan(ctx)
     assert plan.fact_key is None, plan.model_dump()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='F02: indirect third-party attraction grants Amora self-choice')
 def test_indirect_attraction_does_not_authorize_self_choice():
     ctx = context('Lia perguntou se Rui gosta de mulheres, e ele disse que sim. Foi uma conversa entre eles.')
     plan = DialogueOrchestrator().plan(ctx)
     assert plan.self_choice_keys == [], plan.model_dump()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='F03: all quotes stripped even when directly addressed to Amora')
 def test_quoted_direct_question_preserves_request():
     ctx = context('Amora, eu te perguntei: "qual seu nome?"')
     plan = DialogueOrchestrator().plan(ctx)
@@ -104,7 +101,6 @@ async def test_provider_idle_timeout_is_not_a_surface_budget_timeout(tmp_path, m
         core.close()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='F07: SECRET raw text persisted by language observation; AUTH alone is redacted')
 async def test_secret_observation_has_no_durable_raw_text(tmp_path, monkeypatch):
     from amora.app import AmoraCore
     from amora.events import PrivacyScope
@@ -134,7 +130,6 @@ def test_canonical_parent_is_recognized(tmp_path, monkeypatch):
         core.close()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='F02b: indirect third-party report can persist an unrequested personal preference')
 async def test_indirect_report_cannot_commit_amora_preference(tmp_path, monkeypatch):
     from amora.app import AmoraCore
     from amora.world import SelfLayer
@@ -142,7 +137,7 @@ async def test_indirect_report_cannot_commit_amora_preference(tmp_path, monkeypa
     monkeypatch.setenv('AMORA_SECRET_NVIDIA_API_KEY', 'synthetic-test-key')
     core = AmoraCore.bootstrap()
     async def synthetic(self, ctx):
-        assert 'physical_attraction' in ctx.dialogue_plan['self_choice_keys']
+        assert 'physical_attraction' not in ctx.dialogue_plan['self_choice_keys']
         return {'moves': [{'kind': ctx.dialogue_plan['response_moves'][0],
                            'text': 'Eu gosto de pessoas adultas com estilo.'}],
                 'closing': 'statement',

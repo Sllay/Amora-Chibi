@@ -333,6 +333,8 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         if len(body) > MAX_LOCAL_AUDIO_BYTES:
             raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="audio body too large")
 
+        if privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+            raise HTTPException(status_code=403, detail="sensitive audio cannot be transcribed")
         incoming = core.paths.cache / "incoming"
         incoming.mkdir(parents=True, exist_ok=True)
         audio_path = incoming / f"{uuid4().hex}.wav"

@@ -49,7 +49,7 @@ def commit_self_choices(
     """
     if not choices:
         return SelfChoiceDecision()
-    if request.metadata.get("test_mode", False):
+    if request.metadata.get("test_mode", False) or "TEST_MODE_ACTIVE" in context.reason_codes:
         return SelfChoiceDecision(
             skipped_keys=tuple(str(item.key) for item in choices),
             reason_codes=("SELF_CHOICE_TEST_MODE_NOT_PERSISTED",),
@@ -64,7 +64,18 @@ def commit_self_choices(
             skipped_keys=tuple(str(item.key) for item in choices),
             reason_codes=("SELF_CHOICE_REMOTE_CONTEXT_UNAVAILABLE",),
         )
-    allowed = set(context.dialogue_plan.get("self_choice_keys") or ())
+    from .dialogue import DialogueOrchestrator, choice_evidence
+    from amora.events import PrivacyScope
+    rebound = context.model_copy(update={"user_text": request.text})
+    expected_keys = DialogueOrchestrator().plan(rebound).self_choice_keys
+    evidence = context.dialogue_plan.get("self_choice_evidence")
+    if (context.privacy_scope != request.privacy_scope or context.turn_id != request.turn_id or request.target_id != "ENTITY_AMORA"
+            or request.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}
+            or not request.remote_processing_allowed or context.user_text != request.text
+            or not expected_keys or evidence != choice_evidence(rebound, expected_keys)):
+        return SelfChoiceDecision(skipped_keys=tuple(str(item.key) for item in choices),
+                                  reason_codes=("SELF_CHOICE_EVIDENCE_INVALID",))
+    allowed = set(context.dialogue_plan.get("self_choice_keys") or ()) & set(expected_keys)
     committed: list[str] = []
     skipped: list[str] = []
     for item in choices:
