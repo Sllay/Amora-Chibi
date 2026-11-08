@@ -139,3 +139,21 @@ def test_v2_v3_experiment_requires_operator(tmp_path, monkeypatch):
     finally:
         client.close()
         core.close()
+
+
+def test_v3_temperature_experiment_requires_operator(tmp_path, monkeypatch):
+    core, client = _core(tmp_path, monkeypatch)
+    try:
+        command = {"command": "providers experiment amora-v3-temperature --case safada"}
+        web = {"Authorization": "Bearer " + issue_browser_token(MASTER, core.clock, "web")}
+        assert client.post("/v1/operator/commands", json=command).status_code == 401
+        assert client.post("/v1/operator/commands", headers=web, json=command).status_code == 403
+        operator = {"Authorization": "Bearer " + issue_operator_token(MASTER, core.clock)}
+        started = client.post("/v1/operator/commands", headers=operator, json=command)
+        assert started.status_code == 202
+        finished = _terminal_job(client, operator, started.json()["job_id"])
+        assert finished["error_code"] == "EXPERIMENT_NVIDIA_SECRET_MISSING"
+        assert not finished["progress"]
+    finally:
+        client.close()
+        core.close()
