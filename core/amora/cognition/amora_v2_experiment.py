@@ -29,7 +29,7 @@ from .realization import RealizationError, RealizationValidator
 MODEL = "mistralai/mistral-large-4-1t-a52b"
 PROMPT_FILENAME = "Amora-Virtual-Human-V2.md"
 # Git blob identity; the English overlay is pinned to this reviewed revision.
-PROMPT_GIT_BLOB_SHA1 = "de895364a3fac1b59ff0d33c9eccbcb32ce9f6fa"
+PROMPT_GIT_BLOB_SHA1 = "2a8c64e510062d0f557ccd9c284c0c5ec9882d3a"
 _RUNTIME_PROMPT = Path("/opt/amora/jailbreak") / PROMPT_FILENAME
 _DEV_PROMPT = Path(__file__).resolve().parents[3] / "jailbreak" / PROMPT_FILENAME
 
