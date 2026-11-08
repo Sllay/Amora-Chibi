@@ -385,3 +385,17 @@ nível expressivo, não concede novas ações.
 Arquivos de prompt V2/V3, modelos de produção, provider e memória não
 sofrem alteração. ADR-0038; testes de replay e validação. Certificação
 live NVIDIA pendente até depois de CI/merge/deploy.
+
+
+## A/B NVIDIA timeout and validator diagnosis — 2026-11-08
+
+O relatório V2 × V3 para `sacanagem` mostrou duas falhas por inatividade
+de streaming próximas de 55s, antes de qualquer saída: não eram rejeições
+do Core, apesar do rótulo incorreto do Amora Shell. O laboratório V2 × V3
+e V3 sampling agora usam idle 100s e teto 225s por chamada (máximo duas,
+sem retry). Código do provider de produção permanece 55s/185s. Os
+experimentos registram estágio/tipo de timeout de maneira sanitizada,
+distinguem falha de transporte, JSON inválido e rejeição local legítima;
+Shell não afirma rejeição do Core antes de executar `RealizationValidator`.
+Prompts V2/V3 e `DialoguePlan` preservados. Certificação live e deploy
+pendentes. Esta alteração não comprova que NVIDIA responderá em 100s.

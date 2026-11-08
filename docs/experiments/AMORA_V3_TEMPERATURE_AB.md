@@ -63,3 +63,43 @@ providers experiment amora-v3-temperature --case boca_suja --temperature 0.85 --
 ```
 
 Each command initiates two NVIDIA calls (unless rate-limited). Run one job at a time after the main-branch deployment. Repeat important cases to avoid overinterpreting single random outcomes. Live provider results and the operator's human ratings are necessary for a recommendation.
+
+
+## NVIDIA stream timeout versus Core rejection (2026-11-08)
+
+The previous experiment runner used the production idle timeout of
+**55s**. Two attempts returned `EXPERIMENT_PROVIDER_FAILURE` after
+55.09s and 55.06s with **no provider message**, yet Shell displayed
+`REJEITADO pelo Core`. This was an **incorrect status label**:
+`RealizationValidator` never ran. Two identical elapsed times strongly
+suggest NVIDIA SSE idle/read timeout, but do not prove whether the
+failure was while waiting for headers, for the first event, or after
+partial generation.
+
+Both operator-only V2×V3 and V3 sampling tests now use an idle
+timeout of **100s** and an independent total cap of **225s per
+call**. Two sequential calls are within the 650s admin deadline.
+The real production Mistral continues at idle **55s**, total **185s**.
+Do not interpret larger limits as a guarantee of success, and do
+not automatically retry stalled generation.
+
+The runner records:
+- `validation_status=not_run`, `error_code=EXPERIMENT_NVIDIA_TIMEOUT`,
+  sanitized `failure_stage` (`waiting_headers`,
+  `waiting_first_event`, `reasoning_only`, `visible_partial`) and
+  `timeout_kind` (`idle` or `total_safety`);
+- only safe event counters and timing markers; never private reasoning,
+  generated fragments, prompt content, auth credentials or exception bodies;
+- transport/HTTP failure separately from invalid JSON, Core rejection
+  and validated output.
+
+If the next run still times out, inspect the stage:
+`waiting_headers` or `waiting_first_event` indicates upstream
+latency/availability; `reasoning_only` indicates no visible answer
+yet, even if the model was reasoning; `visible_partial` means an
+incomplete structured response was discarded correctly. An HTTP
+failure or 429 requires a different diagnosis. No rejection of vulgar
+language can be inferred without visible model output.
+
+All prompts remain byte-for-byte unchanged. Live NVIDIA certification
+and deployment of the updated main branch remain separate steps.

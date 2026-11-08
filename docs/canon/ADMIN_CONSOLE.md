@@ -690,3 +690,25 @@ relatório marca o resultado como confundido. Cópia lexical de
 exemplos V3 registrada separadamente. Sem mudança no provider
 de produção, GDD, V2/V3, estado ou memória. Veja
 `docs/experiments/AMORA_V3_TEMPERATURE_AB.md`.
+
+
+### Diagnóstico correto de falhas NVIDIA em experimentos
+
+Os comandos `providers experiment amora-v2-v3` e
+`providers experiment amora-v3-temperature` usam idle 100s e teto
+225s por candidato apenas no laboratório. A produção permanece
+com 55s/185s. O Shell diferencia:
+
+- `EXPERIMENT_NVIDIA_TIMEOUT`: timeout de streaming; registra stage,
+  idle/total, marcadores temporais e contagem de eventos sem conteúdo;
+- `EXPERIMENT_PROVIDER_FAILURE`/`EXPERIMENT_RATE_LIMITED`:
+  transporte/HTTP; não houve validação local;
+- `EXPERIMENT_JSON_INVALID`: texto recebido inválido como JSON,
+  antes de `RealizationValidator`;
+- `rejected_by_core`: JSON parseado e rejeitado por contrato local;
+- `passed`: fala validada.
+
+Não confundir falha de transporte com censura do Core nem pontuar
+candidatos ausentes. Segredos, corpo HTTP, texto parcial e reasoning
+não entram nos diagnósticos. No máximo duas chamadas sequenciais sem
+retry/fallback. A alteração não promove modelos nem edita os prompts.
