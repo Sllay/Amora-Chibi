@@ -30,6 +30,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
 
     def state(self) -> dict[str, object]:
         state = super().state()
+        from .expressive_profile import configured_profile, profile_state
+        state["social_expression_profile"] = profile_state(configured_profile())
         state["last_realization"] = getattr(self, "_last_realization", None)
         state["last_realization_rejection"] = getattr(self, "_last_realization_rejection", None)
         return state
@@ -255,7 +257,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             except ContextBudgetExceeded:
                 last_failure = "CONTEXT_ENVELOPE_OVERFLOW"
                 self._journal(request, JournalStage.ERROR, summary="provider envelope exceeds budget",
-                    reason_codes=[last_failure, "NO_REMOTE_REQUEST"], error_code=last_failure)
+                    reason_codes=[last_failure, "NO_SURFACE_REQUEST"], error_code=last_failure)
                 continue
             except NvidiaStreamTimeout as exc:
                 kind = exc.diagnostics.get("timeout_kind")
@@ -465,6 +467,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             "provider": provider,
             "model": model,
             "frame": frame_dump,
+            "expression_profile": context.expression_profile if context else "core-v1",
             "reason_codes": list(reason_codes),
         }
         self._last_realization_rejection = None

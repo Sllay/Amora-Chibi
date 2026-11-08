@@ -15,6 +15,8 @@ RUN --mount=type=secret,id=proxy_ca \
 COPY --chown=10001:10001 core ./core
 COPY --chown=10001:10001 config ./config
 COPY --chown=10001:10001 tests ./tests
+# Forensic tests compare source bytes with the immutable runtime catalogs.
+COPY --chown=10001:10001 jailbreak ./jailbreak
 COPY --chown=10001:10001 tools ./tools
 COPY --chown=10001:10001 android ./android
 COPY --chown=10001:10001 web ./web

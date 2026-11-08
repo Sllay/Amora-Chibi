@@ -108,13 +108,21 @@ class ContextCompiler:
         world.subscribe_claim_observer(self.relationship_learning.observe_claim)
 
     def compile(self, request: CognitiveRequest, *, token_budget: int = 8192) -> CognitiveContext:
+        from .expressive_profile import configured_profile, profile_text
+        profile = configured_profile()
+        profile_text(profile)  # integrity and configuration validated before provider work
         remote = self.privacy_gate.remote_allowed(request)
         reasons = ["CANONICAL_STATE_OUTSIDE_PROVIDER", "REMOTE_CONTEXT_ALLOWED" if remote else "REMOTE_CONTEXT_BLOCKED"]
         if bool(request.metadata.get("test_mode", False)):
             reasons.append("TEST_MODE_ACTIVE")
 
+        mode = request.metadata.get("cognitive_mode")
+        if mode == "reflection":
+            reasons.append("COGNITIVE_REFLECTION")
+        elif mode == "autonomous_initiation":
+            reasons.append("AUTONOMOUS_INITIATION")
         acir: dict[str, Any] | None = None
-        if request.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+        if request.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET} and mode != "autonomous_initiation":
             perspective = PerspectiveStack(PerspectiveFrame(speaker_id=request.speaker_id, addressee_id=request.target_id))
             acir = self.acir.compile_utterance(request.text, perspective).model_dump(mode="json")
             reasons.append("ACIR_COMPILED")
@@ -206,7 +214,7 @@ class ContextCompiler:
             reasons.append("SELF_MODEL_REMOTE_LAYER_ALLOWLIST")
 
         context = CognitiveContext(
-            turn_id=request.turn_id, created_at=self.clock.now(), speaker_id=request.speaker_id,
+            turn_id=request.turn_id, created_at=self.clock.now(), speaker_id=request.speaker_id, expression_profile=profile,
             target_id=request.target_id, user_text=request.text, acir=acir, self_model=self_snapshot,
             relationships=relationships, mood={"valence": round(mood.valence, 6), "arousal": round(mood.arousal, 6),
                                                "dominance": round(mood.dominance, 6)},
@@ -228,15 +236,19 @@ class ContextCompiler:
             context.reason_codes.append("ACIR_BOUND_TO_DIALOGUE_PLAN")
         context.reason_codes.extend(code for code in dialogue_plan.reason_codes if code not in context.reason_codes)
         context.reason_codes.append(f"DIALOGUE_ACT_{dialogue_plan.act.value.upper()}")
-        return self._fit_budget(context)
+        return self._fit_budget(context, self.dialogue)
 
     @staticmethod
-    def _fit_budget(context: CognitiveContext) -> CognitiveContext:
+    def _fit_budget(context: CognitiveContext, dialogue=None) -> CognitiveContext:
         from .context_budget import estimate_context, ContextBudgetExceeded
         def replan():
             identity = context.dialogue_plan.get("speaker_identity")
-            mode = context.dialogue_plan.get("act")
-            context.dialogue_plan = DialogueOrchestrator().plan(context).model_dump(mode="json")
+            old = set(context.dialogue_plan.get("reason_codes") or ())
+            context.reason_codes = [code for code in context.reason_codes
+                                    if code not in old and not code.startswith("DIALOGUE_ACT_")]
+            context.dialogue_plan = (dialogue or DialogueOrchestrator()).plan(context).model_dump(mode="json")
+            context.reason_codes.extend(context.dialogue_plan.get("reason_codes") or ())
+            context.reason_codes.append("DIALOGUE_ACT_" + context.dialogue_plan["act"].upper())
             if identity:
                 context.dialogue_plan["speaker_identity"] = identity
             if context.acir is not None:

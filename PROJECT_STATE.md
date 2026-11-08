@@ -414,3 +414,12 @@ sessões anteriores sem executor atuaram como revisores, execução pelo princip
 Correções limitadas a expectativas de testes Shell e sua seleção no CI.
 Nenhuma alteração do Core produtivo ou dos arquivos V2/V3; nenhuma Fase 2/3,
 promoção, certificação live ou deploy. Estado de entrega/PR no relatório.
+
+## Fase2 — correções de causa-raiz e perfilV3 (software)
+
+Branches empilhadas sobreaudit/phase1-core-forensics452a4d9; semmerge/deploy.
+Resultados e rollout: docs/engineering/phase2/RESULTS.md e ROLLOUT.md, ADR0039.
+ReproduçõesF01–F10 (incluiF02b) passaram semxfail. Default perfilcore-v1;
+amora-v3 optinverificado emstaginglocalisolado comtransportsimulado, não em
+hostremoto/produção e não certificação comportamentalFase3. Ambosjailbreaks
+inalterados. API GitHub403 bloqueia consultaCI/aberturaPR; Gitremotofunciona.

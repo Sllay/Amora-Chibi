@@ -12,6 +12,7 @@ from .mesh_providers import (
     CloudflareCognitiveProvider as BaseCloudflareCognitiveProvider,
     OpenRouterCognitiveProvider as BaseOpenRouterCognitiveProvider,
 )
+from .context_budget import ensure_payload
 from .models import CognitiveContext
 from .preview import preview_enabled, publish_preview
 from .prompt_frame import render_conversation_turn, render_current_turn, render_trusted_protocol
@@ -157,6 +158,7 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
             },
         }
         started = perf_counter()
+        ensure_payload(context, payload)
         root, response = await self._post_responses(payload, api_key=api_key, error_label="structured realization")
         set_ms("provider_surface_ms", (perf_counter() - started) * 1000.0)
         parse_started = perf_counter()
@@ -186,6 +188,7 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
             # object is still locally schema/DialoguePlan validated afterwards.
             "text": {"format": {"type": "json_object"}},
         }
+        ensure_payload(context, payload)
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -283,10 +286,7 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
 
     def _realization_instructions(self, context: CognitiveContext) -> str:
         return (
-            self._system_prompt()
-            + _IDENTITY_CONTRACT
-            + "\n\n"
-            + render_trusted_protocol(context)
+            render_trusted_protocol(context)
             + "\n\nAMORA REALIZATION CONTRACT\n"
             + realization_instruction(context)
         )

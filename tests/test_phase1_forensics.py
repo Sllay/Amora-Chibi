@@ -1,6 +1,7 @@
-"""Phase 1 evidence: strict xfails are confirmed defects, not passing gates.
+"""Phase 1 reproductions retained as passing Phase 2 regressions.
 
-No production corrections, remote generations, or prompt modifications here.
+F04/F05 accept explicit irreducible overflow rather than silently losing
+essential context. No remote generations or original prompt edits.
 """
 import json
 from datetime import datetime, timezone

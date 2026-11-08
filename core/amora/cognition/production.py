@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from time import perf_counter
+from copy import deepcopy
 from typing import Any
 from uuid import UUID
 
@@ -10,6 +11,8 @@ from amora.models import ScopedModelRouter, TaskClass
 from .models import CognitiveContext, CognitiveJournalEntry, CognitiveRequest, JournalStage
 from .proposals import CognitiveProposalBundle
 from .replay import CognitiveReplayResult
+from .realization import RealizationError
+from .context_budget import ContextBudgetExceeded
 from .resilient import CognitiveEngine as ResilientCognitiveEngine
 
 
@@ -42,7 +45,12 @@ class CognitiveEngine(ResilientCognitiveEngine):
         reflection_request = request.model_copy(
             update={"metadata": {**request.metadata, "cognitive_mode": "reflection"}}
         )
-        context = self.compiler.compile(reflection_request)
+        from .context_budget import ContextBudgetExceeded
+        try:
+            context = self.compiler.compile(reflection_request)
+        except ContextBudgetExceeded:
+            return CognitiveProposalBundle(reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "REFLECTION_SKIPPED"])
+
         candidates = self.router.ranked_candidates(
             TaskClass.REASONING,
             privacy_scope=request.privacy_scope,
@@ -173,7 +181,6 @@ class CognitiveEngine(ResilientCognitiveEngine):
                     # circuits or other operational effects in read-only replay.
                     from .provider_resilience import ResilientProviderProxy
                     from .realization import RealizationValidator
-                    from copy import deepcopy
                     transport = provider._provider if isinstance(provider, ResilientProviderProxy) else provider
                     raw = dict(await transport.realize(deepcopy(context)))
                     usage = raw.pop("_usage", {})
@@ -183,7 +190,7 @@ class CognitiveEngine(ResilientCognitiveEngine):
                         input_tokens=usage.get("input_tokens"), output_tokens=usage.get("output_tokens"),
                         reason_codes=["REPLAY_ONLY", "STRUCTURED_REALIZATION", "NO_STATE_MUTATION"]))
                     continue
-                async for delta in provider.stream(context):
+                async for delta in provider.stream(deepcopy(context)):
                     if delta.text:
                         parts.append(delta.text)
                     finish_reason = delta.finish_reason or finish_reason
@@ -210,8 +217,8 @@ class CognitiveEngine(ResilientCognitiveEngine):
                         text="".join(parts).strip(),
                         success=False,
                         latency_ms=(perf_counter() - started) * 1000.0,
-                        error_code=type(exc).__name__,
-                        reason_codes=["REPLAY_ONLY", "PROVIDER_FAILURE", "NO_STATE_MUTATION"],
+                        error_code=getattr(exc, "code", type(exc).__name__),
+                        reason_codes=["REPLAY_ONLY", "REALIZATION_REJECTED" if isinstance(exc, RealizationError) else "NO_SURFACE_REQUEST" if isinstance(exc, ContextBudgetExceeded) else "PROVIDER_FAILURE", "NO_STATE_MUTATION"],
                     )
                 )
         return results
