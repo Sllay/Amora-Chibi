@@ -333,14 +333,16 @@ def test_direct_playful_insult_invite_is_valid_even_when_play_drive_is_zero() ->
     context = _parent_context("Amora, me xinga na brincadeira, sua peste kkkkk.")
     planned = DialogueOrchestrator().plan(context)
     assert planned.act.value == "tease"
-    assert planned.response_moves == ["playful_reaction", "light_tease"]
+    assert planned.response_moves == ["playful_reaction", "bold_tease"]
+    assert "bold" in planned.tone_tags
     assert "EXPLICIT_PLAYFUL_INVITATION" in planned.reason_codes
     assert planned.ask_followup is False
     assert planned.offer_help is False
 
     realized_context = context.model_copy(update={"dialogue_plan": planned.model_dump(mode="json")})
     cue = expression_cue(realized_context)
-    assert cue["profanity"]["level"] == "playful"
+    assert cue["profanity"]["level"] == "bold"
+    assert cue["social_expression"]["intensity"] == "bold"
     assert cue["profanity"]["playful_directed_teasing_allowed"] is True
     assert cue["profanity"]["do_not_invent_hostility"] is True
 
