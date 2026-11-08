@@ -493,7 +493,47 @@ async def _command_providers_experiment_amora_v2_v3(core: Any, args: list[str]) 
         raise AdminCommandError(exc.code, "experimento V2 x V3 indisponível") from exc
 
 
+async def _command_providers_experiment_amora_v3_temperature(core: Any, args: list[str]) -> dict[str, Any]:
+    from amora.cognition.amora_v2_v3_experiment import CASES
+    from amora.cognition.amora_v3_temperature_experiment import (
+        parse_sampling_args, run_amora_v3_temperature,
+    )
+    from amora.cognition.mistral_prompt_experiment import MistralExperimentError
+
+    try:
+        case, control, test = parse_sampling_args(args)
+    except ValueError as exc:
+        raise AdminCommandError(
+            "COMMAND_ARGUMENT_INVALID",
+            "uso: providers experiment amora-v3-temperature --case ID "
+            "[--temperature 0.75] [--top-p 1.0] "
+            "[--temperature-a 0.50] [--top-p-a 1.0] "
+            "[--temperature-b 0.75] [--top-p-b 1.0]",
+            details={
+                "available_cases": list(CASES),
+                "temperature_range": [0, 2],
+                "top_p_range": "(0, 1]",
+                "error": str(exc),
+            },
+        ) from exc
+    try:
+        return await run_amora_v3_temperature(
+            core, case=case, control=control, test=test,
+            on_result=lambda item: (_progress_sink.get() or (lambda _: None))(item),
+        )
+    except MistralExperimentError as exc:
+        raise AdminCommandError(exc.code, "experimento de amostragem V3 indisponível") from exc
+
+
 _COMMANDS: tuple[RegisteredCommand, ...] = (
+    RegisteredCommand(
+        path=("providers", "experiment", "amora-v3-temperature"),
+        usage="providers experiment amora-v3-temperature --case ID [--temperature X] [--top-p Y] [--temperature-a X] [--top-p-a Y]",
+        description="V3 inglesa, temperatura e top_p ajustáveis pelo operador; A/B cego.",
+        timeout_seconds=650.0,
+        handler=_command_providers_experiment_amora_v3_temperature,
+        exclusive=True,
+    ),
     RegisteredCommand(
         path=("providers", "experiment", "amora-v2-v3"),
         usage="providers experiment amora-v2-v3 --case ID",
