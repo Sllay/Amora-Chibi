@@ -154,13 +154,21 @@ function formatMistralABC(result) {
 
 function formatSocialPersonaABC(result) {
   const lines = [result.kind === "amora_v3_temperature_ab"
-    ? "Amora V3 — temperatura 0,50 × 0,75 · comparação cega"
+    ? "Amora V3 — temperature/top_p dinâmicos · comparação cega"
     : result.kind === "amora_v2_v3_ab"
     ? "Amora V2 × V3 — comparação direta A/B cega"
     : result.kind === "amora_v2_ab"
     ? "Amora Virtual Human V2 — comparação A/B cega"
     : "Personalidade social — revisão cega", "Caso: " + result.case,
     result.review_instruction, ""];
+  if (result.kind === "amora_v3_temperature_ab" && result.sampling_profiles) {
+    const p = result.sampling_profiles;
+    lines.push("Perfis em disputa (não vinculados a candidate-1/2 até a revelação):");
+    lines.push("controle: temperature=" + p.control.temperature + " · top_p=" + p.control.top_p);
+    lines.push("teste: temperature=" + p.test.temperature + " · top_p=" + p.test.top_p);
+    if (result.sampling_comparison_note) lines.push(result.sampling_comparison_note);
+    lines.push("");
+  }
   for (const item of result.variants || []) {
     lines.push(item.candidate_id + " · " + (item.validated ? "Core válido" : "REJEITADO pelo Core"));
     lines.push(item.text || item.candidate_output || "Sem resposta candidata.");
