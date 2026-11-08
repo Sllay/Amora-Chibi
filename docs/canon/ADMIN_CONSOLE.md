@@ -636,3 +636,26 @@ adapter mantém seus limites de 55s de inatividade real e 185s totais;
 limites HTTP 429 encerram a bateria. Precisa de `NVIDIA_API_KEY` no
 runtime da Amora, não apenas no secret do GitHub Actions. **Código e
 testes offline não representam execução live da bateria.**
+
+
+### Experimento Amora Virtual Human V2 (operator-only; sem promoção)
+
+Comando adicional de laboratório:
+
+```text
+providers experiment amora-v2-ab --case mente_poluida
+```
+
+Usa exclusivamente o overlay inglês `jailbreak/Amora-Virtual-Human-V2.md`
+e o Mistral Large 4 NVIDIA, comparando Core canônico × Core+V2 com
+snapshot sintético congelado e duas chamadas sequenciais sem fallback.
+Os novos casos de malícia contextual, provocação, palavrões e humor
+adulto estão em `core/amora/cognition/amora_v2_experiment.py`.
+Argumentos são fechados e exigem `operator`; resultados são cegos
+para revisão humana, validados pelo `RealizationValidator` e nunca
+persistem self-facts, memórias ou decisões de promoção.
+
+A tradução PT-BR do prompt fica apenas na conversa com o operador;
+não é artefato de deployment. A validação offline e o CI não substituem
+a certificação live NVIDIA. O experimento não altera o provider principal.
+Procedimento e limites: `docs/experiments/AMORA_V2_AB.md`.
