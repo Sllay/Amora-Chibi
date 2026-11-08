@@ -401,7 +401,13 @@ class DialogueOrchestrator:
         if (
             reported_scene
             and self._SOCIAL_SCENE_RE.search(text)
-            and self._SCENE_PLAY_RE.search(text)
+            and (
+                self._SCENE_PLAY_RE.search(text)
+                or (
+                    self._ADULT_REGISTER_RE.search(text)
+                    and context.drives.get("play", 0.0) >= 0.75
+                )
+            )
             and context.drives.get("play", 0.0) >= 0.35
             and not possible_self_choices
         ):
