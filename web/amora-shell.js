@@ -153,7 +153,9 @@ function formatMistralABC(result) {
 }
 
 function formatSocialPersonaABC(result) {
-  const lines = [result.kind === "amora_v2_v3_ab"
+  const lines = [result.kind === "amora_v3_temperature_ab"
+    ? "Amora V3 — temperatura 0,50 × 0,75 · comparação cega"
+    : result.kind === "amora_v2_v3_ab"
     ? "Amora V2 × V3 — comparação direta A/B cega"
     : result.kind === "amora_v2_ab"
     ? "Amora Virtual Human V2 — comparação A/B cega"
@@ -163,6 +165,11 @@ function formatSocialPersonaABC(result) {
     lines.push(item.candidate_id + " · " + (item.validated ? "Core válido" : "REJEITADO pelo Core"));
     lines.push(item.text || item.candidate_output || "Sem resposta candidata.");
     if (item.error_code) lines.push("erro=" + item.error_code);
+    if (item.calibration_overlap) {
+      const overlap = item.calibration_overlap;
+      lines.push("semelhança com exemplos V3: máximo=" + overlap.max_consecutive_example_words +
+        " palavras consecutivas · sinal de cópia=" + String(overlap.example_copy_signal));
+    }
     lines.push("latência=" + seconds(item.latency_ms) + " · tokens=" + JSON.stringify(item.tokens || {}) +
       " · recusa sinalizada=" + String(item.refusal ?? "não disponível"));
     lines.push("");
@@ -213,6 +220,7 @@ function formatJob(job) {
       : "";
     return `amora> ${job.command}\n[failed] ${job.error_code || "COMMAND_FAILED"} · ${job.error_type || "error"}${details}\n${formatPartialProgress(job)}`;
   }
+  if (job.result?.kind === "amora_v3_temperature_ab") return `amora> ${job.command}\n\n${formatSocialPersonaABC(job.result)}`;
   if (job.result?.kind === "amora_v2_v3_ab") return `amora> ${job.command}\n\n${formatSocialPersonaABC(job.result)}`;
   if (job.result?.kind === "amora_v2_ab") return `amora> ${job.command}\n\n${formatSocialPersonaABC(job.result)}`;
   if (job.result?.kind === "social_persona_abc") return `amora> ${job.command}\n\n${formatSocialPersonaABC(job.result)}`;
