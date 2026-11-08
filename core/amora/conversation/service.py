@@ -291,6 +291,9 @@ class ConversationEngine:
             "nonverbal_cues": _merge_segment_values(segments, "nonverbal_cues"),
             "remote_tts_allowed": remote_tts_allowed,
             "speech_delivery_unit": "cognitive_turn",
+            "generation": {"fallback_used": plan.fallback_used,
+                           "reason_codes": plan.reason_codes, "provider": plan.provider,
+                           "model": plan.model},
         }
         return await self.enqueue_text(
             plan.speech_text,

@@ -12,6 +12,7 @@ from .self_choice import commit_self_choices
 from .production import CognitiveEngine as ProductionCognitiveEngine
 from .proposals import CognitiveProposalBundle
 from .providers import ProviderError
+from .providers_nvidia import NvidiaStreamTimeout
 from .providers_structured import GeminiCognitiveProvider
 from .realization import RealizationError, RealizationValidator, ValidatedRealization
 from .speech import SpeechSegmenter
@@ -246,6 +247,21 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 raw = dict(raw_result)
                 usage = raw.pop("_usage", {}) if isinstance(raw.get("_usage"), dict) else {}
                 validated = RealizationValidator.parse_and_validate(context, raw)
+            except NvidiaStreamTimeout as exc:
+                kind = exc.diagnostics.get("timeout_kind")
+                last_failure = "NVIDIA_IDLE_TIMEOUT" if kind == "idle" else "NVIDIA_TOTAL_TIMEOUT"
+                stage = exc.diagnostics.get("stage")
+                safe_stage = stage if stage in {"waiting_headers", "waiting_first_event", "reasoning_only", "visible_partial", "completed"} else "unknown"
+                self._last_realization_rejection = {"provider": descriptor.name, "model": descriptor.model,
+                    "code": last_failure, "turn_id": str(request.turn_id), "failure_stage": safe_stage}
+                self._record_provider_failure(request, descriptor, error_code=last_failure,
+                                              status_code=None, started=provider_started)
+                self._journal(request, JournalStage.ERROR, summary="NVIDIA stream deadline",
+                    reason_codes=[last_failure, "PROVIDER_TRANSPORT_TIMEOUT", "NO_SPEECH_EMITTED"],
+                    error_code=last_failure, provider=descriptor.name, model=descriptor.model,
+                    payload={"failure_stage": safe_stage, "timeout_kind": "idle" if kind == "idle" else "total_safety"})
+                self._backoff(descriptor, status_code=None)
+                continue
             except asyncio.TimeoutError:
                 last_failure = "PROVIDER_ATTEMPT_TIMEOUT"
                 self._last_realization_rejection = {
