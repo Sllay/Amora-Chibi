@@ -243,6 +243,7 @@ class ContextCompiler:
                 context.dialogue_plan["input_acir"] = context.acir
         # Relevance-ranked memories and the newest causal exchange are retained.
         # Drop optional projections before removing old complete exchanges.
+        replan()
         while estimate_context(context) > context.token_budget:
             if context.capabilities:
                 context.capabilities.pop()

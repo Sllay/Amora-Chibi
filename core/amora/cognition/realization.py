@@ -301,10 +301,5 @@ def realization_instruction(context: CognitiveContext) -> str:
 
 
 def _speaker_is_parent(context: CognitiveContext) -> bool:
-    if context.speaker_id != "PERSON_BK":
-        return False
-    for relation in context.relationships:
-        relation_type = str(relation.get("relation_type") or "").casefold()
-        if relation_type in {"father", "parent", "pai"} or "parent" in relation_type:
-            return True
-    return False
+    from amora.identity.kinship import is_parent_of
+    return is_parent_of(context.relationships, context.speaker_id, "ENTITY_AMORA")

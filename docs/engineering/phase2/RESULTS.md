@@ -43,3 +43,10 @@ final. Default8192 substitui3200 que antes ignorava prefixo de protocolo.
 Reproduções F04/F05 agora aceitam explicitamente overflow em orçamento256;
 não se força perda de dado essencial para satisfazer budget impossível.
 ACIR projetado remove content literal de system; ConversationTurn conserva bytes.
+
+## D — contratos
+
+Parentesco por arestas direcionais em identity/kinship.py; father_of aponta
+do pai à filha e child_of no inverso. Replay aceita realize(), usa transport
+sem wrapper de repair/state, valida output local e não comita escolhas/usage.
+Não reutiliza respond() para executar replay. F08/F09 sem xfail.

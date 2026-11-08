@@ -120,7 +120,6 @@ async def test_secret_observation_has_no_durable_raw_text(tmp_path, monkeypatch)
         core.close()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='F08: canonical father_of relationship is not recognized by parent predicate')
 def test_canonical_parent_is_recognized(tmp_path, monkeypatch):
     from amora.app import AmoraCore
     from amora.cognition.realization import _speaker_is_parent
@@ -200,7 +199,6 @@ def test_lab_bold_scene_does_not_represent_fresh_runtime_state(tmp_path, monkeyp
         core.close()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='F09: generic replay requires stream() absent on production Mistral adapter')
 async def test_generic_replay_supports_registered_structured_mistral(tmp_path, monkeypatch):
     from amora.app import AmoraCore
     monkeypatch.setenv('AMORA_HOME', str(tmp_path / 'runtime'))
