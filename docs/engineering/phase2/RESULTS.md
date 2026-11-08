@@ -31,3 +31,15 @@ Código NVIDIA_IDLE_TIMEOUT ou NVIDIA_TOTAL_TIMEOUT, etapa sanitizada e backoff
 ficam no journal; caller curto mantém SURFACE_BUDGET_TIMEOUT sem health poison.
 Fila Web agora inclui generation(fallback/provider/reasons); UI mostra fallback
 como recuperação, sem fingir rejeição estrutural. Node Web executado.
+
+## C — contexto
+
+Antes: F04/F05/F10 falham como auditoria. Após:40pass/2xfail (somente D).
+Budget é estimativa de envelope canonical e guarda payload NVIDIA antesHTTP;
+excesso irredutível gera CONTEXT_ENVELOPE_OVERFLOW, não health failure.
+Prioridade: retirar capabilities opcionais e claims/memórias de menor ranking,
+depois histórico antigo, conservando última troca causal. Replanejar snapshot
+final. Default8192 substitui3200 que antes ignorava prefixo de protocolo.
+Reproduções F04/F05 agora aceitam explicitamente overflow em orçamento256;
+não se força perda de dado essencial para satisfazer budget impossível.
+ACIR projetado remove content literal de system; ConversationTurn conserva bytes.

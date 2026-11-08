@@ -19,7 +19,7 @@ class ContextCompiler(BaseContextCompiler):
     capability slice is projected from the live Action runtime.
     """
 
-    def compile(self, request: CognitiveRequest, *, token_budget: int = 3200) -> CognitiveContext:
+    def compile(self, request: CognitiveRequest, *, token_budget: int = 8192) -> CognitiveContext:
         started = perf_counter()
         try:
             context = super().compile(request, token_budget=token_budget)
@@ -72,9 +72,4 @@ class ContextCompiler(BaseContextCompiler):
     def _fit_with_capabilities(self, context: CognitiveContext) -> CognitiveContext:
         """Respect the global context budget after capability projection."""
 
-        context = self._fit_budget(context)
-        while context.capabilities and len(context.model_dump_json()) // 4 > context.token_budget:
-            context.capabilities.pop()
-            if "CONTEXT_TRIMMED_CAPABILITY" not in context.reason_codes:
-                context.reason_codes.append("CONTEXT_TRIMMED_CAPABILITY")
-        return context
+        return self._fit_budget(context)

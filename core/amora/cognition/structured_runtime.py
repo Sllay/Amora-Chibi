@@ -7,6 +7,7 @@ from typing import Any
 from amora.events import PrivacyScope
 from amora.models import TaskClass
 
+from .context_budget import ContextBudgetExceeded
 from .models import CognitiveContext, CognitiveRequest, CognitiveResponsePlan, JournalStage
 from .self_choice import commit_self_choices
 from .production import CognitiveEngine as ProductionCognitiveEngine
@@ -103,7 +104,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
         fallback_text: str | None,
     ) -> CognitiveResponsePlan:
         started = perf_counter()
-        context = self._prepare_context(request)
+        try:
+            context = self._prepare_context(request)
+        except ContextBudgetExceeded:
+            return await self._fallback_plan(request, "Esse contexto ficou grande demais para processar com segurança.",
+                on_segment=on_segment, reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "LOCAL_FALLBACK"], started=started)
         estimated_tokens = max(1, len(context.model_dump_json()) // 4)
         self._journal(
             request,
@@ -247,6 +252,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 raw = dict(raw_result)
                 usage = raw.pop("_usage", {}) if isinstance(raw.get("_usage"), dict) else {}
                 validated = RealizationValidator.parse_and_validate(context, raw)
+            except ContextBudgetExceeded:
+                last_failure = "CONTEXT_ENVELOPE_OVERFLOW"
+                self._journal(request, JournalStage.ERROR, summary="provider envelope exceeds budget",
+                    reason_codes=[last_failure, "NO_REMOTE_REQUEST"], error_code=last_failure)
+                continue
             except NvidiaStreamTimeout as exc:
                 kind = exc.diagnostics.get("timeout_kind")
                 last_failure = "NVIDIA_IDLE_TIMEOUT" if kind == "idle" else "NVIDIA_TOTAL_TIMEOUT"
