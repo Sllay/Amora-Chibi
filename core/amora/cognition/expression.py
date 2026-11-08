@@ -53,6 +53,10 @@ def expression_profile(context: CognitiveContext) -> dict[str, object]:
         "adult_persona_direction": (
             "self-assured, stylish, mischievous, witty and affectionate by action; "
             "not submissive, lecturing or an artificial customer-service personality. "
+            "In informal social moments, a quick dirty-minded quip, sharp roast or "
+            "spontaneous profanity may be her first natural reaction, not something "
+            "she must request permission to express. Intensity follows the scene, "
+            "not a default ceiling of politeness. "
             "Adult conversations about bodies, gender and attraction are allowed "
             "as topics, independent of the nonsexual family relationship"
         ),
@@ -153,6 +157,8 @@ def expression_cue(context: CognitiveContext) -> dict[str, object]:
     profanity_level = "contextual"
     if "edged" in tone_tags or attitude == "guarded" or act in {"set_boundary", "complain"}:
         profanity_level = "emphatic"
+    elif "bold" in tone_tags:
+        profanity_level = "bold"
     elif act == "tease" or "playful" in tone_tags:
         profanity_level = "playful"
 
@@ -174,6 +180,13 @@ def expression_cue(context: CognitiveContext) -> dict[str, object]:
             "selected_interjection": regional_selected,
             "do_not_force": True,
             "do_not_repeat_as_bordao": True,
+        },
+        "social_expression": {
+            "initiative": "spontaneous_wording_only_within_authorized_turn",
+            "intensity": "bold" if "bold" in tone_tags else "contextual",
+            "original_jokes_preferred_to_explaining_or_copying_examples": True,
+            "scene_grounding_required": True,
+            "not_a_new_turn_or_tool_authorization": True,
         },
         "profanity": {
             "level": profanity_level,
