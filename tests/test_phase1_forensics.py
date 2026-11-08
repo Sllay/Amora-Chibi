@@ -41,13 +41,14 @@ def test_quoted_direct_question_preserves_request():
     assert plan.fact_key == 'canonical_name', plan.model_dump()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='F04: trimming has no budget postcondition')
 def test_budget_is_respected_when_irreducible_input_exceeds_it():
-    ctx = ContextCompiler._fit_budget(context('x' * 2500, token_budget=256))
-    assert len(ctx.model_dump_json()) // 4 <= ctx.token_budget
+    from amora.cognition.context_budget import ContextBudgetExceeded
+    with pytest.raises(ContextBudgetExceeded) as error:
+        ContextCompiler._fit_budget(context('x' * 2500, token_budget=256))
+    assert error.value.estimated > error.value.budget
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='F05: trimming removes history supporting reflective question but retains plan')
+
 def test_trimmed_snapshot_has_consistent_plan():
     ctx = context('Tu entendeu?', token_budget=256, recent_messages=[
         {'speaker_id': 'PERSON_BK', 'text': 'Meu desenho foi ignorado.'},
@@ -55,7 +56,11 @@ def test_trimmed_snapshot_has_consistent_plan():
     ])
     ctx.dialogue_plan = DialogueOrchestrator().plan(ctx).model_dump(mode='json')
     assert ctx.dialogue_plan['allow_reflective_question']
-    ContextCompiler._fit_budget(ctx)
+    from amora.cognition.context_budget import ContextBudgetExceeded
+    try:
+        ContextCompiler._fit_budget(ctx)
+    except ContextBudgetExceeded:
+        assert len(ctx.recent_messages) == 2  # preserve causal pair; explicit overflow
     assert ctx.dialogue_plan['allow_reflective_question'] == DialogueOrchestrator().plan(ctx).allow_reflective_question
 
 
@@ -216,7 +221,6 @@ async def test_generic_replay_supports_registered_structured_mistral(tmp_path, m
         core.close()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='F10: compiled ACIR duplicates literal input inside trusted system protocol')
 def test_compiled_literal_stays_outside_trusted_system_protocol(tmp_path, monkeypatch):
     from amora.app import AmoraCore
     from amora.cognition.prompt_frame import render_trusted_protocol

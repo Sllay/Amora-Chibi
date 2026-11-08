@@ -214,6 +214,8 @@ class NvidiaMistralLarge4Provider:
             raise ProviderError("NVIDIA_API_KEY is not configured")
 
         payload = self._payload(context)
+        from .context_budget import ensure_payload
+        ensure_payload(context, payload)
         started = perf_counter()
         root, response_headers, status_code = await self._post_chat(payload, api_key=api_key)
         try:

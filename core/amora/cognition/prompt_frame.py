@@ -113,7 +113,7 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
         _add_entity(participants, _clean_id(relation.get("source")))
         _add_entity(participants, _clean_id(relation.get("target")))
 
-    acir = context.acir if isinstance(context.acir, dict) else None
+    acir = semantic_acir(context.acir)
     if acir:
         _add_entity(participants, _clean_id(acir.get("speaker")))
         _add_entity(participants, _clean_id(acir.get("addressee")))
@@ -159,7 +159,8 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "recent_turn_routes": recent_routes,
         },
         "canonical_state": canonical_state,
-        "dialogue_plan": context.dialogue_plan,
+        "dialogue_plan": {key: semantic_acir(value) if key == "input_acir" else value
+                          for key, value in context.dialogue_plan.items()},
         "expression_cue": expression_cue(context),
         "privacy": {
             "scope": context.privacy_scope.value,
@@ -281,3 +282,11 @@ def _add_entity(target: set[str], value: object) -> None:
     entity_id = _clean_id(value)
     if entity_id:
         target.add(entity_id)
+
+
+def semantic_acir(value):
+    """Project ACIR roles while leaving literal content in ConversationTurn only."""
+    if not isinstance(value, dict):
+        return value
+    return {key: semantic_acir(item) if isinstance(item, dict) else item
+            for key, item in value.items() if key != "content"}

@@ -107,7 +107,7 @@ class ContextCompiler:
         )
         world.subscribe_claim_observer(self.relationship_learning.observe_claim)
 
-    def compile(self, request: CognitiveRequest, *, token_budget: int = 3200) -> CognitiveContext:
+    def compile(self, request: CognitiveRequest, *, token_budget: int = 8192) -> CognitiveContext:
         remote = self.privacy_gate.remote_allowed(request)
         reasons = ["CANONICAL_STATE_OUTSIDE_PROVIDER", "REMOTE_CONTEXT_ALLOWED" if remote else "REMOTE_CONTEXT_BLOCKED"]
         if bool(request.metadata.get("test_mode", False)):
@@ -232,18 +232,36 @@ class ContextCompiler:
 
     @staticmethod
     def _fit_budget(context: CognitiveContext) -> CognitiveContext:
-        def estimate() -> int:
-            return max(1, len(context.model_dump_json()) // 4)
-        while estimate() > context.token_budget and context.recent_messages:
-            context.recent_messages.pop(0)
-            if "CONTEXT_TRIMMED_RECENT" not in context.reason_codes:
-                context.reason_codes.append("CONTEXT_TRIMMED_RECENT")
-        while estimate() > context.token_budget and len(context.world_claims) > 2:
-            context.world_claims.pop()
-            if "CONTEXT_TRIMMED_WORLD" not in context.reason_codes:
-                context.reason_codes.append("CONTEXT_TRIMMED_WORLD")
-        while estimate() > context.token_budget and len(context.memories) > 2:
-            context.memories.pop()
-            if "CONTEXT_TRIMMED_MEMORY" not in context.reason_codes:
-                context.reason_codes.append("CONTEXT_TRIMMED_MEMORY")
+        from .context_budget import estimate_context, ContextBudgetExceeded
+        def replan():
+            identity = context.dialogue_plan.get("speaker_identity")
+            mode = context.dialogue_plan.get("act")
+            context.dialogue_plan = DialogueOrchestrator().plan(context).model_dump(mode="json")
+            if identity:
+                context.dialogue_plan["speaker_identity"] = identity
+            if context.acir is not None:
+                context.dialogue_plan["input_acir"] = context.acir
+        # Relevance-ranked memories and the newest causal exchange are retained.
+        # Drop optional projections before removing old complete exchanges.
+        while estimate_context(context) > context.token_budget:
+            if context.capabilities:
+                context.capabilities.pop()
+                reason = "CONTEXT_TRIMMED_CAPABILITY"
+            elif len(context.world_claims) > 2:
+                context.world_claims.pop()
+                reason = "CONTEXT_TRIMMED_WORLD"
+            elif len(context.memories) > 2:
+                context.memories.pop()
+                reason = "CONTEXT_TRIMMED_MEMORY"
+            elif len(context.recent_messages) > 2:
+                first = context.recent_messages.pop(0)
+                while len(context.recent_messages) > 2 and context.recent_messages[0].get("turn_id") == first.get("turn_id") and first.get("turn_id"):
+                    context.recent_messages.pop(0)
+                reason = "CONTEXT_TRIMMED_RECENT"
+            else:
+                raise ContextBudgetExceeded(estimate_context(context), context.token_budget)
+            if reason not in context.reason_codes:
+                context.reason_codes.append(reason)
+            replan()
+        replan()
         return context
