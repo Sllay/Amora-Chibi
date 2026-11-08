@@ -168,6 +168,21 @@ class CognitiveEngine(ResilientCognitiveEngine):
             input_tokens: int | None = None
             output_tokens: int | None = None
             try:
+                if callable(getattr(provider, "realize", None)):
+                    # Use the undecorated transport to avoid repair counters, quota,
+                    # circuits or other operational effects in read-only replay.
+                    from .provider_resilience import ResilientProviderProxy
+                    from .realization import RealizationValidator
+                    from copy import deepcopy
+                    transport = provider._provider if isinstance(provider, ResilientProviderProxy) else provider
+                    raw = dict(await transport.realize(deepcopy(context)))
+                    usage = raw.pop("_usage", {})
+                    validated = RealizationValidator.parse_and_validate(context, raw)
+                    results.append(CognitiveReplayResult(provider=name, model=descriptor.model,
+                        text=validated.text, success=True, latency_ms=(perf_counter()-started)*1000,
+                        input_tokens=usage.get("input_tokens"), output_tokens=usage.get("output_tokens"),
+                        reason_codes=["REPLAY_ONLY", "STRUCTURED_REALIZATION", "NO_STATE_MUTATION"]))
+                    continue
                 async for delta in provider.stream(context):
                     if delta.text:
                         parts.append(delta.text)
