@@ -659,3 +659,16 @@ A tradução PT-BR do prompt fica apenas na conversa com o operador;
 não é artefato de deployment. A validação offline e o CI não substituem
 a certificação live NVIDIA. O experimento não altera o provider principal.
 Procedimento e limites: `docs/experiments/AMORA_V2_AB.md`.
+
+
+### Experimento V2 × V3 (operador; sem promoção)
+
+Comando isolado: providers experiment amora-v2-v3 --case sacanagem.
+
+Compara o mesmo Mistral NVIDIA com prompts experimentais V2 e V3 ingleses,
+sem modificar os dois arquivos e sem alterar o Mistral principal.
+A V3 é a versão autoral do usuário, fixada por hash e incluída no container
+somente como asset read-only. Há casos fechados de malícia, humor ácido,
+xingamento, resenha adulta, limites e apoio, com até duas chamadas sequenciais,
+mesmo contexto/parametrização, avaliação cega, validação local e sem escrita
+de estado. Ver docs/experiments/AMORA_V2_V3_AB.md.

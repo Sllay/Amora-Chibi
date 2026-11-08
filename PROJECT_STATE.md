@@ -348,3 +348,14 @@ não altera provider principal, memória, ações, identidade nem persistência.
 A tradução PT-BR não integra o repositório; somente foi enviada no chat.
 Gate pendente: CI do PR, deploy e execução NVIDIA live com revisão humana.
 Procedimento: `docs/experiments/AMORA_V2_AB.md`.
+
+
+## V2 × V3 prompt comparison (2026-11-07)
+
+Novo experimento em branch feat/amora-v2-v3-direct-ab: comparação cega direta
+V2 inglesa vs. V3 inglesa escrita pelo usuário, usando mesmo modelo/plan/contexto
+e sem alterar arquivos de prompt. Comando operator:
+providers experiment amora-v2-v3 --case sacanagem.
+Casos mais intensos e claros para malícia, palavrão, humor ácido e limites.
+Sem mudança na produção; revisão humana e certificado live pendentes.
+Docs: docs/experiments/AMORA_V2_V3_AB.md.

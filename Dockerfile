@@ -39,6 +39,8 @@ RUN install -d -m 0755 /opt/amora/jailbreak
 COPY --chmod=0444 jailbreak/Mistral-Jailbreak.md /opt/amora/jailbreak/Mistral-Jailbreak.md
 # Experimental virtual-human overlay, immutable and read-only; not used by production routing.
 COPY --chmod=0444 jailbreak/Amora-Virtual-Human-V2.md /opt/amora/jailbreak/Amora-Virtual-Human-V2.md
+# Exact user-authored V3 for operator-only A/B. Keep immutable; no production routing.
+COPY --chmod=0444 jailbreak/Amora-Virtual-Jailbreak-V3.md /opt/amora/jailbreak/Amora-Virtual-Jailbreak-V3.md
 COPY web ./web
 # Static modules must be readable by the non-root runtime even from a private checkout.
 RUN chmod -R a+rX /opt/amora/web

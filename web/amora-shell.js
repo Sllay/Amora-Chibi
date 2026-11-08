@@ -153,7 +153,9 @@ function formatMistralABC(result) {
 }
 
 function formatSocialPersonaABC(result) {
-  const lines = [result.kind === "amora_v2_ab"
+  const lines = [result.kind === "amora_v2_v3_ab"
+    ? "Amora V2 × V3 — comparação direta A/B cega"
+    : result.kind === "amora_v2_ab"
     ? "Amora Virtual Human V2 — comparação A/B cega"
     : "Personalidade social — revisão cega", "Caso: " + result.case,
     result.review_instruction, ""];
@@ -211,6 +213,7 @@ function formatJob(job) {
       : "";
     return `amora> ${job.command}\n[failed] ${job.error_code || "COMMAND_FAILED"} · ${job.error_type || "error"}${details}\n${formatPartialProgress(job)}`;
   }
+  if (job.result?.kind === "amora_v2_v3_ab") return `amora> ${job.command}\n\n${formatSocialPersonaABC(job.result)}`;
   if (job.result?.kind === "amora_v2_ab") return `amora> ${job.command}\n\n${formatSocialPersonaABC(job.result)}`;
   if (job.result?.kind === "social_persona_abc") return `amora> ${job.command}\n\n${formatSocialPersonaABC(job.result)}`;
   if (job.result?.kind === "mistral_prompt_abc") return `amora> ${job.command}\n\n${formatMistralABC(job.result)}`;
