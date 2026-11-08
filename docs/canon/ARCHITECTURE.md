@@ -934,3 +934,14 @@ Uma escolha é uma declaração representada/aceita pelo agente, não
 alegação de corpo biológico ou consciência humana real. Perguntas
 indiretas em PT-BR exigem resposta direta: a qualidade semântica e
 a ausência de evasões seguem sendo avaliadas em conversa real.
+
+### Fase 2 — autoridade e perfil expressivo versionado (ADR-0039)
+
+Atribuição local segmentada precede elegibilidade de self_choices; o commit
+revalida contexto/request e evidência de escolha. AUTH/SECRET são tratados na
+origem, antes de eventos/atenção/STT. Budget do envelope é estimado, overflow
+local explícito; snapshot final determina plano e códigos causais. Replay de
+realize usa validação sem commit/usage/circuit. Perfil expressivo opt-in
+AMORA_SOCIAL_EXPRESSION_PROFILE=amora-v3 carrega V3 original com SHA validado;
+core-v1 permanece padrão e rollback. Ativação de staging remoto/produção e
+qualidade comportamental são gates separados de software/fixture local.

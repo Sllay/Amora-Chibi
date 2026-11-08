@@ -204,8 +204,10 @@ def render_turn_frame(context: CognitiveContext) -> str:
 def render_trusted_protocol(context: CognitiveContext) -> str:
     """Render trusted developer context, with no literal user/assistant history."""
 
+    from .expressive_profile import profile_text
     return "\n\n".join(
         (
+            profile_text(context.expression_profile),
             _render_section(
                 "AMORA PROVIDER PROTOCOL",
                 {
@@ -285,8 +287,10 @@ def _add_entity(target: set[str], value: object) -> None:
 
 
 def semantic_acir(value):
-    """Project ACIR roles while leaving literal content in ConversationTurn only."""
+    """Keep typed semantic roles; literal content belongs to ConversationTurn."""
+    if isinstance(value, list):
+        return [semantic_acir(item) for item in value]
     if not isinstance(value, dict):
         return value
-    return {key: semantic_acir(item) if isinstance(item, dict) else item
-            for key, item in value.items() if key != "content"}
+    return {key: semantic_acir(item) for key, item in value.items()
+            if not (key == "content" and isinstance(item, str))}

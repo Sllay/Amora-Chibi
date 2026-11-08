@@ -153,7 +153,7 @@ class RealizationValidator:
             return None
 
         if act == "acknowledge_call":
-            text = "Oi, papis." if _speaker_is_parent(context) else "Oi."
+            text = "Oi, papis." if context.speaker_id == "PERSON_BK" and _speaker_is_parent(context) else "Oi."
             frame = RealizationFrame(
                 moves=[RealizationMove(kind="acknowledge_call", text=text)],
                 closing=RealizationClosing.STATEMENT,

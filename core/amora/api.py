@@ -73,6 +73,8 @@ class ObserveTextRequest(BaseModel):
 
 
 def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAPI:
+    from amora.cognition.expressive_profile import configured_profile, profile_text
+    profile_text(configured_profile())  # local integrity check, no provider request
     # High-frequency request polling and successful provider requests remain in
     # structured diagnostics, not in the human terminal surface.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)

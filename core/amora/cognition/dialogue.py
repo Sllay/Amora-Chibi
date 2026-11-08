@@ -411,7 +411,7 @@ class DialogueOrchestrator:
                     and context.drives.get("play", 0.0) >= 0.75
                 )
             )
-            and context.drives.get("play", 0.0) >= 0.35
+            and (context.drives.get("play", 0.0) >= 0.35 or context.expression_profile == "amora-v3")
             and not possible_self_choices
         ):
             bold = bool(self._ADULT_REGISTER_RE.search(text))
@@ -449,7 +449,7 @@ class DialogueOrchestrator:
 
         if (
             self._PLAY_RE.search(addressed_text)
-            and context.drives.get("play", 0.0) >= 0.35
+            and (context.drives.get("play", 0.0) >= 0.35 or context.expression_profile == "amora-v3")
             and not possible_self_choices
             and "?" not in addressed_raw
             and not self._QUESTION_START_RE.search(addressed_text)
@@ -538,7 +538,7 @@ class DialogueOrchestrator:
                 "react naturally and with Amora's own mischievous, opinionated edge "
                 "when the social moment supports it; do not force jokes, "
                 "change facts or manufacture an invitation"
-                if context.drives.get("play", 0.0) >= 0.55
+                if (context.drives.get("play", 0.0) >= 0.55 or context.expression_profile == "amora-v3")
                 else "react to the current topic and move the conversation forward naturally"
             ),
             depth=self._depth(text),
@@ -677,6 +677,8 @@ class DialogueOrchestrator:
     @staticmethod
     def _style_register(context: CognitiveContext) -> str:
         for relation in context.relationships:
+            if {relation.get("source"), relation.get("target")} != {context.speaker_id, "ENTITY_AMORA"}:
+                continue
             relation_type = str(relation.get("relation_type") or "").lower()
             if any(token in relation_type for token in ("family", "parent", "child", "father", "daughter")):
                 return "intimate_colloquial"

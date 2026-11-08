@@ -14,6 +14,7 @@ from .providers import ProviderError
 from .providers_v1 import GeminiCognitiveProvider as BaseGeminiCognitiveProvider
 from .providers_v1 import GroqCognitiveProvider as BaseGroqCognitiveProvider
 from .realization import realization_instruction
+from .prompt_frame import render_trusted_protocol
 
 
 _DIALOGUE_MODEL = "qwen/qwen3.8-27b"
@@ -166,6 +167,8 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
             "reasoning_effort": "none",
             "response_format": {"type": "json_object"},
         }
+        from .context_budget import ensure_payload
+        ensure_payload(effective_context, payload)
         started = perf_counter()
         timeout = httpx.Timeout(self.timeout_seconds, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
@@ -317,10 +320,12 @@ class GeminiCognitiveProvider(BaseGeminiCognitiveProvider):
         payload["generationConfig"] = generation
         system_instruction = payload.get("systemInstruction") or {"parts": [{"text": ""}]}
         parts = system_instruction.get("parts") or [{"text": ""}]
-        current = str((parts[0] or {}).get("text") or "")
+        current = render_trusted_protocol(context)
         parts[0] = {"text": current + "\n\n" + realization_instruction(context)}
         system_instruction["parts"] = parts
         payload["systemInstruction"] = system_instruction
+        from .context_budget import ensure_payload
+        ensure_payload(context, payload)
 
         url = f"{self.API_ROOT}/{self.model}:generateContent"
         started = perf_counter()

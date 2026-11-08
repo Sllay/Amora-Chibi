@@ -72,4 +72,4 @@ class ContextCompiler(BaseContextCompiler):
     def _fit_with_capabilities(self, context: CognitiveContext) -> CognitiveContext:
         """Respect the global context budget after capability projection."""
 
-        return self._fit_budget(context)
+        return self._fit_budget(context, self.dialogue)

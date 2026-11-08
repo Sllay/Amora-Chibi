@@ -31,10 +31,7 @@ class OpenRouterCognitiveProvider(BaseOpenRouterCognitiveProvider):
 
     async def realize(self, context: CognitiveContext) -> dict[str, object]:
         instructions = (
-            self._system_prompt()
-            + _IDENTITY_CONTRACT
-            + "\n\n"
-            + render_trusted_protocol(context)
+            render_trusted_protocol(context)
             + "\n\nAMORA REALIZATION CONTRACT\n"
             + realization_instruction(context)
         )
@@ -48,6 +45,8 @@ class OpenRouterCognitiveProvider(BaseOpenRouterCognitiveProvider):
             "max_output_tokens": 700,
             "text": {"format": {"type": "json_object"}},
         }
+        from .context_budget import ensure_payload
+        ensure_payload(context, payload)
         root, response, latency_ms = await self._post_responses(payload)
         parsed = _parse_response_json(root, purpose="realization")
         usage = root.get("usage") if isinstance(root.get("usage"), dict) else {}
@@ -83,6 +82,8 @@ class OpenRouterCognitiveProvider(BaseOpenRouterCognitiveProvider):
             "max_output_tokens": 900,
             "text": {"format": {"type": "json_object"}},
         }
+        from .context_budget import ensure_payload
+        ensure_payload(context, payload)
         root, response, latency_ms = await self._post_responses(payload)
         parsed = _parse_response_json(root, purpose="proposal")
         usage = root.get("usage") if isinstance(root.get("usage"), dict) else {}
