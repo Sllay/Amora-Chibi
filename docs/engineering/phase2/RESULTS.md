@@ -22,3 +22,12 @@ Suites A:132pass/6xfail antes do último endurecimento de atribuição; rodada
 específica posterior63pass, sem falhas. Xfails restantes pertencem aos blocos B–D.
 Risco residual: atribuidor é gramática local conservadora, não parser geral;
 ambiguidade nega preferência persistente sem proibir expressão adulta.
+
+## B — transporte
+
+F06 reprodução inicial falha; após catch tipado NvidiaStreamTimeout antes do
+TimeoutError do caller:48pass/5xfail em forense+provider+SSE/budget.
+Código NVIDIA_IDLE_TIMEOUT ou NVIDIA_TOTAL_TIMEOUT, etapa sanitizada e backoff
+ficam no journal; caller curto mantém SURFACE_BUDGET_TIMEOUT sem health poison.
+Fila Web agora inclui generation(fallback/provider/reasons); UI mostra fallback
+como recuperação, sem fingir rejeição estrutural. Node Web executado.

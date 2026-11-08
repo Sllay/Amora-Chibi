@@ -81,7 +81,6 @@ def test_production_payload_has_no_v3_but_lab_explicitly_injects_it():
     assert lab['B_virtual_human_v3']['messages'][0]['content'] == v3
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='F06: provider idle TimeoutError mislabeled SURFACE_BUDGET_TIMEOUT')
 async def test_provider_idle_timeout_is_not_a_surface_budget_timeout(tmp_path, monkeypatch):
     from amora.app import AmoraCore
     monkeypatch.setenv('AMORA_HOME', str(tmp_path / 'runtime'))

@@ -315,6 +315,10 @@ async function streamWebTurn(payload, onProgress) {
     if (event === "progress" && ["reasoning", "writing"].includes(value?.stage)) {
       onProgress(value.stage);
     } else if (event === "completed") {
+      const generation = value?.reply_queued?.metadata?.generation;
+      if (generation?.fallback_used) {
+        addMessage("system", "Resposta local de recuperação: " + (generation.reason_codes || []).join(", "));
+      }
       completed = true;
     } else if (event === "failed") {
       throw new Error(value?.error_code || "WEB_TURN_PROCESSING_FAILED");
