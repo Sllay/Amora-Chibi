@@ -495,18 +495,30 @@ async def _command_providers_experiment_amora_v2_v3(core: Any, args: list[str]) 
 
 async def _command_providers_experiment_amora_v3_temperature(core: Any, args: list[str]) -> dict[str, Any]:
     from amora.cognition.amora_v2_v3_experiment import CASES
-    from amora.cognition.amora_v3_temperature_experiment import run_amora_v3_temperature
+    from amora.cognition.amora_v3_temperature_experiment import (
+        parse_sampling_args, run_amora_v3_temperature,
+    )
     from amora.cognition.mistral_prompt_experiment import MistralExperimentError
 
-    if len(args) != 2 or args[0] != "--case" or args[1] not in CASES:
+    try:
+        case, control, test = parse_sampling_args(args)
+    except ValueError as exc:
         raise AdminCommandError(
             "COMMAND_ARGUMENT_INVALID",
-            "uso: providers experiment amora-v3-temperature --case ID",
-            details={"available_cases": list(CASES)},
-        )
+            "uso: providers experiment amora-v3-temperature --case ID "
+            "[--temperature 0.75] [--top-p 1.0] "
+            "[--temperature-a 0.50] [--top-p-a 1.0] "
+            "[--temperature-b 0.75] [--top-p-b 1.0]",
+            details={
+                "available_cases": list(CASES),
+                "temperature_range": [0, 2],
+                "top_p_range": "(0, 1]",
+                "error": str(exc),
+            },
+        ) from exc
     try:
         return await run_amora_v3_temperature(
-            core, case=args[1],
+            core, case=case, control=control, test=test,
             on_result=lambda item: (_progress_sink.get() or (lambda _: None))(item),
         )
     except MistralExperimentError as exc:
@@ -516,8 +528,8 @@ async def _command_providers_experiment_amora_v3_temperature(core: Any, args: li
 _COMMANDS: tuple[RegisteredCommand, ...] = (
     RegisteredCommand(
         path=("providers", "experiment", "amora-v3-temperature"),
-        usage="providers experiment amora-v3-temperature --case ID",
-        description="V3 inglês 0.50 × 0.85; somente temperatura muda; revisão cega.",
+        usage="providers experiment amora-v3-temperature --case ID [--temperature X] [--top-p Y] [--temperature-a X] [--top-p-a Y]",
+        description="V3 inglesa, temperatura e top_p ajustáveis pelo operador; A/B cego.",
         timeout_seconds=650.0,
         handler=_command_providers_experiment_amora_v3_temperature,
         exclusive=True,
