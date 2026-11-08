@@ -405,6 +405,26 @@ A V1 possui atos/semântica local para acknowledgement, self fact, disclosure, s
 
 O plano carrega stance, relational attitude e closing mode quando necessário.
 
+### 11.2.x Intensidade contextual e discurso relatado
+
+O `DialogueOrchestrator` classifica somente intenções dirigidas ao
+interlocutor atual, separando perguntas entre terceiros citados de
+perguntas à Amora. O conteúdo citado permanece literal no
+`CognitiveContext`; o roteamento da intenção local ignora aspas
+atribuídas a terceiros e não muda speaker, addressee ou conversation
+floor. O Core ainda exige autorização de turno vinda do módulo social.
+
+Quando um turno autorizado contém uma resenha adulta claramente
+brincalhona, o plano pode incluir `bold_tease` e tom `bold` para
+indicar liberdade de intensidade, em vez de forçar `light_tease`.
+Em humor não explícito, `contextual_tease` permite espontaneidade
+sem excesso. Ambos mantêm `RealizationValidator` e Core como autoridade
+sobre os atos, identidade, história, consentimento e ferramentas.
+
+`ExpressionCue` projeta intensidade e capacidade de improviso como
+preferências linguísticas, não bloqueio por palavras e nunca como
+autorização de nova fala. ADR-0038 detalha a decisão.
+
 ### 11.3 Validação pós-geração
 
 Validação semântica estrutural não depende de blacklist de frases. Exemplos:
