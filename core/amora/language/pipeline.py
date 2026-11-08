@@ -51,6 +51,7 @@ class LanguageSocialPipeline:
         extra_payload: dict[str, object] | None = None,
         explicit_addressee_id: str | None = None,
     ) -> UtteranceObservation:
+        sensitive = privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}
         if explicit_addressee_id is not None:
             if self.addressee.registry.get(explicit_addressee_id) is None:
                 raise ValueError("unknown explicit surface addressee")
@@ -63,6 +64,9 @@ class LanguageSocialPipeline:
                 candidates=[explicit_addressee_id],
                 reason_codes=["EXPLICIT_SURFACE_TARGET"],
             )
+        elif sensitive:
+            result = AddresseeResult(kind=AddresseeKind.UNKNOWN, confidence=0.0,
+                                    reason_codes=["SENSITIVE_CONTENT_REDACTED"])
         else:
             result = self.addressee.infer(
                 text,
@@ -74,7 +78,7 @@ class LanguageSocialPipeline:
             result.confidence if result.entity_id else speaker_confidence,
         )
         # A private surface has its own target, not the physical/ambient floor.
-        if explicit_addressee_id is None:
+        if explicit_addressee_id is None and not sensitive:
             self.social.begin_turn(
                 speaker_id,
                 addressee_id=result.entity_id,
@@ -90,11 +94,13 @@ class LanguageSocialPipeline:
         }
         if explicit_addressee_id is not None:
             payload["explicit_addressee_id"] = explicit_addressee_id
-        if is_auth:
-            payload["auth_redacted"] = True
+        if sensitive:
+            payload["content_redacted"] = True
+            if is_auth:
+                payload["auth_redacted"] = True
         else:
             payload["text"] = text
-        if extra_payload:
+        if extra_payload and not sensitive:
             payload.update(extra_payload)
 
         event = AmoraEvent(
@@ -112,9 +118,9 @@ class LanguageSocialPipeline:
 
         # AUTH content never enters durable state. Its raw text is also omitted
         # from the event payload so subscribers cannot accidentally log/forward it.
-        published = await self.events.publish(event, persist=not is_auth)
+        published = await self.events.publish(event, persist=not sensitive)
         return UtteranceObservation(
-            text=None if is_auth else text,
+            text=None if sensitive else text,
             speaker_id=speaker_id,
             addressee=result,
             perspective=PerspectiveFrame(

@@ -98,6 +98,11 @@ class PlatformMessagingService:
             self._inflight.pop(key, None)
 
     async def _receive_once(self, message: InboundMessage) -> InboundResult:
+        from amora.events import PrivacyScope
+        if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+            return InboundResult(decision=AttentionDecision(
+                action=RoutingAction.BLOCK, speaker_actor_ref="protected",
+                reason_codes=["PRIVACY_SCOPE_BLOCKED"]))
         existing_audit = self.store.get_audit(
             platform=message.platform,
             account_scope=message.account_scope,
