@@ -474,7 +474,34 @@ async def _command_providers_experiment_amora_v2_ab(core: Any, args: list[str]) 
         raise AdminCommandError(exc.code, "experimento Amora V2 indisponível") from exc
 
 
+async def _command_providers_experiment_amora_v2_v3(core: Any, args: list[str]) -> dict[str, Any]:
+    from amora.cognition.amora_v2_v3_experiment import CASES, run_amora_v2_v3
+    from amora.cognition.mistral_prompt_experiment import MistralExperimentError
+
+    if len(args) != 2 or args[0] != "--case" or args[1] not in CASES:
+        raise AdminCommandError(
+            "COMMAND_ARGUMENT_INVALID",
+            "uso: providers experiment amora-v2-v3 --case ID",
+            details={"available_cases": list(CASES)},
+        )
+    try:
+        return await run_amora_v2_v3(
+            core, case=args[1],
+            on_result=lambda item: (_progress_sink.get() or (lambda _: None))(item),
+        )
+    except MistralExperimentError as exc:
+        raise AdminCommandError(exc.code, "experimento V2 x V3 indisponível") from exc
+
+
 _COMMANDS: tuple[RegisteredCommand, ...] = (
+    RegisteredCommand(
+        path=("providers", "experiment", "amora-v2-v3"),
+        usage="providers experiment amora-v2-v3 --case ID",
+        description="V2 inglesa × V3 inglesa autoral; A/B cego com casos adultos.",
+        timeout_seconds=650.0,
+        handler=_command_providers_experiment_amora_v2_v3,
+        exclusive=True,
+    ),
     RegisteredCommand(
         path=("providers", "experiment", "amora-v2-ab"),
         usage="providers experiment amora-v2-ab --case ID",
