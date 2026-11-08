@@ -672,3 +672,21 @@ somente como asset read-only. Há casos fechados de malícia, humor ácido,
 xingamento, resenha adulta, limites e apoio, com até duas chamadas sequenciais,
 mesmo contexto/parametrização, avaliação cega, validação local e sem escrita
 de estado. Ver docs/experiments/AMORA_V2_V3_AB.md.
+
+
+### Experimento dinâmico de sampling da V3 (operator-only)
+
+`providers experiment amora-v3-temperature --case safada --temperature 0.85 --top-p 1.0`
+
+Comparação cega e sintética de dois perfis numéricos sobre a mesma
+V3 inglesa fixada por hash, com temperatura e top_p configuráveis
+diretamente no Shell; suporta `--temperature-a`, `--top-p-a`,
+`--temperature-b`, `--top-p-b` e os aliases `--temperature`
+e `--top-p` para B. Controle padrão 0.50/1.00, teste padrão
+0.75/1.00. Validar 0 <= temperatura <= 2, 0 < top_p <= 1;
+rejeitar parâmetros iguais, inválidos e duplicados antes da chamada.
+Dois parâmetros mudados simultaneamente são permitidos, mas o
+relatório marca o resultado como confundido. Cópia lexical de
+exemplos V3 registrada separadamente. Sem mudança no provider
+de produção, GDD, V2/V3, estado ou memória. Veja
+`docs/experiments/AMORA_V3_TEMPERATURE_AB.md`.
