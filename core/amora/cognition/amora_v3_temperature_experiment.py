@@ -1,14 +1,16 @@
-"""Operator-only V3 sampling A/B: original .50 versus roleplay .75.
+"""Operator-only V3 sampling A/B with operator-selected temperature/top_p.
 
 Strict controlled test: same user-owned V3 bytes, same Core context, same
-NVIDIA model and parameters, except temperature. No provider promotion.
+NVIDIA model and prompt, except explicitly selected sampling values. No promotion.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import json
+import math
 import re
+from dataclasses import dataclass
 from copy import deepcopy
 from random import SystemRandom
 from time import perf_counter
@@ -23,8 +25,76 @@ from .realization import RealizationError, RealizationValidator
 
 BASE_TEMPERATURE = 0.5
 CREATIVE_TEMPERATURE = 0.75
-_VARIANTS = ("A_v3_base_temp050", "B_v3_roleplay_temp075")
+_VARIANTS = ("A_v3_control", "B_v3_test")
 _COPY_WORD_THRESHOLD = 7
+
+
+@dataclass(frozen=True, slots=True)
+class SamplingProfile:
+    temperature: float
+    top_p: float
+
+    def __post_init__(self) -> None:
+        if (not math.isfinite(self.temperature) or
+                not (0.0 <= self.temperature <= 2.0)):
+            raise ValueError("temperature must be finite and between 0 and 2")
+        if not math.isfinite(self.top_p) or not (0.0 < self.top_p <= 1.0):
+            raise ValueError("top_p must be finite and greater than 0, at most 1")
+
+    def as_dict(self) -> dict[str, float]:
+        return {"temperature": self.temperature, "top_p": self.top_p}
+
+
+DEFAULT_CONTROL = SamplingProfile(BASE_TEMPERATURE, 1.0)
+DEFAULT_TEST = SamplingProfile(CREATIVE_TEMPERATURE, 1.0)
+
+_FLAGS = {
+    "--case": "case",
+    "--temperature": "test_temperature",
+    "--top-p": "test_top_p",
+    "--temperature-a": "control_temperature",
+    "--top-p-a": "control_top_p",
+    "--temperature-b": "test_temperature",
+    "--top-p-b": "test_top_p",
+}
+
+
+def _numeric_parameter(raw: str) -> float:
+    # Accept 0.75 or 0,75; reject scientific notation, NaN, inf and injections.
+    normalized = raw.replace(",", ".")
+    if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]{1,4})?", normalized):
+        raise ValueError("invalid numeric sampling value")
+    return float(normalized)
+
+
+def parse_sampling_args(args: list[str]) -> tuple[str, SamplingProfile, SamplingProfile]:
+    """Closed, order-independent command grammar. No freeform provider fields."""
+    if not args or len(args) % 2:
+        raise ValueError("expected flag/value pairs")
+    parsed: dict[str, str] = {}
+    for flag, raw in zip(args[0::2], args[1::2]):
+        field = _FLAGS.get(flag)
+        if field is None or field in parsed:
+            raise ValueError("unknown or repeated sampling argument")
+        parsed[field] = raw
+    case = parsed.get("case")
+    if not case or case not in CASES:
+        raise ValueError("unknown or missing case")
+    control = SamplingProfile(
+        temperature=_numeric_parameter(parsed["control_temperature"])
+        if "control_temperature" in parsed else DEFAULT_CONTROL.temperature,
+        top_p=_numeric_parameter(parsed["control_top_p"])
+        if "control_top_p" in parsed else DEFAULT_CONTROL.top_p,
+    )
+    test = SamplingProfile(
+        temperature=_numeric_parameter(parsed["test_temperature"])
+        if "test_temperature" in parsed else DEFAULT_TEST.temperature,
+        top_p=_numeric_parameter(parsed["test_top_p"])
+        if "test_top_p" in parsed else DEFAULT_TEST.top_p,
+    )
+    if control == test:
+        raise ValueError("sampling profiles are identical; change at least one value")
+    return case, control, test
 
 
 def _words(value: str) -> list[str]:
@@ -73,21 +143,30 @@ def example_overlap(text: str, examples: list[str]) -> dict[str, Any]:
     }
 
 
-def sampling_payloads(provider, context, v3: str) -> dict[str, dict[str, Any]]:
+def sampling_payloads(
+    provider, context, v3: str, *,
+    control: SamplingProfile = DEFAULT_CONTROL,
+    test: SamplingProfile = DEFAULT_TEST,
+) -> dict[str, dict[str, Any]]:
     original = provider._payload(context)
     original["messages"].insert(0, {"role": "system", "content": v3})
-    if original["temperature"] != BASE_TEMPERATURE:
-        raise MistralExperimentError("EXPERIMENT_BASELINE_TEMPERATURE_CHANGED")
-    base = deepcopy(original)
-    creative = deepcopy(original)
-    creative["temperature"] = CREATIVE_TEMPERATURE
-    differences = {
-        name for name in base if base[name] != creative[name]
+    if (original["temperature"], original["top_p"]) != (
+        BASE_TEMPERATURE, 1.0
+    ):
+        raise MistralExperimentError("EXPERIMENT_BASELINE_SAMPLING_CHANGED")
+    if control == test:
+        raise MistralExperimentError("EXPERIMENT_SAMPLING_PROFILES_IDENTICAL")
+    a, b = deepcopy(original), deepcopy(original)
+    for payload, profile in ((a, control), (b, test)):
+        payload["temperature"] = profile.temperature
+        payload["top_p"] = profile.top_p
+    differences = {name for name in a if a[name] != b[name]}
+    expected = {
+        field for field in ("temperature", "top_p") if a[field] != b[field]
     }
-    if differences != {"temperature"}:
+    if differences != expected or not expected:
         raise MistralExperimentError("EXPERIMENT_PAIR_MISMATCH")
-    return dict(zip(_VARIANTS, (base, creative)))
-
+    return dict(zip(_VARIANTS, (a, b)))
 
 def _spoken_candidate(parsed: Any) -> str | None:
     if not isinstance(parsed, dict) or not isinstance(parsed.get("moves"), list):
@@ -102,6 +181,8 @@ def _spoken_candidate(parsed: Any) -> str | None:
 
 async def run_amora_v3_temperature(
     core: Any, *, case: str,
+    control: SamplingProfile = DEFAULT_CONTROL,
+    test: SamplingProfile = DEFAULT_TEST,
     on_result: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     context = paired_context(case)
@@ -111,7 +192,7 @@ async def run_amora_v3_temperature(
     if not api_key:
         raise MistralExperimentError("EXPERIMENT_NVIDIA_SECRET_MISSING")
     provider = NvidiaMistralLarge4ProductionProvider(core.secrets, model=MODEL)
-    payloads = sampling_payloads(provider, context, v3)
+    payloads = sampling_payloads(provider, context, v3, control=control, test=test)
     order = list(_VARIANTS)
     SystemRandom().shuffle(order)
     outcomes: list[dict[str, Any]] = []
@@ -178,7 +259,7 @@ async def run_amora_v3_temperature(
     from .expression import expression_cue
     return {
         "kind": "amora_v3_temperature_ab",
-        "summary": "V3 original 0.50 vs V3 roleplay 0.75; somente temperatura muda.",
+        "summary": "V3 original com dois perfis de sampling definidos pelo operador.",
         "case": case,
         "variants": outcomes,
         "planned_calls": 2,
@@ -191,13 +272,23 @@ async def run_amora_v3_temperature(
         "dialogue_plan": context.dialogue_plan,
         "expression_cue": expression_cue(context),
         "sampling_profiles": {
-            "base": {"temperature": BASE_TEMPERATURE},
-            "creative": {"temperature": CREATIVE_TEMPERATURE},
+            "control": control.as_dict(),
+            "test": test.as_dict(),
             "unchanged": {
-                "top_p": 1.0, "frequency_penalty": 0,
+                "frequency_penalty": 0,
                 "presence_penalty": 0, "reasoning_effort": "low",
             },
         },
+        "changed_parameters": [
+            name for name in ("temperature", "top_p")
+            if control.as_dict()[name] != test.as_dict()[name]
+        ],
+        "sampling_comparison_note": (
+            "Ambos temperature e top_p foram alterados: não é possível atribuir "
+            "diferenças de comportamento a somente um parâmetro."
+            if control.temperature != test.temperature and control.top_p != test.top_p
+            else "Apenas um parâmetro de sampling mudou entre os perfis."
+        ),
         "copy_signal_rule": ">=7 consecutive words from any V3 GOOD calibration example",
         "rubric": {name: None for name in (
             *RUBRIC, "novidade frente aos exemplos",
@@ -210,7 +301,7 @@ async def run_amora_v3_temperature(
         ),
         "formalism_investigation": (
             "Ambas usam a MESMA V3 e DialoguePlan. "
-            "Temperatura maior pode diversificar ou prejudicar JSON/fatos."
+            "Amostragem mais variada pode diversificar ou prejudicar JSON/fatos."
         ),
         "reveal_token": base64.b64encode(json.dumps({
             item["candidate_id"]: variant for item, variant in zip(outcomes, order)
