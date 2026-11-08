@@ -10,8 +10,9 @@ import pytest
 from amora.admin_commands import AmoraCommandBus
 from amora.cognition.amora_v2_v3_experiment import CASES, load_v3, paired_context
 from amora.cognition.amora_v3_temperature_experiment import (
-    BASE_TEMPERATURE, CREATIVE_TEMPERATURE, MODEL, calibration_examples,
-    example_overlap, run_amora_v3_temperature, sampling_payloads,
+    BASE_TEMPERATURE, CREATIVE_TEMPERATURE, MODEL, SamplingProfile,
+    calibration_examples, example_overlap, parse_sampling_args,
+    run_amora_v3_temperature, sampling_payloads,
 )
 from amora.cognition.providers import ProviderError
 from amora.cognition.providers_nvidia import NvidiaMistralLarge4ProductionProvider
@@ -60,7 +61,7 @@ async def test_identical_sampling_except_temperature_with_blinding(case, monkeyp
     assert report["promotion_decision"] == "none"
     assert report["planned_calls"] == report["attempted_calls"] == 2
     reveal = json.loads(base64.b64decode(report["reveal_token"]))
-    assert set(reveal.values()) == {"A_v3_base_temp050", "B_v3_roleplay_temp075"}
+    assert set(reveal.values()) == {"A_v3_control", "B_v3_test"}
     assert set(reveal) == {"candidate-1", "candidate-2"}
 
 
@@ -131,6 +132,14 @@ async def test_command_operator_args_reject_unknown_and_no_secret():
         ("providers experiment amora-v3-temperature --case safada", "EXPERIMENT_NVIDIA_SECRET_MISSING"),
         ("providers experiment amora-v3-temperature --case ../../etc/passwd", "COMMAND_ARGUMENT_INVALID"),
         ("providers experiment amora-v3-temperature --temperature 1.0", "COMMAND_ARGUMENT_INVALID"),
+        ("providers experiment amora-v3-temperature --case safada --temperature NaN", "COMMAND_ARGUMENT_INVALID"),
+        ("providers experiment amora-v3-temperature --case safada --top-p 1.2", "COMMAND_ARGUMENT_INVALID"),
+        ("providers experiment amora-v3-temperature --case safada --temperature -1", "COMMAND_ARGUMENT_INVALID"),
+        ("providers experiment amora-v3-temperature --case safada --temperature 4", "COMMAND_ARGUMENT_INVALID"),
+        ("providers experiment amora-v3-temperature --case safada --top-p 0", "COMMAND_ARGUMENT_INVALID"),
+        ("providers experiment amora-v3-temperature --case safada --temperature 0.5 --top-p 1", "COMMAND_ARGUMENT_INVALID"),
+        ("providers experiment amora-v3-temperature --case safada --temperature 0.75 --temperature-b 0.85", "COMMAND_ARGUMENT_INVALID"),
+        ("providers experiment amora-v3-temperature --case safada --temperature 0.75 --rogue 10", "COMMAND_ARGUMENT_INVALID"),
     ):
         job = bus.start(fake_core(key=None), command)
         for _ in range(100):
@@ -148,3 +157,70 @@ def test_prompts_are_user_pinned_and_not_modified():
     assert V3_BLOB_SHA1
     docker = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
     assert "COPY --chmod=0444 jailbreak/Amora-Virtual-Jailbreak-V3.md" in docker
+
+
+@pytest.mark.parametrize("flags,a,b", [
+    ("--case safada", (0.5, 1.0), (0.75, 1.0)),
+    ("--case safada --temperature 0.85", (0.5, 1.0), (0.85, 1.0)),
+    ("--case safada --top-p 0.92", (0.5, 1.0), (0.75, 0.92)),
+    ("--case safada --temperature 0,95 --top-p 0,9", (0.5, 1.0), (0.95, 0.9)),
+    ("--top-p-b 0.88 --temperature-b 0.95 --case safada", (0.5, 1.0), (0.95, 0.88)),
+    ("--temperature-a 0.75 --temperature 0.95 --case safada", (0.75, 1.0), (0.95, 1.0)),
+    ("--temperature-a 0.75 --top-p-a 0.95 --temperature-b 0.75 --top-p-b 1 --case safada",
+     (0.75, 0.95), (0.75, 1.0)),
+])
+def test_dynamic_sampling_command_parsing(flags, a, b):
+    case, control, test = parse_sampling_args(flags.split())
+    assert case == "safada"
+    assert (control.temperature, control.top_p) == a
+    assert (test.temperature, test.top_p) == b
+
+
+@pytest.mark.parametrize("bad", [
+    ["--case", "safada", "--temperature", "nan"],
+    ["--case", "safada", "--temperature", "inf"],
+    ["--case", "safada", "--temperature", "0.75evil"],
+    ["--case", "safada", "--temperature", "0.5", "--top-p", "1"],
+    ["--case", "safada", "--temperature", "3"],
+    ["--case", "safada", "--top-p", "1.001"],
+    ["--case", "safada", "--top-p", "0"],
+    ["--case", "safada", "--temperature-b", "0.6", "--temperature", "0.7"],
+    ["--case", "safada", "--temperature", "0.8", "--temperature"],
+])
+def test_dynamic_sampling_rejects_invalid_inputs(bad):
+    with pytest.raises(ValueError):
+        parse_sampling_args(bad)
+
+
+def test_two_axes_are_optimizable_but_confounded():
+    provider = NvidiaMistralLarge4ProductionProvider(fake_core().secrets, model=MODEL)
+    context = paired_context("safada")
+    a = SamplingProfile(0.70, 0.98)
+    b = SamplingProfile(1.05, 0.90)
+    samples = sampling_payloads(provider, context, load_v3(), control=a, test=b)
+    inputs = list(samples.values())
+    assert (inputs[0]["temperature"], inputs[0]["top_p"]) == (0.70, 0.98)
+    assert (inputs[1]["temperature"], inputs[1]["top_p"]) == (1.05, 0.90)
+    assert all(inputs[0][field] == inputs[1][field] for field in inputs[0]
+               if field not in {"temperature", "top_p"})
+
+
+async def test_operator_dynamic_flags_change_payload_and_report(monkeypatch):
+    sent = []
+    raw, _spoken = valid_raw("safada")
+
+    async def fake_post(self, payload, **kwargs):
+        sent.append(payload)
+        return {"choices": [{"message": {"content": raw}}]}, {}, 200
+
+    monkeypatch.setattr(NvidiaMistralLarge4ProductionProvider, "_post_chat", fake_post)
+    case, control, test = parse_sampling_args(
+        "--case safada --temperature 0.92 --top-p 0.95".split()
+    )
+    report = await run_amora_v3_temperature(fake_core(), case=case, control=control, test=test)
+    assert {(p["temperature"], p["top_p"]) for p in sent} == {(0.5, 1.0), (0.92, 0.95)}
+    assert report["sampling_profiles"]["control"] == {"temperature": 0.5, "top_p": 1.0}
+    assert report["sampling_profiles"]["test"] == {"temperature": 0.92, "top_p": 0.95}
+    assert report["changed_parameters"] == ["temperature", "top_p"]
+    assert "não é possível atribuir" in report["sampling_comparison_note"]
+    assert all(item["validated"] for item in report["variants"])
