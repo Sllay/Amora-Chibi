@@ -1,4 +1,4 @@
-"""Operator-only V3 sampling A/B: original .50 versus creative .85.
+"""Operator-only V3 sampling A/B: original .50 versus roleplay .75.
 
 Strict controlled test: same user-owned V3 bytes, same Core context, same
 NVIDIA model and parameters, except temperature. No provider promotion.
@@ -22,8 +22,8 @@ from .providers_nvidia import NvidiaMistralLarge4ProductionProvider
 from .realization import RealizationError, RealizationValidator
 
 BASE_TEMPERATURE = 0.5
-CREATIVE_TEMPERATURE = 0.85
-_VARIANTS = ("A_v3_base_temp050", "B_v3_creative_temp085")
+CREATIVE_TEMPERATURE = 0.75
+_VARIANTS = ("A_v3_base_temp050", "B_v3_roleplay_temp075")
 _COPY_WORD_THRESHOLD = 7
 
 
@@ -178,7 +178,7 @@ async def run_amora_v3_temperature(
     from .expression import expression_cue
     return {
         "kind": "amora_v3_temperature_ab",
-        "summary": "V3 original 0.50 vs V3 criativa 0.85; somente temperatura muda.",
+        "summary": "V3 original 0.50 vs V3 roleplay 0.75; somente temperatura muda.",
         "case": case,
         "variants": outcomes,
         "planned_calls": 2,
