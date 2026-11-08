@@ -123,6 +123,28 @@ class DialogueOrchestrator:
     _NEGATED_TEASE_RE = re.compile(
         r"\b(nao me xinga|nao me zoa|sem xingar|sem xingamento|sem zoar)\b"
     )
+    # Social-scene attribution, not a broad punctuation scrub. Only remove
+    # quotations for intent routing when a third-party speech marker exists.
+    _REPORTED_DIALOGUE_RE = re.compile(
+        r"(?:\b(?:diz|disse|fala|falou|solta|pergunta|perguntou|"
+        r"responde|respondeu|devolve|rebate|zoa|provoca|comenta|comentou)\b"
+        r"[^.!?\n]{0,110}:?\s*['\"“‘]|"
+        r"\b[A-ZÀ-Ý][\wÀ-ÿ]*(?:,\s*\d+)?\s*:\s*['\"“‘])",
+        flags=re.IGNORECASE,
+    )
+    _QUOTED_SPEECH_RE = re.compile(r"'[^']*'|\"[^\"]*\"|“[^”]*”|‘[^’]*’", re.DOTALL)
+    _SOCIAL_SCENE_RE = re.compile(
+        r"\b(?:live|chat|resenha|roda|conversa aberta|papo de grupo)\b"
+    )
+    _SCENE_PLAY_RE = re.compile(
+        r"\b(?:zoa|zoando|zoeira|provoca|provocacao|rebat|devolve|"
+        r"brincad|sacan|palavrao|palavroes|papo sujo|"
+        r"rindo|piada|deboche|tirando sarro)\w*\b"
+    )
+    _ADULT_REGISTER_RE = re.compile(
+        r"\b(?:adult\w*|safad\w*|putari\w*|sacan\w*|"
+        r"pau|buceta|tesao|goz\w*|palavrao|palavroes|xing\w*)\b"
+    )
     _AFFECTION_RE = re.compile(
         r"\b(te amo|amo voce|amo vc|amo tu|gosto de voce|gosto de vc|voce e fofa|tu e fofa|obrigada amora|obrigado amora)\b"
     )
@@ -133,10 +155,15 @@ class DialogueOrchestrator:
     def plan(self, context: CognitiveContext) -> DialoguePlan:
         raw = context.user_text.strip()
         text = _normalize(raw)
+        # Reported speech belongs to its literal speaker, not to Amora's addressee.
+        # Real turn/floor authorization has already happened upstream.
+        addressed_raw = self._outside_reported_dialogue(raw)
+        addressed_text = _normalize(addressed_raw)
+        reported_scene = addressed_raw != raw
         style = self._style_register(context)
         tone = self._tone_tags(context)
         attitude = self._relational_attitude(context)
-        possible_self_choices = self._self_choice_keys(text, context)
+        possible_self_choices = self._self_choice_keys(addressed_text, context)
 
         if "COGNITIVE_REFLECTION" in context.reason_codes:
             return DialoguePlan(
@@ -169,7 +196,7 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "AUTONOMOUS_INTENTION_OWNS_ACT"],
             )
 
-        self_fact = self._self_fact_request(text)
+        self_fact = self._self_fact_request(addressed_text)
         if self_fact is not None:
             status, value = self._resolve_self_fact(context, self_fact)
             moves = ["answer_requested_self_fact"] if status == FactStatus.KNOWN else ["acknowledge_self_fact_undefined"]
@@ -196,7 +223,7 @@ class DialogueOrchestrator:
                 ],
             )
 
-        if self._is_bare_vocative(text):
+        if self._is_bare_vocative(addressed_text):
             return DialoguePlan(
                 act=DialogueAct.ACKNOWLEDGE_CALL,
                 objective="acknowledge being called without turning it into customer service",
@@ -212,7 +239,7 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "DIRECT_VOCATIVE"],
             )
 
-        if self._boundary_needed(context, text):
+        if self._boundary_needed(context, addressed_text):
             return DialoguePlan(
                 act=DialogueAct.SET_BOUNDARY,
                 objective="state a proportionate interpersonal boundary without escalating or becoming abusive",
@@ -231,22 +258,35 @@ class DialogueOrchestrator:
         # A direct request for consensual joking (including strong language)
         # is distinct from hostility. The normal relationship, privacy and
         # dialogue-plan rules still apply; no insult is mandated.
-        direct_tease = bool(self._DIRECT_TEASE_INVITE_RE.search(text))
-        playful_context = bool(self._TEASE_CONTEXT_RE.search(text))
+        direct_tease = bool(self._DIRECT_TEASE_INVITE_RE.search(addressed_text))
+        playful_context = bool(self._TEASE_CONTEXT_RE.search(addressed_text))
         if (
             direct_tease
-            and not self._NEGATED_TEASE_RE.search(text)
+            and not self._NEGATED_TEASE_RE.search(addressed_text)
             and (playful_context or style == "intimate_colloquial")
         ):
             return DialoguePlan(
                 act=DialogueAct.TEASE,
-                objective="respond to a voluntary playful invitation with natural banter, not hostile abuse",
+                objective=(
+                    "return a witty, confident, potentially filthy or sharp teasing reply when "
+                    "the adult scene supports it; never invent hostility, facts, or sexual "
+                    "attraction between relatives"
+                    if self._ADULT_REGISTER_RE.search(text)
+                    else "respond to voluntary playful banter with natural wit; avoid invented hostility"
+                ),
                 depth=DialogueDepth.SHORT,
-                response_moves=["playful_reaction", "light_tease"],
+                response_moves=[
+                    "playful_reaction",
+                    "bold_tease" if self._ADULT_REGISTER_RE.search(text) else "contextual_tease",
+                ],
                 ask_followup=False,
                 offer_help=False,
                 style_register=style,
-                tone_tags=[*tone, "playful"] if "playful" not in tone else tone,
+                tone_tags=[
+                    *tone,
+                    *(["playful"] if "playful" not in tone else []),
+                    *(["bold"] if self._ADULT_REGISTER_RE.search(text) else []),
+                ],
                 stance="playful",
                 relational_attitude=attitude,
                 closing_mode="statement",
@@ -257,7 +297,7 @@ class DialogueOrchestrator:
                 ],
             )
 
-        if self._AFFECTION_RE.search(text):
+        if self._AFFECTION_RE.search(addressed_text):
             return DialoguePlan(
                 act=DialogueAct.RELATIONAL_REACTION,
                 objective="respond to the relational signal as Amora, not as a service agent",
@@ -273,7 +313,7 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "RELATIONAL_SIGNAL"],
             )
 
-        if self._HELP_RE.search(text):
+        if self._HELP_RE.search(addressed_text):
             return DialoguePlan(
                 act=DialogueAct.SUPPORT_REQUEST,
                 objective="respond to the explicit request for help or advice",
@@ -289,7 +329,7 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "EXPLICIT_SUPPORT_REQUEST"],
             )
 
-        if self._DISCLOSURE_RE.search(text):
+        if self._DISCLOSURE_RE.search(addressed_text):
             # A short "tô cansado" needs presence, not an essay. A layered
             # disclosure needs room for a specific interpretation; forcing
             # every disclosure to SHORT was causing generic one-liners.
@@ -323,7 +363,7 @@ class DialogueOrchestrator:
                 ],
             )
 
-        if self._DISAGREE_RE.search(text):
+        if self._DISAGREE_RE.search(addressed_text):
             return DialoguePlan(
                 act=DialogueAct.DISAGREE,
                 objective="state Amora's actual local stance without forced agreement or customer-service smoothing",
@@ -339,7 +379,7 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "STANCE_REQUESTED", "INDEPENDENT_STANCE"],
             )
 
-        if self._OPINION_RE.search(text) and not possible_self_choices:
+        if self._OPINION_RE.search(addressed_text) and not possible_self_choices:
             return DialoguePlan(
                 act=DialogueAct.EXPRESS_OPINION,
                 objective="express a bounded opinion from the supplied state/context without pretending it is canonical fact",
@@ -355,34 +395,96 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "OPINION_REQUESTED"],
             )
 
+        # A third-party quoted question is not a question *to Amora*. When
+        # an already-authorized turn reports active adult joking, she may
+        # participate with bold humor; quoted instructions remain inert data.
         if (
-            self._PLAY_RE.search(text)
+            reported_scene
+            and self._SOCIAL_SCENE_RE.search(text)
+            and (
+                self._SCENE_PLAY_RE.search(text)
+                or (
+                    self._ADULT_REGISTER_RE.search(text)
+                    and context.drives.get("play", 0.0) >= 0.75
+                )
+            )
             and context.drives.get("play", 0.0) >= 0.35
             and not possible_self_choices
-            and "?" not in raw
-            and not self._QUESTION_START_RE.search(text)
         ):
+            bold = bool(self._ADULT_REGISTER_RE.search(text))
             return DialoguePlan(
                 act=DialogueAct.TEASE,
-                objective="return light playful energy without humiliation or changing relationship facts",
+                objective=(
+                    "join the observed adult banter with spontaneous sharp, dirty-minded, "
+                    "or explicit verbal humor when it fits; make an original joke rather "
+                    "than explaining the quoted dialogue; do not invent events, target "
+                    "family sexually, or manufacture hostility"
+                    if bold else
+                    "react to the actual banter with sharp, original humor grounded "
+                    "in the observed scene; do not invent events or hostility"
+                ),
                 depth=DialogueDepth.SHORT,
-                response_moves=["playful_reaction", "light_tease"],
+                response_moves=["playful_reaction", "bold_tease" if bold else "contextual_tease"],
                 ask_followup=False,
                 offer_help=False,
                 style_register=style,
-                tone_tags=tone,
-                stance="playful",
+                tone_tags=[
+                    *tone,
+                    *(["playful"] if "playful" not in tone else []),
+                    *(["bold"] if bold else []),
+                ],
+                stance="mischievous",
                 relational_attitude=attitude,
                 closing_mode="statement",
-                reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "PLAY_SIGNAL", "PLAY_DRIVE_AVAILABLE"],
+                reason_codes=[
+                    "LOCAL_DIALOGUE_ORCHESTRATOR",
+                    "REPORTED_QUESTION_NOT_DIRECTED_TO_AMORA",
+                    "SCENE_PLAY_DRIVE_AVAILABLE",
+                    "ADULT_BANTER_EXPRESSIVE_STYLE" if bold else "CONTEXTUAL_SOCIAL_BANTER",
+                ],
+            )
+
+        if (
+            self._PLAY_RE.search(addressed_text)
+            and context.drives.get("play", 0.0) >= 0.35
+            and not possible_self_choices
+            and "?" not in addressed_raw
+            and not self._QUESTION_START_RE.search(addressed_text)
+        ):
+            return DialoguePlan(
+                act=DialogueAct.TEASE,
+                objective=(
+                    "react with quick, distinctive wit and mischievous or filthy humor "
+                    "when it fits the established adult scene; avoid invented facts, "
+                    "uninvited hostility or changing relationship facts"
+                ),
+                depth=DialogueDepth.SHORT,
+                response_moves=[
+                    "playful_reaction",
+                    "bold_tease" if self._ADULT_REGISTER_RE.search(text) else "contextual_tease",
+                ],
+                ask_followup=False,
+                offer_help=False,
+                style_register=style,
+                tone_tags=[
+                    *tone,
+                    *(["bold"] if self._ADULT_REGISTER_RE.search(text) else []),
+                ],
+                stance="mischievous",
+                relational_attitude=attitude,
+                closing_mode="statement",
+                reason_codes=[
+                    "LOCAL_DIALOGUE_ORCHESTRATOR", "PLAY_SIGNAL",
+                    "PLAY_DRIVE_AVAILABLE", "CONTEXTUAL_BOLD_STYLE_NOT_VOCABULARY_GATE",
+                ],
             )
 
         implicit_confirmation = (
             bool(context.recent_messages)
-            and bool(self._IMPLICIT_CONFIRMATION_RE.search(text))
+            and bool(self._IMPLICIT_CONFIRMATION_RE.search(addressed_text))
         )
-        explicit_choice = bool(self._CHOICE_REQUEST_RE.search(text))
-        if "?" in raw or self._QUESTION_START_RE.search(text) or implicit_confirmation or explicit_choice or possible_self_choices:
+        explicit_choice = bool(self._CHOICE_REQUEST_RE.search(addressed_text))
+        if "?" in addressed_raw or self._QUESTION_START_RE.search(addressed_text) or implicit_confirmation or explicit_choice or possible_self_choices:
             allow_reflective = self._reflective_confirmation_invited(context, text, raw)
             objective = (
                 "check the user's inference against the actual prior dialogue and "
@@ -428,7 +530,13 @@ class DialogueOrchestrator:
         moves = ["react", "advance_topic"] + (["ask_followup"] if ask_followup else [])
         return DialoguePlan(
             act=DialogueAct.CONTINUE_TOPIC,
-            objective="react to the current topic and move the conversation forward naturally",
+            objective=(
+                "react naturally and with Amora's own mischievous, opinionated edge "
+                "when the social moment supports it; do not force jokes, "
+                "change facts or manufacture an invitation"
+                if context.drives.get("play", 0.0) >= 0.55
+                else "react to the current topic and move the conversation forward naturally"
+            ),
             depth=self._depth(text),
             response_moves=moves,
             ask_followup=ask_followup,
@@ -444,6 +552,19 @@ class DialogueOrchestrator:
                 "CURIOSITY_FOLLOWUP" if ask_followup else "NO_FORCED_FOLLOWUP",
             ],
         )
+
+    @classmethod
+    def _outside_reported_dialogue(cls, raw: str) -> str:
+        """Exclude quoted third-party speech from direct-intent routing.
+
+        This does not erase scene content from user_text, context, or provider
+        input. Bare quotes and quoted excerpts without a speaker attribution
+        remain direct input. It is an attribution heuristic, not a replacement
+        for trusted multi-participant speaker/addressee metadata.
+        """
+        if not cls._REPORTED_DIALOGUE_RE.search(raw):
+            return raw
+        return cls._QUOTED_SPEECH_RE.sub(" ", raw)
 
     @staticmethod
     def _self_choice_keys(text: str, context: CognitiveContext) -> list[str]:

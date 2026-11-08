@@ -372,3 +372,16 @@ B=0.75/1.00. Apresentação cega, limite 2 chamadas NVIDIA,
 métrica de cópia exata a partir dos GOOD exemplos V3,
 sem alterar provider principal nem prompts e sem promoção.
 Documento: `docs/experiments/AMORA_V3_TEMPERATURE_AB.md`.
+
+## Core social boldness + reported dialogue ownership — 2026-11-07
+
+Branch `feat/core-social-bold-scene-attribution` corrige a classificação
+de perguntas entre terceiros citados como perguntas diretas à Amora.
+Resenha adulta em turno autorizado passa a permitir `bold_tease`,
+humor atrevido e vocabulário natural, em vez do objetivo sempre leve;
+cenas comuns usam `contextual_tease`. A personalidade segue contextual
+e não força sacanagem em momentos sérios. `ExpressionCue` informa o
+nível expressivo, não concede novas ações.
+Arquivos de prompt V2/V3, modelos de produção, provider e memória não
+sofrem alteração. ADR-0038; testes de replay e validação. Certificação
+live NVIDIA pendente até depois de CI/merge/deploy.
