@@ -21,6 +21,10 @@ from .amora_v2_v3_experiment import (
 )
 from .mistral_prompt_experiment import MistralExperimentError, RUBRIC
 from .providers_nvidia import NvidiaMistralLarge4ProductionProvider
+from .amora_experiment_transport import (
+    classify_provider_failure, experiment_provider,
+    EXPERIMENT_IDLE_SECONDS, EXPERIMENT_MAX_TOTAL_SECONDS,
+)
 from .realization import RealizationError, RealizationValidator
 
 BASE_TEMPERATURE = 0.5
@@ -191,7 +195,7 @@ async def run_amora_v3_temperature(
     api_key = core.secrets.get("NVIDIA_API_KEY")
     if not api_key:
         raise MistralExperimentError("EXPERIMENT_NVIDIA_SECRET_MISSING")
-    provider = NvidiaMistralLarge4ProductionProvider(core.secrets, model=MODEL)
+    provider = experiment_provider(core.secrets, model=MODEL)
     payloads = sampling_payloads(provider, context, v3, control=control, test=test)
     order = list(_VARIANTS)
     SystemRandom().shuffle(order)
@@ -202,6 +206,7 @@ async def run_amora_v3_temperature(
             "case": case,
             "candidate_id": f"candidate-{len(outcomes) + 1}",
             "validated": False,
+            "validation_status": "not_run",
             "diagnostic_only": False,
         }
         try:
@@ -226,6 +231,7 @@ async def run_amora_v3_temperature(
                 parsed = json.loads(raw)
             except (ValueError, TypeError):
                 result["json_invalid"] = True
+                result["validation_status"] = "invalid_model_json"
                 result["error_code"] = "EXPERIMENT_JSON_INVALID"
             else:
                 result["json_invalid"] = False
@@ -235,20 +241,21 @@ async def run_amora_v3_temperature(
                 try:
                     validated = RealizationValidator.parse_and_validate(context, parsed)
                 except RealizationError as exc:
+                    result["validation_status"] = "rejected_by_core"
                     result["error_code"] = exc.code
                 else:
                     result["validated"] = True
+                    result["validation_status"] = "passed"
                     result["text"] = validated.text
                     result["error_code"] = None
         except Exception as exc:
-            code = getattr(exc, "status_code", None)
-            result["http_status"] = code if isinstance(code, int) else None
-            result["rate_limit_observed"] = code == 429
-            result["error_code"] = (
-                "EXPERIMENT_RATE_LIMITED" if code == 429
-                else "EXPERIMENT_PROVIDER_FAILURE"
-            )
-        result["dialogue_plan_fidelity"] = result["validated"]
+            # Safe stage-aware diagnostics, no upstream body or stack trace.
+            classify_provider_failure(result, exc)
+        result["dialogue_plan_fidelity"] = (
+            result["validated"] if result["validation_status"] in {
+                "passed", "rejected_by_core",
+            } else None
+        )
         result["latency_ms"] = round((perf_counter() - started) * 1000.0, 1)
         outcomes.append(result)
         if on_result is not None:
@@ -262,6 +269,11 @@ async def run_amora_v3_temperature(
         "summary": "V3 original com dois perfis de sampling definidos pelo operador.",
         "case": case,
         "variants": outcomes,
+        "transport_deadlines": {
+            "idle_seconds": EXPERIMENT_IDLE_SECONDS,
+            "max_total_seconds": EXPERIMENT_MAX_TOTAL_SECONDS,
+            "production_unchanged": True,
+        },
         "planned_calls": 2,
         "attempted_calls": len(outcomes),
         "stopped_on_rate_limit": any(
