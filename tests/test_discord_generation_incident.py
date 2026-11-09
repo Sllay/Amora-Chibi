@@ -203,3 +203,53 @@ async def test_enqueue_database_failure_can_retry_without_regeneration(core, mon
     recovered = await core.messaging.receive(incoming)
     assert len(recovered.outbound) == 1
     assert provider.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_total_budget_excludes_context_compilation(core, monkeypatch):
+    from amora.cognition import CognitiveRequest
+    import amora.cognition.structured_runtime as runtime
+    provider = CountingProvider()
+    core.cognition.register_provider(provider)
+    elapsed = [100.0]
+    original = core.cognition._prepare_context
+    def costly_compile(request):
+        context = original(request)
+        elapsed[0] += 2.0
+        return context
+    monkeypatch.setattr(runtime, 'perf_counter', lambda: elapsed[0])
+    monkeypatch.setattr(core.cognition, '_prepare_context', costly_compile)
+    plan = await core.cognition.respond(CognitiveRequest(
+        text='Me conta algo engraçado sobre programação.', speaker_id='PERSON_BK',
+        target_id='ENTITY_AMORA', remote_processing_allowed=True,
+        metadata={'test_mode': True, 'provider_total_budget_seconds': 1.,
+                  'provider_attempt_budget_seconds': .5}), fallback_text='operational')
+    assert provider.calls == 1
+    assert plan.provider == provider.descriptor.name
+    assert not plan.fallback_used
+
+
+@pytest.mark.asyncio
+async def test_remote_error_body_is_not_written_to_operator_logs_or_journal(core, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="amora.cognition.generation")
+    marker = 'SYNTHETIC_SECRET_BODY_NEVER_LOG'
+    class UnsafeErrorProvider(CountingProvider):
+        async def realize(self, context):
+            raise ProviderError(marker, status_code=503)
+    core.cognition.register_provider(UnsafeErrorProvider())
+    result = await core.messaging.receive(message(core, message_id='safe-diagnostics'))
+    assert result.outbound[0].metadata['fallback_used'] is True
+    journal = core.cognition.store.recent_journal(limit=100)
+    assert marker not in caplog.text
+    assert marker not in str([entry.model_dump() for entry in journal])
+    assert marker not in result.model_dump_json()
+
+    records = [r for r in caplog.records if r.name == "amora.cognition.generation"]
+    selected = [r for r in records if r.stage == "provider_selected"]
+    errors = [r for r in records if getattr(r, "status_code", None) == 503]
+    assert selected and errors
+    assert selected[0].turn_id == errors[0].turn_id
+    assert errors[0].latency_ms >= 0
+    assert errors[0].provider is not None
+    assert not hasattr(errors[0], "payload")

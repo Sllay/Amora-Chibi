@@ -321,13 +321,14 @@ class CognitiveEngine(HardenedCognitiveEngine):
         status_code: int | None,
         started: float,
     ) -> None:
+        latency_ms = max(0.0, (perf_counter() - started) * 1000.0)
         self._record_usage(
             provider=descriptor.name,
             model=descriptor.model or "unknown",
             task_class=TaskClass.SOCIAL_DIALOGUE.value,
             success=False,
             turn_id=request.turn_id,
-            latency_ms=(perf_counter() - started) * 1000.0,
+            latency_ms=latency_ms,
             status_code=status_code,
             metadata={"error_code": error_code, "failover_eligible": True},
         )
@@ -335,6 +336,7 @@ class CognitiveEngine(HardenedCognitiveEngine):
             request,
             JournalStage.ERROR,
             summary="provider generation failed",
+            duration_ms=latency_ms,
             reason_codes=["PROVIDER_FAILURE", "FAILOVER_ELIGIBLE"],
             provider=descriptor.name,
             model=descriptor.model,

@@ -581,6 +581,7 @@ class PlatformMessagingService:
         cognitive_reason_codes: list[str] | None = None,
         remote_processing_allowed: bool | None = None,
     ) -> None:
+        metadata = result.outbound[0].metadata if result.outbound else {}
         _LOG.info(
             "messaging_inbound_result action=%s outbound=%d duplicate=%s provider=%s fallback_used=%s remote_processing_allowed=%s attention_reasons=%s cognitive_reasons=%s",
             result.decision.action.value,
@@ -591,6 +592,13 @@ class PlatformMessagingService:
             remote_processing_allowed,
             ",".join(result.decision.reason_codes) or "none",
             ",".join(cognitive_reason_codes or []) or "none",
+            extra={
+                "turn_id": metadata.get("cognitive_turn_id"),
+                "model": metadata.get("model"),
+                "generation_stage": metadata.get("generation_stage"),
+                "generation_error_code": metadata.get("generation_error_code"),
+                "generation_latency_ms": metadata.get("generation_latency_ms"),
+            },
         )
 
     @classmethod
