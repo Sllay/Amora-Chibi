@@ -81,3 +81,28 @@ async def test_messaging_cognition_hard_timeout_queues_operational_fallback_inst
         assert "OPERATIONAL_TIMEOUT_FALLBACK" in outbound.metadata["cognitive_reason_codes"]
     finally:
         core.close()
+
+
+def test_discord_sixty_second_generation_deadline_ladder_is_bounded() -> None:
+    """A social provider may take ~60s without another layer cancelling it first."""
+    from amora.messaging.service import (
+        _MESSAGING_COGNITION_TIMEOUT_SECONDS,
+        _MESSAGING_PROVIDER_ATTEMPT_BUDGET_SECONDS,
+        _MESSAGING_PROVIDER_TOTAL_BUDGET_SECONDS,
+    )
+    from amora.security import http_processing_deadline_seconds
+
+    attempt = _MESSAGING_PROVIDER_ATTEMPT_BUDGET_SECONDS
+    total = _MESSAGING_PROVIDER_TOTAL_BUDGET_SECONDS
+    cognition = _MESSAGING_COGNITION_TIMEOUT_SECONDS
+    inbound_http = http_processing_deadline_seconds(
+        "/v1/messaging/worker/inbound", "POST", worker=True
+    )
+    assert 60 < attempt < total < cognition < 120 < inbound_http
+    assert total - attempt >= 10
+    assert cognition - total >= 10
+    # Only the messaging inbound endpoint receives an extended HTTP deadline.
+    assert http_processing_deadline_seconds("/v1/web/utterance", "POST", worker=False) == 90
+    assert http_processing_deadline_seconds("/v1/web/utterance/stream", "POST", worker=False) == 270
+    assert http_processing_deadline_seconds("/v1/messaging/worker/outbound", "GET", worker=True) == 90
+    assert http_processing_deadline_seconds("/v1/messaging/worker/inbound", "GET", worker=True) == 90

@@ -167,9 +167,12 @@ class RateLimits:
 
 
 def http_processing_deadline_seconds(path: str, method: str, *, worker: bool) -> int:
-    """Exact SSE chat path gets a longer resource-safety cap, not generic bypass."""
+    """Exact long-running chat routes get separate bounded HTTP safety caps."""
     if not worker and path == "/v1/web/utterance/stream" and method == "POST":
         return 270
+    if path == "/v1/messaging/worker/inbound" and method == "POST":
+        # Discord: 75s attempt, 90s total provider, 105s cognition, 120s client.
+        return 130
     return 90
 
 

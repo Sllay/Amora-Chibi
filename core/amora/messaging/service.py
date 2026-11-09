@@ -25,9 +25,12 @@ from .store import MessagingStore
 
 
 _LOG = logging.getLogger("amora.messaging")
-_MESSAGING_PROVIDER_TOTAL_BUDGET_SECONDS = 20.0
-_MESSAGING_PROVIDER_ATTEMPT_BUDGET_SECONDS = 12.0
-_MESSAGING_COGNITION_TIMEOUT_SECONDS = 24.0
+# Discord uses a synchronous inbound request until durable background generation lands.
+# Give the social model >=60s while leaving room for failover, context and delivery.
+# Ladder: provider attempt < provider total < cognition < worker HTTP < Core HTTP.
+_MESSAGING_PROVIDER_TOTAL_BUDGET_SECONDS = 90.0
+_MESSAGING_PROVIDER_ATTEMPT_BUDGET_SECONDS = 75.0
+_MESSAGING_COGNITION_TIMEOUT_SECONDS = 105.0
 _TERMINAL_DUPLICATE_REASONS = frozenset(
     {
         "REPLY_LEASE_INVALIDATED",

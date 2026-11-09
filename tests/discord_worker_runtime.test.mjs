@@ -130,8 +130,8 @@ test('Core inbound transport budget outlives the Core cognition hard timeout', a
       platform: 'discord',
     });
     await client.inbound({ message_id: 'budget-probe' });
-    assert.equal(capturedTimeoutMs, 45_000);
-    assert.ok(capturedTimeoutMs > 24_000);
+    assert.equal(capturedTimeoutMs, 120_000);
+    assert.ok(capturedTimeoutMs > 105_000);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
