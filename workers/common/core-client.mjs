@@ -1,5 +1,6 @@
 const DEFAULT_TIMEOUT_MS = 20_000;
-const INBOUND_TIMEOUT_MS = 45_000;
+// Above the Core's 105s cognition cap; below its 130s messaging HTTP guard.
+const INBOUND_TIMEOUT_MS = 120_000;
 const VISUAL_CONTENT_TIMEOUT_MS = 45_000;
 const MIN_PRESENCE_CONTROL_TIMEOUT_MS = 5_000;
 const DEFAULT_OUTBOUND_LEASE_SECONDS = 120;
@@ -86,10 +87,9 @@ export class MessagingCoreClient {
   }
 
   inbound(message) {
-    // Core owns a <=24s cognition budget, but routing, appraisal, persistence and
-    // fallback delivery live outside that inner timer. Keep a generous transport
-    // margin so the worker receives the Core's controlled fallback instead of
-    // aborting the HTTP request first.
+    // Core owns a 105s cognition cap. The 120s inbound timeout leaves margin
+    // for routing, appraisal and persistence, while the Core HTTP guard is 130s.
+    // This is a synchronous compatibility step, not durable background generation.
     return this.request('/v1/messaging/worker/inbound', {
       method: 'POST',
       body: message,
