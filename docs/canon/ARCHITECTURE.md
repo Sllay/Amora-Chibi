@@ -249,6 +249,17 @@ Normalizações como `A mora`/`mora` → `Amora` ou `Grok` → `Groq` são permi
 
 Providers não devem redescobrir relações e entidades já resolvidas localmente.
 
+Em texto livre, `ACIRCompiler.compile_utterance` anota referências por offsets,
+entidades, perspectiva, status e reason codes (`language/text_references.py`).
+Reutiliza `PerspectiveResolver` e segmentos de `attribution`; isso não é um
+parser geral. Possessivos dependem do speaker/addressee e da direção das
+arestas disponíveis ao destinatário. Um referente resolvido não verifica a
+alegação: `assertion_truth=unverified_user_claim` não concede escrita canônica.
+O system recebe somente a projeção estruturada, nunca o fragmento literal.
+Histórico fornece antecedentes apenas após disclosure e escopo de sessão.
+Turnos de teste são visíveis somente a testes na mesma sessão explícita;
+continuam excluídos de conversas produtivas. Ver ADR-0040.
+
 Exemplo:
 
 ```json
