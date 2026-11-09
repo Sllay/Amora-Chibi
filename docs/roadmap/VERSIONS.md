@@ -127,6 +127,10 @@ Sherpa-onnx/Piper-Faber estabeleceu o primeiro path local comprovado no Galaxy A
 
 Atos locais ricos, stance/relational attitude, closing mode, RealizationFrame, validator local, emotion → DialoguePlan e observabilidade foram integrados.
 
+Fase 3/perspectiva: anotação de referências em texto livre, grafo com disclosure,
+ACIR/plano/payload e sessão Web de teste integrados (ADR-0040). Estado:
+TECHNICALLY IMPLEMENTED; validação Mistral remota pendente. Escopo permanece V1.0.
+
 PR #29 / merge `dfe50de9a9312f0e6a3f08cc482e9b4dc0aee1d4`.
 
 ### V1 Step 3 — Zero-Cost Provider Mesh

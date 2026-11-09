@@ -5,6 +5,20 @@ const $ = (id) => document.getElementById(id);
 const browserStore = new BrowserState(browserStorage("localStorage"), browserStorage("sessionStorage"));
 const REMOTE_KEY = "amora.web.remote.v1";
 const TEST_KEY = "amora.web.test.v1";
+// Per-tab conversation scope; no token, transcript or canonical identity stored.
+const conversationSessionId = (() => {
+  try {
+    const storage = browserStorage("sessionStorage");
+    if (!storage || !globalThis.crypto?.randomUUID) return null;
+    const key = "amora.web.conversation-session.v1";
+    let id = storage.getItem(key);
+    if (!id || !/^web:[a-f0-9-]{36}$/.test(id)) {
+      id = "web:" + globalThis.crypto.randomUUID();
+      storage.setItem(key, id);
+    }
+    return id;
+  } catch (_) { return null; }
+})();
 const MAX_SPEECH_QUEUE = 3;
 const VOICE_FETCH_TIMEOUT_MS = 90000;
 const STREAM_BACKPRESSURE_HIGH_SECONDS = 1.25;
@@ -366,6 +380,7 @@ async function submitText(text) {
     setMicStatus("Amora processando…");
     await streamWebTurn({
       text: clean,
+      session_id: conversationSessionId,
       remote_processing_allowed: remoteToggle.checked,
       test_mode: testToggle.checked,
     }, (stage) => {
@@ -947,6 +962,7 @@ async function finishUserSpeech() {
       remote_processing_allowed: remoteToggle.checked ? "true" : "false",
       test_mode: testToggle.checked ? "true" : "false",
     });
+    if (conversationSessionId) params.set("session_id", conversationSessionId);
     const result = await api(`/v1/audio/transcribe?${params}`, {
       method: "POST",
       headers: { "Content-Type": "audio/wav" },

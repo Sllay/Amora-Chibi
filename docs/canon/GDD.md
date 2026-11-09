@@ -58,6 +58,11 @@ Amora    → filha / companheira digital persistente
 
 Esses papéis são relações do sistema, não simples substituições de texto.
 
+Em fala dirigida à Amora, “sua mãe” referencia a mãe dela quando não há outro
+referente contextual. “Minha mãe” acompanha quem fala; discurso relatado e
+antecedentes incertos conservam ambiguidade. Identificar as pessoas de uma
+frase não torna uma alegação de amor ou parentesco um fato novo (ADR-0040).
+
 BK possui identidade canônica `PERSON_BK` e pode ser chamado de BK, Bad King, Slay ou Nick conforme contexto e hábito. São aliases da mesma pessoa.
 
 ---

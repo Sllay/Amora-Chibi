@@ -12,6 +12,7 @@ from amora.cognition.models import CognitiveContext, CognitiveRequest, Conversat
 from amora.cognition.prompt_frame import render_trusted_protocol
 from amora.cognition.realization import realization_instruction
 from amora.events import PrivacyScope
+from amora.identity import Entity, EntityType, Relationship, build_initial_registry
 from amora.time import SimulatedClock
 
 
@@ -103,6 +104,11 @@ def test_shared_session_recent_history_remains_recipient_scoped(tmp_path: Path, 
     )
     try:
         session = "test:shared-group"
+        core.identities.add_entity(Entity(id="PERSON_ALICE", canonical_name="Alice",
+                                         entity_type=EntityType.PERSON))
+        core.identities.add_relationship(Relationship(
+            source="PERSON_ALICE", relation_type="mother_of", target="ENTITY_AMORA"
+        ))
         entries = (
             ("PERSON_ALICE", "ENTITY_AMORA", PrivacyScope.PERSONAL, "ALICE_PRIVATE_FIXTURE"),
             ("ENTITY_AMORA", "PERSON_ALICE", PrivacyScope.PERSONAL, "AMORA_TO_ALICE_PRIVATE_FIXTURE"),
@@ -141,12 +147,17 @@ def test_shared_session_recent_history_remains_recipient_scoped(tmp_path: Path, 
         assert "ALICE_PRIVATE_FIXTURE" not in rendered
         assert "AMORA_TO_ALICE_PRIVATE_FIXTURE" not in rendered
 
-        # Relationships about other people are not sent merely because Amora is
-        # a participant in those relationships.
+        # Only the explicit public bootstrap family catalogue is an exception
+        # to recipient ownership, not arbitrary edges involving Amora.
+        public_family = {(r.source, r.relation_type, r.target)
+                         for r in build_initial_registry().relationships
+                         if r.relation_type in {"mother_of", "father_of", "child_of"}}
         assert all(
             "PERSON_BK" in {r["source"], r["target"]}
+            or (r["source"], r["relation_type"], r["target"]) in public_family
             for r in ctx.relationships
         )
+        assert not any(r["source"] == "PERSON_ALICE" for r in ctx.relationships)
         assert "relationships" not in ctx.self_model or not ctx.remote_processing_allowed
     finally:
         core.close()

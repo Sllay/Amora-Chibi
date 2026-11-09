@@ -7,6 +7,7 @@ from amora.emotion import EmotionEngine
 from amora.events import PrivacyScope
 from amora.identity import EntityRegistry
 from amora.language import ACIRCompiler, PerspectiveFrame, PerspectiveResolver, PerspectiveStack
+from amora.language.text_references import scoped_registry, history_antecedents
 from amora.memory import MemoryQuery, MemoryService
 from amora.social import SocialSceneTracker
 from amora.time import Clock
@@ -122,11 +123,8 @@ class ContextCompiler:
         elif mode == "autonomous_initiation":
             reasons.append("AUTONOMOUS_INITIATION")
         acir: dict[str, Any] | None = None
-        if request.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET} and mode != "autonomous_initiation":
-            perspective = PerspectiveStack(PerspectiveFrame(speaker_id=request.speaker_id, addressee_id=request.target_id))
-            acir = self.acir.compile_utterance(request.text, perspective).model_dump(mode="json")
-            reasons.append("ACIR_COMPILED")
-        else:
+        compile_acir = request.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET} and mode != "autonomous_initiation"
+        if not compile_acir:
             reasons.append("ACIR_REDACTED_PRIVATE_SCOPE")
 
         speaker = self.identities.get(request.speaker_id)
@@ -164,9 +162,13 @@ class ContextCompiler:
                                               privacy_scope=item.privacy_scope.value, reason_codes=hit.reason_codes))
 
         claims: list[dict[str, Any]] = []
+        authorized_relations: set[tuple[str, str, str]] = set()
         for claim in self.world.current_state():
             if not self.privacy_gate.claim_allowed(claim, remote=remote, recipient_id=request.speaker_id):
                 continue
+            if (claim.canonical and claim.subject_id and isinstance(claim.object_value, str)
+                    and claim.predicate in {"mother_of", "father_of", "child_of"}):
+                authorized_relations.add((claim.subject_id, claim.predicate, claim.object_value))
             if claim.subject_id not in entity_ids | {"ENTITY_AMORA", None} and len(claims) >= 4:
                 continue
             claims.append({"id": str(claim.id), "kind": claim.kind.value, "statement": claim.statement,
@@ -178,11 +180,13 @@ class ContextCompiler:
         persisted_messages = self.store.list_messages(limit=24, session_id=request.session_id)
         reasons.append("RECENT_HISTORY_SESSION_SCOPED" if request.session_id is not None else "RECENT_HISTORY_UNSCOPED_LEGACY")
         test_turn_ids = {str(message.turn_id) for message in persisted_messages if bool(message.metadata.get("test_mode", False))}
+        include_session_tests = bool(request.metadata.get("test_mode", False)) and request.session_id is not None
         if test_turn_ids:
-            reasons.append("TEST_TURNS_EXCLUDED_FROM_RECENT")
+            reasons.append("TEST_SESSION_CONTEXT_ALLOWED" if include_session_tests else "TEST_TURNS_EXCLUDED_FROM_RECENT")
         recent: list[dict[str, Any]] = []
         for message in persisted_messages:
-            if str(message.turn_id) == str(request.turn_id) or str(message.turn_id) in test_turn_ids:
+            if (str(message.turn_id) == str(request.turn_id)
+                    or (str(message.turn_id) in test_turn_ids and not include_session_tests)):
                 continue
             if not self.privacy_gate.message_allowed(
                 message, remote=remote, recipient_id=request.speaker_id
@@ -196,14 +200,16 @@ class ContextCompiler:
         recent = recent[-12:]
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
-        relationships: list[dict[str, Any]] = []
-        for relation in self.identities.relationships:
-            # A relation Amora has with someone else is not automatically
-            # public to the current participant.
-            if request.speaker_id not in {relation.source, relation.target}:
-                continue
-            relationships.append({"source": relation.source, "relation_type": relation.relation_type,
-                                  "target": relation.target, "confidence": relation.confidence})
+        reference_registry = scoped_registry(self.identities, request.speaker_id,
+                                             authorized_relations=authorized_relations)
+        relationships = [relation.model_dump(mode="json") for relation in reference_registry.relationships]
+        if compile_acir:
+            resolver = PerspectiveResolver(reference_registry)
+            perspective = PerspectiveStack(PerspectiveFrame(speaker_id=request.speaker_id, addressee_id=request.target_id))
+            antecedents = history_antecedents(recent, resolver) if request.session_id is not None else []
+            acir = ACIRCompiler(resolver).compile_utterance(request.text, perspective,
+                                                         antecedents=antecedents).model_dump(mode="json")
+            reasons.append("ACIR_COMPILED")
 
         self_snapshot = self.self_model.snapshot()
         if remote:

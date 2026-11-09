@@ -1,5 +1,15 @@
 # AMORA — Project State / Checkpoint Operacional
 
+## Adendo 2026-11-09 — Fase 3, perspectiva
+
+Base verificada: main `f71ac4b` (PR #171), branch de trabalho
+`fix/phase3-contextual-perspective`. Texto livre agora recebe referências
+canônicas por perspectiva e grafo autorizado; alegações de sentimento continuam
+não verificadas. Relatório e limites de validação:
+[`docs/engineering/phase3/PERSPECTIVE_RESULTS.md`](docs/engineering/phase3/PERSPECTIVE_RESULTS.md).
+Nenhum deploy, inferência remota ou alteração de V2/V3 nesta etapa.
+O checkpoint antigo abaixo continua histórico e não substitui o HEAD atual.
+
 **Atualizado em:** 2026-11-03  
 **Base funcional consolidada em `main`:** PR #131 / `f7d35b9658adb0dac3c79a0260c9601957f50550`  
 **Schema atual em `main`:** **17**  
