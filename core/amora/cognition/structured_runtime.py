@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from time import perf_counter
 from typing import Any
 
@@ -27,6 +28,29 @@ class CognitiveEngine(ProductionCognitiveEngine):
     passed local validation. This intentionally trades a little first-token
     latency for semantic authority and safe provider failover.
     """
+
+    def _journal(self, request, stage, **fields):
+        # Only a fixed diagnostic projection leaves the privacy-controlled journal.
+        # Never log context, prompts, response bodies or exception text.
+        super()._journal(request, stage, **fields)
+        if stage not in {JournalStage.CONTEXT_COMPILED, JournalStage.PROVIDER_SELECTED,
+                         JournalStage.MODEL_STARTED, JournalStage.ERROR}:
+            return
+        payload = fields.get("payload") or {}
+        safe = {
+            "turn_id": str(request.turn_id), "stage": stage.value,
+            "provider": fields.get("provider"), "model": fields.get("model"),
+            "error_code": fields.get("error_code"),
+            "reason_codes": fields.get("reason_codes") or [],
+            "latency_ms": fields.get("duration_ms"),
+        }
+        for key in ("status_code", "candidate_index", "candidate_count",
+                    "provider_total_budget_seconds", "provider_attempt_budget_seconds",
+                    "remaining_provider_budget_seconds"):
+            value = payload.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                safe[key] = value
+        logging.getLogger("amora.cognition.generation").info("generation_stage", extra=safe)
 
     def state(self) -> dict[str, object]:
         state = super().state()
@@ -116,6 +140,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             request,
             JournalStage.CONTEXT_COMPILED,
             summary="canonical context compiled",
+            duration_ms=(perf_counter() - started) * 1000.0,
             reason_codes=context.reason_codes,
             payload={
                 "memory_ids": [item.id for item in context.memories],
@@ -178,6 +203,19 @@ class CognitiveEngine(ProductionCognitiveEngine):
 
         total_budget = _positive_float(request.metadata.get("provider_total_budget_seconds"))
         attempt_budget = _positive_float(request.metadata.get("provider_attempt_budget_seconds"))
+        # The caller separately bounds the entire cognitive turn. This budget
+        # measures provider execution only, excluding synchronous context/SQL and
+        # journal persistence; their cost must not impersonate a model timeout.
+        provider_elapsed = 0.0
+
+        async def timed_realize(realize):
+            nonlocal provider_elapsed
+            attempt_started = perf_counter()
+            try:
+                return await realize(context)
+            finally:
+                provider_elapsed += max(0.0, perf_counter() - attempt_started)
+
         last_failure = "NO_STRUCTURED_REALIZATION_PROVIDER"
         for provider_index, descriptor in enumerate(candidates):
             provider = self._providers.get(descriptor.name)
@@ -201,7 +239,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
 
             remaining_budget = None
             if total_budget is not None:
-                remaining_budget = total_budget - (perf_counter() - started)
+                remaining_budget = total_budget - provider_elapsed
                 if remaining_budget <= 0:
                     last_failure = "PROVIDER_TOTAL_BUDGET_EXHAUSTED"
                     self._journal(
@@ -232,6 +270,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     "candidate_count": len(candidates),
                     "provider_total_budget_seconds": total_budget,
                     "provider_attempt_budget_seconds": attempt_budget,
+                    "remaining_provider_budget_seconds": remaining_budget,
                 },
             )
             self._journal(
@@ -248,9 +287,9 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 if remaining_budget is not None:
                     timeout = min(timeout, remaining_budget) if timeout is not None else remaining_budget
                 if timeout is not None:
-                    raw_result = await asyncio.wait_for(realize(context), timeout=max(0.05, timeout))
+                    raw_result = await asyncio.wait_for(timed_realize(realize), timeout=max(0.05, timeout))
                 else:
-                    raw_result = await realize(context)
+                    raw_result = await timed_realize(realize)
                 raw = dict(raw_result)
                 usage = raw.pop("_usage", {}) if isinstance(raw.get("_usage"), dict) else {}
                 validated = RealizationValidator.parse_and_validate(context, raw)

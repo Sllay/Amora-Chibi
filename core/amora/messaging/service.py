@@ -252,12 +252,19 @@ class PlatformMessagingService:
                 metadata=request.metadata,
             )
 
-        fallback = self.conversation.composer.fallback_dialogue(cognitive_text, speaker_id=actor_id)
+        # Remote generation failures must not masquerade as a social acknowledgement.
+        # Local-only conversation retains its legitimate local composition.
+        fallback = (
+            self.conversation.composer.operational_provider_fallback()
+            if message.remote_processing_allowed
+            else self.conversation.composer.fallback_dialogue(cognitive_text, speaker_id=actor_id)
+        )
         provider: str | None = None
         model: str | None = None
         fallback_used = False
         cognitive_reasons: list[str] = []
         cognitive_turn_id = str(request.turn_id)
+        generation_started = self.clock.monotonic()
         try:
             plan = await asyncio.wait_for(
                 self.cognition.respond(request, on_segment=None, fallback_text=fallback),
@@ -348,6 +355,9 @@ class PlatformMessagingService:
             text,
             metadata={
                 "cognitive_turn_id": cognitive_turn_id,
+                "generation_latency_ms": max(0, round((self.clock.monotonic() - generation_started) * 1000)),
+                "generation_stage": ("local" if not message.remote_processing_allowed else "fallback" if fallback_used else "realization"),
+                "generation_error_code": cognitive_reasons[0] if message.remote_processing_allowed and fallback_used and cognitive_reasons else None,
                 "provider": provider,
                 "model": model,
                 "fallback_used": fallback_used,
@@ -571,6 +581,7 @@ class PlatformMessagingService:
         cognitive_reason_codes: list[str] | None = None,
         remote_processing_allowed: bool | None = None,
     ) -> None:
+        metadata = result.outbound[0].metadata if result.outbound else {}
         _LOG.info(
             "messaging_inbound_result action=%s outbound=%d duplicate=%s provider=%s fallback_used=%s remote_processing_allowed=%s attention_reasons=%s cognitive_reasons=%s",
             result.decision.action.value,
@@ -581,6 +592,13 @@ class PlatformMessagingService:
             remote_processing_allowed,
             ",".join(result.decision.reason_codes) or "none",
             ",".join(cognitive_reason_codes or []) or "none",
+            extra={
+                "turn_id": metadata.get("cognitive_turn_id"),
+                "model": metadata.get("model"),
+                "generation_stage": metadata.get("generation_stage"),
+                "generation_error_code": metadata.get("generation_error_code"),
+                "generation_latency_ms": metadata.get("generation_latency_ms"),
+            },
         )
 
     @classmethod
