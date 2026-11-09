@@ -47,13 +47,13 @@ class ACIRCompiler:
     def __init__(self, resolver: PerspectiveResolver) -> None:
         self.resolver = resolver
 
-    def compile_utterance(self, text: str, stack: PerspectiveStack) -> ACIR:
+    def compile_utterance(self, text: str, stack: PerspectiveStack, *, antecedents: list[str] | None = None) -> ACIR:
         """Compile the conservative ACIR envelope available for every utterance.
 
-        This deliberately does not pretend that the Core already has a general
-        semantic parser. The raw utterance remains raw content while the deictic
-        participants (speaker/addressee) are resolved through the same canonical
-        PerspectiveResolver used by richer typed SemanticDraft callers.
+        This is bounded reference annotation, not a general semantic parser.
+        The raw utterance remains content; participant and reference identities
+        use the same PerspectiveResolver as typed SemanticDraft callers. A
+        resolved reference never verifies the assertion made about that entity.
         """
         roles: dict[str, Any] = {
             "speaker": ReferenceInput(expression="eu"),
@@ -61,7 +61,12 @@ class ACIRCompiler:
         }
         if stack.current.addressee_id is not None:
             roles["addressee"] = ReferenceInput(expression="você")
-        return self.compile(
+        from .text_references import extract_references
+        references = extract_references(text, stack, self.resolver, antecedents=antecedents)
+        if references:
+            roles["references"] = references
+            roles["assertion_truth"] = "unverified_user_claim"
+        result = self.compile(
             SemanticDraft(
                 intent="communicate",
                 proposition_type="utterance",
@@ -69,6 +74,9 @@ class ACIRCompiler:
             ),
             stack,
         )
+        result.entities = sorted(set(result.entities) | {entity_id for ref in references
+                                 if ref["status"] == "resolved" for entity_id in ref["entity_ids"]})
+        return result
 
     def compile(self, draft: SemanticDraft, stack: PerspectiveStack) -> ACIR:
         frame = stack.current
