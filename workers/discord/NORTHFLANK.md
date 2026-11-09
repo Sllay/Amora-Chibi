@@ -43,3 +43,33 @@ A Discord Application Public Key não é usada por este worker porque Applicatio
 5. Confirme no Discord que o bot fica online e execute a matriz física de staging em `workers/discord/README.md` / issue de certificação.
 
 Nunca copie tokens reais para issues, PRs, arquivos `.env` versionados ou mensagens de chat.
+
+## Temporização do inbound Discord (hotfix síncrono)
+
+O fluxo de mensagens remotas usa, nesta revisão, uma escada de deadlines:
+
+| Fase | Prazo máximo |
+|---|---:|
+| Tentativa de provider (NVIDIA/Groq) | 75s |
+| Total de tentativas de providers | 90s |
+| Cognição Discord no Core | 105s |
+| Discord Worker → Core (HTTP inbound) | 120s |
+| HTTP middleware do Core para `POST /v1/messaging/worker/inbound` | 130s |
+
+Web/Safari e demais rotas mantêm seus prazos anteriores. O timeout interno do
+NVIDIA para **inatividade significativa** no SSE permanece 55s e não é o
+limite total de geração; se o modelo ficar silencioso por mais de 55s,
+pode falhar mesmo com 75s disponíveis para a tentativa.
+
+**Verificação externa obrigatória:** conferir o timeout do ingress/proxy do
+Northflank para o endpoint `POST /v1/messaging/worker/inbound` e configurá-lo
+para **pelo menos 135s**, se o domínio/roteamento permitir. Um proxy que encerra
+em menos de 120s continuará interrompendo requests, independentemente dos
+limites do código. Validar empiricamente a duração com um turno sintético lento
+e a entrega no Discord real antes de considerar o incidente resolvido.
+
+Isto é compatibilidade **síncrona temporária**, não uma inbox durável. A geração
+continua dentro do request HTTP; a perda do processo, conexões interrompidas e
+corridas entre réplicas não estão resolvidas. A evolução correta é aceitar
+rapidamente o inbound e processar o turno por worker durável, com lease e
+idempotência verificados. Evitar retries ilimitados no Discord.
