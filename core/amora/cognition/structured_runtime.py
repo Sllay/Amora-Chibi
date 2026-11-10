@@ -16,7 +16,7 @@ from .proposals import CognitiveProposalBundle
 from .providers import ProviderError
 from .providers_nvidia import NvidiaStreamTimeout
 from .providers_structured import GeminiCognitiveProvider
-from .realization import RealizationError, RealizationValidator, ValidatedRealization
+from .realization import RealizationError, RealizationValidator, ValidatedRealization, response_semantic_filter_enabled
 from .speech import SpeechSegmenter
 from .service import SegmentSink
 
@@ -58,6 +58,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
         state["social_expression_profile"] = profile_state(configured_profile())
         state["last_realization"] = getattr(self, "_last_realization", None)
         state["last_realization_rejection"] = getattr(self, "_last_realization_rejection", None)
+        state["response_semantic_filter_enabled"] = response_semantic_filter_enabled()
         return state
 
     def register_provider(self, provider) -> None:
@@ -292,7 +293,9 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     raw_result = await timed_realize(realize)
                 raw = dict(raw_result)
                 usage = raw.pop("_usage", {}) if isinstance(raw.get("_usage"), dict) else {}
-                validated = RealizationValidator.parse_and_validate(context, raw)
+                validated = RealizationValidator.parse_and_validate(
+                    context, raw, enforce_dialogue_plan=response_semantic_filter_enabled(),
+                )
             except ContextBudgetExceeded:
                 last_failure = "CONTEXT_ENVELOPE_OVERFLOW"
                 self._journal(request, JournalStage.ERROR, summary="provider envelope exceeds budget",
@@ -538,6 +541,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             metadata={
                 "realization_frame": frame_dump,
                 "realization_validated": True,
+            "dialogue_plan_semantically_enforced": "RESPONSE_SEMANTIC_FILTER_DISABLED" not in validated.reason_codes,
                 "candidate_index": usage.get("candidate_index"),
                 "cues": [cue.value for cue in speech_plan.cues],
                 "cue_support": speech_plan.cue_support(),
