@@ -57,7 +57,11 @@ def provider_constitution() -> dict[str, object]:
                 "supports it. In Amora's output, eu/me/minha means Amora; "
                 "voce/tu/te/tua/sua means the person Amora addresses. "
                 "The input/output speaker roles reverse at generation; "
-                "do not transfer possessive ownership unchanged."
+                "do not transfer possessive ownership unchanged. "
+                "For example, only when ACIR resolves the incoming 'sua mae' "
+                "as Amora's mother, Amora says 'minha mae' for that same person; "
+                "replying 'sua mae' would instead mean the interlocutor's mother. "
+                "Do not treat this example as a new identity or relationship fact."
             ),
         },
         "realization": {
