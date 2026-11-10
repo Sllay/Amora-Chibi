@@ -12,7 +12,7 @@ from .mesh_providers import (
     CloudflareCognitiveProvider as BaseCloudflareCognitiveProvider,
     OpenRouterCognitiveProvider as BaseOpenRouterCognitiveProvider,
 )
-from .context_budget import ensure_payload
+from .context_budget import ensure_payload, fit_provider_payload, estimate_payload
 from .models import CognitiveContext
 from .preview import preview_enabled, publish_preview
 from .prompt_frame import render_conversation_turn, render_current_turn, render_trusted_protocol
@@ -112,53 +112,47 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
         api_key = self.secrets.get("GROQ_API_KEY")
         if not api_key:
             raise ProviderError("GROQ_API_KEY is not configured")
-        instructions = (
-            self._system_prompt()
-            + _IDENTITY_CONTRACT
-            + "\n\n"
-            + render_trusted_protocol(context)
-            + "\n\n"
-            + _REFLECTION_INSTRUCTION
-            + " Produza apenas propostas estruturadas sujeitas aos gates locais."
-        )
-        payload = {
+        _, payload = fit_provider_payload(context, lambda projected: {
             "model": self.model,
-            "instructions": instructions,
-            "input": _responses_input(context),
+            "instructions": (
+                self._system_prompt() + _IDENTITY_CONTRACT + "\n\n"
+                + render_trusted_protocol(projected) + "\n\n"
+                + _REFLECTION_INSTRUCTION
+                + " Produza apenas propostas estruturadas sujeitas aos gates locais."
+            ),
+            "input": _responses_input(projected),
             "stream": False,
             "temperature": 0.25,
             "top_p": 0.8,
             "max_output_tokens": 900,
             "store": False,
             "text": {"format": {"type": "json_object"}},
-        }
+        })
         root, response = await self._post_responses(payload, api_key=api_key, error_label="cognitive proposal")
         parsed = _parse_responses_json(root, error_message="Groq returned invalid structured cognitive proposals")
         parsed["_usage"] = _responses_usage(root, response)
         return parsed
 
     async def _responses_realize(self, context: CognitiveContext, *, api_key: str) -> dict[str, object]:
-        instructions = self._realization_instructions(context)
-        payload = {
+        _, payload = fit_provider_payload(context, lambda projected: {
             "model": self.model,
-            "instructions": instructions,
-            "input": _responses_input(context),
+            "instructions": self._realization_instructions(projected),
+            "input": _responses_input(projected),
             "stream": False,
             "temperature": 0.70,
             "top_p": 0.80,
-            "max_output_tokens": _dialogue_token_budget(context),
+            "max_output_tokens": _dialogue_token_budget(projected),
             "store": False,
             "reasoning": {"effort": "none"},
             "text": {
                 "format": {
                     "type": "json_schema",
                     "name": "amora_realization",
-                    "schema": _realization_schema(context),
+                    "schema": _realization_schema(projected),
                 }
             },
-        }
+        })
         started = perf_counter()
-        ensure_payload(context, payload)
         root, response = await self._post_responses(payload, api_key=api_key, error_label="structured realization")
         set_ms("provider_surface_ms", (perf_counter() - started) * 1000.0)
         parse_started = perf_counter()
@@ -174,21 +168,19 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
         return parsed
 
     async def _responses_stream_realize(self, context: CognitiveContext, *, api_key: str) -> dict[str, object]:
-        payload = {
+        _, payload = fit_provider_payload(context, lambda projected: {
             "model": self.model,
-            "instructions": self._realization_instructions(context),
-            "input": _responses_input(context),
+            "instructions": self._realization_instructions(projected),
+            "input": _responses_input(projected),
             "stream": True,
             "temperature": 0.70,
             "top_p": 0.80,
-            "max_output_tokens": _dialogue_token_budget(context),
+            "max_output_tokens": _dialogue_token_budget(projected),
             "store": False,
             "reasoning": {"effort": "none"},
-            # JSON-object mode is used for progressive preview. The completed
-            # object is still locally schema/DialoguePlan validated afterwards.
+            # Progressive preview is locally validated before it is committed.
             "text": {"format": {"type": "json_object"}},
-        }
-        ensure_payload(context, payload)
+        })
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -212,13 +204,23 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
                 remaining_requests = response.headers.get("x-ratelimit-remaining-requests")
                 remaining_tokens = response.headers.get("x-ratelimit-remaining-tokens")
                 if response.status_code >= 400:
-                    body = (await response.aread()).decode("utf-8", errors="replace")[:1000]
+                    # Never include rejected payload or upstream error bodies in
+                    # an exception: those can echo private conversation text.
                     if response.status_code in {400, 404, 405, 415, 422}:
-                        raise _StreamingResponseUnsupported(body)
+                        raise _StreamingResponseUnsupported(f"response_http_{response.status_code}")
                     raise ProviderError(
-                        f"Groq Responses streaming failed ({response.status_code}): {body}",
+                        f"Groq Responses streaming failed (HTTP {response.status_code})",
                         status_code=response.status_code,
                         retry_after=response.headers.get("retry-after"),
+                        diagnostics={
+                            "stage": "http_request_rejected",
+                            "http_status_code": response.status_code,
+                            "provider_error_category": (
+                                "request_body_too_large" if response.status_code == 413
+                                else "other_http_error"
+                            ),
+                            "estimated_input_tokens": estimate_payload(payload),
+                        },
                     )
 
                 async for line in response.aiter_lines():
@@ -307,9 +309,18 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
             )
         if response.status_code >= 400:
             raise ProviderError(
-                f"Groq Responses {error_label} failed ({response.status_code}): {response.text[:1000]}",
+                f"Groq Responses {error_label} failed (HTTP {response.status_code})",
                 status_code=response.status_code,
                 retry_after=response.headers.get("retry-after"),
+                diagnostics={
+                    "stage": "http_request_rejected",
+                    "http_status_code": response.status_code,
+                    "provider_error_category": (
+                        "request_body_too_large" if response.status_code == 413
+                        else "other_http_error"
+                    ),
+                    "estimated_input_tokens": estimate_payload(payload),
+                },
             )
         try:
             root = response.json()
