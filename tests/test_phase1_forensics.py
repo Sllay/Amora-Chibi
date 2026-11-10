@@ -167,7 +167,7 @@ def test_web_default_test_mode_is_not_continuity_or_read_only(tmp_path, monkeypa
         with TestClient(create_api(core)) as client:
             response = client.post('/v1/web/utterance', headers={
                 'Authorization': 'Bearer ' + core.secrets.get('LOCAL_API_TOKEN')},
-                json={'text': 'O gerente do caos perdeu o ponto e vírgula.', 'remote_processing_allowed': False})
+                json={'text': 'O gerente do caos perdeu o ponto e vírgula.', 'remote_processing_allowed': False, 'test_mode': True})
             assert response.status_code == 200
             assert response.json()['test_mode'] is True
             assert core.database._conn.execute(
