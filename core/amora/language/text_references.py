@@ -151,10 +151,13 @@ def extract_references(text: str, stack: PerspectiveStack, resolver: Perspective
             elif key in PRONOUNS:
                 expression = word
             else:
-                entity_id, alias_end = _alias_at(tokens, index, resolver.registry)
-                if entity_id:
-                    end = alias_end
-                    expression = resolver.registry.get(entity_id).canonical_name
+                # Bare relational nouns like "mãe" are not personal aliases;
+                # assigning them to one registry entry would leak identity.
+                if key not in KINSHIP:
+                    entity_id, alias_end = _alias_at(tokens, index, resolver.registry)
+                    if entity_id:
+                        end = alias_end
+                        expression = resolver.registry.get(entity_id).canonical_name
             if expression is not None:
                 frame = local
                 if named_owner:
