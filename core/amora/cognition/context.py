@@ -154,7 +154,28 @@ class ContextCompiler:
             entity_ids.add(request.target_id)
 
         memories: list[ContextMemory] = []
-        for hit in self.memory.recall(MemoryQuery(text=request.text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78)):
+        # Generic recollection requests contain no event-specific retrieval terms.
+        # Use entity/recency ranking rather than letting conversational filler
+        # accidentally match arbitrary memories via full-text search.
+        recall_text = request.text
+        from unicodedata import combining, normalize
+        normalized_recall = "".join(
+            char for char in normalize("NFKD", request.text.casefold())
+            if not combining(char)
+        )
+        normalized_recall = " ".join(normalized_recall.strip(" ?!.,").split())
+        if normalized_recall in {
+            "voce lembra do que conversamos",
+            "lembra do que conversamos",
+            "voce lembra de mim",
+            "lembra de mim",
+            "o que voce lembra de mim",
+            "o que voce lembra sobre mim",
+            "o que voce lembra das nossas conversas",
+        }:
+            recall_text = ""
+            reasons.append("GENERIC_RECOLLECTION_ENTITY_RECALL")
+        for hit in self.memory.recall(MemoryQuery(text=recall_text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78)):
             item = hit.memory
             if self.privacy_gate.memory_allowed(item, remote=remote, recipient_id=request.speaker_id):
                 memories.append(ContextMemory(id=str(item.id), kind=item.kind.value, content=item.summary or item.content,
