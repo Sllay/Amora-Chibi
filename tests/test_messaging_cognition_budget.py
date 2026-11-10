@@ -154,3 +154,27 @@ def test_libsql_safe_event_dedupe_uses_atomic_conflict_target(tmp_path, monkeypa
         assert sql["event_type"] == "conversation.utterance_cancelled"
     finally:
         db.close()
+
+
+def test_event_dedupe_key_does_not_mask_cross_type_or_pk_collision(tmp_path) -> None:
+    from uuid import uuid4
+    import sqlite3
+    from amora.events import AmoraEvent
+    from amora.storage import AmoraDatabase
+
+    db = AmoraDatabase(tmp_path / "events-conflict.db")
+    db.migrate()
+    try:
+        original = AmoraEvent(event_type="conversation.utterance_cancelled",
+                              source="test", dedupe_key="cancel:unique")
+        assert db.append_event(original)
+        with pytest.raises(sqlite3.IntegrityError):
+            db.append_event(AmoraEvent(event_type="different.event",
+                                       source="test", dedupe_key="cancel:unique"))
+        with pytest.raises(sqlite3.IntegrityError):
+            db.append_event(AmoraEvent(id=original.id,
+                                       event_type=original.event_type,
+                                       source="test", dedupe_key="another:unique"))
+        assert db.event_count() == 1
+    finally:
+        db.close()
