@@ -76,17 +76,20 @@ class AmoraDatabase:
         values = (str(event.id), event.schema_version, event.event_type, event.timestamp.isoformat(), event.source, event.actor, event.target, event.confidence, event.importance, int(event.priority), json.dumps(event.payload, ensure_ascii=False, separators=(",", ":")), event.privacy_scope.value, event.session_id, str(event.correlation_id) if event.correlation_id else None, str(event.causation_id) if event.causation_id else None, str(event.causal_parent) if event.causal_parent else None, event.sequence, event.dedupe_key)
         with self._lock:
             try:
-                execute_atomic_statement(
+                result = execute_atomic_statement(
                     self.backend,
                     self._conn,
-                    """INSERT INTO events (id, schema_version, event_type, timestamp, source, actor, target, confidence, importance, priority, payload_json, privacy_scope, session_id, correlation_id, causation_id, causal_parent, sequence, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO events (id, schema_version, event_type, timestamp, source, actor, target, confidence, importance, priority, payload_json, privacy_scope, session_id, correlation_id, causation_id, causal_parent, sequence, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(dedupe_key) DO NOTHING""",
                     values,
                 )
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise
                 return False
-            return True
+            # libSQL may report a duplicate dedupe_key as generic SQLITE_CONSTRAINT.
+            # Ignore *only* the expected unique dedupe-key conflict, atomically in SQL;
+            # FK, CHECK, NOT NULL and unrelated primary-key violations still fail.
+            return result.rowcount > 0
 
     def event_count(self) -> int:
         with self._lock:
