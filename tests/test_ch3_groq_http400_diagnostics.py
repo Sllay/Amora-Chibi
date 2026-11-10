@@ -165,7 +165,7 @@ async def test_groq_responses_413_is_classified_without_echoing_private_body(mon
 @pytest.mark.asyncio
 async def test_groq_full_v3_is_preserved_in_bounded_provider_projection(monkeypatch) -> None:
     from amora.cognition.providers_identity import GroqCognitiveProvider as LiveGroq
-    from amora.cognition.context_budget import estimate_payload, GROQ_PAYLOAD_SOFT_CEILING_TOKENS
+    from amora.cognition.context_budget import estimate_payload, GROQ_PAYLOAD_HARD_CEILING_TOKENS
     from amora.cognition.expressive_profile import profile_text
     from amora.cognition.providers import ProviderError
 
@@ -188,7 +188,7 @@ async def test_groq_full_v3_is_preserved_in_bounded_provider_projection(monkeypa
     with pytest.raises(ProviderError, match="synthetic stop"):
         await provider._responses_realize(ctx, api_key="TEST_KEY_DO_NOT_LEAK")
 
-    assert estimate_payload(sent) <= GROQ_PAYLOAD_SOFT_CEILING_TOKENS
+    assert estimate_payload(sent) <= GROQ_PAYLOAD_HARD_CEILING_TOKENS
     assert profile_text("amora-v3") in sent["instructions"]
     assert ctx.user_text in str(sent["input"])
     assert ctx.recent_messages == original_history
