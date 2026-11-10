@@ -134,6 +134,7 @@ def test_third_person_uses_explicit_filtered_antecedent(text, phrase, antecedent
 def core(tmp_path, monkeypatch):
     monkeypatch.setenv('AMORA_HOME', str(tmp_path / 'phase3-isolated'))
     monkeypatch.setenv('AMORA_SOCIAL_EXPRESSION_PROFILE', 'core-v1')
+    monkeypatch.setenv('AMORA_SOCIAL_PRIMARY', 'mistral')
     monkeypatch.setenv('AMORA_SECRET_NVIDIA_API_KEY', 'synthetic-never-remote')
     for name in ('GROQ_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY'):
         monkeypatch.delenv('AMORA_SECRET_' + name, raising=False)
