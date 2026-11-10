@@ -83,13 +83,29 @@ class AmoraDatabase:
                     values,
                 )
             except sqlite3.IntegrityError as exc:
-                if not is_duplicate_error(exc):
+                # Only an existing *same-kind* event with the same dedupe key is
+                # idempotent. Never suppress unrelated PK or constraint failures.
+                if not is_duplicate_error(exc) or not event.dedupe_key:
                     raise
+                existing = self._conn.execute(
+                    "SELECT event_type FROM events WHERE dedupe_key = ?",
+                    (event.dedupe_key,),
+                ).fetchone()
+                if existing is not None and existing["event_type"] == event.event_type:
+                    return False
+                raise
+            if result.rowcount > 0:
+                return True
+            # SQL ON CONFLICT(dedupe_key) handles libSQL's generic
+            # SQLITE_CONSTRAINT without depending on extended exception codes.
+            # Distinguish an idempotent replay from a key collision across types.
+            existing = self._conn.execute(
+                "SELECT event_type FROM events WHERE dedupe_key = ?",
+                (event.dedupe_key,),
+            ).fetchone() if event.dedupe_key else None
+            if existing is not None and existing["event_type"] == event.event_type:
                 return False
-            # libSQL may report a duplicate dedupe_key as generic SQLITE_CONSTRAINT.
-            # Ignore *only* the expected unique dedupe-key conflict, atomically in SQL;
-            # FK, CHECK, NOT NULL and unrelated primary-key violations still fail.
-            return result.rowcount > 0
+            raise sqlite3.IntegrityError("EVENT_DEDUPE_CONFLICT")
 
     def event_count(self) -> int:
         with self._lock:
