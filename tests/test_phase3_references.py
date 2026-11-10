@@ -328,3 +328,12 @@ def test_real_memory_is_retrieved_across_web_sessions_without_leaking_test_histo
     context = core.cognition.compiler.compile(request)
     assert any(item.id == str(remembered.memory.id) for item in context.memories)
     assert not any("A Lia chegou." in item["text"] for item in context.recent_messages)
+
+    generic_context = core.cognition.compiler.compile(req(
+        "Você lembra de mim?",
+        session_id="web:third-session",
+        metadata={"test_mode": False},
+    ))
+    assert "GENERIC_RECOLLECTION_ENTITY_RECALL" in generic_context.reason_codes
+    assert any(item.id == str(remembered.memory.id) for item in generic_context.memories)
+
