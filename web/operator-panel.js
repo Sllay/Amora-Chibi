@@ -100,7 +100,9 @@ async function showSurface(surface) {
   if (surface === "peopleView" && hasOperator) {
     await loadPeople().catch((error) => {
       if (error.status === 401) return showSurface("peopleView");
-      $("peopleList").textContent = humanError(error);
+      if (!$("peopleList").textContent.startsWith("Não foi possível carregar fichas:")) {
+        $("peopleList").textContent = humanError(error);
+      }
     });
   }
   if (surface === "consoleView" && hasOperator) {
@@ -396,18 +398,32 @@ async function removeRelationship(item) {
 }
 
 async function loadPeople() {
-  const [people, relationships] = await Promise.all([
+  // Profiles and family relations are independent read models. A failing
+  // relationship projection must never hide valid person profiles.
+  const [peopleResult, relationsResult] = await Promise.allSettled([
     operatorApi("/v1/operator/people"),
     operatorApi("/v1/operator/relationships"),
   ]);
+  if (peopleResult.status === "rejected") {
+    $("peopleList").textContent = `Não foi possível carregar fichas: ${humanError(peopleResult.reason)}`;
+    $("relationshipList").textContent = "Relações indisponíveis enquanto as fichas não carregarem.";
+    throw peopleResult.reason;
+  }
+  const people = peopleResult.value;
   state.profiles = people.profiles || [];
   state.entities = people.entities || [];
   state.relationTypes = people.family_relation_types || [];
   state.symmetricTypes = new Set(people.symmetric_relation_types || []);
-  state.relationships = relationships.relationships || [];
+  // Never display stale family edges as if they were verified.
+  state.relationships = relationsResult.status === "fulfilled"
+    ? (relationsResult.value.relationships || []) : [];
   if (state.selectedEntityId && !state.profiles.some((item) => item.entity_id === state.selectedEntityId)) state.selectedEntityId = null;
   renderPeopleList();
   renderRelationships();
+  if (relationsResult.status === "rejected") {
+    $("relationshipList").textContent =
+      `Não foi possível carregar parentescos: ${humanError(relationsResult.reason)}. As fichas continuam disponíveis.`;
+  }
   if (!state.selectedEntityId && state.profiles.length) state.selectedEntityId = state.profiles[0].entity_id;
   if (state.selectedEntityId) await selectPerson(state.selectedEntityId);
 }
