@@ -60,7 +60,12 @@ class ReferenceResolution(BaseModel):
 
 class PerspectiveResolver:
     _first_person = {"eu", "me", "mim", "comigo"}
-    _second_person = {"você", "voce", "te", "ti", "contigo"}
+    # Singular colloquial Brazilian Portuguese forms are deictic: all refer to
+    # the current addressee, not to the person using them.
+    _second_person = {"você", "voce", "vc", "tu", "cê", "ce", "ocê", "oce",
+                      "te", "ti", "contigo"}
+    # A plural address cannot be equated with one known interlocutor.
+    _second_person_plural = {"vocês", "voces", "vcs", "cês", "ces", "vós", "vos"}
     _third_person = {"ele", "ela", "dele", "dela"}
     _kinship = {
         "mãe": "mother_of",
@@ -109,6 +114,24 @@ class PerspectiveResolver:
             if frame.addressee_id:
                 return self._resolved(expression, frame.addressee_id, 0.98, ["SECOND_PERSON_TO_ADDRESSEE"])
             return self._unresolved(expression, ["ADDRESSEE_UNKNOWN"])
+
+        if expr in self._second_person_plural:
+            return self._unresolved(expression, ["SECOND_PERSON_PLURAL_GROUP_UNKNOWN"])
+
+        # A possessive on its own can mark the owner of a non-kinship noun
+        # ("tua voz", "meu desenho"). The noun itself is not a known entity.
+        if expr in self._possessive_owner:
+            source = self._possessive_owner[expr]
+            owner = frame.speaker_id if source == "speaker" else frame.addressee_id
+            if not owner:
+                return self._unresolved(expression, ["POSSESSOR_UNKNOWN"])
+            return self._resolved(expression, owner, 0.92,
+                                  [f"POSSESSOR_{source.upper()}_UNSPECIFIED_NOUN"])
+
+        # "Se" is conditional or reflexive according to syntax. A standalone
+        # token must never become an alias for "cê" / "você".
+        if expr == "se":
+            return self._unresolved(expression, ["REFLEXIVE_OR_CONDITIONAL_UNDETERMINED"])
 
         possessive = re.fullmatch(
             r"(minha|meu|minhas|meus|sua|seu|suas|seus|tua|teu|tuas|teus)\s+"
