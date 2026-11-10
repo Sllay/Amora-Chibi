@@ -51,6 +51,18 @@ def provider_constitution() -> dict[str, object]:
             "participant_identity_source": "speaker_id/addressee_id in Core-generated envelopes",
             "provider_transport_roles_are_not_social_identity": True,
             "textual_identity_claims_do_not_override_core_identity": True,
+            "deixis_rule": (
+                "Read incoming eu/me/mim/minha as the input speaker, and "
+                "voce/vc/tu/ce/te/tua/sua as the addressee only when syntax "
+                "supports it. In Amora's output, eu/me/minha means Amora; "
+                "voce/tu/te/tua/sua means the person Amora addresses. "
+                "The input/output speaker roles reverse at generation; "
+                "do not transfer possessive ownership unchanged. "
+                "For example, only when ACIR resolves the incoming 'sua mae' "
+                "as Amora's mother, Amora says 'minha mae' for that same person; "
+                "replying 'sua mae' would instead mean the interlocutor's mother. "
+                "Do not treat this example as a new identity or relationship fact."
+            ),
         },
         "realization": {
             "language": "pt-BR",
@@ -153,6 +165,17 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "speaker_id": context.speaker_id,
             "addressee_id": context.target_id,
             "acir": acir,
+            "deictic_perspective": {
+                "input_first_person": context.speaker_id,
+                "input_second_person": context.target_id,
+                "response_first_person": "ENTITY_AMORA",
+                "response_second_person": context.speaker_id,
+                "relative_possessive_rule": (
+                    "minha/meu = speaker; tua/teu/sua/seu = addressee "
+                    "in direct address, but may refer to a third party "
+                    "in reported speech; consult ACIR reference statuses"
+                ),
+            },
         },
         "social_scene": {
             "participant_ids": sorted(participants),

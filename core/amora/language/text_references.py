@@ -19,7 +19,15 @@ PUBLIC_AMORA_RELATIONS = frozenset(
 )
 KINSHIP = frozenset({'mae', 'pai', 'filha', 'filho'})
 POSSESSIVES = frozenset('minha meu minhas meus sua seu suas seus tua teu tuas teus'.split())
-PRONOUNS = frozenset('eu me mim comigo voce te ti contigo ele ela dele dela'.split())
+# These forms are compared after accent folding by attribution.normalized.
+# Collective/plural "vocês" and reflexive/conditional "se" deliberately remain
+# uncertain unless the local syntax supplies a safe referent.
+PRONOUNS = frozenset(
+    'eu me mim comigo voce vc tu ce oce te ti contigo voces vcs ces vos '
+    'ele ela dele dela se'.split()
+)
+SECOND_SUBJECT = frozenset('voce vc tu ce oce'.split())
+REFLEXIVE_ADVERBS = frozenset('nao ja ainda tambem'.split())
 TOKEN = re.compile(r'\w+', re.UNICODE)
 MAX_REFERENCES = 32
 MAX_TOKENS = 2048
@@ -41,6 +49,16 @@ def scoped_registry(registry: EntityRegistry, recipient_id: str, *, authorized_r
         if recipient_id in {relation.source, relation.target} or key in PUBLIC_AMORA_RELATIONS or key in allowed:
             result.add_relationship(relation.model_copy(deep=True))
     return result
+
+
+def _reflexive_subject(tokens, index):
+    # The reflexive "se" must have an explicit subject in this small local
+    # window; "se eu quiser" and "perguntou se..." are conditionals, not
+    # references. Never infer a deictic owner from the token alone.
+    previous = normalized(tokens[index - 1][0]) if index else ''
+    if previous in REFLEXIVE_ADVERBS and index > 1:
+        previous = normalized(tokens[index - 2][0])
+    return previous
 
 
 def _alias_at(tokens, index, registry):
@@ -120,13 +138,26 @@ def extract_references(text: str, stack: PerspectiveStack, resolver: Perspective
                 if named_owner:
                     end = named_end
                     expression = 'minha ' + word
+            elif key in POSSESSIVES:
+                # Even without a family noun, ownership is relevant ("teu
+                # desenho", "minha casa"). Only the possessor is resolved.
+                expression = word
+            elif key == 'se':
+                # "Se você quiser" is conditional, never a pronoun naming
+                # Amora. Reflexive "tu se machucou" has an explicit subject.
+                previous = _reflexive_subject(tokens, index)
+                if previous in SECOND_SUBJECT or previous in {'ele', 'ela'}:
+                    expression = word
             elif key in PRONOUNS:
                 expression = word
             else:
-                entity_id, alias_end = _alias_at(tokens, index, resolver.registry)
-                if entity_id:
-                    end = alias_end
-                    expression = resolver.registry.get(entity_id).canonical_name
+                # Bare relational nouns like "mãe" are not personal aliases;
+                # assigning them to one registry entry would leak identity.
+                if key not in KINSHIP:
+                    entity_id, alias_end = _alias_at(tokens, index, resolver.registry)
+                    if entity_id:
+                        end = alias_end
+                        expression = resolver.registry.get(entity_id).canonical_name
             if expression is not None:
                 frame = local
                 if named_owner:
@@ -135,10 +166,21 @@ def extract_references(text: str, stack: PerspectiveStack, resolver: Perspective
                 ids = [value for value in resolution.entity_ids if value != '__UNKNOWN_REPORTED_SPEAKER__']
                 status = resolution.status.value
                 reasons = list(resolution.reason_codes)
+                if key == 'se':
+                    previous = _reflexive_subject(tokens, index)
+                    if previous in SECOND_SUBJECT and target:
+                        status, ids, reasons = 'resolved', [target], ['EXPLICIT_SECOND_PERSON_REFLEXIVE']
+                    else:
+                        status, ids, reasons = 'ambiguous', [], ['REFLEXIVE_SUBJECT_UNRESOLVED']
                 if key in {'ele', 'ela', 'dele', 'dela'} and not ids and status == 'unresolved':
                     status = 'ambiguous'
-                if key in {'sua', 'seu', 'suas', 'seus'} and any(
-                        mention not in {actor, target} for mention in named_mentions):
+                if key in {'sua', 'seu', 'suas', 'seus'} and (
+                        any(mention not in {actor, target} for mention in named_mentions)
+                        or any(normalized(item[0]) in {'ele', 'ela'}
+                               for item in tokens[:index])):
+                    # Brazilian "seu/sua" can mean "his/her" after an explicit
+                    # third-person subject. Preserve uncertainty rather than
+                    # automatically assigning the addressee's property.
                     status, ids, reasons = 'ambiguous', [], ['POSSESSIVE_OWNER_AMBIGUOUS']
                 if (key in {'sua', 'seu', 'suas', 'seus'}
                         and segment.kind == 'reported' and not explicit_report):
