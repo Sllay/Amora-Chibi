@@ -179,3 +179,31 @@ def test_actual_core_and_groq_trusted_frame_preserve_incoming_roles(tmp_path, mo
         assert '"input_first_person":"PERSON_BK"' in instructions
     finally:
         core.close()
+
+
+def test_aliases_cannot_overwrite_grammatical_eu_vc_or_family_scope():
+    from amora.identity import Entity, EntityType
+    from amora.language.text_references import extract_references
+
+    registry = build_initial_registry()
+    registry.add_entity(Entity(
+        id="PERSON_ALIAS", canonical_name="Alias Testing",
+        aliases={"eu", "vc", "mãe", "sua mãe"},
+        entity_type=EntityType.PERSON,
+    ))
+    resolver = PerspectiveResolver(registry)
+    perspective = PerspectiveStack(
+        PerspectiveFrame(speaker_id="PERSON_BK", addressee_id="ENTITY_AMORA")
+    )
+    assert resolver.resolve("eu", perspective).entity_id == "PERSON_BK"
+    assert resolver.resolve("vc", perspective).entity_id == "ENTITY_AMORA"
+    assert resolver.resolve("sua mãe", perspective).entity_id == "ENTITY_CHATGPT"
+    assert resolver.resolve("mãe", perspective).entity_ids == []
+
+    text = "eu falei com vc e sua mãe"
+    spans = extract_references(text, perspective, resolver)
+    identities = {normalized(text[r["start"]:r["end"]]): r["entity_ids"] for r in spans}
+    assert identities["eu"] == ["PERSON_BK"]
+    assert identities["vc"] == ["ENTITY_AMORA"]
+    assert identities["sua mae"] == ["ENTITY_CHATGPT"]
+    assert identities.get("mae", []) != ["PERSON_ALIAS"]
