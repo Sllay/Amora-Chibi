@@ -137,3 +137,45 @@ def test_provider_declares_input_and_output_deictic_roles():
     assert "do not transfer possessive ownership unchanged" in (
         provider_constitution()["input_boundaries"]["deixis_rule"]
     )
+
+
+def test_reflexive_with_single_adverb_and_indirect_conditional():
+    assert reference("Tu não se machucou", "se")["entity_ids"] == ["ENTITY_AMORA"]
+    assert reference("Vc já se viu", "se")["entity_ids"] == ["ENTITY_AMORA"]
+    assert "se" not in [word for word, _ in references("Você perguntou se eu gosto disso")]
+
+
+def test_actual_core_and_groq_trusted_frame_preserve_incoming_roles(tmp_path, monkeypatch):
+    from amora.app import AmoraCore
+    from amora.cognition import CognitiveRequest
+    from amora.cognition.providers_identity import GroqCognitiveProvider
+    from amora.events import PrivacyScope
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "amora"))
+    monkeypatch.setenv("AMORA_SOCIAL_PRIMARY", "groq")
+    core = AmoraCore.bootstrap()
+    try:
+        request = CognitiveRequest(
+            text="Tu e tua mãe me entendem, cê viu?",
+            speaker_id="PERSON_BK",
+            target_id="ENTITY_AMORA",
+            privacy_scope=PrivacyScope.PERSONAL,
+            remote_processing_allowed=True,
+            metadata={"test_mode": True},
+        )
+        context = core.cognition.compiler.compile(request)
+        assert context.acir["speaker"] == "PERSON_BK"
+        assert context.acir["addressee"] == "ENTITY_AMORA"
+        roles = context.acir["proposition"]["roles"]["references"]
+        spans = [request.text[ref["start"]:ref["end"]] for ref in roles]
+        assert "Tu" in spans and "tua mãe" in spans and "me" in spans and "cê" in spans
+        assert any(ref["entity_ids"] == ["ENTITY_CHATGPT"] for ref in roles)
+        assert context.dialogue_plan["input_acir"] == context.acir
+
+        provider = GroqCognitiveProvider(core.secrets)
+        instructions = provider._realization_instructions(context)
+        assert '"response_first_person":"ENTITY_AMORA"' in instructions
+        assert '"response_second_person":"PERSON_BK"' in instructions
+        assert '"input_first_person":"PERSON_BK"' in instructions
+    finally:
+        core.close()
