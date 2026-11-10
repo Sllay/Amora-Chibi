@@ -212,7 +212,7 @@ class PlatformMessagingService:
                 "social_attention_score": decision.score,
                 "social_attention_reasons": list(decision.reason_codes),
                 "floor_generation": decision.floor_generation,
-                "memory_consolidation": False,
+                "memory_consolidation": message.remote_processing_allowed,
                 "relationship_learning": False,
                 "messaging_audit": True,
                 "provider_total_budget_seconds": self.provider_total_budget_seconds,
@@ -373,6 +373,21 @@ class PlatformMessagingService:
             },
             reason_codes=["CORE_OUTBOUND_ENQUEUED", *cognitive_reasons],
         )
+        # Messaging does not use IntegratedConversation.observe_completed_utterance,
+        # so it must explicitly run bounded cognitive reflection. Never delay
+        # the actual reply generation; the outbound intent is durable first.
+        if message.remote_processing_allowed and not fallback_used:
+            try:
+                await asyncio.wait_for(
+                    self.cognition.reflect(request.model_copy(update={
+                        "source_event_id": request.turn_id,
+                        "metadata": {**request.metadata, "cognitive_mode": "reflection"},
+                    })),
+                    timeout=8.0,
+                )
+            except Exception as exc:
+                _LOG.warning("messaging_memory_reflection_failed type=%s", type(exc).__name__)
+
         result = InboundResult(decision=decision, duplicate=duplicate_recovery, outbound=[outbound])
         self._log_result(
             result,

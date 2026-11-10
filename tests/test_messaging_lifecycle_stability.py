@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -170,5 +170,46 @@ async def test_structured_provider_attempt_budget_fails_over_to_local_fallback_w
         assert "PROVIDER_ATTEMPT_TIMEOUT" in plan.reason_codes
         assert "LOCAL_FALLBACK" in plan.reason_codes
         assert provider.descriptor.name not in state.get("cognitive_provider_cooldowns", {})
+    finally:
+        core.close()
+
+
+def test_recent_dialogue_keeps_longer_session_and_latest_question(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=_clock())
+    try:
+        session = "MSG_DISCORD_MEMORY_WINDOW"
+        for index in range(36):
+            text = (
+                "Eu tinha vontade de pular de lugares muito altos quando era pequeno."
+                if index == 7 else f"Conversa de acompanhamento numero {index}."
+            )
+            core.cognition.store.put_message(
+                ConversationMessage(
+                    turn_id=uuid4(),
+                    speaker_id="PERSON_BK",
+                    addressee_id="ENTITY_AMORA",
+                    source=MessageSource.TEXT,
+                    raw_text=text,
+                    normalized_text=text,
+                    privacy_scope=PrivacyScope.PERSONAL,
+                    remote_processing_allowed=True,
+                    status=MessageStatus.RECEIVED,
+                    session_id=session,
+                    started_at=core.clock.now(),
+                )
+            )
+            core.clock.advance(timedelta(seconds=1))
+        context = core.cognition.compiler.compile(CognitiveRequest(
+            text="Voce lembra do que eu disse?",
+            speaker_id="PERSON_BK",
+            target_id="ENTITY_AMORA",
+            session_id=session,
+            privacy_scope=PrivacyScope.PERSONAL,
+            remote_processing_allowed=True,
+        ))
+        assert any("lugares muito altos" in item["text"] for item in context.recent_messages)
+        assert any("numero 35" in item["text"] for item in context.recent_messages)
+        assert len(context.recent_messages) > 12
     finally:
         core.close()
