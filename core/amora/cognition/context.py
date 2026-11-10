@@ -200,7 +200,7 @@ class ContextCompiler:
             if len(claims) >= 10:
                 break
 
-        persisted_messages = self.store.list_messages(limit=24, session_id=request.session_id)
+        persisted_messages = self.store.list_messages(limit=96, session_id=request.session_id)
         reasons.append("RECENT_HISTORY_SESSION_SCOPED" if request.session_id is not None else "RECENT_HISTORY_UNSCOPED_LEGACY")
         test_turn_ids = {str(message.turn_id) for message in persisted_messages if bool(message.metadata.get("test_mode", False))}
         include_session_tests = bool(request.metadata.get("test_mode", False)) and request.session_id is not None
@@ -218,9 +218,9 @@ class ContextCompiler:
             text = message.spoken_text or message.normalized_text or message.raw_text
             if text:
                 recent.append({"turn_id": str(message.turn_id), "speaker_id": message.speaker_id,
-                               "addressee_id": message.addressee_id, "text": text[:600],
+                               "addressee_id": message.addressee_id, "text": text[:800],
                                "source": message.source.value, "status": message.status.value})
-        recent = recent[-12:]
+        recent = recent[-48:]
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
         reference_registry = scoped_registry(self.identities, request.speaker_id,
