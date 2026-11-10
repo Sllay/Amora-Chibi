@@ -102,6 +102,7 @@ class StructuredProvider:
 
 @pytest.mark.asyncio
 async def test_invalid_structured_provider_output_never_reaches_speech_queue(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_RESPONSE_SEMANTIC_FILTER_ENABLED", "1")
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=_clock())
     try:
@@ -124,6 +125,7 @@ async def test_invalid_structured_provider_output_never_reaches_speech_queue(tmp
 
 @pytest.mark.asyncio
 async def test_valid_structured_provider_is_validated_before_speech(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMORA_RESPONSE_SEMANTIC_FILTER_ENABLED", "1")
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     core = AmoraCore.bootstrap(clock=_clock())
     try:
