@@ -164,6 +164,8 @@ class ContextCompiler:
             if not combining(char)
         )
         normalized_recall = " ".join(normalized_recall.strip(" ?!.,").split())
+        if normalized_recall.startswith("amora, "):
+            normalized_recall = normalized_recall[len("amora, "):]
         if normalized_recall in {
             "voce lembra do que conversamos",
             "lembra do que conversamos",
