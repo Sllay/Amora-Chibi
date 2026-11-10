@@ -41,7 +41,7 @@ class WebTextTurnRequest(BaseModel):
     session_id: str | None = None
     privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
     remote_processing_allowed: bool = False
-    test_mode: bool = True
+    test_mode: bool = False
 
 
 def register_web_routes(app: FastAPI, core, require_auth: Callable[..., None], *, voice: VoiceBackend | None = None) -> None:
