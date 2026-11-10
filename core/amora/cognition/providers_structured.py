@@ -273,9 +273,15 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
             )
         if response.status_code >= 400:
             raise ProviderError(
-                f"Groq reasoning assist failed ({response.status_code}): {response.text[:700]}",
+                f"Groq reasoning assist failed (HTTP {response.status_code})",
                 status_code=response.status_code,
                 retry_after=response.headers.get("retry-after"),
+                diagnostics={"stage": "reasoning_assist_rejected",
+                             "http_status_code": response.status_code,
+                             "provider_error_category": (
+                                 "request_body_too_large" if response.status_code == 413
+                                 else "other_http_error"
+                             )},
             )
         try:
             root = response.json()
@@ -344,9 +350,15 @@ class GeminiCognitiveProvider(BaseGeminiCognitiveProvider):
             )
         if response.status_code >= 400:
             raise ProviderError(
-                f"Gemini structured realization failed ({response.status_code}): {response.text[:1000]}",
+                f"Gemini structured realization failed (HTTP {response.status_code})",
                 status_code=response.status_code,
                 retry_after=response.headers.get("retry-after"),
+                diagnostics={"stage": "http_request_rejected",
+                             "http_status_code": response.status_code,
+                             "provider_error_category": (
+                                 "model_or_access_unavailable" if response.status_code == 404
+                                 else "other_http_error"
+                             )},
             )
         try:
             root = response.json()
