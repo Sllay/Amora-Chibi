@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -199,7 +199,7 @@ def test_recent_dialogue_keeps_longer_session_and_latest_question(tmp_path, monk
                     started_at=core.clock.now(),
                 )
             )
-            core.clock.advance(seconds=1)
+            core.clock.advance(timedelta(seconds=1))
         context = core.cognition.compiler.compile(CognitiveRequest(
             text="Voce lembra do que eu disse?",
             speaker_id="PERSON_BK",
