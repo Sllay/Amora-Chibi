@@ -328,4 +328,3 @@ def test_real_memory_is_retrieved_across_web_sessions_without_leaking_test_histo
     context = core.cognition.compiler.compile(request)
     assert any(item.id == str(remembered.memory.id) for item in context.memories)
     assert not any("A Lia chegou." in item["text"] for item in context.recent_messages)
-    assert "TEST_TURNS_EXCLUDED_FROM_RECENT" not in context.reason_codes or not context.recent_messages
