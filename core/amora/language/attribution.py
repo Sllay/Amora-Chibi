@@ -11,8 +11,12 @@ import unicodedata
 VERSION = 'amora.addressing.v1'
 REPORT_VERBS = frozenset(('diz disse fala falou solta pergunta perguntou perguntei '
                          'responde respondeu devolve rebate zoa provoca comenta comentou').split())
-FIRST_PERSON = frozenset(('eu me minha meu').split())
-SECOND_PERSON = frozenset(('tu voce vc teu tua seu sua voces').split())
+FIRST_PERSON = frozenset(('eu me mim comigo minha meu minhas meus').split())
+SECOND_PERSON = frozenset(
+    ('tu voce vc ce oce te ti contigo teu tua teus tuas '
+     'seu sua seus suas voces vcs ces').split()
+)
+SECOND_PERSON_SUBJECTS = frozenset(('tu voce vc ce oce voces vcs ces').split())
 
 
 def normalized(text: str) -> str:
@@ -49,7 +53,11 @@ def _report_target(prefix: str, speaker: str, target: str | None) -> tuple[str |
     recipient = any(after[i] in {'a', 'ao', 'para', 'pra'} and after[i + 1] == 'amora'
                     for i in range(len(after) - 1))
     if (not before or before in (['me'], ['amora', 'me']) or before == ['amora']
+            or before[0] in {'eu', 'tu', 'voce', 'vc', 'ce', 'oce', 'voces', 'vcs', 'ces'}
             or (any(t in FIRST_PERSON for t in before) and ('te' in before or recipient))):
+        # "Você falou comigo?" is still spoken by the current speaker to
+        # Amora. The reporting verb alone is not evidence of nested speech.
+        # A genuinely named source ("Rui disse: ...") stays reported.
         return speaker, target
     return None, None
 
@@ -114,7 +122,7 @@ def personal_choice_requested(text: str) -> bool:
     # A speaker's own disclosure is not a request, even if it mentions 'you'.
     if tokens[0] == 'eu' and not any(t in REPORT_VERBS or t in {'escolha', 'escolhe'} for t in tokens):
         return False
-    question = '?' in text or tokens[0] in {'qual', 'que', 'de', 'como', 'e', 'tu', 'voce', 'vc'}
-    if question and any(t in {'tu', 'voce', 'vc', 'teu', 'tua', 'seu', 'sua'} for t in tokens):
+    question = '?' in text or tokens[0] in {'qual', 'que', 'de', 'como', 'e'} | SECOND_PERSON_SUBJECTS
+    if question and any(t in SECOND_PERSON for t in tokens):
         return True
     return tokens[0] in {'qual', 'que'} and any(t.startswith(('genero', 'escolher')) for t in tokens)
