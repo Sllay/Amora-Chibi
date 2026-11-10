@@ -103,10 +103,6 @@ class PerspectiveResolver:
         frame = stack.current
         candidates = candidates or []
 
-        direct = self.registry.get(expression) or self.registry.resolve_alias(expression)
-        if direct:
-            return self._resolved(expression, direct.id, 0.99, ["CANONICAL_ENTITY_OR_ALIAS"])
-
         if expr in self._first_person:
             return self._resolved(expression, frame.speaker_id, 0.99, ["FIRST_PERSON_TO_SPEAKER"])
 
@@ -193,6 +189,16 @@ class PerspectiveResolver:
 
         if expr in self._third_person:
             return self._resolve_third_person_owner(expr, frame, candidates)
+
+        # Reserved deictics and bare kinship terms cannot be impersonated by
+        # user-managed nicknames. A named entity is considered only after the
+        # grammatical roles were resolved or deliberately left uncertain.
+        if expr in self._kinship:
+            return self._unresolved(expression, ["BARE_KINSHIP_NOT_A_GLOBAL_NAME"])
+
+        direct = self.registry.get(expression) or self.registry.resolve_alias(expression)
+        if direct:
+            return self._resolved(expression, direct.id, 0.99, ["CANONICAL_ENTITY_OR_ALIAS"])
 
         return self._unresolved(expression, ["NO_RESOLUTION_RULE"])
 
