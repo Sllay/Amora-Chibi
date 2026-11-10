@@ -19,7 +19,16 @@ PUBLIC_AMORA_RELATIONS = frozenset(
 )
 KINSHIP = frozenset({'mae', 'pai', 'filha', 'filho'})
 POSSESSIVES = frozenset('minha meu minhas meus sua seu suas seus tua teu tuas teus'.split())
-PRONOUNS = frozenset('eu me mim comigo voce te ti contigo ele ela dele dela'.split())
+# These forms are compared after accent folding by attribution.normalized.
+# Collective/plural "vocês" and reflexive/conditional "se" deliberately remain
+# uncertain unless the local syntax supplies a safe referent.
+PRONOUNS = frozenset(
+    'eu me mim comigo voce vc tu ce oce te ti contigo voces vcs ces vos '
+    'ele ela dele dela se'.split()
+)
+SECOND_SINGULAR = frozenset('voce vc tu ce oce te ti contigo'.split())
+SECOND_SUBJECT = frozenset('voce vc tu ce oce'.split())
+THIRD_PERSON = frozenset('ele ela dele dela'.split())
 TOKEN = re.compile(r'\w+', re.UNICODE)
 MAX_REFERENCES = 32
 MAX_TOKENS = 2048
@@ -120,6 +129,21 @@ def extract_references(text: str, stack: PerspectiveStack, resolver: Perspective
                 if named_owner:
                     end = named_end
                     expression = 'minha ' + word
+            elif key in POSSESSIVES:
+                # Even without a family noun, ownership is relevant ("teu
+                # desenho", "minha casa"). Only the possessor is resolved.
+                expression = word
+            elif key == 'se':
+                # "Se você quiser" is conditional, never a pronoun naming
+                # Amora. Reflexive "tu se machucou" has an explicit subject.
+                previous = normalized(tokens[index - 1][0]) if index else ''
+                following = normalized(tokens[end][0]) if end < len(tokens) else ''
+                if previous in SECOND_SUBJECT:
+                    expression = word
+                elif index > 0 and following not in SECOND_SUBJECT:
+                    # Unknown third-person reflexive: represent uncertainty,
+                    # do not ascribe the action to the addressee.
+                    expression = word
             elif key in PRONOUNS:
                 expression = word
             else:
@@ -135,10 +159,21 @@ def extract_references(text: str, stack: PerspectiveStack, resolver: Perspective
                 ids = [value for value in resolution.entity_ids if value != '__UNKNOWN_REPORTED_SPEAKER__']
                 status = resolution.status.value
                 reasons = list(resolution.reason_codes)
+                if key == 'se':
+                    previous = normalized(tokens[index - 1][0]) if index else ''
+                    if previous in SECOND_SUBJECT and target:
+                        status, ids, reasons = 'resolved', [target], ['EXPLICIT_SECOND_PERSON_REFLEXIVE']
+                    else:
+                        status, ids, reasons = 'ambiguous', [], ['REFLEXIVE_SUBJECT_UNRESOLVED']
                 if key in {'ele', 'ela', 'dele', 'dela'} and not ids and status == 'unresolved':
                     status = 'ambiguous'
-                if key in {'sua', 'seu', 'suas', 'seus'} and any(
-                        mention not in {actor, target} for mention in named_mentions):
+                if key in {'sua', 'seu', 'suas', 'seus'} and (
+                        any(mention not in {actor, target} for mention in named_mentions)
+                        or any(normalized(item[0]) in {'ele', 'ela'}
+                               for item in tokens[:index])):
+                    # Brazilian "seu/sua" can mean "his/her" after an explicit
+                    # third-person subject. Preserve uncertainty rather than
+                    # automatically assigning the addressee's property.
                     status, ids, reasons = 'ambiguous', [], ['POSSESSIVE_OWNER_AMBIGUOUS']
                 if (key in {'sua', 'seu', 'suas', 'seus'}
                         and segment.kind == 'reported' and not explicit_report):
