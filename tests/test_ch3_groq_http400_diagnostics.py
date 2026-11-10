@@ -193,3 +193,54 @@ async def test_groq_full_v3_is_preserved_in_bounded_provider_projection(monkeypa
     assert ctx.user_text in str(sent["input"])
     assert ctx.recent_messages == original_history
     assert len(sent["input"]) < 11  # older optional history was trimmed
+
+
+@pytest.mark.asyncio
+async def test_gemini_404_does_not_echo_provider_response(monkeypatch) -> None:
+    from amora.cognition.providers_structured import GeminiCognitiveProvider
+    from amora.cognition.providers import ProviderError
+
+    marker = "PRIVATE_GEMINI_ERROR_BODY"
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        providers_structured.httpx, "AsyncClient",
+        lambda *args, **kwargs: original(
+            *args, transport=httpx.MockTransport(lambda request: httpx.Response(
+                404, json={"error": {"message": marker}}
+            )), **kwargs
+        ),
+    )
+    class GeminiSecrets:
+        def get(self, name):
+            return "test-key" if name == "GEMINI_API_KEY" else None
+    with pytest.raises(ProviderError) as raised:
+        await GeminiCognitiveProvider(GeminiSecrets()).realize(_context())
+    error = raised.value
+    assert error.status_code == 404
+    assert error.diagnostics["provider_error_category"] == "model_or_access_unavailable"
+    assert marker not in str(error)
+    assert marker not in str(error.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_groq_reasoning_assist_rejection_does_not_echo_private_body(monkeypatch) -> None:
+    from amora.cognition.providers import ProviderError
+
+    marker = "PRIVATE_REASONING_ERROR_BODY"
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        providers_structured.httpx, "AsyncClient",
+        lambda *args, **kwargs: original(
+            *args, transport=httpx.MockTransport(lambda request: httpx.Response(
+                429, json={"error": {"message": marker}}
+            )), **kwargs
+        ),
+    )
+    with pytest.raises(ProviderError) as raised:
+        await GroqCognitiveProvider(_Secrets())._reasoning_assist(
+            _context(), api_key="TEST_KEY_DO_NOT_LEAK"
+        )
+    error = raised.value
+    assert error.status_code == 429
+    assert error.diagnostics["stage"] == "reasoning_assist_rejected"
+    assert marker not in str(error)
