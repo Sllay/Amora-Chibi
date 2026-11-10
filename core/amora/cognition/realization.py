@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .models import CognitiveContext
+
+
+def response_semantic_filter_enabled() -> bool:
+    """Temporary operator switch for Core's conversational output gate.
+
+    Disabled by default while the overly strict post-generation gate is under
+    review. This does not relax provider-side rules, privacy or action authority.
+    """
+    return os.getenv("AMORA_RESPONSE_SEMANTIC_FILTER_ENABLED", "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 class RealizationClosing(StrEnum):
@@ -58,14 +70,50 @@ class RealizationValidator:
     _LOCAL_ACTS = {"acknowledge_call", "answer_self_fact"}
 
     @classmethod
-    def parse_and_validate(cls, context: CognitiveContext, raw: object) -> ValidatedRealization:
+    def parse_and_validate(
+        cls, context: CognitiveContext, raw: object, *, enforce_dialogue_plan: bool = True
+    ) -> ValidatedRealization:
         if not isinstance(raw, dict):
             raise RealizationError("REALIZATION_ROOT_NOT_OBJECT", "realization root must be an object")
         try:
             frame = RealizationFrame.model_validate(raw)
         except ValidationError as exc:
             raise RealizationError("REALIZATION_SCHEMA_INVALID", str(exc)) from exc
+        if not enforce_dialogue_plan:
+            return cls.accept_without_semantic_filter(context, frame)
         return cls.validate(context, frame)
+
+    @classmethod
+    def accept_without_semantic_filter(
+        cls, context: CognitiveContext, frame: RealizationFrame
+    ) -> ValidatedRealization:
+        """Keep the provider's words without rejecting conversational deviations.
+
+        Only schema/empty-text checks remain. Unauthorized self-choice proposals
+        are ignored, never committed; speech text is left untouched.
+        """
+        combined = " ".join(move.text.strip() for move in frame.moves if move.text.strip()).strip()
+        if not combined:
+            raise RealizationError("EMPTY_REALIZATION", "realization has no speakable text")
+        permitted = set(context.dialogue_plan.get("self_choice_keys") or ())
+        seen: set[str] = set()
+        choices: list[SelfChoiceProposal] = []
+        for choice in frame.self_choices:
+            if choice.key in permitted and choice.key not in seen:
+                seen.add(choice.key)
+                choices.append(choice)
+        ignored_choices = len(frame.self_choices) != len(choices)
+        if ignored_choices:
+            frame = frame.model_copy(update={"self_choices": choices})
+        return ValidatedRealization(
+            frame=frame,
+            text=combined,
+            reason_codes=(
+                "REALIZATION_SCHEMA_VALID",
+                "RESPONSE_SEMANTIC_FILTER_DISABLED",
+                *(("UNAUTHORIZED_SELF_CHOICES_IGNORED",) if ignored_choices else ()),
+            ),
+        )
 
     @classmethod
     def validate(cls, context: CognitiveContext, frame: RealizationFrame) -> ValidatedRealization:

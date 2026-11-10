@@ -23,6 +23,7 @@ def staging(tmp_path, monkeypatch):
     monkeypatch.setenv('AMORA_HOME', str(tmp_path / 'isolated-v3-staging'))
     monkeypatch.setenv('AMORA_SOCIAL_EXPRESSION_PROFILE', 'amora-v3')
     monkeypatch.setenv('AMORA_SOCIAL_PRIMARY', 'mistral')
+    monkeypatch.setenv('AMORA_RESPONSE_SEMANTIC_FILTER_ENABLED', '1')
     monkeypatch.setenv('AMORA_SECRET_NVIDIA_API_KEY', 'fake-never-remote')
     for name in ('GROQ_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY'):
         monkeypatch.delenv('AMORA_SECRET_' + name, raising=False)
