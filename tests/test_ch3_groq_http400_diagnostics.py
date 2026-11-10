@@ -133,3 +133,114 @@ async def test_unrecognized_http_400_does_not_claim_content_filter(monkeypatch) 
     report = await certify_social_case(GroqCognitiveProvider(_Secrets()), case)
     assert report.error_code == "PROVIDER_HTTP_400"
     assert report.transport_diagnostics["provider_error_category"] == "invalid_request_unspecified"
+
+
+@pytest.mark.asyncio
+async def test_groq_responses_413_is_classified_without_echoing_private_body(monkeypatch) -> None:
+    from amora.cognition.providers_identity import GroqCognitiveProvider as LiveGroq
+    from amora.cognition import providers_identity
+    from amora.cognition.providers import ProviderError
+
+    marker = "SECRET_MESSAGE_MUST_NEVER_APPEAR"
+    original_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/responses")
+        return httpx.Response(413, json={"error": {"message": marker}})
+
+    monkeypatch.setattr(
+        providers_identity.httpx, "AsyncClient",
+        lambda *args, **kwargs: original_client(*args, transport=httpx.MockTransport(handler), **kwargs),
+    )
+    with pytest.raises(ProviderError) as raised:
+        await LiveGroq(_Secrets())._responses_realize(_context(), api_key="TEST_KEY_DO_NOT_LEAK")
+    error = raised.value
+    assert error.status_code == 413
+    assert error.diagnostics["provider_error_category"] == "request_body_too_large"
+    assert error.diagnostics["estimated_input_tokens"] > 0
+    assert marker not in str(error)
+    assert marker not in str(error.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_groq_full_v3_is_preserved_in_bounded_provider_projection(monkeypatch) -> None:
+    from amora.cognition.providers_identity import GroqCognitiveProvider as LiveGroq
+    from amora.cognition.context_budget import estimate_payload, GROQ_PAYLOAD_HARD_CEILING_TOKENS
+    from amora.cognition.expressive_profile import profile_text
+    from amora.cognition.providers import ProviderError
+
+    ctx = _context().model_copy(deep=True)
+    ctx.expression_profile = "amora-v3"
+    ctx.recent_messages = [
+        {"turn_id": str(uuid4()), "speaker_id": "PERSON_BK", "addressee_id": "ENTITY_AMORA",
+         "source": "platform_messaging", "text": "histórico opcional " + "a" * 1250}
+        for _ in range(10)
+    ]
+    original_history = ctx.model_copy(deep=True).recent_messages
+    sent = {}
+
+    async def fake_post(payload, *, api_key, error_label):
+        sent.update(payload)
+        raise ProviderError("synthetic stop before network")
+
+    provider = LiveGroq(_Secrets())
+    monkeypatch.setattr(provider, "_post_responses", fake_post)
+    with pytest.raises(ProviderError, match="synthetic stop"):
+        await provider._responses_realize(ctx, api_key="TEST_KEY_DO_NOT_LEAK")
+
+    assert estimate_payload(sent) <= GROQ_PAYLOAD_HARD_CEILING_TOKENS
+    assert profile_text("amora-v3") in sent["instructions"]
+    assert ctx.user_text in str(sent["input"])
+    assert ctx.recent_messages == original_history
+    assert len(sent["input"]) < 11  # older optional history was trimmed
+
+
+@pytest.mark.asyncio
+async def test_gemini_404_does_not_echo_provider_response(monkeypatch) -> None:
+    from amora.cognition.providers_structured import GeminiCognitiveProvider
+    from amora.cognition.providers import ProviderError
+
+    marker = "PRIVATE_GEMINI_ERROR_BODY"
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        providers_structured.httpx, "AsyncClient",
+        lambda *args, **kwargs: original(
+            *args, transport=httpx.MockTransport(lambda request: httpx.Response(
+                404, json={"error": {"message": marker}}
+            )), **kwargs
+        ),
+    )
+    class GeminiSecrets:
+        def get(self, name):
+            return "test-key" if name == "GEMINI_API_KEY" else None
+    with pytest.raises(ProviderError) as raised:
+        await GeminiCognitiveProvider(GeminiSecrets()).realize(_context())
+    error = raised.value
+    assert error.status_code == 404
+    assert error.diagnostics["provider_error_category"] == "model_or_access_unavailable"
+    assert marker not in str(error)
+    assert marker not in str(error.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_groq_reasoning_assist_rejection_does_not_echo_private_body(monkeypatch) -> None:
+    from amora.cognition.providers import ProviderError
+
+    marker = "PRIVATE_REASONING_ERROR_BODY"
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        providers_structured.httpx, "AsyncClient",
+        lambda *args, **kwargs: original(
+            *args, transport=httpx.MockTransport(lambda request: httpx.Response(
+                429, json={"error": {"message": marker}}
+            )), **kwargs
+        ),
+    )
+    with pytest.raises(ProviderError) as raised:
+        await GroqCognitiveProvider(_Secrets())._reasoning_assist(
+            _context(), api_key="TEST_KEY_DO_NOT_LEAK"
+        )
+    error = raised.value
+    assert error.status_code == 429
+    assert error.diagnostics["stage"] == "reasoning_assist_rejected"
+    assert marker not in str(error)

@@ -541,7 +541,7 @@ async def test_status_shows_configured_mistral_primary_without_exposing_secrets(
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / "mistral-home"))
     monkeypatch.setenv("AMORA_SECRET_NVIDIA_API_KEY", "NVIDIA_SECRET_DO_NOT_PRINT")
     monkeypatch.setenv("AMORA_SECRET_GROQ_API_KEY", "GROQ_SECRET_DO_NOT_PRINT")
-    monkeypatch.delenv("AMORA_SOCIAL_PRIMARY", raising=False)
+    monkeypatch.setenv("AMORA_SOCIAL_PRIMARY", "mistral")
     core = AmoraCore.bootstrap()
     try:
         bus = AmoraCommandBus()

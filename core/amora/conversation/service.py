@@ -465,6 +465,8 @@ class ConversationEngine:
         current = self.store.get_utterance(utterance_id)
         if current is None:
             return None, 0
+        # Cancelling the same utterance again must not publish an identical event.
+        # Do not cancel or mark an already spoken single utterance as cancelled.
         turn_raw = current.metadata.get("cognitive_turn_id")
         cancelled = 0
         if turn_raw:
@@ -473,9 +475,11 @@ class ConversationEngine:
                 self.cognition.interrupt_turn(str(turn_raw), reason=reason)
             item = self.store.get_utterance(utterance_id)
         else:
+            if current.status.value in {"spoken", "cancelled"} or current.metadata.get("cancelled_at"):
+                return current, 0
             item = self.store.cancel(utterance_id, reason=reason)
-            cancelled = 1 if item is not None else 0
-        if item is not None:
+            cancelled = 1 if item is not None and item.status.value == "cancelled" else 0
+        if item is not None and cancelled > 0:
             await self.events.publish(
                 AmoraEvent(
                     event_type="conversation.utterance_cancelled",

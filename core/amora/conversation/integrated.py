@@ -346,9 +346,13 @@ class ConversationEngine(BaseConversationEngine):
                     )
             item = self.store.get_utterance(utterance_id)
         else:
+            # Repeat cancels (including post-delivery Web retries) are no-ops,
+            # not additional cancellation events. Preserve spoken utterances.
+            if current.status.value in {"spoken", "cancelled"} or current.metadata.get("cancelled_at"):
+                return current, 0
             item = self.store.cancel(utterance_id, reason=reason)
-            cancelled = 1 if item is not None else 0
-        if item is not None:
+            cancelled = 1 if item is not None and item.status.value == "cancelled" else 0
+        if item is not None and cancelled > 0:
             await self.events.publish(
                 AmoraEvent(
                     event_type="conversation.utterance_cancelled",

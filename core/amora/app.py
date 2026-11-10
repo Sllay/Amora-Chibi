@@ -213,11 +213,10 @@ class AmoraCore:
             operations=operations,
         )
 
-        # Social primary selected by the project owner: NVIDIA/Mistral Large 4.
-        # A missing NVIDIA key must not prevent Groq/Gemini fallback. Operators
-        # can roll back the social preference without changing code by setting
-        # AMORA_SOCIAL_PRIMARY=groq and restarting the service.
-        social_primary = os.getenv("AMORA_SOCIAL_PRIMARY", "mistral").strip().casefold()
+        # Operational preference: Groq/Qwen for lower latency and shorter turns.
+        # NVIDIA/Mistral remains opt-in via AMORA_SOCIAL_PRIMARY=mistral.
+        # The Core/Amora V3 identity is independent of the selected provider.
+        social_primary = os.getenv("AMORA_SOCIAL_PRIMARY", "groq").strip().casefold()
         if social_primary not in {"mistral", "groq"}:
             raise ValueError("AMORA_SOCIAL_PRIMARY must be 'mistral' or 'groq'")
         if social_primary == "mistral":

@@ -35,6 +35,8 @@ def _groq_request_error_category(response: httpx.Response) -> str:
     Explicit identifiers take precedence. Messages are only examined for
     narrowly recognizable error signatures; never returned or logged.
     """
+    if response.status_code == 413:
+        return "request_body_too_large"
     if response.status_code != 400:
         return "other_http_error"
     try:
@@ -151,24 +153,27 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
         effective_context = context.model_copy(
             update={"specialist_support": specialist_support}
         ) if specialist_support else context
-        messages = self._messages(effective_context)
-        messages[0] = {
-            **messages[0],
-            "content": messages[0]["content"] + "\n\n" + realization_instruction(effective_context),
-        }
-        max_tokens = _dialogue_token_budget(effective_context)
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "stream": False,
-            "temperature": 0.70,
-            "top_p": 0.80,
-            "max_completion_tokens": max_tokens,
-            "reasoning_effort": "none",
-            "response_format": {"type": "json_object"},
-        }
-        from .context_budget import ensure_payload
-        ensure_payload(effective_context, payload)
+        from .context_budget import fit_provider_payload, estimate_payload
+
+        def build_payload(projected):
+            messages = self._messages(projected)
+            messages[0] = {
+                **messages[0],
+                "content": messages[0]["content"] + "\n\n" + realization_instruction(projected),
+            }
+            return {
+                "model": self.model,
+                "messages": messages,
+                "stream": False,
+                "temperature": 0.70,
+                "top_p": 0.80,
+                "max_completion_tokens": _dialogue_token_budget(projected),
+                "reasoning_effort": "none",
+                "response_format": {"type": "json_object"},
+            }
+
+        _, payload = fit_provider_payload(effective_context, build_payload)
+        messages = payload["messages"]
         started = perf_counter()
         timeout = httpx.Timeout(self.timeout_seconds, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
@@ -186,6 +191,7 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
                 "provider_error_category": _groq_request_error_category(response),
                 "message_count": len(messages),
                 "prompt_chars": sum(len(item["content"]) for item in messages),
+                "estimated_input_tokens": estimate_payload(payload),
             }
             raise ProviderError(
                 f"Groq structured realization failed (HTTP {response.status_code})",
@@ -267,9 +273,15 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
             )
         if response.status_code >= 400:
             raise ProviderError(
-                f"Groq reasoning assist failed ({response.status_code}): {response.text[:700]}",
+                f"Groq reasoning assist failed (HTTP {response.status_code})",
                 status_code=response.status_code,
                 retry_after=response.headers.get("retry-after"),
+                diagnostics={"stage": "reasoning_assist_rejected",
+                             "http_status_code": response.status_code,
+                             "provider_error_category": (
+                                 "request_body_too_large" if response.status_code == 413
+                                 else "other_http_error"
+                             )},
             )
         try:
             root = response.json()
@@ -338,9 +350,15 @@ class GeminiCognitiveProvider(BaseGeminiCognitiveProvider):
             )
         if response.status_code >= 400:
             raise ProviderError(
-                f"Gemini structured realization failed ({response.status_code}): {response.text[:1000]}",
+                f"Gemini structured realization failed (HTTP {response.status_code})",
                 status_code=response.status_code,
                 retry_after=response.headers.get("retry-after"),
+                diagnostics={"stage": "http_request_rejected",
+                             "http_status_code": response.status_code,
+                             "provider_error_category": (
+                                 "model_or_access_unavailable" if response.status_code == 404
+                                 else "other_http_error"
+                             )},
             )
         try:
             root = response.json()

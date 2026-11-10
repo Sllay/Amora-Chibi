@@ -204,6 +204,7 @@ async def test_generic_replay_supports_registered_structured_mistral(tmp_path, m
     from amora.app import AmoraCore
     monkeypatch.setenv('AMORA_HOME', str(tmp_path / 'runtime'))
     monkeypatch.setenv('AMORA_SECRET_NVIDIA_API_KEY', 'synthetic-test-key')
+    monkeypatch.setenv('AMORA_SOCIAL_PRIMARY', 'mistral')
     core = AmoraCore.bootstrap()
     async def synthetic(self, ctx):
         return {'moves': [{'kind': ctx.dialogue_plan['response_moves'][0], 'text': 'Essa ideia faz sentido.'}],

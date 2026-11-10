@@ -61,7 +61,7 @@ def test_social_mistral_promoted_and_routed_first_with_groq_as_fallback(
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     monkeypatch.setenv("AMORA_SECRET_NVIDIA_API_KEY", "test-nvidia-key")
     monkeypatch.setenv("AMORA_SECRET_GROQ_API_KEY", "test-groq-key")
-    monkeypatch.delenv("AMORA_SOCIAL_PRIMARY", raising=False)
+    monkeypatch.setenv("AMORA_SOCIAL_PRIMARY", "mistral")
     core = AmoraCore.bootstrap(clock=_clock())
     try:
         names = [x.name for x in _ranked_social(core)]

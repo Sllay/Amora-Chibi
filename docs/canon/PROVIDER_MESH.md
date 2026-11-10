@@ -61,26 +61,26 @@ AMORA CORE
 
 Cada papel é certificado separadamente.
 
-### Social primary atual (decisão explícita de 2026-11-04, ADR-0036)
+### Social primary operacional (Qwen desde 2026-11-09; ver ADR-0036 para decisão histórica)
 
-- **social dialogue:** Mistral Large 4 via NVIDIA (`mistralai/mistral-large-4-1t-a52b`) selecionado pelo usuário, quando `NVIDIA_API_KEY` existe.
-- **social fallback:** Groq/Qwen 3.8 27B permanece registrado e disponível; Gemini e outros providers continuam conforme suas regras existentes.
+- **social dialogue:** Groq/Qwen 3.8 27B (`qwen/qwen3.8-27b`) selecionado como padrão operacional para testar resposta mais rápida.
+- **social fallback:** Gemini e outros providers elegíveis; NVIDIA/Mistral fica disponível com seleção explícita `AMORA_SOCIAL_PRIMARY=mistral`.
 - **reasoning specialist:** GPT-OSS 120B via Groq. **Mistral não foi promovido para reasoning.**
 - **candidato de certificação:** `NvidiaMistralLarge4Provider` permanece separado da instância produtiva `NvidiaMistralLarge4ProductionProvider`.
 
 ```text
 SOCIAL_DIALOGUE:
-Mistral Large 4 (NVIDIA) — PRIMARY
+Groq/Qwen 3.8 27B — PRIMARY
   → falha, timeout, quota ou circuito aberto
-  → Groq/Qwen — FALLBACK
+  → Gemini/OpenRouter — FALLBACK
 
 REASONING:
 GPT-OSS 120B — não alterado
 ```
 
-Padrão `AMORA_SOCIAL_PRIMARY=mistral`; para rollback operacional,
-`AMORA_SOCIAL_PRIMARY=groq` seguido de reinício. Sem chave NVIDIA,
-Groq segue como primary. O campo `social_primary_provider` do status
+Padrão `AMORA_SOCIAL_PRIMARY=groq`; para usar NVIDIA/Mistral,
+`AMORA_SOCIAL_PRIMARY=mistral` seguido de reinício. A seleção permanece dependente
+de credenciais, elegibilidade e disponibilidade. O campo `social_primary_provider` do status
 identifica qual candidato ficou em primeiro lugar de fato.
 
 A seleção é **autorizada pelo usuário**, não por score automático. A latência

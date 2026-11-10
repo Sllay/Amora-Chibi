@@ -17,7 +17,7 @@ from amora.security import http_processing_deadline_seconds
 
 def _client(tmp_path, monkeypatch, *, remote=False):
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
-    monkeypatch.delenv("AMORA_SOCIAL_PRIMARY", raising=False)
+    monkeypatch.setenv("AMORA_SOCIAL_PRIMARY", "mistral")
     if remote:
         monkeypatch.setenv("AMORA_SECRET_NVIDIA_API_KEY", "fake-nvidia-token")
         monkeypatch.setenv("AMORA_SECRET_GROQ_API_KEY", "fake-groq-token")

@@ -106,3 +106,75 @@ def test_discord_sixty_second_generation_deadline_ladder_is_bounded() -> None:
     assert http_processing_deadline_seconds("/v1/web/utterance/stream", "POST", worker=False) == 270
     assert http_processing_deadline_seconds("/v1/messaging/worker/outbound", "GET", worker=True) == 90
     assert http_processing_deadline_seconds("/v1/messaging/worker/inbound", "GET", worker=True) == 90
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancel_is_idempotent_and_does_not_duplicate_event(tmp_path, monkeypatch) -> None:
+    from amora.conversation.models import UtteranceKind
+    from amora.events import PrivacyScope
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        utterance = await core.conversation.enqueue_text(
+            "Fala de teste", target_id="PERSON_BK", kind=UtteranceKind.DIALOGUE,
+            priority=30, privacy_scope=PrivacyScope.PERSONAL,
+            source_event_id=None, dedupe_key="repeat-cancel-test",
+        )
+        assert utterance is not None
+        before = core.database.event_count()
+        first, count = await core.conversation.cancel_utterance(utterance.id, reason="barge_in")
+        assert first is not None and count == 1
+        assert first.status.value == "cancelled"
+        assert core.database.event_count() == before + 1
+        second, count = await core.conversation.cancel_utterance(utterance.id, reason="barge_in")
+        assert second is not None and count == 0
+        assert core.database.event_count() == before + 1
+    finally:
+        core.close()
+
+
+def test_libsql_safe_event_dedupe_uses_atomic_conflict_target(tmp_path, monkeypatch) -> None:
+    from amora.events import AmoraEvent
+    from amora.storage import AmoraDatabase
+
+    db = AmoraDatabase(tmp_path / "events.db")
+    db.migrate()
+    try:
+        first = AmoraEvent(event_type="conversation.utterance_cancelled",
+                           source="test", dedupe_key="cancel:once")
+        second = AmoraEvent(event_type="conversation.utterance_cancelled",
+                            source="test", dedupe_key="cancel:once")
+        assert db.append_event(first) is True
+        assert db.append_event(second) is False
+        assert db.event_count() == 1
+        sql = db._conn.execute(
+            "SELECT event_type FROM events WHERE dedupe_key=?", ("cancel:once",)
+        ).fetchone()
+        assert sql["event_type"] == "conversation.utterance_cancelled"
+    finally:
+        db.close()
+
+
+def test_event_dedupe_key_does_not_mask_cross_type_or_pk_collision(tmp_path) -> None:
+    from uuid import uuid4
+    import sqlite3
+    from amora.events import AmoraEvent
+    from amora.storage import AmoraDatabase
+
+    db = AmoraDatabase(tmp_path / "events-conflict.db")
+    db.migrate()
+    try:
+        original = AmoraEvent(event_type="conversation.utterance_cancelled",
+                              source="test", dedupe_key="cancel:unique")
+        assert db.append_event(original)
+        with pytest.raises(sqlite3.IntegrityError):
+            db.append_event(AmoraEvent(event_type="different.event",
+                                       source="test", dedupe_key="cancel:unique"))
+        with pytest.raises(sqlite3.IntegrityError):
+            db.append_event(AmoraEvent(id=original.id,
+                                       event_type=original.event_type,
+                                       source="test", dedupe_key="another:unique"))
+        assert db.event_count() == 1
+    finally:
+        db.close()
