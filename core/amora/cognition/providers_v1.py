@@ -197,7 +197,7 @@ class GeminiCognitiveProvider:
         timeout_seconds: float = 45.0,
     ) -> None:
         self.secrets = secrets
-        self.model = model or os.getenv("AMORA_GEMINI_COGNITION_MODEL", "gemini-2.5-flash-lite")
+        self.model = model or os.getenv("AMORA_GEMINI_COGNITION_MODEL", "gemini-3.5-flash-lite")
         self.timeout_seconds = timeout_seconds
         self.descriptor = ProviderDescriptor(
             name="gemini",
