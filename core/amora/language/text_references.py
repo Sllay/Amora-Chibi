@@ -26,9 +26,8 @@ PRONOUNS = frozenset(
     'eu me mim comigo voce vc tu ce oce te ti contigo voces vcs ces vos '
     'ele ela dele dela se'.split()
 )
-SECOND_SINGULAR = frozenset('voce vc tu ce oce te ti contigo'.split())
 SECOND_SUBJECT = frozenset('voce vc tu ce oce'.split())
-THIRD_PERSON = frozenset('ele ela dele dela'.split())
+REFLEXIVE_ADVERBS = frozenset('nao ja ainda tambem'.split())
 TOKEN = re.compile(r'\w+', re.UNICODE)
 MAX_REFERENCES = 32
 MAX_TOKENS = 2048
@@ -50,6 +49,16 @@ def scoped_registry(registry: EntityRegistry, recipient_id: str, *, authorized_r
         if recipient_id in {relation.source, relation.target} or key in PUBLIC_AMORA_RELATIONS or key in allowed:
             result.add_relationship(relation.model_copy(deep=True))
     return result
+
+
+def _reflexive_subject(tokens, index):
+    # The reflexive "se" must have an explicit subject in this small local
+    # window; "se eu quiser" and "perguntou se..." are conditionals, not
+    # references. Never infer a deictic owner from the token alone.
+    previous = normalized(tokens[index - 1][0]) if index else ''
+    if previous in REFLEXIVE_ADVERBS and index > 1:
+        previous = normalized(tokens[index - 2][0])
+    return previous
 
 
 def _alias_at(tokens, index, registry):
@@ -136,13 +145,8 @@ def extract_references(text: str, stack: PerspectiveStack, resolver: Perspective
             elif key == 'se':
                 # "Se você quiser" is conditional, never a pronoun naming
                 # Amora. Reflexive "tu se machucou" has an explicit subject.
-                previous = normalized(tokens[index - 1][0]) if index else ''
-                following = normalized(tokens[end][0]) if end < len(tokens) else ''
-                if previous in SECOND_SUBJECT:
-                    expression = word
-                elif index > 0 and following not in SECOND_SUBJECT:
-                    # Unknown third-person reflexive: represent uncertainty,
-                    # do not ascribe the action to the addressee.
+                previous = _reflexive_subject(tokens, index)
+                if previous in SECOND_SUBJECT or previous in {'ele', 'ela'}:
                     expression = word
             elif key in PRONOUNS:
                 expression = word
@@ -160,7 +164,7 @@ def extract_references(text: str, stack: PerspectiveStack, resolver: Perspective
                 status = resolution.status.value
                 reasons = list(resolution.reason_codes)
                 if key == 'se':
-                    previous = normalized(tokens[index - 1][0]) if index else ''
+                    previous = _reflexive_subject(tokens, index)
                     if previous in SECOND_SUBJECT and target:
                         status, ids, reasons = 'resolved', [target], ['EXPLICIT_SECOND_PERSON_REFLEXIVE']
                     else:
