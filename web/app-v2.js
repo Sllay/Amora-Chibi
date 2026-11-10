@@ -4,7 +4,8 @@ import { PcmStreamPlayer, WavPlayer } from "./audio-player.mjs";
 const $ = (id) => document.getElementById(id);
 const browserStore = new BrowserState(browserStorage("localStorage"), browserStorage("sessionStorage"));
 const REMOTE_KEY = "amora.web.remote.v1";
-const TEST_KEY = "amora.web.test.v1";
+// New preference key resets the old lab default without overriding future explicit choices.
+const TEST_KEY = "amora.web.test.v2";
 // Per-tab conversation scope; no token, transcript or canonical identity stored.
 const conversationSessionId = (() => {
   try {
