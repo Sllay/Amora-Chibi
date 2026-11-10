@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from .providers import ProviderError
-from .realization import RealizationError, RealizationValidator
+from .realization import RealizationError, RealizationValidator, response_semantic_filter_enabled
 
 
 _NON_RETRYABLE_STATUS = {400, 401, 403, 404, 405, 409, 422}
@@ -104,6 +104,7 @@ class ResilientProviderProxy:
         *,
         max_retries: int = 1,
         max_validation_retries: int = 0,
+        enforce_dialogue_plan: bool = True,
         base_delay_seconds: float = 0.08,
         max_inline_retry_delay_seconds: float = 1.5,
         jitter_fraction: float = 0.20,
@@ -114,6 +115,7 @@ class ResilientProviderProxy:
         self.descriptor = provider.descriptor
         self.max_retries = max(0, int(max_retries))
         self.max_validation_retries = max(0, int(max_validation_retries))
+        self.enforce_dialogue_plan = enforce_dialogue_plan
         self.base_delay_seconds = max(0.0, float(base_delay_seconds))
         self.max_inline_retry_delay_seconds = max(0.0, float(max_inline_retry_delay_seconds))
         self.jitter_fraction = min(1.0, max(0.0, float(jitter_fraction)))
@@ -175,7 +177,10 @@ class ResilientProviderProxy:
                 validation_raw = dict(result)
                 validation_raw.pop("_usage", None)
                 try:
-                    RealizationValidator.parse_and_validate(context, validation_raw)
+                    RealizationValidator.parse_and_validate(
+                        context, validation_raw,
+                        enforce_dialogue_plan=self.enforce_dialogue_plan,
+                    )
                 except RealizationError as exc:
                     if validation_attempt >= self.max_validation_retries:
                         self._last_structured_error_code = exc.code
@@ -197,6 +202,8 @@ def wrap_resilient_provider(provider: Any) -> Any:
         # Mistral may spend 20-60s in visible/reasoning output. Another
         # transparent transport/validation retry could multiply voice latency
         # or tie up the turn for minutes. Fail over to Groq instead.
-        return ResilientProviderProxy(provider, max_retries=0, max_validation_retries=0)
+        return ResilientProviderProxy(provider, max_retries=0, max_validation_retries=0,
+                                      enforce_dialogue_plan=response_semantic_filter_enabled())
     # Fast structured providers retain one bounded repair attempt.
-    return ResilientProviderProxy(provider, max_validation_retries=1)
+    return ResilientProviderProxy(provider, max_validation_retries=1,
+                                  enforce_dialogue_plan=response_semantic_filter_enabled())
