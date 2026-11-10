@@ -16,7 +16,7 @@ from amora.web import routes as web_routes
 
 def _bootstrap(tmp_path, monkeypatch, *, providers: bool = False):
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
-    monkeypatch.delenv("AMORA_SOCIAL_PRIMARY", raising=False)
+    monkeypatch.setenv("AMORA_SOCIAL_PRIMARY", "mistral")
     if providers:
         monkeypatch.setenv("AMORA_SECRET_NVIDIA_API_KEY", "test-nvidia-key")
         monkeypatch.setenv("AMORA_SECRET_GROQ_API_KEY", "test-groq-key")
