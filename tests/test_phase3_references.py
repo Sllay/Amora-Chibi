@@ -292,3 +292,48 @@ def test_web_sse_preserves_kinship_without_persisting_claimed_feeling(core, monk
     assert after['memory_count'] == before['memory_count']
     assert after['emotion_event_count'] == before['emotion_event_count']
     assert core.self_model.snapshot() == self_before
+
+
+def test_real_memory_is_retrieved_across_web_sessions_without_leaking_test_history(core):
+    from amora.memory import MemoryCandidate, MemoryKind, MemoryProvenance, ProvenanceKind
+
+    remembered = core.memory.remember(MemoryCandidate(
+        kind=MemoryKind.EPISODIC,
+        content="BK mostrou para Amora um desenho especial de uma raposa azul.",
+        provenance=MemoryProvenance(
+            kind=ProvenanceKind.USER_ASSERTION,
+            source="web:text",
+            actor_id="PERSON_BK",
+            session_id="web:original",
+            confidence=0.98,
+        ),
+        privacy_scope=PrivacyScope.PERSONAL,
+        owner_entity_id="PERSON_BK",
+        entity_refs={"PERSON_BK": 1.0, "ENTITY_AMORA": 1.0},
+        tags={"desenho", "raposa"},
+        importance=0.9,
+        novelty=0.95,
+        relationship_relevance=0.8,
+        future_consequence=0.8,
+        goal_relevance=0.7,
+    ))
+    assert remembered.memory is not None
+
+    remember_turn(core, session="web:original", test_mode=True)
+    request = req(
+        "Você lembra do desenho da raposa azul?",
+        session_id="web:new-session",
+        metadata={"test_mode": False},
+    )
+    context = core.cognition.compiler.compile(request)
+    assert any(item.id == str(remembered.memory.id) for item in context.memories)
+    assert not any("A Lia chegou." in item["text"] for item in context.recent_messages)
+
+    generic_context = core.cognition.compiler.compile(req(
+        "Você lembra de mim?",
+        session_id="web:third-session",
+        metadata={"test_mode": False},
+    ))
+    assert "GENERIC_RECOLLECTION_ENTITY_RECALL" in generic_context.reason_codes
+    assert any(item.id == str(remembered.memory.id) for item in generic_context.memories)
+
