@@ -20,4 +20,5 @@ def test_web_client_does_not_enable_test_mode_by_default():
     script = (root / "web/app-v2.js").read_text(encoding="utf-8")
     assert '<input id="testToggle" type="checkbox" />' in html
     assert 'testToggle.checked = browserStore.get(TEST_KEY) === "1";' in script
+    assert 'const TEST_KEY = "amora.web.test.v2";' in script
     assert "test_mode: testToggle.checked" in script
