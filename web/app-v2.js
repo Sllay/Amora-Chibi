@@ -68,7 +68,7 @@ const appPanel = $("appPanel");
 const remoteToggle = $("remoteToggle");
 const testToggle = $("testToggle");
 remoteToggle.checked = browserStore.get(REMOTE_KEY) !== "0";
-testToggle.checked = browserStore.get(TEST_KEY) !== "0";
+testToggle.checked = browserStore.get(TEST_KEY) === "1";
 remoteToggle.addEventListener("change", () => browserStore.set(REMOTE_KEY, remoteToggle.checked ? "1" : "0"));
 testToggle.addEventListener("change", () => browserStore.set(TEST_KEY, testToggle.checked ? "1" : "0"));
 
