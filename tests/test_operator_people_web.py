@@ -299,3 +299,13 @@ def test_web_shell_exposes_people_and_console_without_avatar_body_work(tmp_path:
             assert "PESSOAS & FAMÍLIA" in page.text
     finally:
         core.close()
+
+
+def test_people_view_does_not_couple_profiles_to_relationship_endpoint() -> None:
+    """Regression: a failed family read model must not blank the people catalog."""
+    script = (Path(__file__).resolve().parents[1] / "web" / "operator-panel.js").read_text()
+    assert 'Promise.allSettled([' in script
+    assert 'if (peopleResult.status === "rejected")' in script
+    assert 'relationsResult.status === "fulfilled"' in script
+    assert 'As fichas continuam disponíveis.' in script
+    assert 'state.relationships = relationsResult.status === "fulfilled"' in script
