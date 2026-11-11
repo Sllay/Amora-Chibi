@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -11,6 +12,8 @@ from amora.time import Clock
 
 from .models import AttentionDecision, ChannelType, InboundMessage, MessagingPlatform, RoutingAction
 
+
+_LOG = logging.getLogger("amora.messaging.identity")
 
 _GROUP_FLOOR_SECONDS = 35
 _CONTINUITY_REPLY_LEASE_SECONDS = 10
@@ -435,6 +438,14 @@ class SocialAttentionRouter:
             )
             if entity is not None:
                 return entity.id, self._actor_ref(message)
+        # Never guess or silently cross account scopes: a binding is an
+        # authority record. Emit only non-identifying diagnostics.
+        _LOG.warning(
+            "messaging_speaker_identity_unresolved platform=%s account_scope=%s identifier_types=%s",
+            message.platform.value,
+            message.account_scope,
+            ",".join(sorted({ref.identifier_type for ref in refs})) or "none",
+        )
         return None, self._actor_ref(message)
 
     def _finalize_pending_runtime_turns(
