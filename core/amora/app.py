@@ -48,7 +48,7 @@ from amora.settings import RuntimePaths, ServerSettings
 from amora.social import AddresseeEngine, SocialSceneTracker
 from amora.storage import AmoraDatabase
 from amora.storage.backend import StorageBackend, BootstrapBackend, backend_from_environment
-from amora.storage.migrations_v103 import LATEST_SCHEMA_VERSION
+from amora.storage.schema import LATEST_SCHEMA_VERSION
 from amora.time import Clock, Scheduler, SystemClock
 from amora.world import (
     PerspectiveConsolidator,
