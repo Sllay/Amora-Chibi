@@ -21,6 +21,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     AMORA_WEB_ROOT=/opt/amora/web AMORA_AVATAR_ROOT=/opt/amora/avatar \
     PATH=/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /opt/amora
+# Apply Alpine security updates after the pinned base image is unpacked.
+# krb5-libs 1.22.2-r1 is affected by HIGH CVEs; Alpine 3.24 fixes them in 1.22.3-r0.
+RUN apk upgrade --no-cache krb5-libs
 RUN python -m pip uninstall -y pip && \
     if [ -f /etc/alpine-release ]; then \
       addgroup -g 10001 amora && adduser -D -u 10001 -G amora amora; \
