@@ -319,3 +319,17 @@ def test_people_api_read_failures_have_stage_specific_non_destructive_diagnostic
     assert "people profiles unavailable (stage: profiles)" in route
     assert "people profiles unavailable (stage: bindings)" in route
     assert "people profiles unavailable (stage: entities_or_authorities)" in route
+
+
+def test_invalid_profile_diagnostics_preserve_storage_and_identify_record() -> None:
+    database_source = (Path(__file__).resolve().parents[1] / "core" / "amora" / "storage" / "database.py").read_text()
+    assert "person_profile_validation_failed entity_id=" in database_source
+    assert "raise ValueError(" in database_source
+    assert "from exc" in database_source
+
+
+def test_unresolved_discord_identity_is_logged_without_snowflake() -> None:
+    attention_source = (Path(__file__).resolve().parents[1] / "core" / "amora" / "messaging" / "attention.py").read_text()
+    assert "messaging_speaker_identity_unresolved" in attention_source
+    assert "identifier_types=%s" in attention_source
+    assert "external_actor_id=%s" not in attention_source
