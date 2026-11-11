@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -11,6 +12,8 @@ from amora.time import Clock
 
 from .models import AttentionDecision, ChannelType, InboundMessage, MessagingPlatform, RoutingAction
 
+
+_LOG = logging.getLogger("amora.messaging.identity")
 
 _GROUP_FLOOR_SECONDS = 35
 _CONTINUITY_REPLY_LEASE_SECONDS = 10
