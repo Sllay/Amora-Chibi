@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from time import perf_counter
 from copy import deepcopy
 from typing import Any
@@ -50,7 +51,15 @@ class CognitiveEngine(ResilientCognitiveEngine):
         try:
             # libSQL's synchronous DB-API must not block the inbound event loop.
             # Compile once and reuse it across all provider failover attempts.
+            compilation_started = perf_counter()
             context = await asyncio.to_thread(self.compiler.compile, reflection_request)
+            logging.getLogger("amora.cognition.reflection").info(
+                "reflection_context_prepared",
+                extra={
+                    "turn_id": str(request.turn_id),
+                    "latency_ms": round((perf_counter() - compilation_started) * 1000),
+                },
+            )
         except ContextBudgetExceeded:
             return CognitiveProposalBundle(reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "REFLECTION_SKIPPED"])
 
