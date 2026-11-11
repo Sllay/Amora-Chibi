@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime
 import hashlib
 import json
+import logging
 from uuid import uuid4
 
 from fastapi import Depends, HTTPException, Query, Request, status
@@ -18,6 +19,8 @@ from amora.identity.profiles import (
     SeedRelationship,
 )
 
+
+_LOG = logging.getLogger(__name__)
 
 FAMILY_RELATION_TYPES = frozenset(
     {
@@ -479,24 +482,37 @@ def register_people_admin_routes(app, core, require_auth) -> None:
 
     @app.get("/v1/operator/people", dependencies=protected)
     def operator_people() -> dict[str, object]:
-        profiles = [
-            {
-                **profile.model_dump(mode="json"),
-                "binding_count": len(core.profiles.bindings_for(profile.entity_id)),
-            }
-            for profile in core.profiles.profiles()
-        ]
-        entities = [
-            _entity_payload(core, entity.id)
-            for entity in core.identities.entities
-            if entity.entity_type in {EntityType.PERSON, EntityType.AI_PERSONA, EntityType.EXTERNAL_AI}
-        ]
+        # Keep failures attributable to a specific read-model stage. Do not
+        # silently seed, overwrite or skip corrupt canonical records.
+        try:
+            stored_profiles = core.profiles.profiles()
+        except Exception:
+            _LOG.exception("operator_people_read_failed stage=profiles")
+            raise HTTPException(status_code=503, detail="people profiles unavailable (stage: profiles)") from None
+        profiles = []
+        for profile in stored_profiles:
+            try:
+                binding_count = len(core.profiles.bindings_for(profile.entity_id))
+            except Exception:
+                _LOG.exception("operator_people_read_failed stage=bindings entity_id=%s", profile.entity_id)
+                raise HTTPException(status_code=503, detail="people profiles unavailable (stage: bindings)") from None
+            profiles.append({**profile.model_dump(mode="json"), "binding_count": binding_count})
+        try:
+            entities = [
+                _entity_payload(core, entity.id)
+                for entity in core.identities.entities
+                if entity.entity_type in {EntityType.PERSON, EntityType.AI_PERSONA, EntityType.EXTERNAL_AI}
+            ]
+            family_authority_ids = sorted(core.profiles.family_authorities())
+        except Exception:
+            _LOG.exception("operator_people_read_failed stage=entities_or_authorities")
+            raise HTTPException(status_code=503, detail="people profiles unavailable (stage: entities_or_authorities)") from None
         return {
             "profiles": profiles,
             "entities": entities,
             "family_relation_types": sorted(FAMILY_RELATION_TYPES),
             "symmetric_relation_types": sorted(SYMMETRIC_RELATION_TYPES),
-            "family_authority_ids": sorted(core.profiles.family_authorities()),
+            "family_authority_ids": family_authority_ids,
         }
 
     @app.put("/v1/operator/people/{entity_id}", dependencies=protected)
