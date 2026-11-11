@@ -459,7 +459,14 @@ function renderBindings(bindings) {
     title.textContent = `${item.platform} · ${item.masked_external_actor_id}`;
     const meta = document.createElement("small");
     meta.textContent = `${item.identifier_type} · ${item.account_scope} · ${item.enabled ? "ativo" : "desativado"}`;
-    info.append(title, meta);
+    if (item.invalid) {
+      meta.textContent += ` · vínculo antigo inválido (${(item.validation_fields || []).join(", ") || "validação"})`;
+      const guidance = document.createElement("small");
+      guidance.textContent = "Este vínculo foi preservado, mas não pode ser editado aqui. Adicione um novo vínculo com ID válido; não use o nome de usuário do Discord como ID.";
+      info.append(title, meta, guidance);
+    } else {
+      info.append(title, meta);
+    }
     const actions = document.createElement("div");
     actions.className = "row-actions";
     const reveal = document.createElement("button");
@@ -495,6 +502,11 @@ function renderBindings(bindings) {
         await loadBindings(item.entity_id);
       } catch (error) { alert(humanError(error)); }
     });
+    if (item.invalid) {
+      reveal.disabled = true;
+      edit.disabled = true;
+      disable.disabled = true;
+    }
     actions.append(reveal, edit, disable);
     row.append(info, actions);
     list.appendChild(row);

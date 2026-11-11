@@ -229,6 +229,23 @@ class AmoraDatabase:
             ).fetchone()
         return str(row["entity_id"]) if row else None
 
+    def platform_binding_admin_rows_for(self, entity_id: str) -> tuple[dict[str, object], ...]:
+        """Private operator-only read of raw bindings for non-destructive diagnostics.
+
+        Legacy rows may not satisfy current validation. This does not change the
+        strict, authorization-facing identity resolution or binding models.
+        Never expose these raw records on public API or in logs.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT platform, identifier_type, external_actor_id, account_scope,
+                          entity_id, trust, confidence, enabled
+                   FROM platform_identity_bindings
+                   WHERE entity_id = ? ORDER BY platform, identifier_type, id""",
+                (entity_id,),
+            ).fetchall()
+        return tuple(dict(row) for row in rows)
+
     def platform_bindings_for(self, entity_id: str) -> tuple[PlatformIdentityBinding, ...]:
         with self._lock:
             rows = self._conn.execute(

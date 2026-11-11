@@ -8,7 +8,7 @@ import logging
 from uuid import uuid4
 
 from fastapi import Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from amora.identity.models import Entity, EntityRegistry, EntityType, Relationship, normalize_alias
 from amora.identity.profiles import (
@@ -120,6 +120,60 @@ def _binding_summary(binding: PlatformIdentityBinding) -> dict[str, object]:
         "confidence": binding.confidence,
         "enabled": binding.enabled,
     }
+
+
+def _operator_binding_summaries(core, entity_id: str) -> list[dict[str, object]]:
+    """Project valid and legacy-invalid rows without promoting invalid IDs.
+
+    Raw external identifiers never leave this operator-only projection. Invalid
+    records remain visible for repair, but cannot pass authoritative validation.
+    """
+    summaries: list[dict[str, object]] = []
+    for raw in core.database.platform_binding_admin_rows_for(entity_id):
+        fields = {
+            "platform": raw["platform"],
+            "identifier_type": raw["identifier_type"],
+            "external_actor_id": raw["external_actor_id"],
+            "account_scope": raw["account_scope"],
+            "entity_id": raw["entity_id"],
+            "trust": raw["trust"],
+            "confidence": raw["confidence"],
+            "enabled": bool(raw["enabled"]),
+        }
+        try:
+            binding = PlatformIdentityBinding.model_validate(fields)
+        except ValidationError as exc:
+            # Keep the original DB row untouched; invalid Discord names are NOT
+            # trusted as identities and are not auto-converted to numeric IDs.
+            invalid_fields = sorted({
+                str(error["loc"][0]) if error["loc"] else "model"
+                for error in exc.errors()
+            })
+            material = json.dumps(
+                [str(raw[key]) for key in ("platform", "identifier_type",
+                  "external_actor_id", "account_scope", "entity_id")],
+                ensure_ascii=False, separators=(",", ":"),
+            )
+            summaries.append({
+                "ref": hashlib.sha256(material.encode("utf-8")).hexdigest(),
+                "platform": str(raw["platform"]),
+                "identifier_type": str(raw["identifier_type"]),
+                "masked_external_actor_id": _masked_identifier(str(raw["external_actor_id"])),
+                "entity_id": entity_id,
+                "account_scope": str(raw["account_scope"]),
+                "trust": str(raw["trust"]),
+                "confidence": raw["confidence"],
+                "enabled": bool(raw["enabled"]),
+                "invalid": True,
+                "validation_fields": invalid_fields,
+            })
+            _LOG.warning(
+                "operator_binding_validation_failed entity_id=%s identifier_type=%s validation_fields=%s",
+                entity_id, raw["identifier_type"], ",".join(invalid_fields),
+            )
+        else:
+            summaries.append({**_binding_summary(binding), "invalid": False})
+    return summaries
 
 
 def _find_binding(core, entity_id: str, ref: str) -> PlatformIdentityBinding | None:
@@ -492,7 +546,7 @@ def register_people_admin_routes(app, core, require_auth) -> None:
         profiles = []
         for profile in stored_profiles:
             try:
-                binding_count = len(core.profiles.bindings_for(profile.entity_id))
+                binding_count = len(_operator_binding_summaries(core, profile.entity_id))
             except Exception:
                 _LOG.exception("operator_people_read_failed stage=bindings entity_id=%s", profile.entity_id)
                 raise HTTPException(status_code=503, detail="people profiles unavailable (stage: bindings)") from None
@@ -593,7 +647,7 @@ def register_people_admin_routes(app, core, require_auth) -> None:
     def operator_bindings(entity_id: str) -> dict[str, object]:
         if core.profiles.profile(entity_id) is None:
             raise HTTPException(status_code=404, detail="person profile not found")
-        return {"bindings": [_binding_summary(item) for item in core.profiles.bindings_for(entity_id)]}
+        return {"bindings": _operator_binding_summaries(core, entity_id)}
 
     @app.get("/v1/operator/people/{entity_id}/bindings/{binding_ref}", dependencies=protected)
     def operator_reveal_binding(entity_id: str, binding_ref: str) -> dict[str, object]:

@@ -333,3 +333,66 @@ def test_unresolved_discord_identity_is_logged_without_snowflake() -> None:
     assert "messaging_speaker_identity_unresolved" in attention_source
     assert "identifier_types=%s" in attention_source
     assert "external_actor_id=%s" not in attention_source
+
+
+def test_legacy_invalid_discord_binding_does_not_blank_people_or_grant_identity(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Legacy username rows remain private and visible for repair, never authority."""
+    from amora.identity import PlatformIdentityBinding
+    from pydantic import ValidationError
+    import pytest
+
+    core, client = _cloud(tmp_path, monkeypatch)
+    legacy_name = "old-discord-handle"
+    try:
+        now = core.clock.now().isoformat()
+        with core.database._lock, core.database._conn:
+            core.database._conn.execute(
+                """INSERT INTO platform_identity_bindings(
+                       platform, identifier_type, external_actor_id, account_scope,
+                       entity_id, trust, confidence, enabled, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("discord", "user_id", legacy_name, "primary", "PERSON_BK",
+                 "operator_verified", 1.0, 1, now, now),
+            )
+        operator = _operator_headers(core, client)
+        page = client.get("/v1/operator/people", headers=operator)
+        assert page.status_code == 200, page.text
+        bk = next(p for p in page.json()["profiles"] if p["entity_id"] == "PERSON_BK")
+        assert bk["binding_count"] == 1
+        assert legacy_name not in page.text
+
+        bindings = client.get("/v1/operator/people/PERSON_BK/bindings", headers=operator)
+        assert bindings.status_code == 200, bindings.text
+        item = bindings.json()["bindings"][0]
+        assert item["invalid"] is True
+        assert item["identifier_type"] == "user_id"
+        assert "external_actor_id" in item["validation_fields"] or "model" in item["validation_fields"]
+        assert legacy_name not in bindings.text
+        assert item["masked_external_actor_id"].endswith(legacy_name[-4:])
+
+        with pytest.raises(ValidationError):
+            core.profiles.bindings_for("PERSON_BK")
+        assert core.profiles.resolve_actor(
+            platform="discord", identifier_type="discord_user_id",
+            external_actor_id="123456789012345678", account_scope="primary",
+        ) is None
+
+        # Strict write-side validation must remain unchanged.
+        with pytest.raises(ValidationError):
+            PlatformIdentityBinding(
+                platform="discord", identifier_type="user_id",
+                external_actor_id=legacy_name, entity_id="PERSON_BK",
+            )
+    finally:
+        client.close()
+        core.close()
+
+
+def test_invalid_binding_operator_ui_disables_mutation_without_validated_record() -> None:
+    script = (Path(__file__).resolve().parents[1] / "web" / "operator-panel.js").read_text()
+    assert 'if (item.invalid)' in script
+    assert "reveal.disabled = true;" in script
+    assert "edit.disabled = true;" in script
+    assert "disable.disabled = true;" in script
