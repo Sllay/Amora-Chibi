@@ -309,3 +309,13 @@ def test_people_view_does_not_couple_profiles_to_relationship_endpoint() -> None
     assert 'relationsResult.status === "fulfilled"' in script
     assert 'As fichas continuam disponíveis.' in script
     assert 'state.relationships = relationsResult.status === "fulfilled"' in script
+
+
+def test_people_api_read_failures_have_stage_specific_non_destructive_diagnostics() -> None:
+    route = (Path(__file__).resolve().parents[1] / "core" / "amora" / "identity" / "admin_routes.py").read_text()
+    assert "operator_people_read_failed stage=profiles" in route
+    assert "operator_people_read_failed stage=bindings" in route
+    assert "operator_people_read_failed stage=entities_or_authorities" in route
+    assert "people profiles unavailable (stage: profiles)" in route
+    assert "people profiles unavailable (stage: bindings)" in route
+    assert "people profiles unavailable (stage: entities_or_authorities)" in route
