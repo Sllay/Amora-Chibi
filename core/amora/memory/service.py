@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from amora.events import PrivacyScope
 from amora.time import Clock
@@ -23,10 +23,15 @@ class MemoryService:
         self.clock = clock
         self.gate = gate or MemoryWriteGate()
 
-    def remember(self, candidate: MemoryCandidate) -> RememberResult:
+    def remember(self, candidate: MemoryCandidate, *, memory_id: UUID | None = None) -> RememberResult:
         decision = self.gate.evaluate(candidate)
         if not decision.store or decision.recommended_kind is None:
             return RememberResult(decision=decision, memory=None)
+
+        if memory_id is not None:
+            existing = self.store.get(memory_id)
+            if existing is not None:
+                return RememberResult(decision=decision, memory=existing)
 
         now = self.clock.now()
         remote_allowed = candidate.remote_processing_allowed
@@ -34,6 +39,7 @@ class MemoryService:
             remote_allowed = False
 
         record = MemoryRecord(
+            id=memory_id or uuid4(),
             kind=decision.recommended_kind,
             content=candidate.content.strip(),
             summary=candidate.summary.strip() if candidate.summary else None,
