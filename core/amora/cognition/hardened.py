@@ -20,7 +20,7 @@ from amora.world import (
     PerspectiveConsolidator,
 )
 
-from .models import CognitiveJournalEntry, CognitiveRequest, CognitiveResponsePlan, JournalStage, MessageStatus, SpeechSegment
+from .models import CognitiveContext, CognitiveJournalEntry, CognitiveRequest, CognitiveResponsePlan, JournalStage, MessageStatus, SpeechSegment
 from .proposals import CognitiveProposalBundle
 from .service import CognitiveEngine as BaseCognitiveEngine, SegmentSink
 
@@ -85,7 +85,9 @@ class CognitiveEngine(BaseCognitiveEngine):
                 await cancel_task
             self._turn_cancel_events.pop(key, None)
 
-    async def reflect(self, request: CognitiveRequest) -> CognitiveProposalBundle:
+    async def reflect(
+        self, request: CognitiveRequest, *, prepared_context: CognitiveContext | None = None,
+    ) -> CognitiveProposalBundle:
         """Ask a provider for bounded proposals, then apply local gates.
 
         Memory candidates pass through MemoryWriteGate. Belief-like output must
@@ -97,7 +99,8 @@ class CognitiveEngine(BaseCognitiveEngine):
         reflection_request = request.model_copy(
             update={"metadata": {**request.metadata, "cognitive_mode": "reflection"}}
         )
-        context = self.compiler.compile(reflection_request)
+        context = (prepared_context if prepared_context is not None
+                   else await asyncio.to_thread(self.compiler.compile, reflection_request))
         descriptor = self.router.select(
             TaskClass.REASONING,
             privacy_scope=request.privacy_scope,
