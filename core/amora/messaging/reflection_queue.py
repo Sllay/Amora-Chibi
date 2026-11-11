@@ -197,7 +197,7 @@ class ReflectionRunner:
                 if self._wake is not None:
                     self._wake.clear()
                     try:
-                        await asyncio.wait_for(self._wake.wait(), timeout=5.0)
+                        await asyncio.wait_for(self._wake.wait(), timeout=20.0)
                     except asyncio.TimeoutError:
                         pass
             except asyncio.CancelledError:
