@@ -165,7 +165,22 @@ class AmoraDatabase:
     def list_person_profiles(self) -> tuple[PersonProfileSeed, ...]:
         with self._lock:
             rows = self._conn.execute("SELECT profile_json FROM person_profiles ORDER BY entity_id").fetchall()
-        return tuple(PersonProfileSeed.model_validate(json.loads(row["profile_json"])) for row in rows)
+        profiles = []
+        for row in rows:
+            try:
+                profiles.append(PersonProfileSeed.model_validate(json.loads(row["profile_json"])))
+            except Exception as exc:
+                # Identify the failing canonical record without dumping private
+                # profile contents or silently discarding an invalid person.
+                try:
+                    entity_id = json.loads(row["profile_json"]).get("entity_id", "unknown")
+                except (ValueError, TypeError, AttributeError):
+                    entity_id = "invalid_json"
+                raise ValueError(
+                    f"person_profile_validation_failed entity_id={entity_id} "
+                    f"error_type={type(exc).__name__}"
+                ) from exc
+        return tuple(profiles)
 
     def upsert_platform_identity_binding(self, binding: PlatformIdentityBinding, *, updated_at: datetime) -> None:
         with self._lock:
