@@ -103,6 +103,13 @@ async def test_reflection_proposals_pass_through_local_gates(tmp_path: Path, mon
         assert "ENTITY_INVENTADA" not in memory.entity_refs
         assert memory.provenance.source == "cognition:structured-provider"
 
+        # A lease retry can re-run reflection after partial side effects.
+        # Accepted memories must retain the same stable record identity.
+        count_before_retry = core.memory.store.count()
+        replay_bundle = await core.cognition.reflect(request)
+        assert replay_bundle.accepted_memory_ids == bundle.accepted_memory_ids
+        assert core.memory.store.count() == count_before_retry
+
         assert len(bundle.hypothesis_ids) == 1
         hypothesis = core.world_store.get_claim(bundle.hypothesis_ids[0])
         assert hypothesis is not None
