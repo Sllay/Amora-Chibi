@@ -392,20 +392,39 @@ class PlatformMessagingService:
             },
             reason_codes=["CORE_OUTBOUND_ENQUEUED", *cognitive_reasons],
         )
-        # Messaging does not use IntegratedConversation.observe_completed_utterance,
-        # so it must explicitly run bounded cognitive reflection. Never delay
-        # the actual reply generation; the outbound intent is durable first.
-        if message.remote_processing_allowed and not fallback_used:
+        # Reflection learns from the observed input, not from the success of
+        # social realization. The outbound intent is persisted before this
+        # bounded attempt. A durable retry queue remains a separate concern.
+        if message.remote_processing_allowed:
             try:
-                await asyncio.wait_for(
+                bundle = await asyncio.wait_for(
                     self.cognition.reflect(request.model_copy(update={
                         "source_event_id": request.turn_id,
                         "metadata": {**request.metadata, "cognitive_mode": "reflection"},
                     })),
                     timeout=8.0,
                 )
+                if bundle.accepted_memory_ids:
+                    reflection_reason = "MEMORY_REFLECTION_ACCEPTED"
+                elif "REFLECTION_PROVIDER_FAILURE" in bundle.reason_codes:
+                    reflection_reason = "MEMORY_REFLECTION_PROVIDER_FAILED"
+                elif "NO_STRUCTURED_REFLECTION_PROVIDER" in bundle.reason_codes:
+                    reflection_reason = "MEMORY_REFLECTION_PROVIDER_UNAVAILABLE"
+                else:
+                    reflection_reason = "MEMORY_REFLECTION_NO_ACCEPTED_MEMORY"
+            except TimeoutError:
+                reflection_reason = "MEMORY_REFLECTION_TIMEOUT"
+                _LOG.warning("messaging_memory_reflection_timeout")
             except Exception as exc:
+                reflection_reason = "MEMORY_REFLECTION_FAILED"
                 _LOG.warning("messaging_memory_reflection_failed type=%s", type(exc).__name__)
+            self.store.add_inbound_reason(
+                platform=message.platform,
+                account_scope=message.account_scope,
+                conversation_id=message.conversation_id,
+                message_id=message.message_id,
+                reason=reflection_reason,
+            )
 
         result = InboundResult(decision=decision, duplicate=duplicate_recovery, outbound=[outbound])
         self._log_result(
