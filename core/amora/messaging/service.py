@@ -281,7 +281,9 @@ class PlatformMessagingService:
             cognitive_reasons = list(plan.reason_codes)
             cognitive_turn_id = str(plan.turn_id)
             text = (plan.display_text or plan.speech_text or fallback).strip()
-            if message.channel_type != ChannelType.GROUP or (
+            if "CONFIDENTIAL_OUTPUT_SUPPRESSED" in cognitive_reasons:
+                text = ""
+            elif message.channel_type != ChannelType.GROUP or (
                 public_text_allowed(text) and public_text_allowed(plan.speech_text or "")
             ):
                 await self.cognition.emit_event(plan)
