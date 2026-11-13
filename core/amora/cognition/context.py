@@ -260,7 +260,8 @@ class ContextCompiler:
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
         reference_registry = scoped_registry(self.identities, request.speaker_id,
-                                             authorized_relations=authorized_relations)
+                                             authorized_relations=authorized_relations,
+                                             include_recipient_edges=not shared)
         relationships = [relation.model_dump(mode="json") for relation in reference_registry.relationships]
         if compile_acir:
             resolver = PerspectiveResolver(reference_registry)
