@@ -6,7 +6,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from time import perf_counter
 from typing import Any
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from amora.events import AmoraEvent, PrivacyScope
 from amora.language import PerspectiveFrame, PerspectiveStack, ReferenceInput, SemanticDraft
@@ -181,7 +181,7 @@ class CognitiveEngine(BaseCognitiveEngine):
             and bool(request.session_id)
             and owner_known
         )
-        for proposal in bundle.memory_candidates:
+        for ordinal, proposal in enumerate(bundle.memory_candidates):
             safe_refs = {
                 entity_id: confidence
                 for entity_id, confidence in proposal.entity_refs.items()
@@ -215,7 +215,9 @@ class CognitiveEngine(BaseCognitiveEngine):
                     goal_relevance=proposal.goal_relevance,
                     metadata={"provider": descriptor.name, "model": descriptor.model, "turn_id": str(request.turn_id),
                               "reflection_remote_reuse": remote_reuse},
-                )
+                ),
+                **({"record_id": uuid5(NAMESPACE_URL, f"amora:reflection:{request.turn_id}:{ordinal}")}
+                   if request.metadata.get("durable_memory_reflection") else {}),
             )
             if result.memory is not None:
                 bundle.accepted_memory_ids.append(str(result.memory.id))
