@@ -20,6 +20,15 @@ from .models import CognitiveContext, CognitiveRequest, ContextMemory
 from .store import CognitiveStore
 
 
+def resolve_scene_visibility(request: CognitiveRequest) -> str:
+    """Use trusted transport metadata; unknown messaging audiences are shared."""
+    if request.metadata.get("surface") == "platform_messaging":
+        return "private" if request.metadata.get("channel_type") == "dm" else "group"
+    if request.privacy_scope == PrivacyScope.PUBLIC:
+        return "group"
+    return "private"
+
+
 class ProviderPrivacyGate:
     @staticmethod
     def remote_allowed(request: CognitiveRequest) -> bool:
@@ -113,6 +122,8 @@ class ContextCompiler:
         profile = configured_profile()
         profile_text(profile)  # integrity and configuration validated before provider work
         remote = self.privacy_gate.remote_allowed(request)
+        visibility = resolve_scene_visibility(request)
+        shared = visibility != "private"
         reasons = ["CANONICAL_STATE_OUTSIDE_PROVIDER", "REMOTE_CONTEXT_ALLOWED" if remote else "REMOTE_CONTEXT_BLOCKED"]
         if bool(request.metadata.get("test_mode", False)):
             reasons.append("TEST_MODE_ACTIVE")
@@ -179,6 +190,8 @@ class ContextCompiler:
             reasons.append("GENERIC_RECOLLECTION_ENTITY_RECALL")
         for hit in self.memory.recall(MemoryQuery(text=recall_text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78)):
             item = hit.memory
+            if shared and item.privacy_scope != PrivacyScope.PUBLIC:
+                continue
             if self.privacy_gate.memory_allowed(item, remote=remote, recipient_id=request.speaker_id):
                 memories.append(ContextMemory(id=str(item.id), kind=item.kind.value, content=item.summary or item.content,
                                               score=hit.score, confidence=item.provenance.confidence,
@@ -187,6 +200,8 @@ class ContextCompiler:
         claims: list[dict[str, Any]] = []
         authorized_relations: set[tuple[str, str, str]] = set()
         for claim in self.world.current_state():
+            if shared and claim.privacy_scope != PrivacyScope.PUBLIC:
+                continue
             if not self.privacy_gate.claim_allowed(claim, remote=remote, recipient_id=request.speaker_id):
                 continue
             if (claim.canonical and claim.subject_id and isinstance(claim.object_value, str)
@@ -210,6 +225,8 @@ class ContextCompiler:
         for message in persisted_messages:
             if (str(message.turn_id) == str(request.turn_id)
                     or (str(message.turn_id) in test_turn_ids and not include_session_tests)):
+                continue
+            if shared and message.privacy_scope != PrivacyScope.PUBLIC:
                 continue
             if not self.privacy_gate.message_allowed(
                 message, remote=remote, recipient_id=request.speaker_id
@@ -250,6 +267,7 @@ class ContextCompiler:
             directed_affect=affect, drives=drives, active_intention=intention, memories=memories,
             world_claims=claims, recent_messages=recent, privacy_scope=request.privacy_scope,
             remote_processing_allowed=remote, token_budget=token_budget, reason_codes=reasons,
+            scene_visibility=visibility,
         )
         # Trusted speaker identity is application-generated metadata. It contains
         # no platform handle/snowflake and therefore gives providers the canonical
