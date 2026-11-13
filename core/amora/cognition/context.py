@@ -140,7 +140,14 @@ class ContextCompiler:
         remote = self.privacy_gate.remote_allowed(request)
         visibility = resolve_scene_visibility(request)
         shared = visibility != "private"
+        # The complete opt-in profile is not an audience-labelled data source.
+        # Shared turns use the existing public Core expression projection.
+        configured = profile
+        if shared:
+            profile = "core-v1"
         reasons = ["CANONICAL_STATE_OUTSIDE_PROVIDER", "REMOTE_CONTEXT_ALLOWED" if remote else "REMOTE_CONTEXT_BLOCKED"]
+        if shared and configured != profile:
+            reasons.append("SHARED_PROFILE_ISOLATED")
         if bool(request.metadata.get("test_mode", False)):
             reasons.append("TEST_MODE_ACTIVE")
 
