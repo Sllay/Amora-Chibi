@@ -403,7 +403,9 @@ async def test_dm_reflection_persists_when_social_generation_falls_back(tmp_path
         assert len(result.outbound) == 1
         assert result.outbound[0].metadata["fallback_used"] is True
         hits = core.memory.recall(MemoryQuery(text="jogo novo"))
-        assert any("jogo novo" in hit.memory.content for hit in hits)
+        remembered = next(hit.memory for hit in hits if "jogo novo" in hit.memory.content)
+        assert remembered.provenance.source_event_id is None
+        assert remembered.metadata["turn_id"] == str(core.messaging._turn_id(incoming))
         audit = core.messaging_store.get_audit(platform=incoming.platform,
             account_scope=incoming.account_scope, conversation_id=incoming.conversation_id,
             message_id=incoming.message_id)
