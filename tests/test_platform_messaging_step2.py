@@ -450,3 +450,74 @@ async def test_known_group_observation_can_consolidate_without_reply(tmp_path, m
         assert all(not core.memory.get(mid).remote_processing_allowed for mid in entry.payload["accepted_memory_ids"])
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_discord_private_memory_reaches_realization_after_core_restart_not_group(tmp_path, monkeypatch):
+    from test_reflection_v10 import StructuredProvider
+    from amora.memory import MemoryQuery
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE", "1")
+    marker = "Projeto Orquidea tem cinco mapas"
+    clock = SimulatedClock()
+
+    class SyntheticProvider(StructuredProvider):
+        def __init__(self):
+            super().__init__()
+            self.contexts = []
+
+        async def realize(self, context):
+            self.contexts.append(context)
+            allowed = context.dialogue_plan["response_moves"]
+            return {"moves": [{"kind": allowed[0], "text": "Tá, entendi."}],
+                    "closing": "statement", "_usage": {"input_tokens": 20, "output_tokens": 5}}
+
+        async def propose(self, context):
+            bundle = await super().propose(context)
+            bundle["memory_candidates"][0]["content"] = marker
+            bundle["memory_candidates"][0]["summary"] = marker
+            bundle["belief_hypotheses"] = []
+            bundle["action_suggestions"] = []
+            return bundle
+
+    first = AmoraCore.bootstrap(clock=clock)
+    try:
+        _bind_bk(first)
+        first.cognition.register_provider(SyntheticProvider())
+        original = _message(first, message_id="private-project-original",
+            actor_id="111111111111111111", channel_type=ChannelType.DM,
+            conversation_id="private-project-channel", text=marker).model_copy(
+                update={"remote_processing_allowed": True})
+        assert (await first.messaging.receive(original)).outbound
+        assert await first.messaging.reflections.process_once()
+        hits = first.memory.recall(MemoryQuery(text="Orquidea"))
+        remembered = next(hit.memory for hit in hits if marker in hit.memory.content)
+        assert remembered.remote_processing_allowed
+        assert remembered.owner_entity_id == "PERSON_BK"
+    finally:
+        first.close()
+
+    second = AmoraCore.bootstrap(clock=clock)
+    try:
+        provider = SyntheticProvider()
+        second.cognition.register_provider(provider)
+        private = _message(second, message_id="private-project-recall",
+            actor_id="111111111111111111", channel_type=ChannelType.DM,
+            conversation_id="private-project-channel", text="Amora, lembra do projeto Orquidea?").model_copy(
+                update={"remote_processing_allowed": True})
+        assert (await second.messaging.receive(private)).outbound
+        assert provider.contexts
+        context = provider.contexts[-1]
+        assert any(m.id == str(remembered.id) for m in context.memories)
+        group = _message(second, message_id="group-project-recall",
+            actor_id="111111111111111111", channel_type=ChannelType.GROUP,
+            conversation_id="unrelated-group-channel", text="Amora, lembra do projeto Orquidea?",
+            mention=True).model_copy(update={"remote_processing_allowed": True})
+        assert (await second.messaging.receive(group)).outbound
+        shared_context = provider.contexts[-1]
+        assert shared_context.scene_visibility == "group"
+        assert all(m.id != str(remembered.id) for m in shared_context.memories)
+        assert marker not in shared_context.model_dump_json()
+    finally:
+        second.close()
