@@ -211,7 +211,9 @@ class ContextCompiler:
         }:
             recall_text = ""
             reasons.append("GENERIC_RECOLLECTION_ENTITY_RECALL")
-        for hit in self.memory.recall(MemoryQuery(text=recall_text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78)):
+        for hit in self.memory.recall(MemoryQuery(text=recall_text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78,
+                                                 projection_recipient_id=request.speaker_id,
+                                                 projection_public_only=shared, projection_remote_only=remote)):
             item = hit.memory
             if shared and item.privacy_scope != PrivacyScope.PUBLIC:
                 continue
