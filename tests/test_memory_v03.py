@@ -237,3 +237,29 @@ def test_derived_social_scope_is_supported(tmp_path):
         assert child.audience == {"PERSON_BK"}
     finally:
         memory.close(); db.close()
+
+
+def test_explicit_entity_recall_fallback_is_scoped_and_not_a_text_match(tmp_path):
+    _, db, memory = build_memory(tmp_path)
+    try:
+        own = memory.remember(important_candidate(
+            content="Projeto orquidea tem cinco mapas.",
+            owner_entity_id="PERSON_BK", entity_refs={"PERSON_BK": 1.0},
+        )).memory
+        foreign = memory.remember(important_candidate(
+            content="Segredo de outra pessoa.",
+            owner_entity_id="ENTITY_CHATGPT", entity_refs={"ENTITY_CHATGPT": 1.0},
+        )).memory
+        assert own and foreign
+        query = MemoryQuery(text="lembra daquele?", entity_ids={"PERSON_BK"},
+            projection_recipient_id="PERSON_BK", projection_remote_only=True)
+        assert memory.recall(query) == []
+        hits = memory.recall(query.model_copy(update={"allow_entity_fallback": True}))
+        assert [hit.memory.id for hit in hits] == [own.id]
+        assert "ENTITY_RECALL_NO_TEXT_MATCH" in hits[0].reason_codes
+        assert "TEXT_MATCH" not in hits[0].reason_codes
+        assert not memory.recall(query.model_copy(update={
+            "allow_entity_fallback": True, "projection_public_only": True,
+        }))
+    finally:
+        memory.close(); db.close()
