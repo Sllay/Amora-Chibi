@@ -8,7 +8,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from amora.cognition import CognitiveRequest
 
 from .attention import SocialAttentionRouter
-from .disclosure import public_text_allowed
+from .disclosure import public_text_allowed, audience_text_allowed
 from .models import (
     AttentionDecision,
     AuditDirection,
@@ -285,6 +285,8 @@ class PlatformMessagingService:
                 text = ""
             elif message.channel_type != ChannelType.GROUP or (
                 public_text_allowed(text) and public_text_allowed(plan.speech_text or "")
+                and audience_text_allowed(text, audience_id=request.session_id)
+                and audience_text_allowed(plan.speech_text or "", audience_id=request.session_id)
             ):
                 await self.cognition.emit_event(plan)
             else:
@@ -337,7 +339,7 @@ class PlatformMessagingService:
             )
             return result
 
-        if message.channel_type == ChannelType.GROUP and not public_text_allowed(text):
+        if message.channel_type == ChannelType.GROUP and not (public_text_allowed(text) and audience_text_allowed(text, audience_id=request.session_id)):
             text = ""
             cognitive_reasons.append("CONFIDENTIAL_OUTPUT_SUPPRESSED")
 
