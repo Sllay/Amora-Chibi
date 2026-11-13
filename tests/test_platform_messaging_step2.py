@@ -376,3 +376,41 @@ async def test_group_publication_rejects_confidential_output_and_retry(tmp_path,
         assert len(calls) == 1
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_dm_reflection_persists_when_social_generation_falls_back(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from amora.memory import MemoryQuery
+    from amora.models import TaskClass
+    from test_reflection_v10 import StructuredProvider
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    for name in ("NVIDIA_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv("AMORA_SECRET_" + name, raising=False)
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        provider = StructuredProvider()
+        provider.descriptor = replace(provider.descriptor,
+            capabilities=frozenset({TaskClass.REASONING}))
+        core.cognition.register_provider(provider)
+        incoming = _message(core, message_id="reflect-after-fallback",
+            actor_id="111111111111111111", channel_type=ChannelType.DM,
+            text="Estou trabalhando em um jogo novo.").model_copy(
+                update={"remote_processing_allowed": True})
+        result = await core.messaging.receive(incoming)
+        assert len(result.outbound) == 1
+        assert result.outbound[0].metadata["fallback_used"] is True
+        hits = core.memory.recall(MemoryQuery(text="jogo novo"))
+        assert any("jogo novo" in hit.memory.content for hit in hits)
+        audit = core.messaging_store.get_audit(platform=incoming.platform,
+            account_scope=incoming.account_scope, conversation_id=incoming.conversation_id,
+            message_id=incoming.message_id)
+        assert "MEMORY_REFLECTION_ACCEPTED" in audit.reason_codes
+        before = core.memory.store.count()
+        replay = await core.messaging.receive(incoming)
+        assert replay.duplicate
+        assert core.memory.store.count() == before
+    finally:
+        core.close()
