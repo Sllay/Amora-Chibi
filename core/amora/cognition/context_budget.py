@@ -37,7 +37,9 @@ def estimate_context(context):
 # provider envelope is never shortened by cutting literal text, identity or the
 # configured expressive profile. First discard only optional projections.
 GROQ_PAYLOAD_SOFT_CEILING_TOKENS = 5_200
-GROQ_PAYLOAD_HARD_CEILING_TOKENS = 7_200
+GROQ_PAYLOAD_HARD_CEILING_TOKENS = 16_384
+GROQ_BASELINE_HARD_CEILING_TOKENS = 7_200
+GROQ_V3_SOFT_CEILING_TOKENS = 12_288
 
 
 def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEILING_TOKENS):
@@ -47,6 +49,11 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
     The character/4 estimate is conservative guidance, not a real tokenizer
     or a substitute for provider response/error diagnostics.
     """
+    full_v3 = context.expression_profile == 'amora-v3'
+    # Preserve the default conservative baseline; the expanded V3 profile
+    # requires more room for its immutable text and the authoritative plan.
+    if full_v3 and ceiling == GROQ_PAYLOAD_SOFT_CEILING_TOKENS:
+        ceiling = GROQ_V3_SOFT_CEILING_TOKENS
     target = min(int(context.token_budget), int(ceiling))
     if target <= 0:
         raise ContextBudgetExceeded(1, target)
@@ -78,7 +85,9 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
             # Groq's conservative *soft* target on its own. Prefer an explicit,
             # still-bounded hard ceiling to silently stripping canonical identity
             # or refusing every V3 turn before the provider is even called.
-            hard = min(int(context.token_budget), GROQ_PAYLOAD_HARD_CEILING_TOKENS)
+            hard_ceiling = (GROQ_PAYLOAD_HARD_CEILING_TOKENS if full_v3
+                            else GROQ_BASELINE_HARD_CEILING_TOKENS)
+            hard = min(int(context.token_budget), hard_ceiling)
             if estimate <= hard:
                 return projected, payload
             raise ContextBudgetExceeded(estimate, hard)
