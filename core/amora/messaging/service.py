@@ -20,6 +20,7 @@ from .models import (
     RoutingAction,
     TransportInvalidation,
 )
+from .reflection_queue import ReflectionQueue
 from .presence import PlatformPresenceController
 from .presence_control import PlatformPresenceControlService, PresenceControlOutcome
 from .store import MessagingStore
@@ -79,6 +80,7 @@ class PlatformMessagingService:
             presence=PlatformPresenceController(store, clock, reset_transient=False),
         )
         self._inflight: dict[str, asyncio.Task[InboundResult]] = {}
+        self.reflections = ReflectionQueue(store.database, cognition, clock)
 
     async def receive(self, message: InboundMessage) -> InboundResult:
         """Process one logical inbound exactly once per Core process.
@@ -222,6 +224,9 @@ class PlatformMessagingService:
             },
         )
         self.cognition.observe_input(request)
+        # Persist the job before realization, including when generation fails.
+        if decision.action == RoutingAction.RESPOND:
+            self.reflections.enqueue(request)
 
         if decision.action == RoutingAction.CONTEXT_ONLY:
             self.cognition.record_turn_decision(
@@ -392,42 +397,6 @@ class PlatformMessagingService:
             },
             reason_codes=["CORE_OUTBOUND_ENQUEUED", *cognitive_reasons],
         )
-        # Reflection learns from the observed input, not from the success of
-        # social realization. The outbound intent is persisted before this
-        # bounded attempt. A durable retry queue remains a separate concern.
-        if message.remote_processing_allowed:
-            try:
-                bundle = await asyncio.wait_for(
-                    self.cognition.reflect(request.model_copy(update={
-                        # A cognitive turn is not an EventStore event. Keep the
-                        # actual source_event_id (None for platform text); the
-                        # reflection record already carries turn_id in metadata.
-                        "metadata": {**request.metadata, "cognitive_mode": "reflection"},
-                    })),
-                    timeout=8.0,
-                )
-                if bundle.accepted_memory_ids:
-                    reflection_reason = "MEMORY_REFLECTION_ACCEPTED"
-                elif "REFLECTION_PROVIDER_FAILURE" in bundle.reason_codes:
-                    reflection_reason = "MEMORY_REFLECTION_PROVIDER_FAILED"
-                elif "NO_STRUCTURED_REFLECTION_PROVIDER" in bundle.reason_codes:
-                    reflection_reason = "MEMORY_REFLECTION_PROVIDER_UNAVAILABLE"
-                else:
-                    reflection_reason = "MEMORY_REFLECTION_NO_ACCEPTED_MEMORY"
-            except TimeoutError:
-                reflection_reason = "MEMORY_REFLECTION_TIMEOUT"
-                _LOG.warning("messaging_memory_reflection_timeout")
-            except Exception as exc:
-                reflection_reason = "MEMORY_REFLECTION_FAILED"
-                _LOG.warning("messaging_memory_reflection_failed type=%s", type(exc).__name__)
-            self.store.add_inbound_reason(
-                platform=message.platform,
-                account_scope=message.account_scope,
-                conversation_id=message.conversation_id,
-                message_id=message.message_id,
-                reason=reflection_reason,
-            )
-
         result = InboundResult(decision=decision, duplicate=duplicate_recovery, outbound=[outbound])
         self._log_result(
             result,
