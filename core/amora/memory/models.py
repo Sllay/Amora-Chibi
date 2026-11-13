@@ -116,6 +116,9 @@ class MemoryQuery(BaseModel):
     limit: int = Field(default=8, ge=1, le=50)
     mmr_lambda: float = Field(default=0.75, ge=0.0, le=1.0)
     include_archived: bool = False
+    projection_recipient_id: str | None = None
+    projection_public_only: bool = False
+    projection_remote_only: bool = False
 
     @model_validator(mode="after")
     def validate_window(self) -> "MemoryQuery":
