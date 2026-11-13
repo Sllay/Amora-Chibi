@@ -8,6 +8,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from amora.cognition import CognitiveRequest
 
 from .attention import SocialAttentionRouter
+from .disclosure import public_text_allowed
 from .models import (
     AttentionDecision,
     AuditDirection,
@@ -35,6 +36,7 @@ _TERMINAL_DUPLICATE_REASONS = frozenset(
     {
         "REPLY_LEASE_INVALIDATED",
         "EMPTY_REALIZATION_SUPPRESSED",
+        "CONFIDENTIAL_OUTPUT_SUPPRESSED",
     }
 )
 
@@ -273,13 +275,19 @@ class PlatformMessagingService:
                 self.cognition.respond(request, on_segment=None, fallback_text=fallback),
                 timeout=self.cognition_timeout_seconds,
             )
-            await self.cognition.emit_event(plan)
             provider = plan.provider
             model = plan.model
             fallback_used = bool(plan.fallback_used)
             cognitive_reasons = list(plan.reason_codes)
             cognitive_turn_id = str(plan.turn_id)
             text = (plan.display_text or plan.speech_text or fallback).strip()
+            if message.channel_type != ChannelType.GROUP or (
+                public_text_allowed(text) and public_text_allowed(plan.speech_text or "")
+            ):
+                await self.cognition.emit_event(plan)
+            else:
+                text = ""
+                cognitive_reasons.append("CONFIDENTIAL_OUTPUT_SUPPRESSED")
         except TimeoutError:
             fallback_used = True
             cognitive_reasons = [
@@ -327,18 +335,25 @@ class PlatformMessagingService:
             )
             return result
 
+        if message.channel_type == ChannelType.GROUP and not public_text_allowed(text):
+            text = ""
+            cognitive_reasons.append("CONFIDENTIAL_OUTPUT_SUPPRESSED")
+
         if not text:
+            suppression_reason = ("CONFIDENTIAL_OUTPUT_SUPPRESSED"
+                                  if "CONFIDENTIAL_OUTPUT_SUPPRESSED" in cognitive_reasons
+                                  else "EMPTY_REALIZATION_SUPPRESSED")
             self.store.add_inbound_reason(
                 platform=message.platform,
                 account_scope=message.account_scope,
                 conversation_id=message.conversation_id,
                 message_id=message.message_id,
-                reason="EMPTY_REALIZATION_SUPPRESSED",
+                reason=suppression_reason,
             )
             result = InboundResult(
                 decision=decision.model_copy(
                     update={
-                        "reason_codes": [*decision.reason_codes, "EMPTY_REALIZATION_SUPPRESSED"],
+                        "reason_codes": [*decision.reason_codes, suppression_reason],
                     }
                 ),
                 duplicate=duplicate_recovery,
