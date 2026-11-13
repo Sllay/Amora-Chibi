@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -169,6 +169,7 @@ class CognitiveContext(BaseModel):
     specialist_support: dict[str, Any] | None = None
     privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
     remote_processing_allowed: bool = False
+    scene_visibility: Literal["private", "group", "public_stream"] = "private"
     expression_profile: str = "core-v1"
     token_budget: int = Field(default=16384, ge=256, le=32000)
     reason_codes: list[str] = Field(default_factory=list)
