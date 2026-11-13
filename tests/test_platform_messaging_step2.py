@@ -420,3 +420,33 @@ async def test_dm_reflection_persists_when_social_generation_falls_back(tmp_path
         assert core.memory.store.count() == before
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_known_group_observation_can_consolidate_without_reply(tmp_path, monkeypatch):
+    from test_reflection_v10 import StructuredProvider
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    monkeypatch.setenv("AMORA_REFLECTION_OBSERVED", "1")
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        core.cognition.register_provider(StructuredProvider())
+        message = _message(core, message_id="observed-project", actor_id="111111111111111111",
+            channel_type=ChannelType.GROUP, text="Estou trabalhando em um jogo novo.").model_copy(
+                update={"remote_processing_allowed": True, "mentioned_actor_ids": ["999999999999999999"]})
+        result = await core.messaging.receive(message)
+        assert result.decision.action == RoutingAction.CONTEXT_ONLY
+        assert not result.outbound
+        turn_id = core.messaging._turn_id(message)
+        assert core.messaging.reflections.state(turn_id)["status"] == "pending"
+        assert await core.messaging.reflections.process_once()
+        assert core.messaging.reflections.state(turn_id)["status"] == "done"
+        from amora.cognition import JournalStage
+        entry = next(e for e in core.cognition.store.journal_for_turn(turn_id)
+                     if e.stage == JournalStage.PROPOSALS_GATED)
+        assert entry.payload["accepted_memory_ids"]
+        assert entry.payload["hypothesis_ids"] == []
+        assert entry.payload["deferred_action_count"] == 0
+        assert all(not core.memory.get(mid).remote_processing_allowed for mid in entry.payload["accepted_memory_ids"])
+    finally:
+        core.close()

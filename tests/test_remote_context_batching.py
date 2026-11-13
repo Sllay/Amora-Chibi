@@ -151,3 +151,26 @@ def test_remote_reflection_jobs_claim_and_retry_atomically(tmp_path, monkeypatch
         assert queue.state(request.turn_id)["status"] == "done"
     finally:
         core.close()
+
+
+def test_remote_reflection_invalidation_is_persistent_and_revision_scoped(tmp_path, monkeypatch):
+    from amora.cognition import CognitiveRequest
+    from amora.messaging.reflection_queue import ReflectionQueue
+    core, _ = _remote_core(tmp_path, monkeypatch)
+    try:
+        request = CognitiveRequest(text="Projeto orquidea.", speaker_id="PERSON_BK",
+            session_id="synthetic-private-session", remote_processing_allowed=True,
+            metadata={"surface": "platform_messaging", "channel_type": "dm",
+                      "native_message_id_hash": "source-hash", "transport_revision": 1})
+        core.cognition.observe_input(request)
+        queue = core.messaging.reflections
+        assert queue.enqueue(request)
+        lease = queue.claim()
+        assert lease
+        assert queue.invalidate_source(request.session_id, "source-hash", through_revision=1) == 1
+        assert not queue.finish(lease, "MEMORY_REFLECTION_ACCEPTED")
+        assert queue.state(request.turn_id)["status"] == "cancelled"
+        assert core.cognition.store.list_messages(session_id=request.session_id, exclude_invalidated=True) == []
+        assert ReflectionQueue(core.database, core.cognition, core.clock).claim() is None
+    finally:
+        core.close()
