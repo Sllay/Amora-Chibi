@@ -458,8 +458,9 @@ class CognitiveEngine(ProductionCognitiveEngine):
         # choices can persist a rejected group response.
         if (request.metadata.get("surface") == "platform_messaging"
                 and request.metadata.get("channel_type") != "dm"):
-            from amora.messaging.disclosure import public_text_allowed
-            if not public_text_allowed(validated.text):
+            from amora.messaging.disclosure import public_text_allowed, audience_text_allowed
+            if not (public_text_allowed(validated.text) and
+                    audience_text_allowed(validated.text, audience_id=request.session_id)):
                 return CognitiveResponsePlan(
                     turn_id=request.turn_id,
                     display_text="",
