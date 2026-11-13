@@ -117,3 +117,37 @@ def test_remote_transaction_batches_executemany_without_changing_transaction_con
         assert server.pipeline_calls <= 4
     finally:
         connection.close()
+
+
+def test_remote_reflection_jobs_claim_and_retry_atomically(tmp_path, monkeypatch):
+    from datetime import timedelta
+    from amora.cognition import CognitiveRequest
+    from amora.time import SimulatedClock
+    from amora.messaging.reflection_queue import ReflectionQueue
+
+    core, _ = _remote_core(tmp_path, monkeypatch)
+    try:
+        request = CognitiveRequest(
+            text="Projeto orquidea tem cinco mapas.", speaker_id="PERSON_BK",
+            session_id="synthetic-session", remote_processing_allowed=True,
+            metadata={"surface": "platform_messaging", "channel_type": "dm",
+                      "memory_consolidation": True},
+        )
+        core.cognition.observe_input(request)
+        clock = SimulatedClock()
+        queue = ReflectionQueue(core.database, core.cognition, clock)
+        assert queue.enqueue(request)
+        assert not queue.enqueue(request)
+        lease = queue.claim()
+        assert lease is not None
+        assert queue.claim() is None
+        assert queue.finish(lease, "REFLECTION_PROVIDER_FAILURE", retry=True)
+        assert not queue.finish(lease, "STALE_ACK")
+        assert queue.claim() is None
+        clock.advance(timedelta(seconds=15))
+        second = queue.claim()
+        assert second is not None and second[2] != lease[2]
+        assert queue.finish(second, "MEMORY_REFLECTION_ACCEPTED")
+        assert queue.state(request.turn_id)["status"] == "done"
+    finally:
+        core.close()
