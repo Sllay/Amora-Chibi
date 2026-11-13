@@ -61,3 +61,25 @@ def test_private_memory_not_projected_to_group(tmp_path, monkeypatch):
         assert all(m.content != marker for m in group.memories)
     finally:
         core.close()
+
+
+@pytest.mark.parametrize("scope,session,channel,allowed", [
+    (PrivacyScope.PERSONAL, "group-a", "group", True),
+    (PrivacyScope.PERSONAL, "dm-a", "dm", False),
+    (PrivacyScope.PERSONAL, "group-a", "dm", False),
+    (PrivacyScope.PRIVATE, "group-a", "group", False),
+    (PrivacyScope.SECRET, "group-a", "group", False),
+])
+def test_shared_history_requires_group_origin(scope, session, channel, allowed):
+    from types import SimpleNamespace
+    from amora.cognition.context import ProviderPrivacyGate
+
+    request = CognitiveRequest(
+        text="hello", speaker_id="PERSON_BK", session_id="group-a",
+        metadata={"surface": "platform_messaging", "channel_type": "group"},
+    )
+    message = SimpleNamespace(
+        privacy_scope=scope, session_id=session,
+        metadata={"surface": "platform_messaging", "channel_type": channel},
+    )
+    assert ProviderPrivacyGate.shared_history_allowed(message, request) is allowed
