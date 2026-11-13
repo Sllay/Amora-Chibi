@@ -221,3 +221,26 @@ async def test_historical_recovery_and_reviewed_reuse_preserve_audience(tmp_path
         assert orphan and not core.memory.store.authorize_reviewed_reflection(orphan.id, "PERSON_BK")
     finally:
         core.close()
+
+
+def test_reconcile_repairs_new_input_without_importing_old_history(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        old = _revision()
+        marked = _revision(2)
+        marked.metadata["reflection_enqueue_requested"] = True
+        core.cognition.observe_input(old)
+        core.cognition.observe_input(marked)
+        queue = core.messaging.reflections
+        assert queue.reconcile_missing() == 1
+        assert queue.reconcile_missing() == 0
+        assert queue.state(old.turn_id) is None
+        assert queue.state(marked.turn_id)["status"] == "pending"
+        lease = queue.claim()
+        core.clock.advance(timedelta(seconds=181))
+        assert not queue.finish(lease, "STALE_ACK")
+        renewed = queue.claim()
+        assert renewed and renewed[2] != lease[2]
+    finally:
+        core.close()

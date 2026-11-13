@@ -16,7 +16,7 @@ _LEASE_SECONDS = 180
 _TIMEOUT_SECONDS = 60
 _RETRY_REASONS = {
     "REFLECTION_PROVIDER_FAILURE", "NO_STRUCTURED_REFLECTION_PROVIDER",
-    "CONTEXT_ENVELOPE_OVERFLOW", "REFLECTION_SKIPPED",
+    "CONTEXT_ENVELOPE_OVERFLOW", "REFLECTION_SKIPPED", "REFLECTION_LEASE_LOST",
 }
 
 
@@ -57,6 +57,33 @@ class ReflectionQueue:
              input_row.metadata.get("native_message_id_hash", ""),
              int(input_row.metadata.get("transport_revision", 1))),
         ))
+
+    def reconcile_missing(self):
+        """Recover the crash gap between persisted input and job insertion.
+
+        Only new inputs carrying the trusted enqueue marker participate.
+        Historical data never becomes a remote job merely by upgrading.
+        """
+        now = self.clock.now().isoformat()
+        return self._write(
+            """INSERT INTO memory_reflection_jobs(turn_id,input_id,status,created_at,available_at)
+               SELECT m.turn_id,m.id,'pending',m.started_at,?
+               FROM conversation_messages m
+               WHERE m.dedupe_key='cognitive-input:' || m.turn_id
+                 AND m.remote_processing_allowed=1 AND m.privacy_scope NOT IN ('AUTH','SECRET')
+                 AND json_extract(m.metadata_json,'$.surface')='platform_messaging'
+                 AND json_extract(m.metadata_json,'$.reflection_enqueue_requested')=1
+                 AND COALESCE(json_extract(m.metadata_json,'$.test_mode'),0)=0
+                 AND COALESCE(json_extract(m.metadata_json,'$.memory_consolidation'),1)=1
+                 AND NOT EXISTS (SELECT 1 FROM memory_reflection_jobs j WHERE j.turn_id=m.turn_id)
+                 AND NOT EXISTS (SELECT 1 FROM memory_reflection_invalidations x
+                     WHERE x.session_id=m.session_id
+                     AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash')
+                     AND x.invalidated_through>=COALESCE(json_extract(m.metadata_json,'$.transport_revision'),1))
+               ORDER BY m.started_at,m.turn_id LIMIT 32
+               ON CONFLICT(turn_id) DO NOTHING""",
+            (now,),
+        )
 
     def source_invalidated(self, session_id, native_message_hash, revision):
         with self.database._lock:
@@ -195,9 +222,9 @@ class ReflectionQueue:
         until = (now + timedelta(seconds=_LEASE_SECONDS)).isoformat()
         won = self._write(
             "UPDATE memory_reflection_jobs SET status='claimed',attempts=attempts+1,"
-            "lease_token=?,lease_until=? WHERE turn_id=? AND attempts<? AND "
+            "lease_token=?,lease_until=? WHERE turn_id=? AND attempts=? AND attempts<? AND "
             "((status='pending' AND available_at<=?) OR (status='claimed' AND lease_until<=?))",
-            (token, until, row["turn_id"], _MAX_ATTEMPTS, stamp, stamp),
+            (token, until, row["turn_id"], row["attempts"], _MAX_ATTEMPTS, stamp, stamp),
         )
         return (row["turn_id"], row["input_id"], token, int(row["attempts"]) + 1) if won else None
 
@@ -207,8 +234,9 @@ class ReflectionQueue:
         delay = min(900, 15 * (2 ** (attempts - 1))) if status == "pending" else 0
         return bool(self._write(
             "UPDATE memory_reflection_jobs SET status=?,available_at=?,lease_token=NULL,lease_until=NULL,"
-            "last_reason=? WHERE turn_id=? AND status='claimed' AND lease_token=?",
-            (status, (self.clock.now() + timedelta(seconds=delay)).isoformat(), reason, turn_id, token),
+            "last_reason=? WHERE turn_id=? AND status='claimed' AND lease_token=? AND lease_until>?",
+            (status, (self.clock.now() + timedelta(seconds=delay)).isoformat(), reason, turn_id, token,
+             self.clock.now().isoformat()),
         ))
 
     def state(self, turn_id):
@@ -229,6 +257,7 @@ class ReflectionQueue:
         return counts
 
     async def process_once(self):
+        self.reconcile_missing()
         job = self.claim()
         if job is None:
             return False

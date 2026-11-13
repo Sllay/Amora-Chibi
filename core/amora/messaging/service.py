@@ -187,10 +187,17 @@ class PlatformMessagingService:
             if duplicate_result is not None:
                 self._log_result(duplicate_result)
                 return duplicate_result
-            routed = self.attention.route(message)
-            decision = routed.model_copy(
-                update={"reason_codes": [*routed.reason_codes, "DUPLICATE_RECOVERY_RESUME"]}
-            )
+            if existing_audit.routing_action == RoutingAction.CONTEXT_ONLY:
+                _, actor_ref = self.attention.resolve_speaker(message)
+                decision = AttentionDecision(
+                    action=RoutingAction.CONTEXT_ONLY, speaker_entity_id=existing_audit.speaker_entity_id,
+                    speaker_actor_ref=actor_ref, reason_codes=["DUPLICATE_RECOVERY_RESUME", "MESSAGING_CONTEXT_ONLY"],
+                )
+            else:
+                routed = self.attention.route(message)
+                decision = routed.model_copy(
+                    update={"reason_codes": [*routed.reason_codes, "DUPLICATE_RECOVERY_RESUME"]}
+                )
             duplicate_recovery = True
         else:
             decision = self.attention.route(message)
@@ -290,13 +297,18 @@ class PlatformMessagingService:
                 "provider_attempt_budget_seconds": self.provider_attempt_budget_seconds,
             },
         )
+        enqueue_reflection = message.remote_processing_allowed and (
+            decision.action == RoutingAction.RESPOND or (
+                decision.action == RoutingAction.CONTEXT_ONLY
+                and decision.speaker_entity_id is not None
+                and os.getenv("AMORA_REFLECTION_OBSERVED", "0") == "1"
+            )
+        )
+        # Persist the intent with the input. The queue reconciles the crash
+        # window between these separate writes, without importing old history.
+        request.metadata["reflection_enqueue_requested"] = enqueue_reflection
         self.cognition.observe_input(request)
-        # Persist the job before realization, including when generation fails.
-        if decision.action == RoutingAction.RESPOND or (
-            decision.action == RoutingAction.CONTEXT_ONLY
-            and decision.speaker_entity_id is not None
-            and os.getenv("AMORA_REFLECTION_OBSERVED", "0") == "1"
-        ):
+        if enqueue_reflection:
             self.reflections.enqueue(request)
 
         if decision.action == RoutingAction.CONTEXT_ONLY:
@@ -499,6 +511,9 @@ class PlatformMessagingService:
 
         terminal_reason = next((reason for reason in reasons if reason in _TERMINAL_DUPLICATE_REASONS), None)
         action = RoutingAction.SILENCE if terminal_reason is not None else audit.routing_action
+        if action == RoutingAction.CONTEXT_ONLY and self.cognition.store.get_message_by_dedupe(
+                f"cognitive-input:{self._turn_id(message)}") is None:
+            return None
         if action is not None and action != RoutingAction.RESPOND:
             return InboundResult(
                 decision=AttentionDecision(
