@@ -594,6 +594,7 @@ class PlatformMessagingService:
             "messaging_audit_count": self.store.count_audit(),
             "messaging_outbound_pending_count": self.store.pending_outbound_count(),
             "messaging_inflight_count": len(self._inflight),
+            "memory_reflection_jobs": self.reflections.counts(),
             "messaging_cognition_timeout_seconds": self.cognition_timeout_seconds,
             "messaging_provider_total_budget_seconds": self.provider_total_budget_seconds,
             "messaging_provider_attempt_budget_seconds": self.provider_attempt_budget_seconds,
