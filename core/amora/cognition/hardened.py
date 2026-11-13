@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections import OrderedDict
 from contextlib import suppress
 from time import perf_counter
@@ -168,12 +169,26 @@ class CognitiveEngine(BaseCognitiveEngine):
             },
         )
 
+        # Future remote reuse is a separate operator opt-in, not implied by
+        # consent to process the current turn. Never promote existing records.
+        owner_known = self.compiler.identities.get(request.speaker_id) is not None
+        remote_reuse = (
+            os.getenv("AMORA_REFLECTION_REMOTE_REUSE", "0") == "1"
+            and request.privacy_scope == PrivacyScope.PERSONAL
+            and request.remote_processing_allowed
+            and context.remote_processing_allowed
+            and context.scene_visibility == "private"
+            and bool(request.session_id)
+            and owner_known
+        )
         for proposal in bundle.memory_candidates:
             safe_refs = {
                 entity_id: confidence
                 for entity_id, confidence in proposal.entity_refs.items()
                 if self.compiler.identities.get(entity_id) is not None
             }
+            if owner_known:
+                safe_refs.setdefault(request.speaker_id, 1.0)
             result = self.compiler.memory.remember(
                 MemoryCandidate(
                     kind=proposal.kind,
@@ -188,8 +203,8 @@ class CognitiveEngine(BaseCognitiveEngine):
                         session_id=request.session_id,
                     ),
                     privacy_scope=request.privacy_scope,
-                    owner_entity_id=request.speaker_id if self.compiler.identities.get(request.speaker_id) else None,
-                    remote_processing_allowed=False,
+                    owner_entity_id=request.speaker_id if owner_known else None,
+                    remote_processing_allowed=remote_reuse,
                     entity_refs=safe_refs,
                     tags=set(proposal.tags) | {"cognitive_reflection"},
                     importance=proposal.importance,
@@ -198,11 +213,17 @@ class CognitiveEngine(BaseCognitiveEngine):
                     relationship_relevance=proposal.relationship_relevance,
                     future_consequence=proposal.future_consequence,
                     goal_relevance=proposal.goal_relevance,
-                    metadata={"provider": descriptor.name, "model": descriptor.model, "turn_id": str(request.turn_id)},
+                    metadata={"provider": descriptor.name, "model": descriptor.model, "turn_id": str(request.turn_id),
+                              "reflection_remote_reuse": remote_reuse},
                 )
             )
             if result.memory is not None:
                 bundle.accepted_memory_ids.append(str(result.memory.id))
+                self._append_reason(bundle, "REFLECTION_MEMORY_REMOTE_REUSE_ALLOWED" if remote_reuse
+                                    else "REFLECTION_MEMORY_LOCAL_ONLY")
+            else:
+                for reason in result.decision.reason_codes:
+                    self._append_reason(bundle, reason)
 
         perspective_consolidator = PerspectiveConsolidator(self.compiler.world)
         input_entities = set(context.acir.get("entities", [])) if context.acir is not None else set()
