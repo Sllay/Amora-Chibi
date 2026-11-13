@@ -157,6 +157,58 @@ class MemoryStore:
                 return None
             return self._hydrate(row)
 
+    def local_only_reflection_audit(self) -> dict:
+        with self._lock:
+            count = self._conn.execute(
+                "SELECT COUNT(*) FROM memory_records WHERE archived_at IS NULL "
+                "AND remote_processing_allowed=0 AND provenance_source LIKE 'cognition:%'"
+            ).fetchone()[0]
+            rows = self._conn.execute(
+                "SELECT id,owner_entity_id,privacy_scope FROM memory_records WHERE archived_at IS NULL "
+                "AND remote_processing_allowed=0 AND provenance_source LIKE 'cognition:%' "
+                "ORDER BY created_at DESC LIMIT 100"
+            ).fetchall()
+        return {"total": int(count), "review_candidates": [dict(row) for row in rows]}
+
+    def authorize_reviewed_reflection(self, memory_id: UUID | str, owner_id: str) -> bool:
+        """Narrow, explicit owner-reviewed reuse; never public or bulk promotion.
+
+        Original DM input must have allowed remote processing. The operator
+        attests the individual memory was reviewed and its owner approved reuse.
+        """
+        if self.identities.get(owner_id) is None:
+            return False
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """UPDATE memory_records SET remote_processing_allowed=1,
+                       owner_entity_id=?, updated_at=?
+                   WHERE id=? AND privacy_scope='PERSONAL' AND archived_at IS NULL
+                     AND remote_processing_allowed=0 AND provenance_source LIKE 'cognition:%'
+                     AND provenance_kind='inference' AND actor_id='ENTITY_AMORA'
+                     AND (owner_entity_id IS NULL OR owner_entity_id=?)
+                     AND NOT EXISTS (SELECT 1 FROM json_each(audience_json) WHERE value<>?)
+                     AND json_array_length(derived_from_json)=0
+                     AND EXISTS (
+                         SELECT 1 FROM conversation_messages m
+                         WHERE m.turn_id=json_extract(memory_records.metadata_json,'$.turn_id')
+                           AND m.dedupe_key='cognitive-input:' || m.turn_id
+                           AND m.session_id=memory_records.session_id AND m.speaker_id=?
+                           AND m.privacy_scope='PERSONAL' AND m.remote_processing_allowed=1
+                           AND json_extract(m.metadata_json,'$.surface')='platform_messaging'
+                           AND json_extract(m.metadata_json,'$.channel_type')='dm'
+                           AND COALESCE(json_extract(m.metadata_json,'$.test_mode'),0)=0
+                           AND COALESCE(json_extract(m.metadata_json,'$.memory_consolidation'),1)=1
+                           AND NOT EXISTS (
+                               SELECT 1 FROM memory_reflection_invalidations x
+                               WHERE x.session_id=m.session_id
+                                 AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash')
+                                 AND x.invalidated_through>=COALESCE(json_extract(m.metadata_json,'$.transport_revision'),1)
+                           )
+                     )""",
+                (owner_id, self.clock.now().isoformat(), str(memory_id), owner_id, owner_id, owner_id),
+            )
+            return cursor.rowcount == 1
+
     def link(self, source_memory_id: UUID | str, target_memory_id: UUID | str, link_type: str, confidence: float = 1.0) -> None:
         confidence = max(0.0, min(1.0, float(confidence)))
         with self._lock, self._conn:

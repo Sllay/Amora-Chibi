@@ -103,6 +103,56 @@ class ReflectionQueue:
             (self.clock.now().isoformat(), str(turn_id)),
         ))
 
+    def recover_historical_turn(self, turn_id):
+        """Explicit recovery of one observed, eligible private platform turn."""
+        item = self.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn_id}")
+        if (item is None or not item.raw_text or not item.speaker_id
+                or not item.session_id or item.privacy_scope != PrivacyScope.PERSONAL
+                or not item.remote_processing_allowed
+                or item.metadata.get("surface") != "platform_messaging"
+                or item.metadata.get("channel_type") != "dm"
+                or item.metadata.get("test_mode")
+                or item.metadata.get("memory_consolidation") is False
+                or self.cognition.compiler.identities.get(item.speaker_id) is None):
+            return False
+        # Never duplicate an existing completed consolidation; old memories can
+        # be explicitly reviewed for reuse through the separate authorization path.
+        if any(entry.stage == JournalStage.PROPOSALS_GATED
+               for entry in self.cognition.store.journal_for_turn(turn_id)):
+            return False
+        request = CognitiveRequest(
+            turn_id=UUID(str(turn_id)), text=item.raw_text, speaker_id=item.speaker_id,
+            target_id=item.addressee_id, session_id=item.session_id,
+            privacy_scope=item.privacy_scope, source_event_id=item.source_event_id,
+            remote_processing_allowed=item.remote_processing_allowed,
+            metadata=item.metadata,
+        )
+        return self.enqueue(request)
+
+    def historical_audit(self):
+        """Counts and bounded identifiers only; no conversation or memory contents."""
+        with self.database._lock:
+            conn = self.database._conn
+            rows = conn.execute(
+                "SELECT m.turn_id FROM conversation_messages m "
+                "WHERE m.dedupe_key='cognitive-input:' || m.turn_id "
+                "AND m.privacy_scope='PERSONAL' AND m.remote_processing_allowed=1 "
+                "AND m.speaker_id IS NOT NULL AND m.session_id IS NOT NULL "
+                "AND json_extract(m.metadata_json,'$.surface')='platform_messaging' "
+                "AND json_extract(m.metadata_json,'$.channel_type')='dm' "
+                "AND COALESCE(json_extract(m.metadata_json,'$.test_mode'),0)=0 "
+                "AND COALESCE(json_extract(m.metadata_json,'$.memory_consolidation'),1)=1 "
+                "AND NOT EXISTS (SELECT 1 FROM memory_reflection_jobs j WHERE j.turn_id=m.turn_id) "
+                "AND NOT EXISTS (SELECT 1 FROM cognitive_journal j WHERE j.turn_id=m.turn_id AND j.stage='proposals_gated') "
+                "AND NOT EXISTS (SELECT 1 FROM memory_reflection_invalidations x WHERE x.session_id=m.session_id "
+                "AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash') "
+                "AND x.invalidated_through>=COALESCE(json_extract(m.metadata_json,'$.transport_revision'),1)) "
+                "ORDER BY m.started_at DESC LIMIT 100"
+            ).fetchall()
+        return {"unconsolidated_turn_candidates": [row["turn_id"] for row in rows],
+                "local_only_reflections": self.cognition.compiler.memory.store.local_only_reflection_audit(),
+                "queue": self.counts()}
+
     def failed_jobs(self, limit=50):
         with self.database._lock:
             rows = self.database._conn.execute(

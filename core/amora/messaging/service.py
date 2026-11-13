@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from amora.cognition import CognitiveRequest
@@ -217,6 +218,7 @@ class PlatformMessagingService:
                 "social_attention_reasons": list(decision.reason_codes),
                 "floor_generation": decision.floor_generation,
                 "memory_consolidation": message.remote_processing_allowed,
+                "observed_only": decision.action == RoutingAction.CONTEXT_ONLY,
                 "relationship_learning": False,
                 "messaging_audit": True,
                 "provider_total_budget_seconds": self.provider_total_budget_seconds,
@@ -225,7 +227,11 @@ class PlatformMessagingService:
         )
         self.cognition.observe_input(request)
         # Persist the job before realization, including when generation fails.
-        if decision.action == RoutingAction.RESPOND:
+        if decision.action == RoutingAction.RESPOND or (
+            decision.action == RoutingAction.CONTEXT_ONLY
+            and decision.speaker_entity_id is not None
+            and os.getenv("AMORA_REFLECTION_OBSERVED", "0") == "1"
+        ):
             self.reflections.enqueue(request)
 
         if decision.action == RoutingAction.CONTEXT_ONLY:

@@ -234,7 +234,7 @@ class CognitiveEngine(BaseCognitiveEngine):
         perspective_consolidator = PerspectiveConsolidator(self.compiler.world)
         input_entities = set(context.acir.get("entities", [])) if context.acir is not None else set()
         deferred_hypothesis_count = 0
-        for proposal in bundle.belief_hypotheses:
+        for proposal in ([] if request.metadata.get("observed_only") else bundle.belief_hypotheses):
             if lease_token and not self.store.reflection_lease_valid(request.turn_id, lease_token):
                 return CognitiveProposalBundle(reason_codes=["REFLECTION_LEASE_LOST"])
             subject_id = proposal.subject_id
@@ -319,7 +319,7 @@ class CognitiveEngine(BaseCognitiveEngine):
                 for reason in result.reason_codes:
                     self._append_reason(bundle, reason)
 
-        for suggestion in bundle.action_suggestions:
+        for suggestion in ([] if request.metadata.get("observed_only") else bundle.action_suggestions):
             if lease_token and not self.store.reflection_lease_valid(request.turn_id, lease_token):
                 return CognitiveProposalBundle(reason_codes=["REFLECTION_LEASE_LOST"])
             target_id = suggestion.target_id

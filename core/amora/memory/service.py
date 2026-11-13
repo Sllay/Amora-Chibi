@@ -97,7 +97,10 @@ class MemoryService:
             gate_score=decision.score,
             metadata=candidate.metadata,
         )
-        self.store.put(record, reflection_lease=reflection_lease)
+        if reflection_lease is None:
+            self.store.put(record)
+        else:
+            self.store.put(record, reflection_lease=reflection_lease)
         return RememberResult(decision=decision, memory=record)
 
     def recall(self, query: MemoryQuery) -> list[MemoryHit]:

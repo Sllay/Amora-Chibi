@@ -525,7 +525,68 @@ async def _command_providers_experiment_amora_v3_temperature(core: Any, args: li
         raise AdminCommandError(exc.code, "experimento de amostragem V3 indisponível") from exc
 
 
+def _memory_uuid(value: str) -> UUID:
+    try:
+        return UUID(value)
+    except ValueError as exc:
+        raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "identificador UUID inválido") from exc
+
+
+async def _command_memory_reflection_status(core: Any, args: list[str]) -> dict[str, Any]:
+    if args:
+        raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "memory reflection status não aceita argumentos")
+    queue = core.messaging.reflections
+    return {"kind": "memory_reflection_status", "summary": "Estado da fila de memória",
+            "data": {"counts": queue.counts(), "failed": queue.failed_jobs()}}
+
+
+async def _command_memory_reflection_retry(core: Any, args: list[str]) -> dict[str, Any]:
+    if len(args) != 1:
+        raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "use memory reflection retry TURN_UUID")
+    turn_id = _memory_uuid(args[0])
+    if not core.messaging.reflections.retry_failed(turn_id):
+        raise AdminCommandError("REFLECTION_NOT_FAILED", "tarefa não está em falha recuperável")
+    return {"kind": "memory_reflection_retry", "summary": "Tarefa rearmada", "turn_id": str(turn_id)}
+
+
+async def _command_memory_historical_audit(core: Any, args: list[str]) -> dict[str, Any]:
+    if args:
+        raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "memory historical audit não aceita argumentos")
+    return {"kind": "memory_historical_audit", "summary": "Auditoria sem conteúdo privado",
+            "data": core.messaging.reflections.historical_audit()}
+
+
+async def _command_memory_historical_recover(core: Any, args: list[str]) -> dict[str, Any]:
+    if len(args) != 2 or args[1] != "--confirm":
+        raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "use memory historical recover TURN_UUID --confirm")
+    turn_id = _memory_uuid(args[0])
+    if not core.messaging.reflections.recover_historical_turn(turn_id):
+        raise AdminCommandError("HISTORICAL_TURN_INELIGIBLE", "turno não autorizado, indisponível ou já consolidado")
+    return {"kind": "memory_historical_recover", "summary": "Turno histórico enfileirado", "turn_id": str(turn_id)}
+
+
+async def _command_memory_historical_authorize(core: Any, args: list[str]) -> dict[str, Any]:
+    if len(args) != 3 or args[2] != "--confirm":
+        raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "use memory historical authorize MEMORY_UUID OWNER_ID --confirm")
+    memory_id = _memory_uuid(args[0])
+    if not core.memory.store.authorize_reviewed_reflection(memory_id, args[1]):
+        raise AdminCommandError("MEMORY_REUSE_INELIGIBLE", "memória sem proveniência ou autorização compatível")
+    return {"kind": "memory_historical_authorize", "summary": "Reutilização individual autorizada",
+            "memory_id": str(memory_id)}
+
+
 _COMMANDS: tuple[RegisteredCommand, ...] = (
+    RegisteredCommand(("memory", "reflection", "status"), "memory reflection status",
+                      "Estado e falhas da fila sem conteúdo de conversas.", 5.0, _command_memory_reflection_status),
+    RegisteredCommand(("memory", "reflection", "retry"), "memory reflection retry TURN_UUID",
+                      "Rearmar uma única tarefa falha.", 5.0, _command_memory_reflection_retry),
+    RegisteredCommand(("memory", "historical", "audit"), "memory historical audit",
+                      "Auditar candidatos históricos sem ler conteúdo.", 5.0, _command_memory_historical_audit),
+    RegisteredCommand(("memory", "historical", "recover"), "memory historical recover TURN_UUID --confirm",
+                      "Reprocessar um turno privado revisado e autorizado.", 5.0, _command_memory_historical_recover),
+    RegisteredCommand(("memory", "historical", "authorize"), "memory historical authorize MEMORY_UUID OWNER_ID --confirm",
+                      "Autorizar reutilização de uma memória revisada com consentimento do titular.", 5.0,
+                      _command_memory_historical_authorize),
     RegisteredCommand(
         path=("providers", "experiment", "amora-v3-temperature"),
         usage="providers experiment amora-v3-temperature --case ID [--temperature X] [--top-p Y] [--temperature-a X] [--top-p-a Y]",
