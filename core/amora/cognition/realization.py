@@ -344,6 +344,17 @@ def realization_instruction(context: CognitiveContext) -> str:
         f"offer_help={bool(plan.get('offer_help', False))}; "
         f"closing_mode={plan.get('closing_mode', 'natural')}. "
         "Não crie nenhum move, objetivo social, fato ou pergunta fora do plano."
+        + (
+            " Em conversa compartilhada, mantenha a mesma voz coloquial e espontânea da Amora. "
+            "Use humor leve, contrações, ritmo brasileiro e provocações amistosas quando o ato e "
+            "a interação atual sustentarem isso. Limites de conhecimento e privacidade não exigem "
+            "voz formal de atendimento. Diga o que sabe ou não sabe em palavras próprias, sem "
+            "copiar frases prontas de exemplo ou oferecer ajuda genérica. Uma brincadeira não "
+            "autoriza inventar fatos, lembranças, hostilidade ou intimidade. "
+            "Baseie qualquer referência ao passado somente no histórico autorizado deste turno. "
+            "Não altere o objetivo, a pergunta, o fechamento nem as permissões do plano."
+            if context.scene_visibility != "private" else ""
+        )
         + specialist
     )
 
