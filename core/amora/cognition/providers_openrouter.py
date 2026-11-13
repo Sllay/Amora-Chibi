@@ -15,6 +15,7 @@ from .providers_identity import (
     _responses_input,
 )
 from .providers_v1 import _REFLECTION_INSTRUCTION
+from .reflection_contract import is_memory_only, memory_input, memory_instructions, validate_memory_extraction
 from .realization import realization_instruction
 
 
@@ -63,7 +64,8 @@ class OpenRouterCognitiveProvider(BaseOpenRouterCognitiveProvider):
         return parsed
 
     async def propose(self, context: CognitiveContext) -> dict[str, object]:
-        instructions = (
+        memory_only = is_memory_only(context)
+        instructions = memory_instructions() if memory_only else (
             self._system_prompt()
             + _IDENTITY_CONTRACT
             + "\n\n"
@@ -75,17 +77,19 @@ class OpenRouterCognitiveProvider(BaseOpenRouterCognitiveProvider):
         payload = {
             "model": self.model,
             "instructions": instructions,
-            "input": _responses_input(context),
+            "input": [{"role": "user", "content": memory_input(context)}] if memory_only else _responses_input(context),
             "stream": False,
             "temperature": 0.25,
             "top_p": 0.8,
-            "max_output_tokens": 900,
+            "max_output_tokens": 1200 if memory_only else 900,
             "text": {"format": {"type": "json_object"}},
         }
         from .context_budget import ensure_payload
         ensure_payload(context, payload)
         root, response, latency_ms = await self._post_responses(payload)
         parsed = _parse_response_json(root, purpose="proposal")
+        if memory_only:
+            parsed = validate_memory_extraction(parsed)
         usage = root.get("usage") if isinstance(root.get("usage"), dict) else {}
         parsed["_usage"] = {
             "input_tokens": usage.get("input_tokens"),
@@ -113,7 +117,7 @@ class OpenRouterCognitiveProvider(BaseOpenRouterCognitiveProvider):
             )
         if response.status_code >= 400:
             raise ProviderError(
-                f"openrouter Responses request failed ({response.status_code}): {response.text[:1000]}",
+                f"openrouter Responses request failed ({response.status_code})",
                 status_code=response.status_code,
                 retry_after=response.headers.get("retry-after"),
             )

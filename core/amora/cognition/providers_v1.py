@@ -12,6 +12,7 @@ from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.secrets import SecretStore
 
 from .models import CognitiveContext
+from .reflection_contract import is_memory_only, validate_memory_extraction
 from .providers import GroqCognitiveProvider as BaseGroqCognitiveProvider, ProviderDelta, ProviderError
 
 
@@ -357,7 +358,7 @@ class GeminiCognitiveProvider:
             )
         if response.status_code >= 400:
             raise ProviderError(
-                f"Gemini cognitive proposal request failed ({response.status_code}): {response.text[:1000]}",
+                f"Gemini cognitive proposal request failed ({response.status_code})",
                 status_code=response.status_code,
                 retry_after=response.headers.get("retry-after"),
             )
@@ -370,6 +371,8 @@ class GeminiCognitiveProvider:
             raise ProviderError("Gemini returned invalid structured cognitive proposals") from exc
         if not isinstance(parsed, dict):
             raise ProviderError("Gemini structured cognitive proposal root must be an object")
+        if is_memory_only(context):
+            parsed = validate_memory_extraction(parsed)
         usage = root.get("usageMetadata") or {}
         parsed["_usage"] = {
             "input_tokens": usage.get("promptTokenCount"),

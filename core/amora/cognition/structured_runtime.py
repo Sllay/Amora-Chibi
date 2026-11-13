@@ -50,6 +50,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
             value = payload.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 safe[key] = value
+        if payload.get("phase") == "reflection":
+            safe["phase"] = "reflection"
+            for key in ("failure_code", "provider_error_category", "validation_issues", "retry_after_seconds"):
+                if payload.get(key) is not None:
+                    safe[key] = payload[key]
         logging.getLogger("amora.cognition.generation").info("generation_stage", extra=safe)
 
     def state(self) -> dict[str, object]:

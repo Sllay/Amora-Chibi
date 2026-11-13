@@ -42,5 +42,6 @@ async def test_structured_reflection_fails_over_without_changing_concurrent_rout
         assert "REFLECTION_PROVIDER_FAILOVER_USED" in bundle.reason_codes
         assert core.cognition.router.descriptor("reflection-primary") is not None
         assert core.cognition.router.descriptor("reflection-secondary") is not None
-        state = core.cognition.state(); assert state["cognitive_provider_failures"]["reflection-primary"] == 1
+        state = core.cognition.state(); assert state["cognitive_reflection_provider_failures"]["reflection-primary"] == 1
+        assert "reflection-primary" not in state["cognitive_provider_failures"]
     finally: core.close()

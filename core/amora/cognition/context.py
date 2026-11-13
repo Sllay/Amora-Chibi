@@ -155,6 +155,12 @@ class ContextCompiler:
         mode = request.metadata.get("cognitive_mode")
         if mode == "reflection":
             reasons.append("COGNITIVE_REFLECTION")
+            if request.metadata.get("durable_memory_reflection"):
+                # Memory extraction is not a social realization or persona task.
+                # Its adapters project only the observed input.
+                from .reflection_contract import MEMORY_ONLY_REASON
+                reasons.append(MEMORY_ONLY_REASON)
+                profile = "core-v1"
         elif mode == "autonomous_initiation":
             reasons.append("AUTONOMOUS_INITIATION")
         acir: dict[str, Any] | None = None
@@ -328,6 +334,10 @@ class ContextCompiler:
             context.reason_codes.append("ACIR_BOUND_TO_DIALOGUE_PLAN")
         context.reason_codes.extend(code for code in dialogue_plan.reason_codes if code not in context.reason_codes)
         context.reason_codes.append(f"DIALOGUE_ACT_{dialogue_plan.act.value.upper()}")
+        if mode == "reflection" and request.metadata.get("durable_memory_reflection"):
+            # The dedicated adapter enforces the budget on its actual compact payload,
+            # not on a social prompt which will never be sent.
+            return context
         return self._fit_budget(context, self.dialogue)
 
     @staticmethod

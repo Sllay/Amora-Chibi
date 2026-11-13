@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from time import perf_counter
+from datetime import timedelta
 from copy import deepcopy
 from typing import Any
 from uuid import UUID
@@ -21,6 +22,8 @@ class CognitiveEngine(ResilientCognitiveEngine):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self._reflection_cooldowns: dict[str, Any] = {}
+        self._reflection_failures: dict[str, int] = {}
         if not isinstance(self.router, ScopedModelRouter):
             self.router = ScopedModelRouter(self.router)
 
@@ -28,6 +31,11 @@ class CognitiveEngine(ResilientCognitiveEngine):
         state = super().state()
         state["cognitive_usage_ledger"] = self.store.usage_ledger()
         state["cognitive_replay_enabled"] = True
+        state["cognitive_reflection_provider_failures"] = dict(self._reflection_failures)
+        state["cognitive_reflection_provider_cooldowns"] = {
+            name: until.isoformat() for name, until in self._reflection_cooldowns.items()
+            if until > self.clock.now()
+        }
         return state
 
     def _prepare_context(self, request: CognitiveRequest) -> CognitiveContext:
@@ -51,13 +59,17 @@ class CognitiveEngine(ResilientCognitiveEngine):
         except ContextBudgetExceeded:
             return CognitiveProposalBundle(reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "REFLECTION_SKIPPED"])
 
+        # A reflection failure must not open the social circuit or reset social quotas.
+        # The transport can still have shared account-level rate limits.
+        now = self.clock.now()
+        excluded = {name for name, until in self._reflection_cooldowns.items() if until > now}
         candidates = self.router.ranked_candidates(
             TaskClass.REASONING,
             privacy_scope=request.privacy_scope,
             remote_processing_allowed=context.remote_processing_allowed,
             require_structured_output=True,
             estimated_input_tokens=max(1, len(context.model_dump_json()) // 4),
-            excluded_names=self._cooldown_names(),
+            excluded_names=excluded,
         )
         if not candidates:
             return CognitiveProposalBundle(reason_codes=["NO_STRUCTURED_REFLECTION_PROVIDER"])
@@ -72,14 +84,20 @@ class CognitiveEngine(ResilientCognitiveEngine):
             if not failed and not unavailable:
                 if index:
                     bundle.reason_codes.append("REFLECTION_PROVIDER_FAILOVER_USED")
-                self._provider_succeeded(descriptor, None, None)
+                if "REFLECTION_LEASE_LOST" not in bundle.reason_codes:
+                    self._reflection_failures.pop(descriptor.name, None)
+                    self._reflection_cooldowns.pop(descriptor.name, None)
                 return bundle
             if failed:
-                latest = self.store.latest_usage(descriptor.name, task_class=TaskClass.REASONING.value)
-                if latest and latest.get("turn_id") != str(request.turn_id):
-                    latest = None  # Never use another turn's status for an unconfirmed usage write.
-                status_code = int(latest["status_code"]) if latest and latest.get("status_code") is not None else None
-                self._backoff(descriptor, status_code=status_code)
+                details = bundle._reflection_failure
+                failures = self._reflection_failures.get(descriptor.name, 0) + 1
+                self._reflection_failures[descriptor.name] = failures
+                status = details.get("status_code")
+                delay = details.get("retry_after_seconds")
+                if delay is None:
+                    delay = 60 if status == 429 else 300 if status in {401, 403, 404} else min(120, 5 * 2 ** min(5, failures - 1))
+                self._reflection_cooldowns[descriptor.name] = self.clock.now() + timedelta(
+                    seconds=max(1, min(3600, delay)))
         return last
 
     def interrupt_turn(

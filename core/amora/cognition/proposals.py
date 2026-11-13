@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from amora.memory import MemoryKind
 
@@ -18,6 +18,8 @@ class MemoryProposal(BaseModel):
     relationship_relevance: float = Field(default=0.0, ge=0.0, le=1.0)
     future_consequence: float = Field(default=0.0, ge=0.0, le=1.0)
     goal_relevance: float = Field(default=0.0, ge=0.0, le=1.0)
+    rarity: float = Field(default=0.0, ge=0.0, le=1.0)
+    repetition: float = Field(default=0.0, ge=0.0, le=1.0)
     entity_refs: dict[str, float] = Field(default_factory=dict)
     tags: set[str] = Field(default_factory=set)
 
@@ -40,6 +42,7 @@ class ActionSuggestion(BaseModel):
 
 
 class CognitiveProposalBundle(BaseModel):
+    _reflection_failure: dict = PrivateAttr(default_factory=dict)
     memory_candidates: list[MemoryProposal] = Field(default_factory=list, max_length=6)
     belief_hypotheses: list[BeliefHypothesisProposal] = Field(default_factory=list, max_length=6)
     action_suggestions: list[ActionSuggestion] = Field(default_factory=list, max_length=6)
