@@ -220,3 +220,26 @@ def test_shared_realization_preserves_voice_without_changing_authority():
     assert context.model_dump(mode="json") == original
     private = context.model_copy(update={"scene_visibility": "private"})
     assert "conversa compartilhada" not in realization_instruction(private)
+
+
+def test_shared_voice_is_style_only_and_independent_of_private_state():
+    context = CognitiveContext(
+        turn_id=uuid4(), created_at=datetime(2026, 11, 4, tzinfo=timezone.utc),
+        speaker_id="PERSON_BK", target_id="ENTITY_AMORA",
+        user_text="Oi Amora", expression_profile="core-v1", scene_visibility="group",
+        dialogue_plan={"act": "answer_question", "response_moves": ["answer_question"]},
+    )
+    profile = expression_profile(context)
+    voice = profile["shared_voice"]
+    assert set(voice) == {"register", "social_range", "initiative", "grounded_banter",
+                          "honest_uncertainty", "range_and_rhythm", "authority"}
+    assert "sarcástica" in voice["social_range"]
+    assert "palavrões naturais" in voice["grounded_banter"]
+    assert "Não invente lembranças" in voice["honest_uncertainty"]
+    changed = context.model_copy(update={"speaker_id": "PERSON_OTHER",
+                                        "self_model": {"private": "SYNTHETIC_SECRET"},
+                                        "user_text": "different topic"})
+    assert expression_profile(changed)["shared_voice"] == voice
+    private = context.model_copy(update={"scene_visibility": "private"})
+    assert "shared_voice" not in expression_profile(private)
+    assert "shared_voice" in render_trusted_protocol(context)
