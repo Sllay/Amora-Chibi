@@ -6,7 +6,7 @@ import logging
 from datetime import timedelta
 from uuid import UUID, uuid4
 
-from amora.cognition import CognitiveRequest
+from amora.cognition import CognitiveRequest, JournalStage
 from amora.events import PrivacyScope
 from amora.storage.backend import execute_atomic_statement
 
@@ -109,11 +109,19 @@ class ReflectionQueue:
         try:
             item = self.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn_id}")
             if (item is None or str(item.id) != input_id or not item.raw_text
-                    or not item.remote_processing_allowed
+                    or not item.speaker_id or not item.remote_processing_allowed
                     or item.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}
                     or item.metadata.get("test_mode")
                     or item.metadata.get("memory_consolidation") is False):
                 self.finish(job, "REFLECTION_INPUT_INELIGIBLE")
+                return True
+            # A crash after the completed gate journal but before queue ACK
+            # must not rerun a completed reflection.
+            completed = next((entry for entry in reversed(self.cognition.store.journal_for_turn(turn_id))
+                              if entry.stage == JournalStage.PROPOSALS_GATED), None)
+            if completed is not None:
+                self.finish(job, "MEMORY_REFLECTION_ACCEPTED" if completed.payload.get("accepted_memory_ids")
+                            else "MEMORY_REFLECTION_NO_ACCEPTED_MEMORY")
                 return True
             request = CognitiveRequest(
                 turn_id=UUID(turn_id), text=item.raw_text, speaker_id=item.speaker_id,
