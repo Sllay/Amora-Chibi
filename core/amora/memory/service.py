@@ -34,8 +34,8 @@ class MemoryService:
                         reason_codes=["DERIVED_SOURCE_UNAVAILABLE"]),
                     memory=None,
                 )
-            rank = {PrivacyScope.PUBLIC: 0, PrivacyScope.PERSONAL: 1,
-                    PrivacyScope.PRIVATE: 2, PrivacyScope.SECRET: 3, PrivacyScope.AUTH: 4}
+            rank = {PrivacyScope.PUBLIC: 0, PrivacyScope.SOCIAL: 1, PrivacyScope.PERSONAL: 2,
+                    PrivacyScope.PRIVATE: 3, PrivacyScope.SECRET: 4, PrivacyScope.AUTH: 5}
             scope = max([candidate.privacy_scope, *(parent.privacy_scope for parent in parents)],
                         key=rank.__getitem__)
             # Intersect effective audiences for all nonpublic sources.
