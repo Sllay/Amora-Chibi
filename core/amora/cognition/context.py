@@ -247,7 +247,7 @@ class ContextCompiler:
             if len(claims) >= 10:
                 break
 
-        persisted_messages = self.store.list_messages(limit=96, session_id=request.session_id)
+        persisted_messages = self.store.list_messages(limit=96, session_id=request.session_id, exclude_invalidated=True)
         reasons.append("RECENT_HISTORY_SESSION_SCOPED" if request.session_id is not None else "RECENT_HISTORY_UNSCOPED_LEGACY")
         test_turn_ids = {str(message.turn_id) for message in persisted_messages if bool(message.metadata.get("test_mode", False))}
         include_session_tests = bool(request.metadata.get("test_mode", False)) and request.session_id is not None

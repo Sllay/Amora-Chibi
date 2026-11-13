@@ -581,8 +581,20 @@ class PlatformMessagingService:
             source_message_id=invalidation.native_message_id,
             reason=invalidation.reason,
         )
+        # The worker supplies the new revision on edits; a deletion is final.
+        # Unknown revisions fail closed instead of allowing an old input to reappear.
+        through = (
+            1_000_000
+            if "DELETED" in invalidation.reason.upper() or invalidation.transport_revision is None
+            else invalidation.transport_revision - 1
+        )
+        session_id = f"MSG_{invalidation.platform.value.upper()}_{self._hash(invalidation.account_scope + '|' + invalidation.conversation_id)}"
+        cancelled_reflections = self.reflections.invalidate_source(
+            session_id, self._hash(invalidation.native_message_id), through_revision=through,
+        )
         return {
             "status": "ok",
+            "cancelled_reflections": cancelled_reflections,
             "floor_generation": generation,
             "floor_invalidated": floor_invalidated,
             "cancelled_outbound": cancelled,

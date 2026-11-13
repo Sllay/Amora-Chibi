@@ -152,6 +152,9 @@ class CognitiveEngine(BaseCognitiveEngine):
                 reason_codes=["REFLECTION_PROVIDER_FAILURE"],
             )
 
+        lease_token = request.metadata.get("reflection_lease_token")
+        if request.metadata.get("durable_memory_reflection") and not self.store.reflection_lease_valid(request.turn_id, lease_token):
+            return CognitiveProposalBundle(reason_codes=["REFLECTION_LEASE_LOST"])
         bundle.provider = descriptor.name
         bundle.model = descriptor.model
         bundle.reason_codes.extend(["STRUCTURED_PROPOSALS", "LOCAL_GATES_REMAIN_AUTHORITATIVE"])
@@ -216,7 +219,8 @@ class CognitiveEngine(BaseCognitiveEngine):
                     metadata={"provider": descriptor.name, "model": descriptor.model, "turn_id": str(request.turn_id),
                               "reflection_remote_reuse": remote_reuse},
                 ),
-                **({"record_id": uuid5(NAMESPACE_URL, f"amora:reflection:{request.turn_id}:{ordinal}")}
+                **({"record_id": uuid5(NAMESPACE_URL, f"amora:reflection:{request.turn_id}:{ordinal}"),
+                    "reflection_lease": (str(request.turn_id), lease_token)}
                    if request.metadata.get("durable_memory_reflection") else {}),
             )
             if result.memory is not None:
@@ -231,6 +235,8 @@ class CognitiveEngine(BaseCognitiveEngine):
         input_entities = set(context.acir.get("entities", [])) if context.acir is not None else set()
         deferred_hypothesis_count = 0
         for proposal in bundle.belief_hypotheses:
+            if lease_token and not self.store.reflection_lease_valid(request.turn_id, lease_token):
+                return CognitiveProposalBundle(reason_codes=["REFLECTION_LEASE_LOST"])
             subject_id = proposal.subject_id
             if context.acir is None:
                 deferred_hypothesis_count += 1
@@ -314,6 +320,8 @@ class CognitiveEngine(BaseCognitiveEngine):
                     self._append_reason(bundle, reason)
 
         for suggestion in bundle.action_suggestions:
+            if lease_token and not self.store.reflection_lease_valid(request.turn_id, lease_token):
+                return CognitiveProposalBundle(reason_codes=["REFLECTION_LEASE_LOST"])
             target_id = suggestion.target_id
             target_known = target_id is None or self.compiler.identities.get(target_id) is not None
             allowed = suggestion.action_kind in _ALLOWED_ACTION_SUGGESTIONS and target_known

@@ -49,9 +49,68 @@ class ReflectionQueue:
         now = self.clock.now().isoformat()
         return bool(self._write(
             "INSERT INTO memory_reflection_jobs(turn_id,input_id,status,created_at,available_at) "
-            "VALUES (?,?,'pending',?,?) ON CONFLICT(turn_id) DO NOTHING",
-            (str(request.turn_id), str(input_row.id), now, now),
+            "SELECT ?,?,'pending',?,? WHERE NOT EXISTS ("
+            "SELECT 1 FROM memory_reflection_invalidations x WHERE x.session_id=? "
+            "AND x.native_message_hash=? AND x.invalidated_through>=?) "
+            "ON CONFLICT(turn_id) DO NOTHING",
+            (str(request.turn_id), str(input_row.id), now, now, input_row.session_id,
+             input_row.metadata.get("native_message_id_hash", ""),
+             int(input_row.metadata.get("transport_revision", 1))),
         ))
+
+    def invalidate_source(self, session_id, native_message_hash, *, through_revision):
+        """Cancel stale revisions even if an invalidation precedes delivery.
+
+        Preserve audit rows and archive only memories derived from the stale turn.
+        A newer revision has a new turn ID and is independently eligible.
+        """
+        db = self.database
+        now = self.clock.now().isoformat()
+        with db._lock, db._conn:
+            db._conn.execute(
+                "INSERT INTO memory_reflection_invalidations(session_id,native_message_hash,invalidated_through) "
+                "VALUES (?,?,?) ON CONFLICT(session_id,native_message_hash) DO UPDATE SET "
+                "invalidated_through=MAX(invalidated_through,excluded.invalidated_through)",
+                (session_id, native_message_hash, through_revision),
+            )
+            # The persisted input is the authority for the native source and revision.
+            stale = """
+                SELECT m.turn_id FROM conversation_messages m
+                JOIN memory_reflection_invalidations x ON x.session_id=m.session_id
+                AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash')
+                WHERE x.session_id=? AND x.native_message_hash=?
+                AND m.dedupe_key='cognitive-input:' || m.turn_id
+                AND COALESCE(json_extract(m.metadata_json,'$.transport_revision'),1)<=x.invalidated_through
+            """
+            cursor = db._conn.execute(
+                "UPDATE memory_reflection_jobs SET status='cancelled',lease_token=NULL,lease_until=NULL,"
+                "last_reason='REFLECTION_SOURCE_INVALIDATED' WHERE status<>'cancelled' AND turn_id IN ("+stale+")",
+                (session_id, native_message_hash),
+            )
+            db._conn.execute(
+                "UPDATE memory_records SET archived_at=?,updated_at=? WHERE archived_at IS NULL "
+                "AND provenance_source LIKE 'cognition:%' AND json_extract(metadata_json,'$.turn_id') IN ("+stale+")",
+                (now, now, session_id, native_message_hash),
+            )
+            return cursor.rowcount
+
+    def retry_failed(self, turn_id):
+        """An operator can rearm exactly one failed task, never a cancelled task."""
+        return bool(self._write(
+            "UPDATE memory_reflection_jobs SET status='pending',attempts=0,available_at=?,"
+            "lease_token=NULL,lease_until=NULL,last_reason='REFLECTION_OPERATOR_RETRY' "
+            "WHERE turn_id=? AND status='failed'",
+            (self.clock.now().isoformat(), str(turn_id)),
+        ))
+
+    def failed_jobs(self, limit=50):
+        with self.database._lock:
+            rows = self.database._conn.execute(
+                "SELECT turn_id,attempts,last_reason FROM memory_reflection_jobs "
+                "WHERE status='failed' ORDER BY created_at DESC LIMIT ?",
+                (max(1, min(100, int(limit))),),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def claim(self):
         now = self.clock.now()
@@ -106,7 +165,7 @@ class ReflectionQueue:
             rows = self.database._conn.execute(
                 "SELECT status, COUNT(*) AS total FROM memory_reflection_jobs GROUP BY status"
             ).fetchall()
-        counts = {"pending": 0, "claimed": 0, "done": 0, "failed": 0}
+        counts = {"pending": 0, "claimed": 0, "done": 0, "failed": 0, "cancelled": 0}
         counts.update({row["status"]: int(row["total"]) for row in rows})
         return counts
 
@@ -114,7 +173,7 @@ class ReflectionQueue:
         job = self.claim()
         if job is None:
             return False
-        turn_id, input_id, _, _ = job
+        turn_id, input_id, lease_token, _ = job
         try:
             item = self.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn_id}")
             if (item is None or str(item.id) != input_id or not item.raw_text
@@ -138,7 +197,8 @@ class ReflectionQueue:
                 source_event_id=item.source_event_id, privacy_scope=item.privacy_scope,
                 remote_processing_allowed=item.remote_processing_allowed,
                 metadata={**item.metadata, "cognitive_mode": "reflection",
-                          "durable_memory_reflection": True},
+                          "durable_memory_reflection": True,
+                          "reflection_lease_token": lease_token},
             )
             bundle = await asyncio.wait_for(self.cognition.reflect(request), timeout=_TIMEOUT_SECONDS)
             retry = next((reason for reason in bundle.reason_codes if reason in _RETRY_REASONS), None)

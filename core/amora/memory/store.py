@@ -76,7 +76,7 @@ class MemoryStore:
             row = self._conn.execute(sql).fetchone()
         return int(row[0]) if row else 0
 
-    def put(self, record: MemoryRecord) -> None:
+    def put(self, record: MemoryRecord, *, reflection_lease: tuple[str, str] | None = None) -> None:
         provenance = record.provenance
         values = (
             str(record.id), record.kind.value, record.content, record.summary,
@@ -96,6 +96,15 @@ class MemoryStore:
             json.dumps(record.metadata, ensure_ascii=False, separators=(",", ":")),
         )
         with self._lock, self._conn:
+            if reflection_lease is not None:
+                turn_id, token = reflection_lease
+                lease = self._conn.execute(
+                    "SELECT 1 FROM memory_reflection_jobs WHERE turn_id=? AND status='claimed' "
+                    "AND lease_token=? AND lease_until>?",
+                    (turn_id, token, self.clock.now().isoformat()),
+                ).fetchone()
+                if lease is None:
+                    raise RuntimeError("REFLECTION_LEASE_LOST")
             self._conn.execute(
                 """
                 INSERT INTO memory_records(
