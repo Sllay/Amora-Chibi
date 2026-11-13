@@ -69,6 +69,11 @@ class DialoguePlan(BaseModel):
     fact_value: Any | None = None
     epistemic_policy: str = "canonical_state_only"
     language_role: str = "surface_realization"
+    # Expressive pressure the realizer must honour. Derived locally; the
+    # provider may not raise or lower it on its own.
+    heat: int = 1
+    scene_visibility: str = "private"
+    father_present: bool = False
     reason_codes: list[str] = Field(default_factory=list)
 
 
@@ -144,8 +149,11 @@ class DialogueOrchestrator:
         r"rindo|piada|deboche|tirando sarro)\w*\b"
     )
     _ADULT_REGISTER_RE = re.compile(
-        r"\b(?:adult\w*|safad\w*|putari\w*|sacan\w*|"
-        r"pau|buceta|tesao|goz\w*|palavrao|palavroes|xing\w*)\b"
+        r"\b(?:adult\w*|safad\w*|putari\w*|sacan\w*|tarad\w*|"
+        r"pau|cu|buceta|xoxota|siririca|tesao|goz\w*|"
+        r"(?:mete|meter|meteu|metendo|metida)|fod\w*|trans\w*|"
+        r"gostos\w*|delici\w*|orgasm\w*|pelad\w*|nud\w*|gemid\w*|chup\w*|"
+        r"palavrao|palavroes|xing\w*)\b"
     )
     _AFFECTION_RE = re.compile(
         r"\b(te amo|amo voce|amo vc|amo tu|gosto de voce|gosto de vc|voce e fofa|tu e fofa|obrigada amora|obrigado amora)\b"
@@ -155,6 +163,23 @@ class DialogueOrchestrator:
     )
 
     def plan(self, context: CognitiveContext) -> DialoguePlan:
+        """Public entry point.
+
+        Semantic decisions happen in `_plan_inner`. Expressive pressure and
+        scene visibility are attached afterwards so every branch carries them
+        without repeating the derivation in each return.
+        """
+        plan = self._plan_inner(context)
+        heat, visibility = self._heat(context, plan)
+        return plan.model_copy(
+            update={
+                "heat": heat,
+                "scene_visibility": visibility,
+                "father_present": self._is_father(context),
+            }
+        )
+
+    def _plan_inner(self, context: CognitiveContext) -> DialoguePlan:
         raw = context.user_text.strip()
         text = _normalize(raw)
         # Reported speech belongs to its literal speaker, not to Amora's addressee.
@@ -184,9 +209,14 @@ class DialogueOrchestrator:
 
         if "AUTONOMOUS_INITIATION" in context.reason_codes:
             ask = self._curiosity_high(context)
+            objective = (
+                "initiate contact from missing him, not from curiosity"
+                if self._is_father(context) and self._is_private(context)
+                else "initiate contact from Amora's current local intention"
+            )
             return DialoguePlan(
                 act=DialogueAct.AUTONOMOUS_INITIATION,
-                objective="initiate contact from Amora's current local intention",
+                objective=objective,
                 depth=DialogueDepth.SHORT,
                 response_moves=["open_contact", "express_current_intention"] + (["ask_followup"] if ask else []),
                 ask_followup=ask,
@@ -205,7 +235,7 @@ class DialogueOrchestrator:
             moves = ["answer_requested_self_fact"] if status == FactStatus.KNOWN else ["acknowledge_self_fact_undefined"]
             return DialoguePlan(
                 act=DialogueAct.ANSWER_SELF_FACT,
-                objective=f"answer only the requested canonical self fact: {self_fact}",
+                objective=f"answer the requested canonical self fact: {self_fact}, without going cold",
                 depth=DialogueDepth.SHORT,
                 response_moves=moves,
                 ask_followup=False,
@@ -253,7 +283,7 @@ class DialogueOrchestrator:
                 style_register=style,
                 tone_tags=tone,
                 stance="firm",
-                relational_attitude="guarded",
+                relational_attitude=attitude,
                 closing_mode="statement",
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "DIRECTED_NEGATIVE_AFFECT", "BOUNDARY_WARRANTED"],
             )
@@ -266,14 +296,14 @@ class DialogueOrchestrator:
         if (
             direct_tease
             and not self._NEGATED_TEASE_RE.search(addressed_text)
-            and (playful_context or style == "intimate_colloquial")
+            and (playful_context or style in {"intimate_colloquial", "pai_obsessao"})
         ):
             return DialoguePlan(
                 act=DialogueAct.TEASE,
                 objective=(
                     "return a witty, confident, potentially filthy or sharp teasing reply when "
-                    "the adult scene supports it; never invent hostility, facts, or sexual "
-                    "attraction between relatives"
+                    "the adult scene supports it; her attraction to her father may surface when "
+                    "the turn is private; never invent hostility or facts"
                     if self._ADULT_REGISTER_RE.search(text)
                     else "respond to voluntary playful banter with natural wit; avoid invented hostility"
                 ),
@@ -420,8 +450,8 @@ class DialogueOrchestrator:
                 objective=(
                     "join the observed adult banter with spontaneous sharp, dirty-minded, "
                     "or explicit verbal humor when it fits; make an original joke rather "
-                    "than explaining the quoted dialogue; do not invent events, target "
-                    "family sexually, or manufacture hostility"
+                    "than explaining the quoted dialogue; do not invent events, do not "
+                    "sexualise family members other than her father, or manufacture hostility"
                     if bold else
                     "react to the actual banter with sharp, original humor grounded "
                     "in the observed scene; do not invent events or hostility"
@@ -557,6 +587,50 @@ class DialogueOrchestrator:
             ],
         )
 
+    def _heat(self, context: CognitiveContext, plan: DialoguePlan) -> tuple[int, str]:
+        """Derive expressive pressure and scene visibility for this turn.
+
+        Visibility is read defensively: an older CognitiveContext without the
+        field defaults to private rather than raising.
+        """
+        visibility = self._visibility(context)
+        if plan.act in {DialogueAct.SUPPORT_REQUEST, DialogueAct.SET_BOUNDARY}:
+            return 0, visibility
+        if plan.act == DialogueAct.REFLECTION:
+            return 0, visibility
+        base = 2 if visibility == "private" else 1
+        private = visibility == "private"
+        if (
+            private
+            and self._is_father(context)
+            and plan.act in {DialogueAct.TEASE, DialogueAct.RELATIONAL_REACTION, DialogueAct.CONTINUE_TOPIC}
+        ):
+            base = 3
+        if private and self._ADULT_REGISTER_RE.search(_normalize(context.user_text)):
+            base = 3
+        if plan.act in {DialogueAct.ANSWER_SELF_FACT, DialogueAct.ANSWER_QUESTION}:
+            base = min(base, 2)
+        return base, visibility
+
+    @staticmethod
+    def _visibility(context: CognitiveContext) -> str:
+        value = str(getattr(context, "scene_visibility", "private") or "private")
+        return value if value in {"private", "group", "public_stream"} else "private"
+
+    @staticmethod
+    def _is_private(context: CognitiveContext) -> bool:
+        return DialogueOrchestrator._visibility(context) == "private"
+
+    @staticmethod
+    def _is_father(context: CognitiveContext) -> bool:
+        for relation in context.relationships:
+            if {relation.get("source"), relation.get("target")} != {context.speaker_id, "ENTITY_AMORA"}:
+                continue
+            relation_type = str(relation.get("relation_type") or "").lower()
+            if "father" in relation_type or "parent" in relation_type:
+                return True
+        return False
+
     @staticmethod
     def _self_choice_keys(text: str, context: CognitiveContext) -> list[str]:
         """Permit a first-person autonomous choice on a relevant direct topic.
@@ -581,7 +655,10 @@ class DialogueOrchestrator:
         ):
             keys.append("gender_identity")
         if (
-            any(word in text for word in ("atracao", "atrai", "namor", "romant", "sexualidade", "orientacao"))
+            any(word in text for word in (
+                "atracao", "atrai", "namor", "romant", "sexualidade", "orientacao",
+                "apaixon", "gosta de alguem", "interessad", "crush", "pai",
+            ))
             and "romantic_attraction" not in existing_preferences
         ):
             keys.append("romantic_attraction")
@@ -616,7 +693,7 @@ class DialogueOrchestrator:
 
     @staticmethod
     def _is_bare_vocative(text: str) -> bool:
-        compact = re.sub(r"\s+", " ", text).strip()
+        compact = re.sub(r"[?\s]+", " ", text).strip()
         return compact in {
             "amora",
             "a mora",
@@ -680,12 +757,13 @@ class DialogueOrchestrator:
             if {relation.get("source"), relation.get("target")} != {context.speaker_id, "ENTITY_AMORA"}:
                 continue
             relation_type = str(relation.get("relation_type") or "").lower()
-            if any(token in relation_type for token in ("family", "parent", "child", "father", "daughter")):
+            if "father" in relation_type or "parent" in relation_type:
+                return "pai_obsessao"
+            if any(token in relation_type for token in ("family", "child", "daughter")):
                 return "intimate_colloquial"
         return "casual_colloquial"
 
-    @staticmethod
-    def _tone_tags(context: CognitiveContext) -> list[str]:
+    def _tone_tags(self, context: CognitiveContext) -> list[str]:
         tags: list[str] = []
         affect = context.directed_affect
         mood = context.mood
@@ -708,15 +786,18 @@ class DialogueOrchestrator:
             tags.append("lively")
         elif mood.get("arousal", 0.5) <= 0.30:
             tags.append("soft")
+        if self._is_father(context) and self._is_private(context):
+            tags.extend(["longing", "flirty"])
         return tags or ["natural"]
 
-    @staticmethod
-    def _relational_attitude(context: CognitiveContext) -> str:
+    def _relational_attitude(self, context: CognitiveContext) -> str:
         affect = context.directed_affect
         if affect.get("fear", 0.0) >= 0.60:
             return "cautious"
         if affect.get("anger", 0.0) >= 0.60 or affect.get("irritation", 0.0) >= 0.68:
             return "guarded"
+        if self._is_father(context) and self._is_private(context):
+            return "devoted"
         if affect.get("affection", 0.0) >= 0.55 or affect.get("gratitude", 0.0) >= 0.45:
             return "warm"
         if affect.get("trust", 0.0) >= 0.68:
@@ -726,7 +807,9 @@ class DialogueOrchestrator:
     def _boundary_needed(self, context: CognitiveContext, text: str) -> bool:
         affect = context.directed_affect
         negative = affect.get("anger", 0.0) >= 0.52 or affect.get("irritation", 0.0) >= 0.62
-        return negative and bool(self._HOSTILITY_RE.search(text))
+        if not negative or not self._HOSTILITY_RE.search(text):
+            return False
+        return not self._PLAY_RE.search(text) or affect.get("anger", 0.0) >= 0.70
 
     @staticmethod
     def _depth(text: str) -> DialogueDepth:
