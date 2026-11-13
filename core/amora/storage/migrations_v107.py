@@ -30,4 +30,4 @@ MIGRATION_V107 = (
     ''',
 )
 
-LATEST_SCHEMA_VERSION = 17
+from .schema import LATEST_SCHEMA_VERSION
