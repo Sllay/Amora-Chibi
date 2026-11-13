@@ -193,6 +193,28 @@ class MemoryStore:
         # Preserve the exact candidate/ranking semantics while loading both child
         # collections in two bounded bulk reads.
         records = self._hydrate_many(rows)
+        # Apply projection permissions before scoring/MMR, not after top-k.
+        if query.projection_recipient_id or query.projection_public_only or query.projection_remote_only:
+            from amora.events import PrivacyScope
+            def eligible(record):
+                if record.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+                    return False
+                if query.projection_remote_only and not record.remote_processing_allowed:
+                    return False
+                if record.privacy_scope == PrivacyScope.PUBLIC:
+                    return True
+                if query.projection_public_only or not query.projection_recipient_id:
+                    return False
+                recipient = query.projection_recipient_id
+                audience = set(record.audience)
+                if record.owner_entity_id == recipient or recipient in audience:
+                    return True
+                if record.owner_entity_id or audience:
+                    return False
+                return record.provenance.actor_id == recipient
+            records = {key: record for key, record in records.items() if eligible(record)}
+            if not records:
+                return []
         scores: dict[str, float] = {memory_id: 0.0 for memory_id in records}
         reasons: dict[str, set[str]] = {memory_id: set() for memory_id in records}
 
@@ -250,6 +272,11 @@ class MemoryStore:
             where.append("created_at <= ?")
             params.append(query.before.isoformat())
 
+        if query.projection_public_only:
+            where.append("privacy_scope = ?")
+            params.append("PUBLIC")
+        if query.projection_remote_only:
+            where.append("remote_processing_allowed = 1")
         sql = "SELECT * FROM memory_records"
         if where:
             sql += " WHERE " + " AND ".join(where)
