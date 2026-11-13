@@ -284,23 +284,68 @@ class MemoryStore:
             params.append("PUBLIC")
         if query.projection_remote_only:
             where.append("remote_processing_allowed = 1")
+        if query.projection_recipient_id and not query.projection_public_only:
+            # Restrict the candidate pool before its size cap. JSON audience
+            # membership is exact, not substring matching.
+            where.append("privacy_scope NOT IN ('AUTH', 'SECRET')")
+            where.append(
+                "(privacy_scope = 'PUBLIC' OR owner_entity_id = ? OR "
+                "EXISTS (SELECT 1 FROM json_each(audience_json) WHERE value = ?) OR "
+                "(COALESCE(owner_entity_id, '') = '' AND "
+                "json_array_length(audience_json) = 0 AND actor_id = ?))"
+            )
+            params.extend([query.projection_recipient_id] * 3)
         sql = "SELECT * FROM memory_records"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY (importance * retrievability) DESC, created_at DESC LIMIT 300"
+        baseline = sql + " ORDER BY (importance * retrievability) DESC, created_at DESC, id LIMIT 300"
+        tokens = sorted(_tokens(query.text))[:16]
         with self._lock:
-            return list(self._conn.execute(sql, params).fetchall())
+            rows = list(self._conn.execute(baseline, params).fetchall())
+            if not tokens:
+                return rows
+            # The lexical candidate path searches the entire eligible corpus,
+            # not merely the highest-importance 300 records.
+            if self.fts_enabled:
+                expression = " OR ".join(f'"{token}"' for token in tokens)
+                matched = self._conn.execute(
+                    "SELECT m.* FROM memory_fts JOIN (" + sql + ") AS m "
+                    "ON m.id = memory_fts.memory_id WHERE memory_fts MATCH ? "
+                    "ORDER BY bm25(memory_fts), m.id LIMIT 150",
+                    (*params, expression),
+                ).fetchall()
+            else:
+                # FTS is optional on some backends. Keep a bounded result set
+                # while searching text and tags across the eligible corpus.
+                clauses = []
+                args = []
+                for token in tokens:
+                    clauses.append(
+                        "(instr(lower(m.content), ?) > 0 OR "
+                        "instr(lower(COALESCE(m.summary, '')), ?) > 0 OR "
+                        "EXISTS (SELECT 1 FROM memory_tags t WHERE t.memory_id = m.id "
+                        "AND instr(lower(t.tag), ?) > 0))"
+                    )
+                    args.extend([token] * 3)
+                matched = self._conn.execute(
+                    "SELECT m.* FROM (" + sql + ") AS m WHERE " + " OR ".join(clauses)
+                    + " ORDER BY (m.importance * m.retrievability) DESC, m.created_at DESC, m.id LIMIT 150",
+                    (*params, *args),
+                ).fetchall()
+            # At most 450 hydrated candidates, regardless of corpus size.
+            return list({row["id"]: row for row in [*rows, *matched]}.values())
 
     def _text_rank(self, text: str, records: dict[str, MemoryRecord]) -> list[str]:
-        query_tokens = list(_tokens(text))[:16]
+        query_tokens = sorted(_tokens(text))[:16]
         if not query_tokens:
             return []
         if self.fts_enabled:
             expression = " OR ".join(f'"{token}"' for token in query_tokens)
             with self._lock:
                 rows = self._conn.execute(
-                    "SELECT memory_id, bm25(memory_fts) AS rank FROM memory_fts WHERE memory_fts MATCH ? ORDER BY rank LIMIT 150",
-                    (expression,),
+                    "SELECT memory_id, bm25(memory_fts) AS rank FROM memory_fts WHERE memory_fts MATCH ? "
+                    "AND memory_id IN (" + ",".join("?" for _ in records) + ") ORDER BY rank, memory_id LIMIT 150",
+                    (expression, *records),
                 ).fetchall()
             ids = [row["memory_id"] for row in rows if row["memory_id"] in records]
             if ids:
