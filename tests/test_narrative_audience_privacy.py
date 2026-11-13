@@ -83,3 +83,34 @@ def test_shared_history_requires_group_origin(scope, session, channel, allowed):
         metadata={"surface": "platform_messaging", "channel_type": channel},
     )
     assert ProviderPrivacyGate.shared_history_allowed(message, request) is allowed
+
+
+def test_derived_memory_cannot_become_public():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from amora.memory.models import MemoryCandidate, MemoryKind, MemoryProvenance, ProvenanceKind, MemoryWriteDecision
+    from amora.memory.service import MemoryService
+
+    source_id = uuid4()
+    parent = SimpleNamespace(
+        privacy_scope=PrivacyScope.PRIVATE, owner_entity_id="PERSON_BK",
+        audience={"PERSON_BK"}, remote_processing_allowed=False,
+        provenance=SimpleNamespace(actor_id="PERSON_BK"),
+    )
+    stored = []
+    store = SimpleNamespace(get=lambda _: parent, put=stored.append)
+    gate = SimpleNamespace(evaluate=lambda candidate: MemoryWriteDecision(
+        store=True, score=1, threshold=0, recommended_kind=candidate.kind))
+    service = MemoryService(store, SimpleNamespace(now=lambda: datetime.now(timezone.utc)), gate)
+    candidate = MemoryCandidate(
+        kind=MemoryKind.EPISODIC, content="synthetic derived summary",
+        privacy_scope=PrivacyScope.PUBLIC,
+        provenance=MemoryProvenance(kind=ProvenanceKind.DERIVED, source="test",
+                                    derived_from=[source_id]),
+    )
+    result = service.remember(candidate)
+    assert result.memory.privacy_scope == PrivacyScope.PRIVATE
+    assert result.memory.audience == {"PERSON_BK"}
+    assert not result.memory.remote_processing_allowed
+    assert len(stored) == 1
