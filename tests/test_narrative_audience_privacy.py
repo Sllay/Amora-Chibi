@@ -114,3 +114,21 @@ def test_derived_memory_cannot_become_public():
     assert result.memory.audience == {"PERSON_BK"}
     assert not result.memory.remote_processing_allowed
     assert len(stored) == 1
+
+
+def test_unlabeled_relationship_is_not_projected_to_shared_audience():
+    from amora.identity.models import Entity, EntityRegistry, EntityType, Relationship
+    from amora.language.text_references import scoped_registry
+
+    registry = EntityRegistry()
+    for entity_id in ("PERSON_SYNTHETIC_A", "PERSON_SYNTHETIC_B"):
+        registry.add_entity(Entity(id=entity_id, canonical_name=entity_id,
+                                   entity_type=EntityType.PERSON))
+    edge = Relationship(source="PERSON_SYNTHETIC_A", relation_type="colleague_of",
+                        target="PERSON_SYNTHETIC_B")
+    registry.add_relationship(edge)
+    key = (edge.source, edge.relation_type, edge.target)
+    assert scoped_registry(registry, edge.source).relationships == (edge,)
+    assert not scoped_registry(registry, edge.source, include_recipient_edges=False).relationships
+    assert scoped_registry(registry, edge.source, include_recipient_edges=False,
+                           authorized_relations={key}).relationships == (edge,)
