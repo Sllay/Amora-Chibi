@@ -402,6 +402,9 @@ async def test_dm_reflection_persists_when_social_generation_falls_back(tmp_path
         result = await core.messaging.receive(incoming)
         assert len(result.outbound) == 1
         assert result.outbound[0].metadata["fallback_used"] is True
+        turn_id = core.messaging._turn_id(incoming)
+        assert core.messaging.reflections.state(turn_id)["status"] == "pending"
+        assert await core.messaging.reflections.process_once()
         hits = core.memory.recall(MemoryQuery(text="jogo novo"))
         remembered = next(hit.memory for hit in hits if "jogo novo" in hit.memory.content)
         assert remembered.provenance.source_event_id is None
@@ -409,7 +412,8 @@ async def test_dm_reflection_persists_when_social_generation_falls_back(tmp_path
         audit = core.messaging_store.get_audit(platform=incoming.platform,
             account_scope=incoming.account_scope, conversation_id=incoming.conversation_id,
             message_id=incoming.message_id)
-        assert "MEMORY_REFLECTION_ACCEPTED" in audit.reason_codes
+        assert audit is not None
+        assert core.messaging.reflections.state(turn_id)["last_reason"] == "MEMORY_REFLECTION_ACCEPTED"
         before = core.memory.store.count()
         replay = await core.messaging.receive(incoming)
         assert replay.duplicate
