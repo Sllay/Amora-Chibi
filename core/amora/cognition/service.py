@@ -366,7 +366,12 @@ class CognitiveEngine:
             source_event_id=request.source_event_id,
             session_id=request.session_id,
             started_at=self.clock.now(),
-            metadata={"segment_id": str(segment.id), "ordinal": ordinal, "nonverbal_cues": list(rendered.nonverbal_cues)},
+            metadata={
+                "segment_id": str(segment.id), "ordinal": ordinal,
+                "nonverbal_cues": list(rendered.nonverbal_cues),
+                **{key: request.metadata[key] for key in ("surface", "channel_type")
+                   if key in request.metadata},
+            },
             dedupe_key=f"cognitive:{request.turn_id}:{ordinal}",
         )
         segment.metadata["message_id"] = str(message.id)
