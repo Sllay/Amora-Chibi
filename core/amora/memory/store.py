@@ -233,9 +233,16 @@ class MemoryStore:
         self._add_rrf(scores, reasons, importance_rank, 1.0, "IMPORTANCE_RETRIEVABILITY")
 
         if query.text and not text_rank:
-            return []
-
-        ranked = sorted(scores, key=scores.get, reverse=True)
+            if not query.allow_entity_fallback or not entity_rank:
+                return []
+            # Explicit recollection requests can recover directly linked memories
+            # without pretending that a lexical match established the requested fact.
+            direct = set(entity_rank)
+            ranked = sorted(direct, key=lambda key: (-scores[key], key))
+            for key in ranked:
+                reasons[key].add("ENTITY_RECALL_NO_TEXT_MATCH")
+        else:
+            ranked = sorted(scores, key=scores.get, reverse=True)
         selected = self._mmr_select(ranked, records, scores, query.limit, query.mmr_lambda)
         max_score = max((scores[memory_id] for memory_id in selected), default=1.0) or 1.0
         now = self.clock.now()
