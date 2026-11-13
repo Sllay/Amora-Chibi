@@ -34,7 +34,19 @@ async def test_structured_reflection_fails_over_without_changing_concurrent_rout
         primary = ReflectionProvider("reflection-primary", priority=9, fail=True); secondary = ReflectionProvider("reflection-secondary", priority=4, fail=False)
         core.cognition.register_provider(primary); core.cognition.register_provider(secondary)
         request = CognitiveRequest(text="Guarda só o que realmente fizer sentido.", speaker_id="PERSON_BK", privacy_scope=PrivacyScope.PERSONAL, remote_processing_allowed=True)
+        # Production reflection must not compile the whole remote context once
+        # per provider failover attempt.
+        compile_calls = 0
+        original_compile = core.cognition.compiler.compile
+
+        def traced_compile(*args, **kwargs):
+            nonlocal compile_calls
+            compile_calls += 1
+            return original_compile(*args, **kwargs)
+
+        core.cognition.compiler.compile = traced_compile
         bundle = await core.cognition.reflect(request)
+        assert compile_calls == 1
         # Step-2 resilience decorates structured realization (`realize`), not reflection proposals (`propose`).
         assert primary.calls == 1
         assert secondary.calls == 1

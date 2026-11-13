@@ -19,6 +19,7 @@ from .models import (
     RoutingAction,
     TransportInvalidation,
 )
+from .reflection_queue import ReflectionQueue, ReflectionRunner
 from .presence import PlatformPresenceController
 from .presence_control import PlatformPresenceControlService, PresenceControlOutcome
 from .store import MessagingStore
@@ -77,6 +78,7 @@ class PlatformMessagingService:
             presence=PlatformPresenceController(store, clock, reset_transient=False),
         )
         self._inflight: dict[str, asyncio.Task[InboundResult]] = {}
+        self.reflection_runner = ReflectionRunner(ReflectionQueue(store.database, clock), cognition)
 
     async def receive(self, message: InboundMessage) -> InboundResult:
         """Process one logical inbound exactly once per Core process.
@@ -373,20 +375,26 @@ class PlatformMessagingService:
             },
             reason_codes=["CORE_OUTBOUND_ENQUEUED", *cognitive_reasons],
         )
-        # Messaging does not use IntegratedConversation.observe_completed_utterance,
-        # so it must explicitly run bounded cognitive reflection. Never delay
-        # the actual reply generation; the outbound intent is durable first.
+        # Reflection is durable and handled by a separate bounded worker.
+        # A slow Turso/context read or provider call must not hold Discord's
+        # inbound response open. The job is keyed by the stable cognitive turn.
         if message.remote_processing_allowed and not fallback_used:
             try:
-                await asyncio.wait_for(
-                    self.cognition.reflect(request.model_copy(update={
-                        "source_event_id": request.turn_id,
-                        "metadata": {**request.metadata, "cognitive_mode": "reflection"},
-                    })),
-                    timeout=8.0,
+                reflection_request = request.model_copy(update={
+                    "source_event_id": request.turn_id,
+                    "metadata": {**request.metadata, "cognitive_mode": "reflection"},
+                })
+                queued = await asyncio.to_thread(
+                    self.reflection_runner.queue.enqueue, reflection_request,
                 )
+                if queued:
+                    self.reflection_runner.notify()
             except Exception as exc:
-                _LOG.warning("messaging_memory_reflection_failed type=%s", type(exc).__name__)
+                # Reply remains durable; a queue fault must remain observable.
+                _LOG.warning(
+                    "messaging_reflection_enqueue_failed type=%s turn_id=%s",
+                    type(exc).__name__, request.turn_id,
+                )
 
         result = InboundResult(decision=decision, duplicate=duplicate_recovery, outbound=[outbound])
         self._log_result(

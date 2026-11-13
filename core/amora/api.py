@@ -92,12 +92,14 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         )
         core.autonomy.schedule_idle(core.scheduler)
         scheduler_runtime.start()
+        core.messaging.reflection_runner.start()
         app.state.scheduler_runtime = scheduler_runtime
         app.state.accepting = True
         try:
             yield
         finally:
             app.state.accepting = False
+            await core.messaging.reflection_runner.stop()
             core.scheduler.cancel("autonomy.idle")
             await scheduler_runtime.stop()
             console = getattr(app.state, "server_console", None)

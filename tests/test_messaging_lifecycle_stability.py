@@ -213,3 +213,25 @@ def test_recent_dialogue_keeps_longer_session_and_latest_question(tmp_path, monk
         assert len(context.recent_messages) > 12
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_discord_reply_enqueues_reflection_without_waiting_for_provider(
+    tmp_path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=_clock())
+    provider = CountingStructuredProvider()
+    core.cognition.register_provider(provider)
+    incoming = _discord_direct_message(core, message_id="durable-reflection-1")
+    try:
+        first = await core.messaging.receive(incoming)
+        assert len(first.outbound) == 1
+        assert not first.outbound[0].metadata["fallback_used"]
+        assert core.messaging.reflection_runner.queue.counts() == {"pending": 1}
+        duplicate = await core.messaging.receive(incoming)
+        assert duplicate.duplicate is True
+        assert core.messaging.reflection_runner.queue.counts() == {"pending": 1}
+        assert provider.calls == 1
+    finally:
+        core.close()

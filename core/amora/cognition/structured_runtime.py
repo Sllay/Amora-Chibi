@@ -132,7 +132,10 @@ class CognitiveEngine(ProductionCognitiveEngine):
     ) -> CognitiveResponsePlan:
         started = perf_counter()
         try:
-            context = self._prepare_context(request)
+            # Remote libSQL reads are synchronous in the storage adapter.
+            # Do not stall Discord outbound/visual polls while the reply context
+            # is compiled or its replay snapshot is persisted.
+            context = await asyncio.to_thread(self._prepare_context, request)
         except ContextBudgetExceeded:
             return await self._fallback_plan(request, "Esse contexto ficou grande demais para processar com segurança.",
                 on_segment=on_segment, reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "LOCAL_FALLBACK"], started=started)

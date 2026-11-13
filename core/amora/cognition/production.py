@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from time import perf_counter
 from copy import deepcopy
 from typing import Any
@@ -47,7 +49,17 @@ class CognitiveEngine(ResilientCognitiveEngine):
         )
         from .context_budget import ContextBudgetExceeded
         try:
-            context = self.compiler.compile(reflection_request)
+            # libSQL's synchronous DB-API must not block the inbound event loop.
+            # Compile once and reuse it across all provider failover attempts.
+            compilation_started = perf_counter()
+            context = await asyncio.to_thread(self.compiler.compile, reflection_request)
+            logging.getLogger("amora.cognition.reflection").info(
+                "reflection_context_prepared",
+                extra={
+                    "turn_id": str(request.turn_id),
+                    "latency_ms": round((perf_counter() - compilation_started) * 1000),
+                },
+            )
         except ContextBudgetExceeded:
             return CognitiveProposalBundle(reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "REFLECTION_SKIPPED"])
 
@@ -65,7 +77,7 @@ class CognitiveEngine(ResilientCognitiveEngine):
         last = CognitiveProposalBundle(reason_codes=["NO_STRUCTURED_REFLECTION_PROVIDER"])
         for index, descriptor in enumerate(candidates):
             with self.router.pin(descriptor.name):
-                bundle = await super().reflect(request)
+                bundle = await super().reflect(request, prepared_context=context)
             last = bundle
             failed = "REFLECTION_PROVIDER_FAILURE" in bundle.reason_codes
             unavailable = "NO_STRUCTURED_REFLECTION_PROVIDER" in bundle.reason_codes

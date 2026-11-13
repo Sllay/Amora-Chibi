@@ -5,7 +5,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from time import perf_counter
 from typing import Any
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from amora.events import AmoraEvent, PrivacyScope
 from amora.language import PerspectiveFrame, PerspectiveStack, ReferenceInput, SemanticDraft
@@ -20,7 +20,7 @@ from amora.world import (
     PerspectiveConsolidator,
 )
 
-from .models import CognitiveJournalEntry, CognitiveRequest, CognitiveResponsePlan, JournalStage, MessageStatus, SpeechSegment
+from .models import CognitiveContext, CognitiveJournalEntry, CognitiveRequest, CognitiveResponsePlan, JournalStage, MessageStatus, SpeechSegment
 from .proposals import CognitiveProposalBundle
 from .service import CognitiveEngine as BaseCognitiveEngine, SegmentSink
 
@@ -85,7 +85,9 @@ class CognitiveEngine(BaseCognitiveEngine):
                 await cancel_task
             self._turn_cancel_events.pop(key, None)
 
-    async def reflect(self, request: CognitiveRequest) -> CognitiveProposalBundle:
+    async def reflect(
+        self, request: CognitiveRequest, *, prepared_context: CognitiveContext | None = None,
+    ) -> CognitiveProposalBundle:
         """Ask a provider for bounded proposals, then apply local gates.
 
         Memory candidates pass through MemoryWriteGate. Belief-like output must
@@ -97,7 +99,8 @@ class CognitiveEngine(BaseCognitiveEngine):
         reflection_request = request.model_copy(
             update={"metadata": {**request.metadata, "cognitive_mode": "reflection"}}
         )
-        context = self.compiler.compile(reflection_request)
+        context = (prepared_context if prepared_context is not None
+                   else await asyncio.to_thread(self.compiler.compile, reflection_request))
         descriptor = self.router.select(
             TaskClass.REASONING,
             privacy_scope=request.privacy_scope,
@@ -168,7 +171,7 @@ class CognitiveEngine(BaseCognitiveEngine):
             },
         )
 
-        for proposal in bundle.memory_candidates:
+        for memory_ordinal, proposal in enumerate(bundle.memory_candidates):
             safe_refs = {
                 entity_id: confidence
                 for entity_id, confidence in proposal.entity_refs.items()
@@ -199,7 +202,8 @@ class CognitiveEngine(BaseCognitiveEngine):
                     future_consequence=proposal.future_consequence,
                     goal_relevance=proposal.goal_relevance,
                     metadata={"provider": descriptor.name, "model": descriptor.model, "turn_id": str(request.turn_id)},
-                )
+                ),
+                memory_id=uuid5(NAMESPACE_URL, f"amora:reflection:{request.turn_id}:memory:{memory_ordinal}"),
             )
             if result.memory is not None:
                 bundle.accepted_memory_ids.append(str(result.memory.id))
