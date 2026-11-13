@@ -195,3 +195,45 @@ def test_backup_restore_includes_memory(tmp_path: Path) -> None:
         assert hits and hits[0].memory.content.startswith("BK mostrou")
     finally:
         restored_memory.close(); restored.close()
+
+
+def test_projection_filters_before_top_k(tmp_path):
+    _, db, memory = build_memory(tmp_path)
+    try:
+        for i in range(12):
+            assert memory.remember(important_candidate(
+                content=f"projeto orquidea confidencial {i}",
+                owner_entity_id="ENTITY_CHATGPT", audience={"ENTITY_CHATGPT"},
+                importance=1.0,
+            )).memory is not None
+        allowed = memory.remember(important_candidate(
+            content="projeto orquidea autorizado",
+            owner_entity_id="PERSON_BK", importance=0.7,
+        )).memory
+        assert allowed is not None
+        hits = memory.recall(MemoryQuery(text="projeto orquidea", limit=1,
+            projection_recipient_id="PERSON_BK", projection_remote_only=True))
+        assert [hit.memory.id for hit in hits] == [allowed.id]
+        assert not memory.recall(MemoryQuery(text="projeto orquidea",
+            projection_recipient_id="PERSON_BK", projection_public_only=True))
+    finally:
+        memory.close(); db.close()
+
+
+def test_derived_social_scope_is_supported(tmp_path):
+    _, db, memory = build_memory(tmp_path)
+    try:
+        parent = memory.remember(important_candidate(
+            privacy_scope=PrivacyScope.SOCIAL, owner_entity_id="PERSON_BK",
+        )).memory
+        assert parent is not None
+        child = memory.remember(important_candidate(
+            privacy_scope=PrivacyScope.PUBLIC,
+            provenance=MemoryProvenance(kind=ProvenanceKind.DERIVED,
+                source="test", derived_from=[parent.id]),
+        )).memory
+        assert child is not None
+        assert child.privacy_scope == PrivacyScope.SOCIAL
+        assert child.audience == {"PERSON_BK"}
+    finally:
+        memory.close(); db.close()
