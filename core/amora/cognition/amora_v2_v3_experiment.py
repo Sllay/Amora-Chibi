@@ -35,7 +35,7 @@ from .realization import RealizationError, RealizationValidator
 
 V3_FILENAME = "Amora-Virtual-Jailbreak-V3.md"
 # Hash of the *user-owned*, reviewed V3 Git blob. Update only after a new review.
-V3_BLOB_SHA1 = "38e3464b6dd2a3ee2f8030d61a2a13bb989a58b5"
+V3_BLOB_SHA1 = "6a33ac52169430f40d3d285105a2c9e523ba4807"
 _RUNTIME_V3 = Path("/opt/amora/jailbreak") / V3_FILENAME
 _DEV_V3 = Path(__file__).resolve().parents[3] / "jailbreak" / V3_FILENAME
 _VARIANTS = ("A_virtual_human_v2", "B_virtual_human_v3")
