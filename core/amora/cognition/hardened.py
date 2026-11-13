@@ -118,13 +118,17 @@ class CognitiveEngine(BaseCognitiveEngine):
             reason_codes=["LOCAL_GATES_REMAIN_AUTHORITATIVE"],
             provider=descriptor.name,
             model=descriptor.model,
-            payload={"estimated_tokens": len(context.model_dump_json()) // 4},
+            payload={"phase": "reflection", "estimated_tokens": len(context.model_dump_json()) // 4},
             dedupe_key=f"journal:reflection-started:{request.turn_id}",
         )
         started = perf_counter()
         usage = {}
         try:
-            raw = await propose(context)
+            attempt_budget = request.metadata.get("reflection_provider_attempt_seconds")
+            if request.metadata.get("durable_memory_reflection") and attempt_budget is not None:
+                raw = await asyncio.wait_for(propose(context), timeout=float(attempt_budget))
+            else:
+                raw = await propose(context)
             raw = dict(raw)
             usage = raw.pop("_usage", {}) if isinstance(raw.get("_usage"), dict) else {}
             bundle = CognitiveProposalBundle.model_validate(raw)
@@ -140,6 +144,9 @@ class CognitiveEngine(BaseCognitiveEngine):
             from .reflection_contract import safe_reflection_failure
             details = safe_reflection_failure(exc)
             status = details["status_code"]
+            if status is None:
+                status = _optional_int(usage.get("status_code"))
+                details["status_code"] = status
             self._record_usage(
                 provider=descriptor.name,
                 model=descriptor.model or "unknown",
@@ -233,7 +240,7 @@ class CognitiveEngine(BaseCognitiveEngine):
                     future_consequence=proposal.future_consequence,
                     goal_relevance=proposal.goal_relevance,
                     rarity=proposal.rarity,
-                    repetition=proposal.repetition,
+                    repetition=0.0 if request.metadata.get("durable_memory_reflection") else proposal.repetition,
                     metadata={"provider": descriptor.name, "model": descriptor.model, "turn_id": str(request.turn_id),
                               "reflection_remote_reuse": remote_reuse},
                 ),
@@ -395,6 +402,9 @@ class CognitiveEngine(BaseCognitiveEngine):
             model=descriptor.model,
             duration_ms=elapsed,
             payload={
+                "phase": "reflection",
+                "memory_candidate_count": len(bundle.memory_candidates),
+                "accepted_memory_count": len(bundle.accepted_memory_ids),
                 "accepted_memory_ids": bundle.accepted_memory_ids,
                 "hypothesis_ids": bundle.hypothesis_ids,
                 "deferred_hypothesis_count": deferred_hypothesis_count,

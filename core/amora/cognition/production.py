@@ -81,9 +81,20 @@ class CognitiveEngine(ResilientCognitiveEngine):
             return CognitiveProposalBundle(reason_codes=["NO_STRUCTURED_REFLECTION_PROVIDER"])
 
         last = CognitiveProposalBundle(reason_codes=["NO_STRUCTURED_REFLECTION_PROVIDER"])
+        started = perf_counter()
+        durable = bool(request.metadata.get("durable_memory_reflection"))
         for index, descriptor in enumerate(candidates):
+            attempt = request
+            if durable:
+                remaining = 48.0 - (perf_counter() - started)
+                if remaining <= 0:
+                    break
+                # Reserve time for failover and persistence within the queue's 60 s guard.
+                attempt = request.model_copy(update={"metadata": {
+                    **request.metadata, "reflection_provider_attempt_seconds": min(16.0, remaining),
+                }})
             with self.router.pin(descriptor.name):
-                bundle = await super().reflect(request)
+                bundle = await super().reflect(attempt)
             last = bundle
             failed = "REFLECTION_PROVIDER_FAILURE" in bundle.reason_codes
             unavailable = "NO_STRUCTURED_REFLECTION_PROVIDER" in bundle.reason_codes

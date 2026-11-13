@@ -211,3 +211,27 @@ async def test_gemini_and_openrouter_extract_only_current_source(tmp_path, monke
         assert all(MARKER not in json.dumps(p) and SOURCE in json.dumps(p, ensure_ascii=False) for p in payloads)
     finally:
         core.close()
+
+
+
+@pytest.mark.asyncio
+async def test_synthetic_operator_probe_requires_useful_memory_and_never_persists(tmp_path, monkeypatch):
+    from amora.admin_commands import _command_memory_reflection_probe
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        core.cognition.register_provider(GroqCognitiveProvider(Secrets()))
+        results = iter(({"memory_candidates": []}, {"memory_candidates": [item()]}))
+        def handler(req):
+            return httpx.Response(200, json=response_object(next(results)))
+        fake_http(monkeypatch, handler)
+        count = core.memory.store.count()
+        empty = await _command_memory_reflection_probe(core, [])
+        assert empty["data"]["success"] is False
+        assert empty["data"]["would_store_count"] == 0
+        useful = await _command_memory_reflection_probe(core, [])
+        assert useful["data"]["success"] is True
+        assert useful["data"]["would_store_count"] == 1
+        assert core.memory.store.count() == count
+    finally:
+        core.close()

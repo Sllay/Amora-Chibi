@@ -601,9 +601,24 @@ async def _command_memory_reflection_probe(core: Any, args: list[str]) -> dict[s
         return {"kind": "memory_reflection_probe", "summary": "Falha na extração sintética",
                 "data": {"success": False, "model": provider.descriptor.model,
                          **safe_reflection_failure(exc)}}
+    from amora.memory import MemoryCandidate, MemoryProvenance, ProvenanceKind
+    # A valid empty object/list proves only syntax, not useful consolidation.
+    accepted = 0
+    for item in checked["memory_candidates"]:
+        candidate = MemoryCandidate(
+            **{key: value for key, value in item.items() if key != "confidence"},
+            provenance=MemoryProvenance(kind=ProvenanceKind.INFERENCE, source="synthetic_probe",
+                                        confidence=item["confidence"]),
+            privacy_scope=PrivacyScope.PERSONAL, remote_processing_allowed=False,
+        )
+        text = (candidate.content + " " + (candidate.summary or "")).casefold()
+        if ("orquidea" in text or "orquídea" in text) and ("cinco" in text or "5" in text):
+            if core.memory.gate.evaluate(candidate).store:
+                accepted += 1
     return {"kind": "memory_reflection_probe", "summary": "Extração sintética concluída",
-            "data": {"success": True, "model": provider.descriptor.model,
-                     "candidate_count": len(checked["memory_candidates"]), "persisted": False}}
+            "data": {"success": accepted > 0, "model": provider.descriptor.model,
+                     "candidate_count": len(checked["memory_candidates"]),
+                     "would_store_count": accepted, "persisted": False}}
 
 
 _COMMANDS: tuple[RegisteredCommand, ...] = (

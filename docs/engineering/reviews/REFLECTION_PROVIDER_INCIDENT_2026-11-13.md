@@ -22,16 +22,19 @@ reasoning for the extraction. One bounded format repair is allowed. Gemini
 uses its JSON-schema generation config; OpenRouter and compatible mesh fallback
 use JSON object plus local validation. No conversation-model promotion or
 technical/vision model change. The provider error body is never logged.
-Reflection diagnostics now include safe status, category, latency, and bounded
-validation field/type pairs; reflection cooldowns do not change the social
-circuit or router quota. A waiting job does not spend a retry during backoff.
+Reflection diagnostics now include safe status, category, latency, bounded
+validation field/type pairs and accepted counts; reflection cooldowns do not
+change the social circuit or router quota. A waiting job does not spend a retry
+during backoff. Durable provider calls (including repair) have a 16 s limit,
+with 48 s total routing budget inside the existing 60 s queue guard.
 
 ## Live validation
 
 After CI and approved Core deployment, use the authenticated operator command
 `memory reflection probe` to send a single synthetic extraction to Groq
 (with at most one format repair). It returns model, success and candidate
-count, or safe diagnostic metadata; it writes no conversational memories.
+count and would-store count, or safe diagnostic metadata; it writes no
+conversational memories. A valid but empty/low-signal result does not pass.
 Then run `memory reflection status`. If the old turn failed permanently,
 use `memory reflection retry d4adb252-d1d4-5f2e-9b87-103d6cca747b` only if it
 is actually failed. Existing completed records are not reprocessed.
