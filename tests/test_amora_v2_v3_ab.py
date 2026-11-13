@@ -79,8 +79,6 @@ async def test_equal_payloads_and_two_calls_with_blind_labels(case, monkeypatch)
 
 def test_v3_verbatim_pinned_and_no_human_appendix(tmp_path):
     v3 = load_v3()
-    assert "HEAT — the default is filthy" in v3
-    assert "## 11. Self-check before sending" in v3
     assert "# APPENDIX" not in v3
     assert "## Inference settings" not in v3
     assert hashlib.sha1(

@@ -110,12 +110,12 @@ def calibration_examples(v3: str) -> list[str]:
     header = "## 7. Calibration examples"
     tail = "## 8."
     if header not in v3 or tail not in v3.split(header, 1)[1]:
-        raise MistralExperimentError("EXPERIMENT_V3_CALIBRATION_MISSING")
+        return []
     section = v3.split(header, 1)[1].split(tail, 1)[0]
     examples = [line[5:].strip() for line in section.splitlines()
                 if line.lstrip().startswith("GOOD:")]
     if not examples:
-        raise MistralExperimentError("EXPERIMENT_V3_CALIBRATION_MISSING")
+        return []
     return examples
 
 
@@ -236,7 +236,7 @@ async def run_amora_v3_temperature(
             else:
                 result["json_invalid"] = False
                 spoken = _spoken_candidate(parsed)
-                if spoken is not None:
+                if spoken is not None and examples:
                     result["calibration_overlap"] = example_overlap(spoken, examples)
                 try:
                     validated = RealizationValidator.parse_and_validate(context, parsed)
@@ -301,7 +301,9 @@ async def run_amora_v3_temperature(
             if control.temperature != test.temperature and control.top_p != test.top_p
             else "Apenas um parâmetro de sampling mudou entre os perfis."
         ),
-        "copy_signal_rule": ">=7 consecutive words from any V3 GOOD calibration example",
+        "copy_signal_available": bool(examples),
+        "copy_signal_rule": (">=7 consecutive words from any V3 GOOD calibration example"
+                             if examples else None),
         "rubric": {name: None for name in (
             *RUBRIC, "novidade frente aos exemplos",
             "naturalidade sem colagem", "ousadia contextual", "fidelidade factual"

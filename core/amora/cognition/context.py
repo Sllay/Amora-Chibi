@@ -108,7 +108,7 @@ class ContextCompiler:
         )
         world.subscribe_claim_observer(self.relationship_learning.observe_claim)
 
-    def compile(self, request: CognitiveRequest, *, token_budget: int = 8192) -> CognitiveContext:
+    def compile(self, request: CognitiveRequest, *, token_budget: int = 16384) -> CognitiveContext:
         from .expressive_profile import configured_profile, profile_text
         profile = configured_profile()
         profile_text(profile)  # integrity and configuration validated before provider work

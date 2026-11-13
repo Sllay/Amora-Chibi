@@ -3,7 +3,7 @@ import hashlib
 import os
 from pathlib import Path
 
-V3_SHA256 = '884a77ebce1a9513f35b0ee0b05647bbf9331de6ef667e1e37c451a9cc552a1a'
+V3_SHA256 = 'a151f02b232d8ae58989ea72c36abe73520f5937e0ba9533fce914bac6475260'
 V3_NAME = 'Amora-Virtual-Jailbreak-V3.md'
 
 

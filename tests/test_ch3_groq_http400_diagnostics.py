@@ -173,8 +173,8 @@ async def test_groq_full_v3_is_preserved_in_bounded_provider_projection(monkeypa
     ctx.expression_profile = "amora-v3"
     ctx.recent_messages = [
         {"turn_id": str(uuid4()), "speaker_id": "PERSON_BK", "addressee_id": "ENTITY_AMORA",
-         "source": "platform_messaging", "text": "histórico opcional " + "a" * 1250}
-        for _ in range(10)
+         "source": "platform_messaging", "text": "histórico opcional " + "a" * 2500}
+        for _ in range(24)
     ]
     original_history = ctx.model_copy(deep=True).recent_messages
     sent = {}
@@ -192,7 +192,7 @@ async def test_groq_full_v3_is_preserved_in_bounded_provider_projection(monkeypa
     assert profile_text("amora-v3") in sent["instructions"]
     assert ctx.user_text in str(sent["input"])
     assert ctx.recent_messages == original_history
-    assert len(sent["input"]) < 11  # older optional history was trimmed
+    assert len(sent["input"]) < len(original_history) + 1  # older optional history was trimmed
 
 
 @pytest.mark.asyncio

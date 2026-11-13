@@ -19,7 +19,7 @@ class ContextCompiler(BaseContextCompiler):
     capability slice is projected from the live Action runtime.
     """
 
-    def compile(self, request: CognitiveRequest, *, token_budget: int = 8192) -> CognitiveContext:
+    def compile(self, request: CognitiveRequest, *, token_budget: int = 16384) -> CognitiveContext:
         started = perf_counter()
         try:
             context = super().compile(request, token_budget=token_budget)

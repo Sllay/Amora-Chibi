@@ -170,7 +170,7 @@ class CognitiveContext(BaseModel):
     privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
     remote_processing_allowed: bool = False
     expression_profile: str = "core-v1"
-    token_budget: int = Field(default=8192, ge=256, le=32000)
+    token_budget: int = Field(default=16384, ge=256, le=32000)
     reason_codes: list[str] = Field(default_factory=list)
 
 
