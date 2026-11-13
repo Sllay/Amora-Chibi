@@ -136,10 +136,25 @@ class ContextCompiler:
 
     def compile(self, request: CognitiveRequest, *, token_budget: int = 16384) -> CognitiveContext:
         from .expressive_profile import configured_profile, profile_text
-        profile = configured_profile()
-        profile_text(profile)  # integrity and configuration validated before provider work
         remote = self.privacy_gate.remote_allowed(request)
         visibility = resolve_scene_visibility(request)
+        # Durable extraction has one observed source, no social task and no
+        # authority to infer state from unrelated history. Compile only that source.
+        if (request.metadata.get("cognitive_mode") == "reflection"
+                and request.metadata.get("durable_memory_reflection")):
+            from .reflection_contract import MEMORY_ONLY_REASON
+            return CognitiveContext(
+                turn_id=request.turn_id, created_at=self.clock.now(),
+                speaker_id=request.speaker_id, target_id=request.target_id,
+                user_text=request.text, privacy_scope=request.privacy_scope,
+                remote_processing_allowed=remote, scene_visibility=visibility,
+                token_budget=token_budget, expression_profile="core-v1",
+                reason_codes=["CANONICAL_STATE_OUTSIDE_PROVIDER", "COGNITIVE_REFLECTION",
+                              MEMORY_ONLY_REASON,
+                              "REMOTE_CONTEXT_ALLOWED" if remote else "REMOTE_CONTEXT_BLOCKED"],
+            )
+        profile = configured_profile()
+        profile_text(profile)  # integrity and configuration validated before provider work
         shared = visibility != "private"
         # The complete opt-in profile is not an audience-labelled data source.
         # Shared turns use the existing public Core expression projection.
@@ -155,12 +170,6 @@ class ContextCompiler:
         mode = request.metadata.get("cognitive_mode")
         if mode == "reflection":
             reasons.append("COGNITIVE_REFLECTION")
-            if request.metadata.get("durable_memory_reflection"):
-                # Memory extraction is not a social realization or persona task.
-                # Its adapters project only the observed input.
-                from .reflection_contract import MEMORY_ONLY_REASON
-                reasons.append(MEMORY_ONLY_REASON)
-                profile = "core-v1"
         elif mode == "autonomous_initiation":
             reasons.append("AUTONOMOUS_INITIATION")
         acir: dict[str, Any] | None = None
@@ -334,10 +343,6 @@ class ContextCompiler:
             context.reason_codes.append("ACIR_BOUND_TO_DIALOGUE_PLAN")
         context.reason_codes.extend(code for code in dialogue_plan.reason_codes if code not in context.reason_codes)
         context.reason_codes.append(f"DIALOGUE_ACT_{dialogue_plan.act.value.upper()}")
-        if mode == "reflection" and request.metadata.get("durable_memory_reflection"):
-            # The dedicated adapter enforces the budget on its actual compact payload,
-            # not on a social prompt which will never be sent.
-            return context
         return self._fit_budget(context, self.dialogue)
 
     @staticmethod

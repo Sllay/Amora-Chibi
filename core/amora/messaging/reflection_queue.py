@@ -239,6 +239,17 @@ class ReflectionQueue:
              self.clock.now().isoformat()),
         ))
 
+    def defer_backoff(self, job, delay):
+        # No provider was called: do not exhaust attempts waiting for a cooldown.
+        turn_id, _, token, _ = job
+        return bool(self._write(
+            "UPDATE memory_reflection_jobs SET status='pending',attempts=MAX(0,attempts-1),"
+            "available_at=?,lease_token=NULL,lease_until=NULL,last_reason='REFLECTION_PROVIDERS_IN_BACKOFF' "
+            "WHERE turn_id=? AND status='claimed' AND lease_token=? AND lease_until>?",
+            ((self.clock.now() + timedelta(seconds=max(1, min(3600, delay)))).isoformat(),
+             turn_id, token, self.clock.now().isoformat()),
+        ))
+
     def state(self, turn_id):
         with self.database._lock:
             row = self.database._conn.execute(
@@ -289,6 +300,9 @@ class ReflectionQueue:
                           "reflection_lease_token": lease_token},
             )
             bundle = await asyncio.wait_for(self.cognition.reflect(request), timeout=_TIMEOUT_SECONDS)
+            if "REFLECTION_PROVIDERS_IN_BACKOFF" in bundle.reason_codes:
+                self.defer_backoff(job, bundle._reflection_failure.get("retry_after_seconds", 15))
+                return True
             retry = next((reason for reason in bundle.reason_codes if reason in _RETRY_REASONS), None)
             if retry:
                 self.finish(job, retry, retry=True)

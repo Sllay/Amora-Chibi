@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .models import CognitiveContext
 from .provider_resilience import classify_provider_failure
@@ -23,7 +23,7 @@ _SCORE_FIELDS = (
 
 
 class MemoryExtractionItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
     kind: Literal["episodic", "semantic", "relational"]
     content: str = Field(min_length=1, max_length=1000)
     summary: str = Field(max_length=300)
@@ -36,6 +36,13 @@ class MemoryExtractionItem(BaseModel):
     goal_relevance: float = Field(ge=0, le=1)
     rarity: float = Field(ge=0, le=1)
     repetition: float = Field(ge=0, le=1)
+
+    @field_validator("content")
+    @classmethod
+    def nonblank_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("blank memory")
+        return value.strip()
 
 
 class MemoryExtraction(BaseModel):
@@ -93,8 +100,18 @@ def memory_input(context: CognitiveContext) -> str:
                        "message": context.user_text}, ensure_ascii=False, separators=(",", ":"))
 
 
-def validate_memory_extraction(raw: dict) -> dict:
-    return MemoryExtraction.model_validate(raw).model_dump(mode="json")
+class ReflectionSchemaError(ProviderError):
+    def __init__(self, issues: list[dict], *, status_code: int | None = None):
+        super().__init__("Reflection output schema invalid", status_code=status_code,
+                         diagnostics={"provider_error_category": "reflection_schema_invalid"})
+        self.validation_issues = issues
+
+
+def validate_memory_extraction(raw: dict, *, status_code: int | None = None) -> dict:
+    try:
+        return MemoryExtraction.model_validate(raw).model_dump(mode="json")
+    except ValidationError as exc:
+        raise ReflectionSchemaError(_validation_issues(exc), status_code=status_code) from None
 
 
 _ALLOWED_FIELDS = set(MemoryExtractionItem.model_fields) | {
@@ -116,20 +133,27 @@ _SAFE_CATEGORIES = {
 }
 
 
+def _validation_issues(exc: ValidationError) -> list[dict]:
+    issues = []
+    for issue in exc.errors(include_url=False, include_context=False, include_input=False)[:8]:
+        path = ".".join(str(part) if isinstance(part, int) or part in _ALLOWED_FIELDS
+                        else "field" for part in issue["loc"])
+        code = issue["type"] if issue["type"] in _ALLOWED_TYPES else "validation_error"
+        issues.append({"path": path, "type": code})
+    return issues
+
+
 def safe_reflection_failure(exc: Exception) -> dict:
     """Fixed diagnostics only. Never serialize exception text or rejected values."""
     failure = classify_provider_failure(exc)
     category = getattr(exc, "diagnostics", {}).get("provider_error_category")
-    issues = []
-    if isinstance(exc, ValidationError):
-        for issue in exc.errors(include_url=False, include_context=False, include_input=False)[:8]:
-            path = ".".join(str(part) if isinstance(part, int) or part in _ALLOWED_FIELDS
-                            else "field" for part in issue["loc"])
-            code = issue["type"] if issue["type"] in _ALLOWED_TYPES else "validation_error"
-            issues.append({"path": path, "type": code})
+    schema_invalid = isinstance(exc, (ValidationError, ReflectionSchemaError))
+    issues = (_validation_issues(exc) if isinstance(exc, ValidationError)
+              else exc.validation_issues if isinstance(exc, ReflectionSchemaError) else [])
+    if schema_invalid:
         category = "reflection_schema_invalid"
     return {
-        "failure_code": "REFLECTION_SCHEMA_INVALID" if isinstance(exc, ValidationError) else failure.code,
+        "failure_code": "REFLECTION_SCHEMA_INVALID" if schema_invalid else failure.code,
         "status_code": failure.status_code,
         "retry_after_seconds": failure.retry_after_seconds,
         "provider_error_category": category if category in _SAFE_CATEGORIES else None,
@@ -137,11 +161,11 @@ def safe_reflection_failure(exc: Exception) -> dict:
     }
 
 
-def parse_memory_json(text: str) -> dict:
+def parse_memory_json(text: str, *, status_code: int | None = None) -> dict:
     try:
         raw = json.loads(text)
-    except (TypeError, ValueError) as exc:
-        raise ProviderError("Invalid reflection JSON", diagnostics={
+    except (TypeError, ValueError):
+        raise ProviderError("Invalid reflection JSON", status_code=status_code, diagnostics={
             "provider_error_category": "invalid_reflection_json",
-        }) from exc
-    return validate_memory_extraction(raw)
+        }) from None
+    return validate_memory_extraction(raw, status_code=status_code)

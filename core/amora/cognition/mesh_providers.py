@@ -24,6 +24,7 @@ from .providers_v1 import (
 )
 from .providers import GroqCognitiveProvider as BaseGroqProvider
 from .realization import realization_instruction
+from .reflection_contract import is_memory_only, memory_input, memory_instructions, validate_memory_extraction
 
 
 _TASKS = frozenset(
@@ -125,7 +126,7 @@ class OpenAICompatibleMeshProvider:
             response = await client.post(self.api_url, headers=self._headers(), json=payload)
         if response.status_code >= 400:
             raise ProviderError(
-                f"{self.name} request failed ({response.status_code}): {response.text[:1000]}",
+                f"{self.name} request failed ({response.status_code})",
                 status_code=response.status_code,
                 retry_after=response.headers.get("retry-after"),
             )
@@ -167,6 +168,24 @@ class OpenAICompatibleMeshProvider:
         return parsed
 
     async def propose(self, context: CognitiveContext) -> dict[str, object]:
+        if is_memory_only(context):
+            from .context_budget import ensure_payload
+            payload = {
+                "model": self.model, "stream": False, "temperature": 0.15,
+                "max_tokens": 1200, "response_format": {"type": "json_object"},
+                "messages": [{"role": "system", "content": memory_instructions()},
+                             {"role": "user", "content": memory_input(context)}],
+            }
+            ensure_payload(context, payload)
+            root, response, latency_ms = await self._post(payload)
+            parsed = validate_memory_extraction(
+                _parse_chat_json(root, provider=self.name, purpose="proposal"),
+                status_code=response.status_code)
+            usage = root.get("usage") or {}
+            parsed["_usage"] = {"input_tokens": usage.get("prompt_tokens"),
+                                "output_tokens": usage.get("completion_tokens"),
+                                "status_code": response.status_code, "latency_ms": latency_ms}
+            return parsed
         root, response, latency_ms = await self._post(
             {
                 "model": self.model,

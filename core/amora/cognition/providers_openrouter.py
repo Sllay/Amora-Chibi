@@ -89,7 +89,7 @@ class OpenRouterCognitiveProvider(BaseOpenRouterCognitiveProvider):
         root, response, latency_ms = await self._post_responses(payload)
         parsed = _parse_response_json(root, purpose="proposal")
         if memory_only:
-            parsed = validate_memory_extraction(parsed)
+            parsed = validate_memory_extraction(parsed, status_code=response.status_code)
         usage = root.get("usage") if isinstance(root.get("usage"), dict) else {}
         parsed["_usage"] = {
             "input_tokens": usage.get("input_tokens"),

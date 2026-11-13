@@ -12,7 +12,9 @@ from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from amora.secrets import SecretStore
 
 from .models import CognitiveContext
-from .reflection_contract import is_memory_only, validate_memory_extraction
+from .reflection_contract import (
+    is_memory_only, memory_input, memory_instructions, memory_schema, validate_memory_extraction,
+)
 from .providers import GroqCognitiveProvider as BaseGroqCognitiveProvider, ProviderDelta, ProviderError
 
 
@@ -148,6 +150,14 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
             "max_completion_tokens": 900,
             "response_format": {"type": "json_object"},
         }
+        if is_memory_only(context):
+            payload["messages"] = [{"role": "system", "content": memory_instructions()},
+                                   {"role": "user", "content": memory_input(context)}]
+            payload["max_completion_tokens"] = 1200
+            if self.model == "qwen/qwen3.8-27b":
+                payload["reasoning_effort"] = "none"
+            from .context_budget import ensure_payload
+            ensure_payload(context, payload)
         timeout = httpx.Timeout(self.timeout_seconds, connect=15.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             response = await client.post(
@@ -157,7 +167,7 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
             )
         if response.status_code >= 400:
             raise ProviderError(
-                f"Groq cognitive proposal request failed ({response.status_code}): {response.text[:1000]}",
+                f"Groq cognitive proposal request failed ({response.status_code})",
                 status_code=response.status_code,
                 retry_after=response.headers.get("retry-after"),
             )
@@ -169,6 +179,8 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
             raise ProviderError("Groq returned invalid structured cognitive proposals") from exc
         if not isinstance(parsed, dict):
             raise ProviderError("Groq structured cognitive proposal root must be an object")
+        if is_memory_only(context):
+            parsed = validate_memory_extraction(parsed, status_code=response.status_code)
         usage = root.get("usage") or {}
         parsed["_usage"] = {
             "input_tokens": usage.get("prompt_tokens"),
@@ -242,6 +254,12 @@ class GeminiCognitiveProvider:
         }
         if json_output:
             generation["responseMimeType"] = "application/json"
+            if is_memory_only(context):
+                generation["responseJsonSchema"] = memory_schema()
+                generation["maxOutputTokens"] = 1200
+                return {"systemInstruction": {"parts": [{"text": memory_instructions()}]},
+                        "contents": [{"role": "user", "parts": [{"text": memory_input(context)}]}],
+                        "generationConfig": generation}
             return {
                 "systemInstruction": {"parts": [{"text": self._system_prompt() + " " + _REFLECTION_INSTRUCTION}]},
                 "contents": [
@@ -349,12 +367,16 @@ class GeminiCognitiveProvider:
         if not key:
             raise ProviderError("GEMINI_API_KEY is not configured")
         url = f"{self.API_ROOT}/{self.model}:generateContent"
+        payload = self._payload(context, json_output=True)
+        if is_memory_only(context):
+            from .context_budget import ensure_payload
+            ensure_payload(context, payload)
         timeout = httpx.Timeout(self.timeout_seconds, connect=15.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             response = await client.post(
                 url,
                 headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                json=self._payload(context, json_output=True),
+                json=payload,
             )
         if response.status_code >= 400:
             raise ProviderError(
@@ -372,7 +394,7 @@ class GeminiCognitiveProvider:
         if not isinstance(parsed, dict):
             raise ProviderError("Gemini structured cognitive proposal root must be an object")
         if is_memory_only(context):
-            parsed = validate_memory_extraction(parsed)
+            parsed = validate_memory_extraction(parsed, status_code=response.status_code)
         usage = root.get("usageMetadata") or {}
         parsed["_usage"] = {
             "input_tokens": usage.get("promptTokenCount"),

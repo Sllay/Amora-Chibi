@@ -72,6 +72,12 @@ class CognitiveEngine(ResilientCognitiveEngine):
             excluded_names=excluded,
         )
         if not candidates:
+            if excluded:
+                bundle = CognitiveProposalBundle(reason_codes=["REFLECTION_PROVIDERS_IN_BACKOFF"])
+                bundle._reflection_failure = {"retry_after_seconds": max(1.0, min(
+                    (until - now).total_seconds() for name, until in self._reflection_cooldowns.items()
+                    if name in excluded))}
+                return bundle
             return CognitiveProposalBundle(reason_codes=["NO_STRUCTURED_REFLECTION_PROVIDER"])
 
         last = CognitiveProposalBundle(reason_codes=["NO_STRUCTURED_REFLECTION_PROVIDER"])

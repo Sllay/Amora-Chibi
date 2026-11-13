@@ -27,9 +27,8 @@ from .providers_structured import (
 from .providers_v1 import _REFLECTION_INSTRUCTION
 from .reflection_contract import (
     is_memory_only, memory_input, memory_instructions, memory_schema,
-    validate_memory_extraction,
+    parse_memory_json, ReflectionSchemaError,
 )
-from pydantic import ValidationError
 from .realization import realization_instruction
 
 
@@ -159,13 +158,18 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
             elif self.model.startswith("openai/gpt-oss-"):
                 payload["reasoning"] = {"effort": "low"}
             ensure_payload(context, payload)
-            root, response = await self._post_responses(
-                payload, api_key=api_key, error_label="memory extraction")
             try:
-                parsed = validate_memory_extraction(
-                    _parse_responses_json(root, error_message="Invalid memory extraction JSON"))
-            except (ValidationError, ProviderError):
-                if attempt == 0:
+                root, response = await self._post_responses(
+                    payload, api_key=api_key, error_label="memory extraction")
+                if root.get("status") in {"incomplete", "failed", "cancelled"}:
+                    raise ProviderError("Incomplete reflection response", status_code=response.status_code,
+                                        diagnostics={"provider_error_category": "incomplete_reflection"})
+                parsed = parse_memory_json(_responses_output_text(root), status_code=response.status_code)
+            except ProviderError as exc:
+                # Repair only format failures, not rate limits, auth or transport.
+                if attempt == 0 and (isinstance(exc, ReflectionSchemaError)
+                    or exc.diagnostics.get("provider_error_category") in {
+                        "json_generation_failed", "invalid_reflection_json", "incomplete_reflection"}):
                     continue
                 raise
             parsed["_usage"] = _responses_usage(root, response)
