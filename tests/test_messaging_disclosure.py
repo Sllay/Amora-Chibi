@@ -38,3 +38,20 @@ async def test_rejected_group_realization_never_reaches_persistence(monkeypatch)
     assert plan.display_text == ""
     assert plan.speech_text == ""
     assert "CONFIDENTIAL_OUTPUT_SUPPRESSED" in plan.reason_codes
+
+
+def test_registry_authorizes_destination_not_speaker(monkeypatch):
+    from amora.messaging.disclosure import audience_text_allowed
+    monkeypatch.setenv("AMORA_DISCLOSURE_REGISTRY_JSON",
+        '[{"id":"synthetic-fact","aliases":["blue prototype"],"audiences":["group-a"]}]')
+    assert audience_text_allowed("blue prototype", audience_id="group-a")
+    assert not audience_text_allowed("blue prototype", audience_id="group-b")
+    assert not audience_text_allowed("blue prototype", audience_id=None)
+    assert audience_text_allowed("ordinary conversation", audience_id="group-b")
+
+
+def test_registry_invalid_entries_fail_closed(monkeypatch):
+    from amora.messaging.disclosure import audience_text_allowed
+    monkeypatch.setenv("AMORA_DISCLOSURE_REGISTRY_JSON",
+        '[{"id":"bad","aliases":[],"audiences":[]}]')
+    assert not audience_text_allowed("ordinary conversation", audience_id="group-a")
