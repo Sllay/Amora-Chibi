@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import re
 
 from amora.autonomy import AutonomyEngine
 from amora.emotion import EmotionEngine
@@ -211,9 +212,15 @@ class ContextCompiler:
         }:
             recall_text = ""
             reasons.append("GENERIC_RECOLLECTION_ENTITY_RECALL")
+        explicit_recall = bool(re.search(
+            r"\b(?:lembra|lembras|lembrar|recorda|recordar|recordas)\b|"
+            r"\b(?:que|qual)\b.{0,80}\b(?:falei|contei|disse|comentei)\b",
+            normalized_recall,
+        ))
         for hit in self.memory.recall(MemoryQuery(text=recall_text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78,
                                                  projection_recipient_id=request.speaker_id,
-                                                 projection_public_only=shared, projection_remote_only=remote)):
+                                                 projection_public_only=shared, projection_remote_only=remote,
+                                                 allow_entity_fallback=explicit_recall and not shared)):
             item = hit.memory
             if shared and item.privacy_scope != PrivacyScope.PUBLIC:
                 continue
