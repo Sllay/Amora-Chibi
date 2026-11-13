@@ -399,7 +399,9 @@ class PlatformMessagingService:
             try:
                 bundle = await asyncio.wait_for(
                     self.cognition.reflect(request.model_copy(update={
-                        "source_event_id": request.turn_id,
+                        # A cognitive turn is not an EventStore event. Keep the
+                        # actual source_event_id (None for platform text); the
+                        # reflection record already carries turn_id in metadata.
                         "metadata": {**request.metadata, "cognitive_mode": "reflection"},
                     })),
                     timeout=8.0,
