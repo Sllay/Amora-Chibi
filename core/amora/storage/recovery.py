@@ -71,6 +71,7 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
             from .migrations_v105 import MIGRATION_V105
             from .migrations_v106 import MIGRATION_V106
             from .migrations_v107 import MIGRATION_V107
+            from .migrations_v108 import MIGRATION_V108
             from .remote import statements
             from .schema import AUDITED_REMOTE_IMPORT_SCHEMA_VERSIONS, LATEST_SCHEMA_VERSION
 
@@ -115,6 +116,11 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
                     target.execute(sql)
                 target.execute("INSERT INTO schema_migrations(version) VALUES (17)")
                 version = 17
+            if version == 17:
+                for sql in statements(MIGRATION_V108[1]):
+                    target.execute(sql)
+                target.execute("INSERT INTO schema_migrations(version) VALUES (18)")
+                version = 18
             if version != LATEST_SCHEMA_VERSION:
                 raise ValueError(
                     f"snapshot upgrade stopped at schema {version}; expected {LATEST_SCHEMA_VERSION}"
