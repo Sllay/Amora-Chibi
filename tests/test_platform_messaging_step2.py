@@ -287,3 +287,92 @@ def test_messaging_worker_token_is_scoped_and_operator_audit_masks_private_ids(t
             assert "123456789012345678" in revealed.text
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_private_turn_is_not_projected_to_group_and_public_reply_is_delivered(tmp_path, monkeypatch):
+    from amora.cognition.models import CognitiveRequest
+    from amora.events import PrivacyScope
+    from amora.memory.models import MemoryCandidate, MemoryKind, MemoryProvenance, ProvenanceKind
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        actor = "111111111111111111"
+        marker = "sintetico projeto orquidea confidencial"
+        dm = _message(core, message_id="privacy-dm", actor_id=actor,
+                      channel_type=ChannelType.DM, conversation_id="privacy-dm-channel",
+                      text=marker)
+        private = await core.messaging.receive(dm)
+        assert private.outbound
+        dm_session = core.messaging._session_ref(dm)
+        assert any(marker in item.raw_text for item in core.cognition.store.list_messages(
+            session_id=dm_session))
+        saved = core.memory.remember(MemoryCandidate(
+            kind=MemoryKind.EPISODIC, content=marker,
+            provenance=MemoryProvenance(kind=ProvenanceKind.USER_ASSERTION,
+                source="privacy-test", actor_id="PERSON_BK", session_id=dm_session),
+            privacy_scope=PrivacyScope.PERSONAL, owner_entity_id="PERSON_BK",
+            audience={"PERSON_BK"}, entity_refs={"PERSON_BK": 1.0},
+            importance=1.0, novelty=1.0, emotional_weight=1.0,
+            relationship_relevance=1.0, future_consequence=1.0,
+            rarity=1.0, goal_relevance=1.0, repetition=1.0,
+        ))
+        assert saved.memory is not None
+        dm_context = core.cognition.compiler.compile(CognitiveRequest(
+            text=marker, speaker_id="PERSON_BK", session_id=dm_session,
+            remote_processing_allowed=False,
+            metadata={"surface": "platform_messaging", "channel_type": "dm"},
+        ))
+        assert any(marker in item.content for item in dm_context.memories)
+
+        group = _message(core, message_id="privacy-group", actor_id=actor,
+                         channel_type=ChannelType.GROUP, conversation_id="privacy-group-channel",
+                         text="Amora, me responde aqui", reply=True)
+        result = await core.messaging.receive(group)
+        assert result.outbound and marker not in result.outbound[0].text
+        group_session = core.messaging._session_ref(group)
+        group_context = core.cognition.compiler.compile(CognitiveRequest(
+            text="oi Amora", speaker_id="PERSON_BK", session_id=group_session,
+            remote_processing_allowed=False,
+            metadata={"surface": "platform_messaging", "channel_type": "group"},
+        ))
+        assert group_context.scene_visibility == "group"
+        assert marker not in group_context.model_dump_json()
+        assert any(item["speaker_id"] == "ENTITY_AMORA" for item in group_context.recent_messages)
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_group_publication_rejects_confidential_output_and_retry(tmp_path, monkeypatch):
+    from amora.cognition.models import CognitiveResponsePlan
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    monkeypatch.setenv("AMORA_CONFIDENTIAL_LITERALS_JSON", '["synthetic confidential marker"]')
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        calls = []
+        async def rejectable_response(request, **kwargs):
+            calls.append(request.turn_id)
+            return CognitiveResponsePlan(
+                turn_id=request.turn_id, display_text="synthetic confidential marker",
+                speech_text="synthetic confidential marker",
+            )
+        async def unexpected_event(plan):
+            pytest.fail("confidential response must not be emitted")
+        monkeypatch.setattr(core.cognition, "respond", rejectable_response)
+        monkeypatch.setattr(core.cognition, "emit_event", unexpected_event)
+        group = _message(core, message_id="privacy-rejected", actor_id="111111111111111111",
+                         channel_type=ChannelType.GROUP, text="Amora, me responde aqui", reply=True)
+        first = await core.messaging.receive(group)
+        assert not first.outbound
+        assert "CONFIDENTIAL_OUTPUT_SUPPRESSED" in first.decision.reason_codes
+        second = await core.messaging.receive(group)
+        assert not second.outbound
+        assert second.duplicate
+        assert len(calls) == 1
+    finally:
+        core.close()

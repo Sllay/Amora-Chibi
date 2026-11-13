@@ -269,9 +269,13 @@ def render_trusted_protocol(context: CognitiveContext) -> str:
     """Render trusted developer context, with no literal user/assistant history."""
 
     from .expressive_profile import profile_text
+    from amora.events import PrivacyScope
+    # Defense in depth for replay/imported contexts that bypass compilation.
+    profile = ("core-v1" if context.scene_visibility != "private" or
+               context.privacy_scope == PrivacyScope.PUBLIC else context.expression_profile)
     return "\n\n".join(
         (
-            profile_text(context.expression_profile),
+            profile_text(profile),
             _render_section(
                 "AMORA PROVIDER PROTOCOL",
                 {

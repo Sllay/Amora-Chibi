@@ -24,6 +24,45 @@ class MemoryService:
         self.gate = gate or MemoryWriteGate()
 
     def remember(self, candidate: MemoryCandidate) -> RememberResult:
+        # A derived record cannot widen the disclosure permissions of its sources.
+        # Missing provenance is not evidence of public authorization.
+        if candidate.provenance.derived_from:
+            parents = [self.get(source_id) for source_id in candidate.provenance.derived_from]
+            if any(parent is None for parent in parents):
+                return RememberResult(
+                    decision=MemoryWriteDecision(store=False, score=0.0, threshold=1.0,
+                        reason_codes=["DERIVED_SOURCE_UNAVAILABLE"]),
+                    memory=None,
+                )
+            rank = {PrivacyScope.PUBLIC: 0, PrivacyScope.PERSONAL: 1,
+                    PrivacyScope.PRIVATE: 2, PrivacyScope.SECRET: 3, PrivacyScope.AUTH: 4}
+            scope = max([candidate.privacy_scope, *(parent.privacy_scope for parent in parents)],
+                        key=rank.__getitem__)
+            # Intersect effective audiences for all nonpublic sources.
+            audiences = []
+            for source in [candidate, *parents]:
+                if source.privacy_scope == PrivacyScope.PUBLIC:
+                    continue
+                allowed = set(source.audience)
+                if source.owner_entity_id:
+                    allowed.add(source.owner_entity_id)
+                elif not allowed and source.provenance.actor_id:
+                    allowed.add(source.provenance.actor_id)
+                audiences.append(allowed)
+            audience = set.intersection(*audiences) if audiences else set()
+            if scope != PrivacyScope.PUBLIC and not audience:
+                return RememberResult(
+                    decision=MemoryWriteDecision(store=False, score=0.0, threshold=1.0,
+                        reason_codes=["DERIVED_AUDIENCE_EMPTY"]),
+                    memory=None,
+                )
+            candidate = candidate.model_copy(update={
+                "privacy_scope": scope,
+                "audience": audience,
+                "owner_entity_id": candidate.owner_entity_id if candidate.owner_entity_id in audience else None,
+                "remote_processing_allowed": candidate.remote_processing_allowed and
+                    all(parent.remote_processing_allowed for parent in parents),
+            })
         decision = self.gate.evaluate(candidate)
         if not decision.store or decision.recommended_kind is None:
             return RememberResult(decision=decision, memory=None)

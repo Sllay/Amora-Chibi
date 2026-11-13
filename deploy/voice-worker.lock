@@ -7,7 +7,7 @@ h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
 idna==3.20
-opentelemetry-api==1.45.1
+opentelemetry-api==1.45.2
 pydantic==2.14.0b2
 pydantic_core==2.49.0
 sherpa-onnx-core==1.13.8

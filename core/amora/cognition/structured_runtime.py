@@ -454,6 +454,20 @@ class CognitiveEngine(ProductionCognitiveEngine):
         usage: dict[str, Any],
         context: CognitiveContext | None = None,
     ) -> CognitiveResponsePlan:
+        # Check the complete realization before segments, journals or self
+        # choices can persist a rejected group response.
+        if (request.metadata.get("surface") == "platform_messaging"
+                and request.metadata.get("channel_type") != "dm"):
+            from amora.messaging.disclosure import public_text_allowed, audience_text_allowed
+            if not (public_text_allowed(validated.text) and
+                    audience_text_allowed(validated.text, audience_id=request.session_id)):
+                return CognitiveResponsePlan(
+                    turn_id=request.turn_id,
+                    display_text="",
+                    speech_text="",
+                    fallback_used=True,
+                    reason_codes=["CONFIDENTIAL_OUTPUT_SUPPRESSED"],
+                )
         request = request.model_copy(update={
             "metadata": {**request.metadata, "response_display_text": validated.text},
         })

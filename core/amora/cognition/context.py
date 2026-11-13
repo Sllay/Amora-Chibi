@@ -20,6 +20,15 @@ from .models import CognitiveContext, CognitiveRequest, ContextMemory
 from .store import CognitiveStore
 
 
+def resolve_scene_visibility(request: CognitiveRequest) -> str:
+    """Use trusted transport metadata; unknown messaging audiences are shared."""
+    if request.metadata.get("surface") == "platform_messaging":
+        return "private" if request.metadata.get("channel_type") == "dm" else "group"
+    if request.privacy_scope == PrivacyScope.PUBLIC:
+        return "group"
+    return "private"
+
+
 class ProviderPrivacyGate:
     @staticmethod
     def remote_allowed(request: CognitiveRequest) -> bool:
@@ -68,6 +77,22 @@ class ProviderPrivacyGate:
         return source in {None, recipient_id, "ENTITY_AMORA"}
 
     @staticmethod
+    def shared_history_allowed(message, request: CognitiveRequest) -> bool:
+        # A group session is not a DM session. Preserve only explicitly
+        # group-origin personal messages from the same transport session.
+        if message.privacy_scope == PrivacyScope.PUBLIC:
+            return True
+        return (
+            message.privacy_scope == PrivacyScope.PERSONAL
+            and request.metadata.get("surface") == "platform_messaging"
+            and request.metadata.get("channel_type") == "group"
+            and bool(request.session_id)
+            and message.session_id == request.session_id
+            and message.metadata.get("surface") == "platform_messaging"
+            and message.metadata.get("channel_type") == "group"
+        )
+
+    @staticmethod
     def message_allowed(message, *, remote: bool, recipient_id: str) -> bool:
         """One shared session is not permission to share another person's DM."""
         if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
@@ -113,7 +138,16 @@ class ContextCompiler:
         profile = configured_profile()
         profile_text(profile)  # integrity and configuration validated before provider work
         remote = self.privacy_gate.remote_allowed(request)
+        visibility = resolve_scene_visibility(request)
+        shared = visibility != "private"
+        # The complete opt-in profile is not an audience-labelled data source.
+        # Shared turns use the existing public Core expression projection.
+        configured = profile
+        if shared:
+            profile = "core-v1"
         reasons = ["CANONICAL_STATE_OUTSIDE_PROVIDER", "REMOTE_CONTEXT_ALLOWED" if remote else "REMOTE_CONTEXT_BLOCKED"]
+        if shared and configured != profile:
+            reasons.append("SHARED_PROFILE_ISOLATED")
         if bool(request.metadata.get("test_mode", False)):
             reasons.append("TEST_MODE_ACTIVE")
 
@@ -179,6 +213,8 @@ class ContextCompiler:
             reasons.append("GENERIC_RECOLLECTION_ENTITY_RECALL")
         for hit in self.memory.recall(MemoryQuery(text=recall_text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78)):
             item = hit.memory
+            if shared and item.privacy_scope != PrivacyScope.PUBLIC:
+                continue
             if self.privacy_gate.memory_allowed(item, remote=remote, recipient_id=request.speaker_id):
                 memories.append(ContextMemory(id=str(item.id), kind=item.kind.value, content=item.summary or item.content,
                                               score=hit.score, confidence=item.provenance.confidence,
@@ -187,6 +223,8 @@ class ContextCompiler:
         claims: list[dict[str, Any]] = []
         authorized_relations: set[tuple[str, str, str]] = set()
         for claim in self.world.current_state():
+            if shared and claim.privacy_scope != PrivacyScope.PUBLIC:
+                continue
             if not self.privacy_gate.claim_allowed(claim, remote=remote, recipient_id=request.speaker_id):
                 continue
             if (claim.canonical and claim.subject_id and isinstance(claim.object_value, str)
@@ -211,7 +249,12 @@ class ContextCompiler:
             if (str(message.turn_id) == str(request.turn_id)
                     or (str(message.turn_id) in test_turn_ids and not include_session_tests)):
                 continue
-            if not self.privacy_gate.message_allowed(
+            if shared:
+                if not self.privacy_gate.shared_history_allowed(message, request):
+                    continue
+                if remote and not message.remote_processing_allowed:
+                    continue
+            elif not self.privacy_gate.message_allowed(
                 message, remote=remote, recipient_id=request.speaker_id
             ):
                 continue
@@ -224,7 +267,8 @@ class ContextCompiler:
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
         reference_registry = scoped_registry(self.identities, request.speaker_id,
-                                             authorized_relations=authorized_relations)
+                                             authorized_relations=authorized_relations,
+                                             include_recipient_edges=not shared)
         relationships = [relation.model_dump(mode="json") for relation in reference_registry.relationships]
         if compile_acir:
             resolver = PerspectiveResolver(reference_registry)
@@ -235,6 +279,15 @@ class ContextCompiler:
             reasons.append("ACIR_COMPILED")
 
         self_snapshot = self.self_model.snapshot()
+        if shared:
+            # Snapshot values have no audience metadata. Do not project learned
+            # preferences, relationship maps or private current-state summaries.
+            identity = self_snapshot.get("core_identity", {})
+            self_snapshot = {"core_identity": {
+                key: identity[key] for key in ("canonical_name",) if key in identity
+            }}
+            intention = None
+            reasons.append("SHARED_CONTEXT_SELF_MODEL_RESTRICTED")
         if remote:
             # Cross-person self-relationship maps are not safe to expose
             # wholesale. Recipient-scoped relationships are projected above.
@@ -250,6 +303,7 @@ class ContextCompiler:
             directed_affect=affect, drives=drives, active_intention=intention, memories=memories,
             world_claims=claims, recent_messages=recent, privacy_scope=request.privacy_scope,
             remote_processing_allowed=remote, token_budget=token_budget, reason_codes=reasons,
+            scene_visibility=visibility,
         )
         # Trusted speaker identity is application-generated metadata. It contains
         # no platform handle/snowflake and therefore gives providers the canonical

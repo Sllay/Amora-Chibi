@@ -195,3 +195,41 @@ def test_v3_opens_adult_banter_without_high_fixture_drive(staging):
             text=text, speaker_id='PERSON_BK', remote_processing_allowed=True))
         assert serious.dialogue_plan['act'] != 'tease'
         assert 'bold_tease' not in serious.dialogue_plan['response_moves']
+
+
+def test_shared_provider_payload_isolates_full_profile(staging):
+    from amora.cognition.prompt_frame import render_trusted_protocol
+    from amora.events import PrivacyScope
+
+    provider = NvidiaMistralLarge4ProductionProvider(staging.secrets)
+    compiler = staging.cognition.compiler
+    v3 = profile_text("amora-v3")
+
+    def compile_scene(channel, scope=PrivacyScope.PERSONAL):
+        return compiler.compile(CognitiveRequest(
+            text="Amora, qual tua opinião sobre desenho?",
+            speaker_id="PERSON_BK", remote_processing_allowed=True,
+            privacy_scope=scope, session_id="synthetic-" + channel,
+            metadata={"surface": "platform_messaging", "channel_type": channel},
+        ))
+
+    private = compile_scene("dm")
+    group = compile_scene("group")
+    unknown = compile_scene("unknown")
+    assert private.expression_profile == "amora-v3"
+    assert provider._payload(private)["messages"][0]["content"].startswith(v3)
+    for shared in (group, unknown):
+        assert shared.expression_profile == "core-v1"
+        assert shared.scene_visibility == "group"
+        assert "SHARED_PROFILE_ISOLATED" in shared.reason_codes
+        system = provider._payload(shared)["messages"][0]["content"]
+        assert v3 not in system
+        assert "AMORA LIVING PROFILE" in system
+        assert "AMORA TURN FRAME" in system
+
+    # Imported/replayed contexts cannot bypass the provider boundary by
+    # carrying a stale expression_profile flag.
+    stale = group.model_copy(update={"expression_profile": "amora-v3"})
+    assert v3 not in render_trusted_protocol(stale)
+    public = private.model_copy(update={"privacy_scope": PrivacyScope.PUBLIC})
+    assert v3 not in render_trusted_protocol(public)

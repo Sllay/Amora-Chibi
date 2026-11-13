@@ -33,7 +33,7 @@ MAX_REFERENCES = 32
 MAX_TOKENS = 2048
 
 
-def scoped_registry(registry: EntityRegistry, recipient_id: str, *, authorized_relations=()) -> EntityRegistry:
+def scoped_registry(registry: EntityRegistry, recipient_id: str, *, authorized_relations=(), include_recipient_edges: bool = True) -> EntityRegistry:
     """Relationship graph has no privacy labels: default-deny third-party edges.
 
     Canonical Amora parenthood is an explicit public catalogue, not permission
@@ -46,7 +46,7 @@ def scoped_registry(registry: EntityRegistry, recipient_id: str, *, authorized_r
     allowed = set(authorized_relations)
     for relation in registry.relationships:
         key = (relation.source, relation.relation_type, relation.target)
-        if recipient_id in {relation.source, relation.target} or key in PUBLIC_AMORA_RELATIONS or key in allowed:
+        if (include_recipient_edges and recipient_id in {relation.source, relation.target}) or key in PUBLIC_AMORA_RELATIONS or key in allowed:
             result.add_relationship(relation.model_copy(deep=True))
     return result
 
