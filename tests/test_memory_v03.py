@@ -263,3 +263,36 @@ def test_explicit_entity_recall_fallback_is_scoped_and_not_a_text_match(tmp_path
         }))
     finally:
         memory.close(); db.close()
+
+
+def test_lexical_recall_reaches_old_records_beyond_importance_cap(tmp_path):
+    _, db, memory = build_memory(tmp_path)
+    try:
+        old = memory.remember(important_candidate(
+            content="O projeto orquidea possui cinco mapas.",
+            summary="Projeto orquidea",
+            tags={"orquidea"}, importance=0.4, owner_entity_id="PERSON_BK",
+        )).memory
+        assert old is not None
+        for i in range(305):
+            assert memory.remember(important_candidate(
+                content=f"Desenho recente numero {i}", tags={"desenho"},
+                importance=1.0, owner_entity_id="PERSON_BK",
+            )).memory is not None
+        # Also exclude a more important matching record owned by someone else.
+        other = memory.remember(important_candidate(
+            content="O projeto orquidea é de outra pessoa.",
+            importance=1.0, owner_entity_id="ENTITY_CHATGPT",
+        )).memory
+        assert other is not None
+        query = MemoryQuery(text="orquidea", limit=8,
+            entity_ids={"PERSON_BK"}, projection_recipient_id="PERSON_BK",
+            projection_remote_only=True)
+        for use_fts in (True, False):
+            memory.store.fts_enabled = use_fts
+            hits = memory.recall(query)
+            assert any(hit.memory.id == old.id and "TEXT_MATCH" in hit.reason_codes
+                       for hit in hits)
+            assert all(hit.memory.id != other.id for hit in hits)
+    finally:
+        memory.close(); db.close()
