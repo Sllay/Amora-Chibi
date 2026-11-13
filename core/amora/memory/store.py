@@ -76,7 +76,7 @@ class MemoryStore:
             row = self._conn.execute(sql).fetchone()
         return int(row[0]) if row else 0
 
-    def put(self, record: MemoryRecord) -> None:
+    def put(self, record: MemoryRecord, *, reflection_lease: tuple[str, str] | None = None) -> None:
         provenance = record.provenance
         values = (
             str(record.id), record.kind.value, record.content, record.summary,
@@ -96,6 +96,15 @@ class MemoryStore:
             json.dumps(record.metadata, ensure_ascii=False, separators=(",", ":")),
         )
         with self._lock, self._conn:
+            if reflection_lease is not None:
+                turn_id, token = reflection_lease
+                lease = self._conn.execute(
+                    "SELECT 1 FROM memory_reflection_jobs WHERE turn_id=? AND status='claimed' "
+                    "AND lease_token=? AND lease_until>?",
+                    (turn_id, token, self.clock.now().isoformat()),
+                ).fetchone()
+                if lease is None:
+                    raise RuntimeError("REFLECTION_LEASE_LOST")
             self._conn.execute(
                 """
                 INSERT INTO memory_records(
@@ -148,6 +157,58 @@ class MemoryStore:
                 return None
             return self._hydrate(row)
 
+    def local_only_reflection_audit(self) -> dict:
+        with self._lock:
+            count = self._conn.execute(
+                "SELECT COUNT(*) FROM memory_records WHERE archived_at IS NULL "
+                "AND remote_processing_allowed=0 AND provenance_source LIKE 'cognition:%'"
+            ).fetchone()[0]
+            rows = self._conn.execute(
+                "SELECT id,owner_entity_id,privacy_scope FROM memory_records WHERE archived_at IS NULL "
+                "AND remote_processing_allowed=0 AND provenance_source LIKE 'cognition:%' "
+                "ORDER BY created_at DESC LIMIT 100"
+            ).fetchall()
+        return {"total": int(count), "review_candidates": [dict(row) for row in rows]}
+
+    def authorize_reviewed_reflection(self, memory_id: UUID | str, owner_id: str) -> bool:
+        """Narrow, explicit owner-reviewed reuse; never public or bulk promotion.
+
+        Original DM input must have allowed remote processing. The operator
+        attests the individual memory was reviewed and its owner approved reuse.
+        """
+        if self.identities.get(owner_id) is None:
+            return False
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """UPDATE memory_records SET remote_processing_allowed=1,
+                       owner_entity_id=?, updated_at=?
+                   WHERE id=? AND privacy_scope='PERSONAL' AND archived_at IS NULL
+                     AND remote_processing_allowed=0 AND provenance_source LIKE 'cognition:%'
+                     AND provenance_kind='inference' AND actor_id='ENTITY_AMORA'
+                     AND (owner_entity_id IS NULL OR owner_entity_id=?)
+                     AND NOT EXISTS (SELECT 1 FROM json_each(audience_json) WHERE value<>?)
+                     AND json_array_length(derived_from_json)=0
+                     AND EXISTS (
+                         SELECT 1 FROM conversation_messages m
+                         WHERE m.turn_id=json_extract(memory_records.metadata_json,'$.turn_id')
+                           AND m.dedupe_key='cognitive-input:' || m.turn_id
+                           AND m.session_id=memory_records.session_id AND m.speaker_id=?
+                           AND m.privacy_scope='PERSONAL' AND m.remote_processing_allowed=1
+                           AND json_extract(m.metadata_json,'$.surface')='platform_messaging'
+                           AND json_extract(m.metadata_json,'$.channel_type')='dm'
+                           AND COALESCE(json_extract(m.metadata_json,'$.test_mode'),0)=0
+                           AND COALESCE(json_extract(m.metadata_json,'$.memory_consolidation'),1)=1
+                           AND NOT EXISTS (
+                               SELECT 1 FROM memory_reflection_invalidations x
+                               WHERE x.session_id=m.session_id
+                                 AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash')
+                                 AND x.invalidated_through>=COALESCE(json_extract(m.metadata_json,'$.transport_revision'),1)
+                           )
+                     )""",
+                (owner_id, self.clock.now().isoformat(), str(memory_id), owner_id, owner_id, owner_id),
+            )
+            return cursor.rowcount == 1
+
     def link(self, source_memory_id: UUID | str, target_memory_id: UUID | str, link_type: str, confidence: float = 1.0) -> None:
         confidence = max(0.0, min(1.0, float(confidence)))
         with self._lock, self._conn:
@@ -193,6 +254,28 @@ class MemoryStore:
         # Preserve the exact candidate/ranking semantics while loading both child
         # collections in two bounded bulk reads.
         records = self._hydrate_many(rows)
+        # Apply projection permissions before scoring/MMR, not after top-k.
+        if query.projection_recipient_id or query.projection_public_only or query.projection_remote_only:
+            from amora.events import PrivacyScope
+            def eligible(record):
+                if record.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+                    return False
+                if query.projection_remote_only and not record.remote_processing_allowed:
+                    return False
+                if record.privacy_scope == PrivacyScope.PUBLIC:
+                    return True
+                if query.projection_public_only or not query.projection_recipient_id:
+                    return False
+                recipient = query.projection_recipient_id
+                audience = set(record.audience)
+                if record.owner_entity_id == recipient or recipient in audience:
+                    return True
+                if record.owner_entity_id or audience:
+                    return False
+                return record.provenance.actor_id == recipient
+            records = {key: record for key, record in records.items() if eligible(record)}
+            if not records:
+                return []
         scores: dict[str, float] = {memory_id: 0.0 for memory_id in records}
         reasons: dict[str, set[str]] = {memory_id: set() for memory_id in records}
 
@@ -211,9 +294,16 @@ class MemoryStore:
         self._add_rrf(scores, reasons, importance_rank, 1.0, "IMPORTANCE_RETRIEVABILITY")
 
         if query.text and not text_rank:
-            return []
-
-        ranked = sorted(scores, key=scores.get, reverse=True)
+            if not query.allow_entity_fallback or not entity_rank:
+                return []
+            # Explicit recollection requests can recover directly linked memories
+            # without pretending that a lexical match established the requested fact.
+            direct = set(entity_rank)
+            ranked = sorted(direct, key=lambda key: (-scores[key], key))
+            for key in ranked:
+                reasons[key].add("ENTITY_RECALL_NO_TEXT_MATCH")
+        else:
+            ranked = sorted(scores, key=scores.get, reverse=True)
         selected = self._mmr_select(ranked, records, scores, query.limit, query.mmr_lambda)
         max_score = max((scores[memory_id] for memory_id in selected), default=1.0) or 1.0
         now = self.clock.now()
@@ -250,23 +340,73 @@ class MemoryStore:
             where.append("created_at <= ?")
             params.append(query.before.isoformat())
 
+        if query.projection_public_only:
+            where.append("privacy_scope = ?")
+            params.append("PUBLIC")
+        if query.projection_remote_only:
+            where.append("remote_processing_allowed = 1")
+        if query.projection_recipient_id and not query.projection_public_only:
+            # Restrict the candidate pool before its size cap. JSON audience
+            # membership is exact, not substring matching.
+            where.append("privacy_scope NOT IN ('AUTH', 'SECRET')")
+            where.append(
+                "(privacy_scope = 'PUBLIC' OR owner_entity_id = ? OR "
+                "EXISTS (SELECT 1 FROM json_each(audience_json) WHERE value = ?) OR "
+                "(COALESCE(owner_entity_id, '') = '' AND "
+                "json_array_length(audience_json) = 0 AND actor_id = ?))"
+            )
+            params.extend([query.projection_recipient_id] * 3)
         sql = "SELECT * FROM memory_records"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY (importance * retrievability) DESC, created_at DESC LIMIT 300"
+        baseline = sql + " ORDER BY (importance * retrievability) DESC, created_at DESC, id LIMIT 300"
+        tokens = sorted(_tokens(query.text))[:16]
         with self._lock:
-            return list(self._conn.execute(sql, params).fetchall())
+            rows = list(self._conn.execute(baseline, params).fetchall())
+            if not tokens:
+                return rows
+            # The lexical candidate path searches the entire eligible corpus,
+            # not merely the highest-importance 300 records.
+            if self.fts_enabled:
+                expression = " OR ".join(f'"{token}"' for token in tokens)
+                matched = self._conn.execute(
+                    "SELECT m.* FROM memory_fts JOIN (" + sql + ") AS m "
+                    "ON m.id = memory_fts.memory_id WHERE memory_fts MATCH ? "
+                    "ORDER BY bm25(memory_fts), m.id LIMIT 150",
+                    (*params, expression),
+                ).fetchall()
+            else:
+                # FTS is optional on some backends. Keep a bounded result set
+                # while searching text and tags across the eligible corpus.
+                clauses = []
+                args = []
+                for token in tokens:
+                    clauses.append(
+                        "(instr(lower(m.content), ?) > 0 OR "
+                        "instr(lower(COALESCE(m.summary, '')), ?) > 0 OR "
+                        "EXISTS (SELECT 1 FROM memory_tags t WHERE t.memory_id = m.id "
+                        "AND instr(lower(t.tag), ?) > 0))"
+                    )
+                    args.extend([token] * 3)
+                matched = self._conn.execute(
+                    "SELECT m.* FROM (" + sql + ") AS m WHERE " + " OR ".join(clauses)
+                    + " ORDER BY (m.importance * m.retrievability) DESC, m.created_at DESC, m.id LIMIT 150",
+                    (*params, *args),
+                ).fetchall()
+            # At most 450 hydrated candidates, regardless of corpus size.
+            return list({row["id"]: row for row in [*rows, *matched]}.values())
 
     def _text_rank(self, text: str, records: dict[str, MemoryRecord]) -> list[str]:
-        query_tokens = list(_tokens(text))[:16]
+        query_tokens = sorted(_tokens(text))[:16]
         if not query_tokens:
             return []
         if self.fts_enabled:
             expression = " OR ".join(f'"{token}"' for token in query_tokens)
             with self._lock:
                 rows = self._conn.execute(
-                    "SELECT memory_id, bm25(memory_fts) AS rank FROM memory_fts WHERE memory_fts MATCH ? ORDER BY rank LIMIT 150",
-                    (expression,),
+                    "SELECT memory_id, bm25(memory_fts) AS rank FROM memory_fts WHERE memory_fts MATCH ? "
+                    "AND memory_id IN (" + ",".join("?" for _ in records) + ") ORDER BY rank, memory_id LIMIT 150",
+                    (expression, *records),
                 ).fetchall()
             ids = [row["memory_id"] for row in rows if row["memory_id"] in records]
             if ids:

@@ -7,6 +7,7 @@ from uuid import UUID
 from amora.storage.backend import execute_atomic_statement
 from amora.time import Clock
 
+from .generation_lifecycle import InboundGenerationLost
 from .models import (
     AuditDirection,
     ChannelType,
@@ -191,37 +192,40 @@ class MessagingStore:
             ).fetchall()
         return tuple(self._audit_from_row(row) for row in rows)
 
-    def put_outbound(self, message: OutboundMessage) -> bool:
+    def put_outbound(self, message: OutboundMessage, *, generation_lease=None) -> bool:
+        values = (
+            str(message.id), message.platform.value, message.account_scope, message.conversation_id,
+            message.target_entity_id, message.text, message.reply_to_message_id,
+            json.dumps(message.mention_actor_ids, separators=(",", ":")), message.source_message_id,
+            message.created_at.isoformat(), message.status.value,
+            json.dumps(message.metadata, ensure_ascii=False, separators=(",", ":")),
+        )
+        sql = """INSERT INTO messaging_outbound_queue(
+                    id,platform,account_scope,conversation_id,target_entity_id,text,reply_to_message_id,
+                    mention_actor_ids_json,source_message_id,created_at,status,metadata_json
+                 ) """
+        if generation_lease is None:
+            sql += "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+        else:
+            turn_id, token = generation_lease
+            sql += """SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (
+                SELECT 1 FROM messaging_inbound_generation g
+                WHERE g.turn_id=? AND g.lease_token=? AND g.lease_until>?
+                AND NOT EXISTS (SELECT 1 FROM memory_reflection_invalidations x
+                    WHERE x.session_id=g.session_id AND x.native_message_hash=g.native_message_hash
+                    AND x.invalidated_through>=g.transport_revision))"""
+            values += (turn_id, token, self.clock.now().isoformat())
+        sql += " ON CONFLICT(id) DO NOTHING"
         with self.database._lock:
-            try:
-                execute_atomic_statement(
-                    self.database.backend,
-                    self.database._conn,
-                    """INSERT INTO messaging_outbound_queue(
-                           id, platform, account_scope, conversation_id, target_entity_id,
-                           text, reply_to_message_id, mention_actor_ids_json, source_message_id,
-                           created_at, status, metadata_json
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        str(message.id),
-                        message.platform.value,
-                        message.account_scope,
-                        message.conversation_id,
-                        message.target_entity_id,
-                        message.text,
-                        message.reply_to_message_id,
-                        json.dumps(message.mention_actor_ids, separators=(",", ":")),
-                        message.source_message_id,
-                        message.created_at.isoformat(),
-                        message.status.value,
-                        json.dumps(message.metadata, ensure_ascii=False, separators=(",", ":")),
-                    ),
-                )
+            cursor = execute_atomic_statement(self.database.backend, self.database._conn, sql, values)
+            if cursor.rowcount == 1:
                 return True
-            except Exception as exc:
-                if "UNIQUE" not in str(exc).upper() and "DUPLICATE" not in str(exc).upper():
-                    raise
+            if self.database._conn.execute("SELECT 1 FROM messaging_outbound_queue WHERE id=?",
+                                           (str(message.id),)).fetchone():
                 return False
+            if generation_lease is not None:
+                raise InboundGenerationLost("INBOUND_GENERATION_LEASE_LOST")
+            raise RuntimeError("OUTBOUND_INSERT_UNEXPECTED_ROWCOUNT")
 
     def get_outbound(self, message_id: UUID | str) -> OutboundMessage | None:
         with self.database._lock:
@@ -311,8 +315,9 @@ class MessagingStore:
         conversation_id: str,
         source_message_id: str,
         reason: str,
+        through_revision: int = 1_000_000,
     ) -> int:
-        """Cancel queued/claimed replies anchored to a native platform message."""
+        """Cancel queued/claimed replies anchored to a stale native revision."""
         with self.database._lock:
             cursor = execute_atomic_statement(
                 self.database.backend,
@@ -320,13 +325,14 @@ class MessagingStore:
                 """UPDATE messaging_outbound_queue
                    SET status='cancelled', error_code=?, claim_expires_at=NULL
                    WHERE platform=? AND account_scope=? AND conversation_id=?
-                     AND source_message_id=? AND status IN ('queued','claimed')""",
+                     AND source_message_id=? AND status IN ('queued','claimed')
+                     AND COALESCE(json_extract(metadata_json,'$.transport_revision'),1)<=?""",
                 (
                     reason[:120],
                     platform.value,
                     account_scope,
                     conversation_id,
-                    source_message_id,
+                    source_message_id, through_revision,
                 ),
             )
         return max(0, int(getattr(cursor, "rowcount", 0) or 0))

@@ -49,7 +49,7 @@ async def wait_terminal(bus: AmoraCommandBus, job_id, *, attempts: int = 20):
 
 def test_catalog_contains_only_explicit_commands() -> None:
     catalog = {item.path: item for item in command_catalog()}
-    assert set(catalog) == {"help", "status", "providers certify social", "providers diagnose nvidia", "providers diagnose groq", "providers experiment mistral-abc", "providers experiment social-persona-abc", "providers experiment amora-v2-ab", "providers experiment amora-v2-v3", "providers experiment amora-v3-temperature"}
+    assert set(catalog) == {"help", "status", "providers certify social", "providers diagnose nvidia", "providers diagnose groq", "providers experiment mistral-abc", "providers experiment social-persona-abc", "providers experiment amora-v2-ab", "providers experiment amora-v2-v3", "providers experiment amora-v3-temperature", "memory reflection status", "memory reflection retry", "memory historical audit", "memory historical recover", "memory historical authorize"}
     assert catalog["providers experiment amora-v3-temperature"].exclusive is True
     assert catalog["providers experiment amora-v3-temperature"].permission == "operator"
     assert catalog["providers experiment amora-v2-v3"].exclusive is True

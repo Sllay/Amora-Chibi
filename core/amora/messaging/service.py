@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from uuid import NAMESPACE_URL, UUID, uuid5
+import os
+from contextvars import ContextVar
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from amora.cognition import CognitiveRequest
 
@@ -20,12 +22,15 @@ from .models import (
     RoutingAction,
     TransportInvalidation,
 )
+from .reflection_queue import ReflectionQueue
+from .generation_lifecycle import InboundGeneration, InboundGenerationBusy, InboundGenerationLost
 from .presence import PlatformPresenceController
 from .presence_control import PlatformPresenceControlService, PresenceControlOutcome
 from .store import MessagingStore
 
 
 _LOG = logging.getLogger("amora.messaging")
+_GENERATION_LEASE: ContextVar[tuple[str, str] | None] = ContextVar("amora_generation_lease", default=None)
 # Discord uses a synchronous inbound request until durable background generation lands.
 # Give the social model >=60s while leaving room for failover, context and delivery.
 # Ladder: provider attempt < provider total < cognition < worker HTTP < Core HTTP.
@@ -79,6 +84,8 @@ class PlatformMessagingService:
             presence=PlatformPresenceController(store, clock, reset_transient=False),
         )
         self._inflight: dict[str, asyncio.Task[InboundResult]] = {}
+        self.reflections = ReflectionQueue(store.database, cognition, clock)
+        self.generations = InboundGeneration(store.database, clock)
 
     async def receive(self, message: InboundMessage) -> InboundResult:
         """Process one logical inbound exactly once per Core process.
@@ -91,12 +98,59 @@ class PlatformMessagingService:
         task = self._inflight.get(key)
         if task is None or task.done():
             task = asyncio.create_task(
-                self._receive_once(message),
+                self._receive_owned(message),
                 name=f"amora-messaging-{self._hash(key)}",
             )
             self._inflight[key] = task
             task.add_done_callback(lambda done, key=key: self._drop_inflight(key, done))
         return await asyncio.shield(task)
+
+    def _source_invalidated(self, message):
+        return self.reflections.source_invalidated(
+            self._session_ref(message), self._hash(message.native_source_message_id),
+            message.transport_revision,
+        )
+
+    async def _receive_owned(self, message: InboundMessage) -> InboundResult:
+        from amora.events import PrivacyScope
+        if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
+            return await self._receive_once(message)
+        turn_id = str(self._turn_id(message))
+        token = str(uuid4())
+        deadline = asyncio.get_running_loop().time() + min(110, self.cognition_timeout_seconds + 5)
+        while not self.generations.claim(
+            turn_id, self._session_ref(message), self._hash(message.native_source_message_id),
+            message.transport_revision, token,
+        ):
+            if asyncio.get_running_loop().time() >= deadline:
+                raise InboundGenerationBusy("INBOUND_GENERATION_BUSY")
+            await asyncio.sleep(0.05)
+        context_token = _GENERATION_LEASE.set((turn_id, token))
+        completed = False
+        try:
+            result = await self._receive_once(message)
+            completed = True
+            return result
+        except InboundGenerationLost:
+            if self._source_invalidated(message):
+                completed = True
+                return self._invalidated_result(message)
+            raise InboundGenerationBusy("INBOUND_GENERATION_LEASE_LOST") from None
+        finally:
+            _GENERATION_LEASE.reset(context_token)
+            self.generations.release(turn_id, token, completed=completed)
+
+    def _invalidated_result(self, message):
+        audit = self.store.get_audit(platform=message.platform, account_scope=message.account_scope,
+                                     conversation_id=message.conversation_id, message_id=message.message_id)
+        if audit is not None:
+            self.store.add_inbound_reason(platform=message.platform, account_scope=message.account_scope,
+                                          conversation_id=message.conversation_id, message_id=message.message_id,
+                                          reason="REPLY_LEASE_INVALIDATED")
+        speaker, actor_ref = self.attention.resolve_speaker(message)
+        return InboundResult(decision=AttentionDecision(
+            action=RoutingAction.SILENCE, speaker_entity_id=speaker, speaker_actor_ref=actor_ref,
+            reason_codes=["REPLY_LEASE_INVALIDATED"]), duplicate=audit is not None)
 
     def _drop_inflight(self, key: str, task: asyncio.Task[InboundResult]) -> None:
         if self._inflight.get(key) is task:
@@ -108,6 +162,20 @@ class PlatformMessagingService:
             return InboundResult(decision=AttentionDecision(
                 action=RoutingAction.BLOCK, speaker_actor_ref="protected",
                 reason_codes=["PRIVACY_SCOPE_BLOCKED"]))
+        if self._source_invalidated(message):
+            return self._invalidated_result(message)
+        lease = _GENERATION_LEASE.get()
+        prepared = self.generations.prepared(*lease) if lease is not None else None
+        if prepared is not None:
+            outbound, decision, reasons = prepared
+            if message.channel_type == ChannelType.GROUP and (
+                not self.attention.floor.validate_reply(message, decision)
+                or not public_text_allowed(outbound.text)
+                or not audience_text_allowed(outbound.text, audience_id=self._session_ref(message))
+            ):
+                return self._invalidated_result(message)
+            outbound = self._persist_prepared_outbound(message, decision, outbound, reasons)
+            return InboundResult(decision=decision, duplicate=True, outbound=[outbound])
         existing_audit = self.store.get_audit(
             platform=message.platform,
             account_scope=message.account_scope,
@@ -119,10 +187,17 @@ class PlatformMessagingService:
             if duplicate_result is not None:
                 self._log_result(duplicate_result)
                 return duplicate_result
-            routed = self.attention.route(message)
-            decision = routed.model_copy(
-                update={"reason_codes": [*routed.reason_codes, "DUPLICATE_RECOVERY_RESUME"]}
-            )
+            if existing_audit.routing_action == RoutingAction.CONTEXT_ONLY:
+                _, actor_ref = self.attention.resolve_speaker(message)
+                decision = AttentionDecision(
+                    action=RoutingAction.CONTEXT_ONLY, speaker_entity_id=existing_audit.speaker_entity_id,
+                    speaker_actor_ref=actor_ref, reason_codes=["DUPLICATE_RECOVERY_RESUME", "MESSAGING_CONTEXT_ONLY"],
+                )
+            else:
+                routed = self.attention.route(message)
+                decision = routed.model_copy(
+                    update={"reason_codes": [*routed.reason_codes, "DUPLICATE_RECOVERY_RESUME"]}
+                )
             duplicate_recovery = True
         else:
             decision = self.attention.route(message)
@@ -215,13 +290,26 @@ class PlatformMessagingService:
                 "social_attention_reasons": list(decision.reason_codes),
                 "floor_generation": decision.floor_generation,
                 "memory_consolidation": message.remote_processing_allowed,
+                "observed_only": decision.action == RoutingAction.CONTEXT_ONLY,
                 "relationship_learning": False,
                 "messaging_audit": True,
                 "provider_total_budget_seconds": self.provider_total_budget_seconds,
                 "provider_attempt_budget_seconds": self.provider_attempt_budget_seconds,
             },
         )
+        enqueue_reflection = message.remote_processing_allowed and (
+            decision.action == RoutingAction.RESPOND or (
+                decision.action == RoutingAction.CONTEXT_ONLY
+                and decision.speaker_entity_id is not None
+                and os.getenv("AMORA_REFLECTION_OBSERVED", "0") == "1"
+            )
+        )
+        # Persist the intent with the input. The queue reconciles the crash
+        # window between these separate writes, without importing old history.
+        request.metadata["reflection_enqueue_requested"] = enqueue_reflection
         self.cognition.observe_input(request)
+        if enqueue_reflection:
+            self.reflections.enqueue(request)
 
         if decision.action == RoutingAction.CONTEXT_ONLY:
             self.cognition.record_turn_decision(
@@ -392,21 +480,6 @@ class PlatformMessagingService:
             },
             reason_codes=["CORE_OUTBOUND_ENQUEUED", *cognitive_reasons],
         )
-        # Messaging does not use IntegratedConversation.observe_completed_utterance,
-        # so it must explicitly run bounded cognitive reflection. Never delay
-        # the actual reply generation; the outbound intent is durable first.
-        if message.remote_processing_allowed and not fallback_used:
-            try:
-                await asyncio.wait_for(
-                    self.cognition.reflect(request.model_copy(update={
-                        "source_event_id": request.turn_id,
-                        "metadata": {**request.metadata, "cognitive_mode": "reflection"},
-                    })),
-                    timeout=8.0,
-                )
-            except Exception as exc:
-                _LOG.warning("messaging_memory_reflection_failed type=%s", type(exc).__name__)
-
         result = InboundResult(decision=decision, duplicate=duplicate_recovery, outbound=[outbound])
         self._log_result(
             result,
@@ -438,6 +511,9 @@ class PlatformMessagingService:
 
         terminal_reason = next((reason for reason in reasons if reason in _TERMINAL_DUPLICATE_REASONS), None)
         action = RoutingAction.SILENCE if terminal_reason is not None else audit.routing_action
+        if action == RoutingAction.CONTEXT_ONLY and self.cognition.store.get_message_by_dedupe(
+                f"cognitive-input:{self._turn_id(message)}") is None:
+            return None
         if action is not None and action != RoutingAction.RESPOND:
             return InboundResult(
                 decision=AttentionDecision(
@@ -535,7 +611,17 @@ class PlatformMessagingService:
                 "idempotency_key_hash": self._hash(self._inbound_key(message)),
             },
         )
-        inserted = self.store.put_outbound(outbound)
+        lease = _GENERATION_LEASE.get()
+        if lease is not None and not self.generations.stage(*lease, outbound, decision, reason_codes):
+            raise InboundGenerationLost("INBOUND_GENERATION_LEASE_LOST")
+        return self._persist_prepared_outbound(message, decision, outbound, reason_codes)
+
+    def _persist_prepared_outbound(self, message, decision, outbound, reason_codes):
+        native_source_id = message.native_source_message_id
+        metadata = outbound.metadata
+        lease = _GENERATION_LEASE.get()
+        inserted = (self.store.put_outbound(outbound, generation_lease=lease)
+                    if lease is not None else self.store.put_outbound(outbound))
         if not inserted:
             existing = self.store.get_outbound(outbound.id)
             if existing is None:
@@ -584,15 +670,26 @@ class PlatformMessagingService:
             invalidation.conversation_id,
             invalidation.native_message_id,
         )
+        # The worker supplies the new revision on edits; a deletion is final.
+        # Unknown revisions fail closed instead of allowing an old input to reappear.
+        through = (
+            1_000_000
+            if "DELETED" in invalidation.reason.upper() or invalidation.transport_revision is None
+            else invalidation.transport_revision - 1
+        )
+        session_id = f"MSG_{invalidation.platform.value.upper()}_{self._hash(invalidation.account_scope + '|' + invalidation.conversation_id)}"
+        cancelled_reflections = self.reflections.invalidate_source(
+            session_id, self._hash(invalidation.native_message_id), through_revision=through,
+        )
+        self.generations.invalidate_prepared(session_id, self._hash(invalidation.native_message_id), through)
         cancelled = self.store.cancel_outbound_by_source(
-            platform=invalidation.platform,
-            account_scope=invalidation.account_scope,
-            conversation_id=invalidation.conversation_id,
-            source_message_id=invalidation.native_message_id,
-            reason=invalidation.reason,
+            platform=invalidation.platform, account_scope=invalidation.account_scope,
+            conversation_id=invalidation.conversation_id, source_message_id=invalidation.native_message_id,
+            reason=invalidation.reason, through_revision=through,
         )
         return {
             "status": "ok",
+            "cancelled_reflections": cancelled_reflections,
             "floor_generation": generation,
             "floor_invalidated": floor_invalidated,
             "cancelled_outbound": cancelled,
@@ -604,6 +701,7 @@ class PlatformMessagingService:
             "messaging_audit_count": self.store.count_audit(),
             "messaging_outbound_pending_count": self.store.pending_outbound_count(),
             "messaging_inflight_count": len(self._inflight),
+            "memory_reflection_jobs": self.reflections.counts(),
             "messaging_cognition_timeout_seconds": self.cognition_timeout_seconds,
             "messaging_provider_total_budget_seconds": self.provider_total_budget_seconds,
             "messaging_provider_attempt_budget_seconds": self.provider_attempt_budget_seconds,

@@ -81,6 +81,7 @@ class CognitiveStore:
         speaker_id: str | None = None,
         turn_id: UUID | str | None = None,
         session_id: str | None = None,
+        exclude_invalidated: bool = False,
     ) -> list[ConversationMessage]:
         clauses: list[str] = []
         args: list[object] = []
@@ -93,6 +94,15 @@ class CognitiveStore:
         if session_id is not None:
             clauses.append("session_id = ?")
             args.append(session_id)
+        if exclude_invalidated:
+            clauses.append("""NOT EXISTS (
+                SELECT 1 FROM conversation_messages original
+                JOIN memory_reflection_invalidations x ON x.session_id=original.session_id
+                AND x.native_message_hash=json_extract(original.metadata_json,'$.native_message_id_hash')
+                WHERE original.turn_id=conversation_messages.turn_id
+                AND original.dedupe_key='cognitive-input:' || original.turn_id
+                AND COALESCE(json_extract(original.metadata_json,'$.transport_revision'),1)<=x.invalidated_through
+            )""")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         args.append(max(1, min(500, int(limit))))
         with self._lock:
@@ -100,6 +110,15 @@ class CognitiveStore:
                 f"SELECT * FROM conversation_messages{where} ORDER BY started_at DESC LIMIT ?", tuple(args)
             ).fetchall()
         return [self._message_from_row(row) for row in reversed(rows)]
+
+    def reflection_lease_valid(self, turn_id, lease_token):
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM memory_reflection_jobs WHERE turn_id=? AND status='claimed' "
+                "AND lease_token=? AND lease_until>?",
+                (str(turn_id), lease_token, self.clock.now().isoformat()),
+            ).fetchone()
+        return row is not None
 
     def update_message_delivery(
         self,

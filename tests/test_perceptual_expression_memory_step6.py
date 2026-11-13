@@ -152,7 +152,7 @@ def _enrich(memory, *, profile: ExpressionSemanticProfile | None = None, body: b
 def test_latest_schema_contains_perceptual_visual_enrichment_fields(tmp_path: Path, monkeypatch) -> None:
     core = _core(tmp_path, monkeypatch)
     try:
-        assert core.database.schema_version() == LATEST_SCHEMA_VERSION == 17
+        assert core.database.schema_version() == LATEST_SCHEMA_VERSION
         columns = {
             str(row[1])
             for row in core.database._conn.execute(

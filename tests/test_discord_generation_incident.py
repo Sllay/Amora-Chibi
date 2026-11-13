@@ -169,7 +169,6 @@ async def test_edit_delete_during_generation_suppresses_stale_delivery(core, rea
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="Confirmed: process-local inflight ownership permits duplicate generation across services")
 async def test_two_service_instances_share_durable_single_generation(core):
     provider = GatedProvider()
     core.cognition.register_provider(provider)
@@ -187,14 +186,13 @@ async def test_two_service_instances_share_durable_single_generation(core):
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="Confirmed: enqueue failure loses completed realization and retry regenerates")
 async def test_enqueue_database_failure_can_retry_without_regeneration(core, monkeypatch):
     import sqlite3
     provider = CountingProvider()
     core.cognition.register_provider(provider)
     incoming = message(core, message_id='db-enqueue-failure')
     original = core.messaging.store.put_outbound
-    def fail_once(outbound):
+    def fail_once(outbound, **kwargs):
         monkeypatch.setattr(core.messaging.store, 'put_outbound', original)
         raise sqlite3.OperationalError('synthetic enqueue failure')
     monkeypatch.setattr(core.messaging.store, 'put_outbound', fail_once)

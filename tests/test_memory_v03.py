@@ -195,3 +195,104 @@ def test_backup_restore_includes_memory(tmp_path: Path) -> None:
         assert hits and hits[0].memory.content.startswith("BK mostrou")
     finally:
         restored_memory.close(); restored.close()
+
+
+def test_projection_filters_before_top_k(tmp_path):
+    _, db, memory = build_memory(tmp_path)
+    try:
+        for i in range(12):
+            assert memory.remember(important_candidate(
+                content=f"projeto orquidea confidencial {i}",
+                owner_entity_id="ENTITY_CHATGPT", audience={"ENTITY_CHATGPT"},
+                importance=1.0,
+            )).memory is not None
+        allowed = memory.remember(important_candidate(
+            content="projeto orquidea autorizado",
+            owner_entity_id="PERSON_BK", importance=0.7,
+        )).memory
+        assert allowed is not None
+        hits = memory.recall(MemoryQuery(text="projeto orquidea", limit=1,
+            projection_recipient_id="PERSON_BK", projection_remote_only=True))
+        assert [hit.memory.id for hit in hits] == [allowed.id]
+        assert not memory.recall(MemoryQuery(text="projeto orquidea",
+            projection_recipient_id="PERSON_BK", projection_public_only=True))
+    finally:
+        memory.close(); db.close()
+
+
+def test_derived_social_scope_is_supported(tmp_path):
+    _, db, memory = build_memory(tmp_path)
+    try:
+        parent = memory.remember(important_candidate(
+            privacy_scope=PrivacyScope.SOCIAL, owner_entity_id="PERSON_BK",
+        )).memory
+        assert parent is not None
+        child = memory.remember(important_candidate(
+            privacy_scope=PrivacyScope.PUBLIC,
+            provenance=MemoryProvenance(kind=ProvenanceKind.DERIVED,
+                source="test", derived_from=[parent.id]),
+        )).memory
+        assert child is not None
+        assert child.privacy_scope == PrivacyScope.SOCIAL
+        assert child.audience == {"PERSON_BK"}
+    finally:
+        memory.close(); db.close()
+
+
+def test_explicit_entity_recall_fallback_is_scoped_and_not_a_text_match(tmp_path):
+    _, db, memory = build_memory(tmp_path)
+    try:
+        own = memory.remember(important_candidate(
+            content="Projeto orquidea tem cinco mapas.",
+            owner_entity_id="PERSON_BK", entity_refs={"PERSON_BK": 1.0},
+        )).memory
+        foreign = memory.remember(important_candidate(
+            content="Segredo de outra pessoa.",
+            owner_entity_id="ENTITY_CHATGPT", entity_refs={"ENTITY_CHATGPT": 1.0},
+        )).memory
+        assert own and foreign
+        query = MemoryQuery(text="lembra daquele?", entity_ids={"PERSON_BK"},
+            projection_recipient_id="PERSON_BK", projection_remote_only=True)
+        assert memory.recall(query) == []
+        hits = memory.recall(query.model_copy(update={"allow_entity_fallback": True}))
+        assert [hit.memory.id for hit in hits] == [own.id]
+        assert "ENTITY_RECALL_NO_TEXT_MATCH" in hits[0].reason_codes
+        assert "TEXT_MATCH" not in hits[0].reason_codes
+        assert not memory.recall(query.model_copy(update={
+            "allow_entity_fallback": True, "projection_public_only": True,
+        }))
+    finally:
+        memory.close(); db.close()
+
+
+def test_lexical_recall_reaches_old_records_beyond_importance_cap(tmp_path):
+    _, db, memory = build_memory(tmp_path)
+    try:
+        old = memory.remember(important_candidate(
+            content="O projeto orquidea possui cinco mapas.",
+            summary="Projeto orquidea",
+            tags={"orquidea"}, importance=0.4, owner_entity_id="PERSON_BK",
+        )).memory
+        assert old is not None
+        for i in range(305):
+            assert memory.remember(important_candidate(
+                content=f"Desenho recente numero {i}", tags={"desenho"},
+                importance=1.0, owner_entity_id="PERSON_BK",
+            )).memory is not None
+        # Also exclude a more important matching record owned by someone else.
+        other = memory.remember(important_candidate(
+            content="O projeto orquidea é de outra pessoa.",
+            importance=1.0, owner_entity_id="ENTITY_CHATGPT",
+        )).memory
+        assert other is not None
+        query = MemoryQuery(text="orquidea", limit=8,
+            entity_ids={"PERSON_BK"}, projection_recipient_id="PERSON_BK",
+            projection_remote_only=True)
+        for use_fts in (True, False):
+            memory.store.fts_enabled = use_fts
+            hits = memory.recall(query)
+            assert any(hit.memory.id == old.id and "TEXT_MATCH" in hit.reason_codes
+                       for hit in hits)
+            assert all(hit.memory.id != other.id for hit in hits)
+    finally:
+        memory.close(); db.close()

@@ -157,3 +157,22 @@ def test_v3_temperature_experiment_requires_operator(tmp_path, monkeypatch):
     finally:
         client.close()
         core.close()
+
+
+def test_memory_recovery_commands_require_operator_and_do_not_return_contents(tmp_path, monkeypatch):
+    core, client = _core(tmp_path, monkeypatch)
+    try:
+        web = {"Authorization": "Bearer " + issue_browser_token(MASTER, core.clock, "web")}
+        operator = {"Authorization": "Bearer " + issue_operator_token(MASTER, core.clock)}
+        payload = {"command": "memory historical audit"}
+        assert client.post("/v1/operator/commands", headers=web, json=payload).status_code == 403
+        started = client.post("/v1/operator/commands", headers=operator, json=payload)
+        assert started.status_code == 202
+        result = _terminal_job(client, operator, started.json()["job_id"])
+        assert result["status"] == "succeeded"
+        assert result["result"]["data"]["local_only_reflections"]["total"] == 0
+        assert "memory reflection retry" in [item["path"] for item in client.get(
+            "/v1/operator/commands/catalog", headers=operator).json()]
+    finally:
+        client.close()
+        core.close()

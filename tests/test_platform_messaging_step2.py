@@ -376,3 +376,148 @@ async def test_group_publication_rejects_confidential_output_and_retry(tmp_path,
         assert len(calls) == 1
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_dm_reflection_persists_when_social_generation_falls_back(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from amora.memory import MemoryQuery
+    from amora.models import TaskClass
+    from test_reflection_v10 import StructuredProvider
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    for name in ("NVIDIA_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv("AMORA_SECRET_" + name, raising=False)
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        provider = StructuredProvider()
+        provider.descriptor = replace(provider.descriptor,
+            capabilities=frozenset({TaskClass.REASONING}))
+        core.cognition.register_provider(provider)
+        incoming = _message(core, message_id="reflect-after-fallback",
+            actor_id="111111111111111111", channel_type=ChannelType.DM,
+            text="Estou trabalhando em um jogo novo.").model_copy(
+                update={"remote_processing_allowed": True})
+        result = await core.messaging.receive(incoming)
+        assert len(result.outbound) == 1
+        assert result.outbound[0].metadata["fallback_used"] is True
+        turn_id = core.messaging._turn_id(incoming)
+        assert core.messaging.reflections.state(turn_id)["status"] == "pending"
+        assert await core.messaging.reflections.process_once()
+        hits = core.memory.recall(MemoryQuery(text="jogo novo"))
+        remembered = next(hit.memory for hit in hits if "jogo novo" in hit.memory.content)
+        assert remembered.provenance.source_event_id is None
+        assert remembered.metadata["turn_id"] == str(core.messaging._turn_id(incoming))
+        audit = core.messaging_store.get_audit(platform=incoming.platform,
+            account_scope=incoming.account_scope, conversation_id=incoming.conversation_id,
+            message_id=incoming.message_id)
+        assert audit is not None
+        assert core.messaging.reflections.state(turn_id)["last_reason"] == "MEMORY_REFLECTION_ACCEPTED"
+        before = core.memory.store.count()
+        replay = await core.messaging.receive(incoming)
+        assert replay.duplicate
+        assert core.memory.store.count() == before
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_known_group_observation_can_consolidate_without_reply(tmp_path, monkeypatch):
+    from test_reflection_v10 import StructuredProvider
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    monkeypatch.setenv("AMORA_REFLECTION_OBSERVED", "1")
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        core.cognition.register_provider(StructuredProvider())
+        message = _message(core, message_id="observed-project", actor_id="111111111111111111",
+            channel_type=ChannelType.GROUP, text="Estou trabalhando em um jogo novo.").model_copy(
+                update={"remote_processing_allowed": True, "mentioned_actor_ids": ["999999999999999999"]})
+        result = await core.messaging.receive(message)
+        assert result.decision.action == RoutingAction.CONTEXT_ONLY
+        assert not result.outbound
+        turn_id = core.messaging._turn_id(message)
+        assert core.messaging.reflections.state(turn_id)["status"] == "pending"
+        assert await core.messaging.reflections.process_once()
+        assert core.messaging.reflections.state(turn_id)["status"] == "done"
+        from amora.cognition import JournalStage
+        entry = next(e for e in core.cognition.store.journal_for_turn(turn_id)
+                     if e.stage == JournalStage.PROPOSALS_GATED)
+        assert entry.payload["accepted_memory_ids"]
+        assert entry.payload["hypothesis_ids"] == []
+        assert entry.payload["deferred_action_count"] == 0
+        assert all(not core.memory.get(mid).remote_processing_allowed for mid in entry.payload["accepted_memory_ids"])
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_discord_private_memory_reaches_realization_after_core_restart_not_group(tmp_path, monkeypatch):
+    from test_reflection_v10 import StructuredProvider
+    from amora.memory import MemoryQuery
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE", "1")
+    marker = "Projeto Orquidea tem cinco mapas"
+    clock = SimulatedClock()
+
+    class SyntheticProvider(StructuredProvider):
+        def __init__(self):
+            super().__init__()
+            self.contexts = []
+
+        async def realize(self, context):
+            self.contexts.append(context)
+            allowed = context.dialogue_plan["response_moves"]
+            return {"moves": [{"kind": allowed[0], "text": "Tá, entendi."}],
+                    "closing": "statement", "_usage": {"input_tokens": 20, "output_tokens": 5}}
+
+        async def propose(self, context):
+            bundle = await super().propose(context)
+            bundle["memory_candidates"][0]["content"] = marker
+            bundle["memory_candidates"][0]["summary"] = marker
+            bundle["belief_hypotheses"] = []
+            bundle["action_suggestions"] = []
+            return bundle
+
+    first = AmoraCore.bootstrap(clock=clock)
+    try:
+        _bind_bk(first)
+        first.cognition.register_provider(SyntheticProvider())
+        original = _message(first, message_id="private-project-original",
+            actor_id="111111111111111111", channel_type=ChannelType.DM,
+            conversation_id="private-project-channel", text=marker).model_copy(
+                update={"remote_processing_allowed": True})
+        assert (await first.messaging.receive(original)).outbound
+        assert await first.messaging.reflections.process_once()
+        hits = first.memory.recall(MemoryQuery(text="Orquidea"))
+        remembered = next(hit.memory for hit in hits if marker in hit.memory.content)
+        assert remembered.remote_processing_allowed
+        assert remembered.owner_entity_id == "PERSON_BK"
+    finally:
+        first.close()
+
+    second = AmoraCore.bootstrap(clock=clock)
+    try:
+        provider = SyntheticProvider()
+        second.cognition.register_provider(provider)
+        private = _message(second, message_id="private-project-recall",
+            actor_id="111111111111111111", channel_type=ChannelType.DM,
+            conversation_id="private-project-channel", text="Amora, lembra do projeto Orquidea?").model_copy(
+                update={"remote_processing_allowed": True})
+        assert (await second.messaging.receive(private)).outbound
+        assert provider.contexts
+        context = provider.contexts[-1]
+        assert any(m.id == str(remembered.id) for m in context.memories)
+        group = _message(second, message_id="group-project-recall",
+            actor_id="111111111111111111", channel_type=ChannelType.GROUP,
+            conversation_id="unrelated-group-channel", text="Amora, lembra do projeto Orquidea?",
+            mention=True).model_copy(update={"remote_processing_allowed": True})
+        assert (await second.messaging.receive(group)).outbound
+        shared_context = provider.contexts[-1]
+        assert shared_context.scene_visibility == "group"
+        assert all(m.id != str(remembered.id) for m in shared_context.memories)
+        assert marker not in shared_context.model_dump_json()
+    finally:
+        second.close()
