@@ -142,3 +142,36 @@ async def test_direct_dialogue_runs_reflection_after_streaming_plan(tmp_path: Pa
         assert core.memory.store.count() >= 1
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_opt_in_reflected_memory_is_recalled_remotely_by_owner_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE", "1")
+    core = AmoraCore.bootstrap(clock=_clock())
+    try:
+        core.cognition.register_provider(StructuredProvider())
+        def request(channel, speaker="PERSON_BK", scope=PrivacyScope.PERSONAL):
+            return CognitiveRequest(
+                text="BK está trabalhando em um jogo novo.",
+                speaker_id=speaker, target_id="ENTITY_AMORA",
+                privacy_scope=scope, remote_processing_allowed=True,
+                session_id="memory-test-" + channel,
+                metadata={"surface": "platform_messaging", "channel_type": channel},
+            )
+        bundle = await core.cognition.reflect(request("dm"))
+        assert len(bundle.accepted_memory_ids) == 1
+        record = core.memory.get(bundle.accepted_memory_ids[0])
+        assert record.remote_processing_allowed
+        assert record.owner_entity_id == "PERSON_BK"
+        assert record.entity_refs["PERSON_BK"] == 1.0
+        assert any(item.id == str(record.id) for item in
+                   core.cognition.compiler.compile(request("dm")).memories)
+        for other in (request("group"), request("dm", speaker="ENTITY_CHATGPT")):
+            assert all(item.id != str(record.id) for item in
+                       core.cognition.compiler.compile(other).memories)
+        monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE", "0")
+        local_bundle = await core.cognition.reflect(request("dm"))
+        assert not core.memory.get(local_bundle.accepted_memory_ids[0]).remote_processing_allowed
+    finally:
+        core.close()
