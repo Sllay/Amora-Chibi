@@ -101,6 +101,15 @@ class ReflectionQueue:
             ).fetchone()
         return dict(row) if row else None
 
+    def counts(self):
+        with self.database._lock:
+            rows = self.database._conn.execute(
+                "SELECT status, COUNT(*) AS total FROM memory_reflection_jobs GROUP BY status"
+            ).fetchall()
+        counts = {"pending": 0, "claimed": 0, "done": 0, "failed": 0}
+        counts.update({row["status"]: int(row["total"]) for row in rows})
+        return counts
+
     async def process_once(self):
         job = self.claim()
         if job is None:
