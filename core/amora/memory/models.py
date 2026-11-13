@@ -119,6 +119,7 @@ class MemoryQuery(BaseModel):
     projection_recipient_id: str | None = None
     projection_public_only: bool = False
     projection_remote_only: bool = False
+    allow_entity_fallback: bool = False
 
     @model_validator(mode="after")
     def validate_window(self) -> "MemoryQuery":
