@@ -66,9 +66,12 @@ async def test_identical_sampling_except_temperature_with_blinding(case, monkeyp
 
 
 def test_copy_detector_flags_prior_verbatim_example_but_not_novel_joke():
-    samples = calibration_examples(load_v3())
-    actual_example = next(x for x in samples if x.startswith('"Safada'))
-    copied = actual_example.strip('"')
+    fixture = ("## 7. Calibration examples\n"
+               "GOOD: Um teste sintético de palavras consecutivas para detectar cópia.\n"
+               "## 8. Next section\n")
+    samples = calibration_examples(fixture)
+    assert len(samples) == 1
+    copied = samples[0]
     copied_diag = example_overlap(copied, samples)
     assert copied_diag["example_copy_signal"] is True
     assert copied_diag["max_consecutive_example_words"] >= 7
@@ -224,3 +227,7 @@ async def test_operator_dynamic_flags_change_payload_and_report(monkeypatch):
     assert report["changed_parameters"] == ["temperature", "top_p"]
     assert "não é possível atribuir" in report["sampling_comparison_note"]
     assert all(item["validated"] for item in report["variants"])
+
+
+def test_calibration_metric_is_optional_for_new_profile_formats():
+    assert calibration_examples("Synthetic revised profile without legacy examples.") == []
