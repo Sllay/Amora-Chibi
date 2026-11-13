@@ -77,6 +77,22 @@ class ProviderPrivacyGate:
         return source in {None, recipient_id, "ENTITY_AMORA"}
 
     @staticmethod
+    def shared_history_allowed(message, request: CognitiveRequest) -> bool:
+        # A group session is not a DM session. Preserve only explicitly
+        # group-origin personal messages from the same transport session.
+        if message.privacy_scope == PrivacyScope.PUBLIC:
+            return True
+        return (
+            message.privacy_scope == PrivacyScope.PERSONAL
+            and request.metadata.get("surface") == "platform_messaging"
+            and request.metadata.get("channel_type") == "group"
+            and bool(request.session_id)
+            and message.session_id == request.session_id
+            and message.metadata.get("surface") == "platform_messaging"
+            and message.metadata.get("channel_type") == "group"
+        )
+
+    @staticmethod
     def message_allowed(message, *, remote: bool, recipient_id: str) -> bool:
         """One shared session is not permission to share another person's DM."""
         if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
@@ -226,9 +242,12 @@ class ContextCompiler:
             if (str(message.turn_id) == str(request.turn_id)
                     or (str(message.turn_id) in test_turn_ids and not include_session_tests)):
                 continue
-            if shared and message.privacy_scope != PrivacyScope.PUBLIC:
-                continue
-            if not self.privacy_gate.message_allowed(
+            if shared:
+                if not self.privacy_gate.shared_history_allowed(message, request):
+                    continue
+                if remote and not message.remote_processing_allowed:
+                    continue
+            elif not self.privacy_gate.message_allowed(
                 message, remote=remote, recipient_id=request.speaker_id
             ):
                 continue
@@ -252,6 +271,15 @@ class ContextCompiler:
             reasons.append("ACIR_COMPILED")
 
         self_snapshot = self.self_model.snapshot()
+        if shared:
+            # Snapshot values have no audience metadata. Do not project learned
+            # preferences, relationship maps or private current-state summaries.
+            identity = self_snapshot.get("core_identity", {})
+            self_snapshot = {"core_identity": {
+                key: identity[key] for key in ("canonical_name",) if key in identity
+            }}
+            intention = None
+            reasons.append("SHARED_CONTEXT_SELF_MODEL_RESTRICTED")
         if remote:
             # Cross-person self-relationship maps are not safe to expose
             # wholesale. Recipient-scoped relationships are projected above.
