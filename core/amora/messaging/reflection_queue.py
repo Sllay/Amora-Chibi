@@ -58,6 +58,15 @@ class ReflectionQueue:
              int(input_row.metadata.get("transport_revision", 1))),
         ))
 
+    def source_invalidated(self, session_id, native_message_hash, revision):
+        with self.database._lock:
+            row = self.database._conn.execute(
+                "SELECT 1 FROM memory_reflection_invalidations WHERE session_id=? "
+                "AND native_message_hash=? AND invalidated_through>=?",
+                (session_id, native_message_hash, revision),
+            ).fetchone()
+        return row is not None
+
     def invalidate_source(self, session_id, native_message_hash, *, through_revision):
         """Cancel stale revisions even if an invalidation precedes delivery.
 

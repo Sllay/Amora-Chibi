@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from .generation_lifecycle import InboundGenerationBusy
 from .models import (
     ExternalActorRef,
     InboundMessage,
@@ -71,7 +72,10 @@ def register_messaging_routes(app, core, require_auth) -> None:
 
     @app.post("/v1/messaging/worker/inbound", dependencies=[Depends(require_auth)])
     async def messaging_inbound(message: InboundMessage):
-        return await core.messaging.receive(message)
+        try:
+            return await core.messaging.receive(message)
+        except InboundGenerationBusy:
+            raise HTTPException(status_code=503, detail="INBOUND_GENERATION_BUSY") from None
 
     @app.post("/v1/messaging/worker/invalidate", dependencies=[Depends(require_auth)])
     def messaging_transport_invalidate(payload: TransportInvalidation):
