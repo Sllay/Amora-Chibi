@@ -23,7 +23,7 @@ class MemoryService:
         self.clock = clock
         self.gate = gate or MemoryWriteGate()
 
-    def remember(self, candidate: MemoryCandidate) -> RememberResult:
+    def remember(self, candidate: MemoryCandidate, *, record_id: UUID | None = None) -> RememberResult:
         # A derived record cannot widen the disclosure permissions of its sources.
         # Missing provenance is not evidence of public authorization.
         if candidate.provenance.derived_from:
@@ -67,12 +67,17 @@ class MemoryService:
         if not decision.store or decision.recommended_kind is None:
             return RememberResult(decision=decision, memory=None)
 
+        if record_id is not None:
+            existing = self.get(record_id)
+            if existing is not None:
+                return RememberResult(decision=decision, memory=existing)
         now = self.clock.now()
         remote_allowed = candidate.remote_processing_allowed
         if candidate.privacy_scope in {PrivacyScope.PRIVATE, PrivacyScope.SECRET, PrivacyScope.AUTH}:
             remote_allowed = False
 
         record = MemoryRecord(
+            **({"id": record_id} if record_id is not None else {}),
             kind=decision.recommended_kind,
             content=candidate.content.strip(),
             summary=candidate.summary.strip() if candidate.summary else None,
