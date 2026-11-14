@@ -337,7 +337,7 @@ class PlatformMessagingService:
             request.metadata["explicit_memory_request"] = True
             request.metadata["reflection_enqueue_requested"] = False
             request.metadata["memory_consolidation"] = False
-            self.cognition.observe_input(request)
+            await self.cognition.observe_input_async(request)
             result = self._explicit_memory_result(message, decision, request, explicit_memory)
             result = result.model_copy(update={"duplicate": duplicate_recovery})
             self._log_result(result, provider="local_control", fallback_used=False,
@@ -350,7 +350,7 @@ class PlatformMessagingService:
             request.metadata["memory_disclosure_request"] = True
             request.metadata["reflection_enqueue_requested"] = False
             request.metadata["memory_consolidation"] = False
-            self.cognition.observe_input(request)
+            await self.cognition.observe_input_async(request)
             result = self._memory_disclosure_result(message, decision, request, disclosure_intent)
             result = result.model_copy(update={"duplicate": duplicate_recovery})
             self._log_result(result, provider="local_control", fallback_used=False,
@@ -363,7 +363,7 @@ class PlatformMessagingService:
             request.metadata["explicit_memory_recall"] = True
             request.metadata["reflection_enqueue_requested"] = False
             request.metadata["memory_consolidation"] = False
-            self.cognition.observe_input(request)
+            await self.cognition.observe_input_async(request)
             result = self._explicit_recall_result(message, decision, request, recall_intent)
             result = result.model_copy(update={"duplicate": duplicate_recovery})
             self._log_result(result, provider="local_control", fallback_used=False,
@@ -382,12 +382,12 @@ class PlatformMessagingService:
         # Persist the intent with the input. The queue reconciles the crash
         # window between these separate writes, without importing old history.
         request.metadata["reflection_enqueue_requested"] = enqueue_reflection
-        self.cognition.observe_input(request)
+        await self.cognition.observe_input_async(request)
         if enqueue_reflection:
             self.reflections.enqueue(request)
 
         if decision.action == RoutingAction.CONTEXT_ONLY:
-            self.cognition.record_turn_decision(
+            await self.cognition.record_turn_decision_async(
                 request,
                 "LISTEN",
                 [*decision.reason_codes, "MESSAGING_CONTEXT_ONLY"],
@@ -402,7 +402,7 @@ class PlatformMessagingService:
             self._log_result(result, remote_processing_allowed=message.remote_processing_allowed)
             return result
 
-        self.cognition.record_turn_decision(
+        await self.cognition.record_turn_decision_async(
             request,
             "TAKE_TURN",
             [*decision.reason_codes, "MESSAGING_REPLY_AUTHORIZED"],
