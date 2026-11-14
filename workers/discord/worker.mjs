@@ -514,12 +514,18 @@ export class DiscordWorker {
   }
 
   beginTypingProgress(normalized) {
-    if (normalized.channel_type !== 'dm' || !this.ready || this.stopped
-        || typeof this.core.progress !== 'function'
-        || !enabled('AMORA_DISCORD_TYPING_PROGRESS', true)) return () => {};
+    if (normalized.channel_type !== 'dm') return () => {};
+    const turnId = messagingTurnId(normalized);
+    const log = (event, detail = '') => safeLog('TYPING_PROGRESS',
+      `turn_id=${traceUuid(turnId)} event=${event}${detail ? ' ' + detail : ''}`);
+    if (!this.ready || this.stopped || typeof this.core.progress !== 'function'
+        || !enabled('AMORA_DISCORD_TYPING_PROGRESS', true)) {
+      log('skipped', 'reason=not_ready_or_disabled');
+      return () => {};
+    }
     const channel = normalized.conversation_id;
-    this.typingProgress.get(channel)?.();
-    if (this.typingProgress.size >= 8) return () => {};
+    this.typingProgress.get(channel)?.('superseded');
+    if (this.typingProgress.size >= 8) { log('skipped', 'reason=capacity'); return () => {}; }
     const isCurrent = () => {
       const validation = this.runtime.validateOutbound({
         conversation_id: channel, source_message_id: normalized.native_message_id,
@@ -527,19 +533,30 @@ export class DiscordWorker {
       });
       return this.ready && !this.stopped && validation.ok && validation.reason === 'SOURCE_CURRENT';
     };
-    if (!isCurrent()) return () => {};
-    const turnId = messagingTurnId(normalized);
+    if (!isCurrent()) { log('skipped', 'reason=source_not_current'); return () => {}; }
     const stop = startTypingProgress({
       isCurrent,
-      poll: async () => (await this.core.progress(turnId))?.active === true,
+      poll: async () => {
+        const result = await this.core.progress(turnId);
+        if (typeof result?.active !== 'boolean') {
+          throw new Error('INVALID_PROGRESS_RESPONSE');
+        }
+        return result.active;
+      },
       send: () => this.rest.request(`/channels/${encodeURIComponent(channel)}/typing`, {
         method: 'POST', timeoutMs: 2000, maxAttempts: 1,
       }),
-      onStop: () => {
+      onEvent: (event, fields) => {
+        const detail = Object.entries(fields).map(([key, value]) => `${key}=${value}`).join(' ');
+        log(event, detail);
+      },
+      onStop: (reason) => {
         if (this.typingProgress.get(channel) === stop) this.typingProgress.delete(channel);
+        log('stopped', `reason=${reason}`);
       },
     });
     this.typingProgress.set(channel, stop);
+    log('started');
     return stop;
   }
 
@@ -565,7 +582,7 @@ export class DiscordWorker {
         attempt += 1;
         try {
           const result = await this.core.inbound(normalized);
-          stopTyping();
+          stopTyping('inbound_complete');
           const action = result?.decision?.action || 'unknown';
           const outboundCount = Array.isArray(result?.outbound) ? result.outbound.length : 0;
           const reasons = Array.isArray(result?.decision?.reason_codes)
