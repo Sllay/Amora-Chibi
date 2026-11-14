@@ -44,6 +44,9 @@ class NumesStreamDiagnostics:
             "loop_lag_before_content_max_ms": 0.0,
             "loop_lag_after_content_max_ms": 0.0,
         }
+        self._connect_started = {}
+        self.metrics.update(http_trace_events=0, tcp_connect_attempts=0, tls_attempts=0,
+                            tcp_connect_ms=0.0, tls_ms=0.0)
         self._last_event = None
         self._last_content = None
         self._loop = None
@@ -54,6 +57,19 @@ class NumesStreamDiagnostics:
 
     def elapsed(self):
         return round((self.clock() - self.started) * 1000, 2)
+
+    async def http_trace(self, name, _info):
+        # HTTPcore's trace extension: only fixed event names and elapsed
+        # timings are used. _info can contain sensitive transport objects.
+        self.metrics["http_trace_events"] += 1
+        for suffix, label in (("connect_tcp", "tcp_connect"), ("start_tls", "tls")):
+            if name.endswith("." + suffix + ".started"):
+                self._connect_started[label] = self.elapsed()
+                self.metrics[label + "_attempts"] += 1
+            elif name.endswith(("." + suffix + ".complete", "." + suffix + ".failed")):
+                start = self._connect_started.pop(label, None)
+                if start is not None:
+                    self.metrics[label + "_ms"] += max(0.0, self.elapsed() - start)
 
     def data_event(self, *, done=False):
         now = self.elapsed()
