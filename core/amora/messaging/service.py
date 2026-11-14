@@ -235,9 +235,9 @@ class PlatformMessagingService:
             return self._invalidated_result(message)
         lease = _GENERATION_LEASE.get()
         prepared = await self._generation_call(message, "prepared", *lease) if lease is not None else None
-        if self._use_storage_lane(message) and self._source_invalidated(message):
-            return self._invalidated_result(message)
         if prepared is not None:
+            if self._use_storage_lane(message) and self._source_invalidated(message):
+                return self._invalidated_result(message)
             outbound, decision, reasons = prepared
             if outbound.metadata.get("memory_disclosure") and not self._disclosure_replay_allowed(message, decision, outbound):
                 self.generations.invalidate_prepared(
@@ -1026,16 +1026,16 @@ class PlatformMessagingService:
             raise InboundGenerationLost("INBOUND_GENERATION_LEASE_LOST")
         return self._persist_prepared_outbound(message, decision, outbound, reason_codes)
 
-    @trace_stage("outbound_prepare")
     async def _queue_generated_outbound(self, message, decision, text, *, metadata, reason_codes):
         lease = _GENERATION_LEASE.get()
         if not self._use_storage_lane(message) or lease is None:
             return self._queue_outbound(message, decision, text, metadata=metadata, reason_codes=reason_codes)
         outbound = self._build_outbound(message, decision, text, metadata=metadata)
-        return await self.storage_lane.call(
-            "persist_reply", message, decision, outbound, reason_codes, lease,
-            self._hash(message.native_source_message_id),
-        )
+        with span("outbound_prepare"):
+            return await self.storage_lane.call(
+                "persist_reply", message, decision, outbound, reason_codes, lease,
+                self._hash(message.native_source_message_id),
+            )
 
     def _persist_prepared_outbound(self, message, decision, outbound, reason_codes):
         return self.store.persist_prepared_reply(
