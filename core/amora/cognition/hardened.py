@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage
+
 import asyncio
 import os
 from collections import OrderedDict
@@ -86,6 +88,7 @@ class CognitiveEngine(BaseCognitiveEngine):
                 await cancel_task
             self._turn_cancel_events.pop(key, None)
 
+    @trace_stage("reflection")
     async def reflect(self, request: CognitiveRequest) -> CognitiveProposalBundle:
         """Ask a provider for bounded proposals, then apply local gates.
 
@@ -474,6 +477,7 @@ class CognitiveEngine(BaseCognitiveEngine):
     def is_turn_cancelled(self, turn_id: UUID | str) -> bool:
         return str(turn_id) in self._cancelled_turns
 
+    @trace_stage("finish_plan")
     def _finish_plan(self, request: CognitiveRequest, plan: CognitiveResponsePlan) -> None:
         plan.speech_plan = self.normalizer.compile(
             plan.display_text, turn_id=request.turn_id, privacy_scope=request.privacy_scope,
