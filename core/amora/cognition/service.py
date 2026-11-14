@@ -476,6 +476,10 @@ class CognitiveEngine:
         return (getattr(self.store, "async_lane", None) is not None
                 and request.metadata.get("surface") == "platform_messaging"
                 and request.metadata.get("channel_type") == "dm"
+                and request.remote_processing_allowed
+                and not request.metadata.get("durable_memory_reflection")
+                and not any(request.metadata.get(key) for key in (
+                    "explicit_memory_request", "memory_disclosure_request", "explicit_memory_recall"))
                 and request.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET})
 
     def _input_message(self, request, dedupe):
