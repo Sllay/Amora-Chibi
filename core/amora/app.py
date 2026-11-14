@@ -19,6 +19,8 @@ from amora.cognition import (
     NvidiaMistralLarge4ProductionProvider,
     OpenRouterCognitiveProvider,
 )
+from amora.cognition.providers_numes import NumesCognitiveProvider
+from amora.cognition.providers_memory import GroqMemoryProvider
 from amora.conversation import ConversationEngine, ConversationStore
 from amora.emotion import EmotionEngine, EmotionStore
 from amora.events import AsyncEventBus, PrivacyScope
@@ -217,8 +219,12 @@ class AmoraCore:
         # NVIDIA/Mistral remains opt-in via AMORA_SOCIAL_PRIMARY=mistral.
         # The Core/Amora V3 identity is independent of the selected provider.
         social_primary = os.getenv("AMORA_SOCIAL_PRIMARY", "groq").strip().casefold()
-        if social_primary not in {"mistral", "groq"}:
-            raise ValueError("AMORA_SOCIAL_PRIMARY must be 'mistral' or 'groq'")
+        if social_primary not in {"mistral", "groq", "numes"}:
+            raise ValueError("AMORA_SOCIAL_PRIMARY must be 'mistral', 'groq' or 'numes'")
+        if social_primary == "numes":
+            numes_cognition = NumesCognitiveProvider(secrets)
+            if numes_cognition.descriptor.available:
+                cognition.register_provider(numes_cognition)
         if social_primary == "mistral":
             mistral_cognition = NvidiaMistralLarge4ProductionProvider(secrets)
             if mistral_cognition.descriptor.available:
@@ -227,6 +233,9 @@ class AmoraCore:
         groq_cognition = GroqCognitiveProvider(secrets)
         if groq_cognition.descriptor.available:
             cognition.register_provider(groq_cognition)
+            memory_model = os.getenv("AMORA_GROQ_MEMORY_MODEL", "").strip()
+            if memory_model:
+                cognition.register_provider(GroqMemoryProvider(secrets, model=memory_model))
 
         cloudflare_cognition = CloudflareCognitiveProvider(secrets)
         cloudflare_zero_cost_confirmed = _env_true("AMORA_CLOUDFLARE_ZERO_COST_CONFIRMED")
@@ -396,6 +405,10 @@ class AmoraCore:
             "social_active_addressee": self.social.scene.active_addressee,
             "groq_stt_configured": self.secrets.get("GROQ_API_KEY") is not None,
             "groq_cognition_configured": self.secrets.get("GROQ_API_KEY") is not None,
+            "numes_cognition_configured": self.secrets.get("NUMES_API_KEY") is not None,
+            "numes_cognition_registered": self.models.descriptor("numes") is not None,
+            "groq_memory_model": (self.models.descriptor("groq_memory").model
+                                  if self.models.descriptor("groq_memory") else None),
             "cloudflare_cognition_configured": cloudflare_configured,
             "cloudflare_zero_cost_confirmed": _env_true("AMORA_CLOUDFLARE_ZERO_COST_CONFIRMED"),
             "cloudflare_cognition_registered": self.models.descriptor("cloudflare") is not None,
