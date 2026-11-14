@@ -258,6 +258,8 @@ class PlatformMessagingService:
             message_id=message.message_id,
         )
         if existing_audit is not None:
+            if self._use_storage_lane(message) and self._source_invalidated(message):
+                return self._invalidated_result(message)
             duplicate_result = self._completed_duplicate_result(message, existing_audit)
             if duplicate_result is not None:
                 self._log_result(duplicate_result)
@@ -315,6 +317,8 @@ class PlatformMessagingService:
                     message_id=message.message_id,
                 )
                 if raced is not None:
+                    if self._use_storage_lane(message) and self._source_invalidated(message):
+                        return self._invalidated_result(message)
                     duplicate_result = self._completed_duplicate_result(message, raced)
                     if duplicate_result is not None:
                         self._log_result(duplicate_result)
