@@ -8,6 +8,7 @@ from __future__ import annotations
 from amora.latency_trace import set_ms, set_value, increment, span
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -36,6 +37,8 @@ class NumesCognitiveProvider:
         self.secrets = secrets
         self.model = model or os.getenv("AMORA_NUMES_DIALOGUE_MODEL", self.DEFAULT_MODEL)
         self.timeout_seconds = timeout_seconds
+        self._http_client = None
+        self._http_loop = None
         self.descriptor = ProviderDescriptor(
             name="numes", model=self.model,
             capabilities=frozenset({TaskClass.SOCIAL_DIALOGUE}),
@@ -48,6 +51,43 @@ class NumesCognitiveProvider:
             metadata={"primary_social_preference": True, "zero_cost_path": True,
                       "standard_expression_only": True, "endpoint": self.API_URL},
         )
+
+    def _new_http_client(self):
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(self.timeout_seconds, connect=10),
+            follow_redirects=False,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20,
+                                keepalive_expiry=120.0),
+        )
+
+    async def start_transport(self):
+        # Only the serving lifespan owns a persistent pool. CLI probes and
+        # direct Core calls still use a scoped client, with no leaked loop state.
+        loop = asyncio.get_running_loop()
+        if self._http_client is not None:
+            if self._http_loop is not loop:
+                raise RuntimeError("Numes transport belongs to a different event loop")
+            return
+        self._http_client = self._new_http_client()
+        self._http_loop = loop
+
+    async def stop_transport(self):
+        client = self._http_client
+        if client is None:
+            return
+        if self._http_loop is not asyncio.get_running_loop():
+            raise RuntimeError("Numes transport belongs to a different event loop")
+        self._http_client = None
+        self._http_loop = None
+        await client.aclose()
+
+    @asynccontextmanager
+    async def _client_scope(self):
+        if self._http_client is not None and self._http_loop is asyncio.get_running_loop():
+            yield self._http_client
+        else:
+            async with self._new_http_client() as client:
+                yield client
 
     async def realize(self, context: CognitiveContext):
         key = self.secrets.get("NUMES_API_KEY")
@@ -129,8 +169,7 @@ class NumesCognitiveProvider:
         event("numes_stream_started")
         diagnostics.start_sampler()
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout_seconds, connect=10),
-                                         follow_redirects=False) as client:
+            async with self._client_scope() as client:
                 async with client.stream("POST", self.API_URL,
                         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                                  "Accept": "text/event-stream", "X-Request-Id": request_id},
