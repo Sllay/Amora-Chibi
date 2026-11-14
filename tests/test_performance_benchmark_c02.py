@@ -98,6 +98,12 @@ async def test_c02_core_storage_latency_baseline(tmp_path, monkeypatch, caplog, 
                     if server is not None:
                         assert trace["remote_sql_calls"] == scoped_calls > 0
                         assert calls >= scoped_calls
+                        # Baseline 90–93 owned calls before C03: seven drive
+                        # transactions -> one atomic write, memory access -> one.
+                        assert trace["remote_sql_calls"] <= 73
+                        assert trace["stage_autonomy_drive_read_sql_calls"] == 1
+                        assert trace["stage_autonomy_drive_write_sql_calls"] == 1
+                        assert trace.get("stage_memory_access_write_sql_calls", 0) <= 1
                     else:
                         assert trace.get("remote_sql_calls", 0) == 0
                     results.append({"backend": name, "turn": index, "wall_ms": round(wall_ms, 3),
