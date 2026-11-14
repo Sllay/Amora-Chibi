@@ -209,6 +209,16 @@ class MessagingStore:
                 or not grant.get("record_id") or not grant.get("updated_at")
                 or not grant.get("expires_at") or grant["expires_at"] <= now):
             return False
+        # Check both the exact authorized source and its conversational
+        # expression. A wording change must never bypass a literal guard.
+        from .disclosure import public_text_allowed, audience_text_allowed
+        source_excerpt = grant.get("source_excerpt", message.text)
+        if (not isinstance(source_excerpt, str)
+                or not public_text_allowed(source_excerpt)
+                or not audience_text_allowed(source_excerpt, audience_id=session_id)
+                or not public_text_allowed(message.text)
+                or not audience_text_allowed(message.text, audience_id=session_id)):
+            return False
         with self.database._lock:
             row = self.database._conn.execute(
                 "SELECT 1 FROM memory_records m WHERE " + SHAREABLE_MEMORY_SQL +
