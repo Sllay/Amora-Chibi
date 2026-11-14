@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage
+
 from datetime import timedelta
 from math import pow
 
@@ -156,6 +158,7 @@ class EmotionEngine:
     def close(self) -> None:
         self.store.close()
 
+    @trace_stage("emotion_mood")
     def current_mood(self) -> MoodState:
         mood = self.store.get_mood()
         now = self.clock.now()
@@ -169,6 +172,7 @@ class EmotionEngine:
         self.store.put_mood(decayed)
         return decayed
 
+    @trace_stage("emotion_affect")
     def affect_for(self, entity_id: str) -> EntityAffect:
         if self.identities.get(entity_id) is None:
             raise ValueError(f"unknown canonical entity: {entity_id}")
@@ -188,6 +192,7 @@ class EmotionEngine:
         self.store.put_affect(decayed)
         return decayed
 
+    @trace_stage("emotion_process")
     async def process(self, item: AppraisalInput) -> EmotionProcessResult:
         if item.privacy_scope == PrivacyScope.AUTH:
             raise ValueError("AUTH content cannot enter the Emotion Engine")
