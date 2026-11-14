@@ -378,10 +378,20 @@ class MemoryStore:
             records = {key: record for key, record in records.items() if eligible(record)}
             if not records:
                 return []
+        if query.require_topic_match:
+            from .recall_intent import topic_terms
+            terms = topic_terms(query.text)
+            records = {key: record for key, record in records.items()
+                       if terms and terms <= topic_terms(record.content + " " + (record.summary or ""))}
+            if not records:
+                return []
         scores: dict[str, float] = {memory_id: 0.0 for memory_id in records}
         reasons: dict[str, set[str]] = {memory_id: set() for memory_id in records}
 
         text_rank = self._text_rank(query.text, records)
+        if query.require_topic_match and not text_rank:
+            # Unicode-normalized matching above already proved the topic.
+            text_rank = sorted(records, key=lambda key: records[key].created_at, reverse=True)
         self._add_rrf(scores, reasons, text_rank, 3.0, "TEXT_MATCH")
         entity_rank, related_rank = self._entity_ranks(query.entity_ids, records.keys())
         self._add_rrf(scores, reasons, entity_rank, 2.2, "ENTITY_MATCH")

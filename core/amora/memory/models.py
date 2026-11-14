@@ -120,6 +120,7 @@ class MemoryQuery(BaseModel):
     projection_public_only: bool = False
     projection_remote_only: bool = False
     allow_entity_fallback: bool = False
+    require_topic_match: bool = False
 
     @model_validator(mode="after")
     def validate_window(self) -> "MemoryQuery":

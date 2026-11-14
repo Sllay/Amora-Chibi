@@ -43,7 +43,7 @@ _GENERIC = re.compile(
 )
 _NAMED = re.compile(
     r"^(?:(?:o\s*que|quais? (?:informacoes|lembrancas))\s+)?"
-    r"(?:(?:voce|vc|tu|ce)\s+)?(?:lembra|lembras|recorda|recordas)\s+"
+    r"(?:(?:voce|vc|tu|ce)\s+)?(?:se\s+)?(?:lembra|lembras|recorda|recordas)\s+"
     r"(?:sobre|acerca de|do|da|dos|das|de)\s+(.+)$"
 )
 
@@ -60,7 +60,7 @@ def parse_recall_intent(value: str) -> RecallIntent | None:
     match = _NAMED.fullmatch(text)
     if not match:
         return None
-    topic = match.group(1).strip()
+    topic = re.sub(r"^que\s+(?:eu\s+)?(?:falei|contei|disse|comentei)\s+(?:sobre|do|da|de)\s+", "", match.group(1)).strip()
     if len(topic) > 160 or len(topic_terms(topic)) > 12:
         return None
     return RecallIntent(topic)

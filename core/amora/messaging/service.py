@@ -264,9 +264,10 @@ class PlatformMessagingService:
         explicit_memory = (parse_explicit_memory(message.text)
                            if decision.action == RoutingAction.RESPOND else None)
         recall_intent = (parse_recall_intent(message.text)
-                         if decision.action == RoutingAction.RESPOND and explicit_memory is None
-                         and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)
-                         else None)
+                         if decision.action == RoutingAction.RESPOND and explicit_memory is None else None)
+        if recall_intent is not None and not is_verified_owner(
+                self.attention.profiles, message, decision.speaker_entity_id):
+            recall_intent = None
         if decision.action == RoutingAction.RESPOND and explicit_memory is None and recall_intent is None:
             control = self.presence_control.handle(
                 message.text,
@@ -659,8 +660,9 @@ class PlatformMessagingService:
                         content = content[len("Relato de PERSON_BK: "):]
                     content = content.strip()
                     parts.append(content[:500] + ("…" if len(content) > 500 else ""))
-                text = "Encontrei na memória estes registros do que você me contou:\n" + "\n".join(
-                    f"• {part}" for part in dict.fromkeys(parts))
+                heading = ("Estas são algumas lembranças recentes registradas, não uma transcrição da conversa:"
+                           if intent.generic else "Encontrei estes registros na memória:")
+                text = heading + "\n" + "\n".join(f"• {part}" for part in dict.fromkeys(parts))
                 reason = "MEMORY_RECALL_PUBLIC_FOUND" if shared else "MEMORY_RECALL_PERSISTENT_FOUND"
             elif shared:
                 reason = "MEMORY_RECALL_SHARED_SCOPE_RESTRICTED"

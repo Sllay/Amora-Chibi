@@ -641,7 +641,8 @@ async def _command_memory_recall_inspect(core: Any, args: list[str]) -> dict[str
             raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "informe um assunto específico")
         matches, complete = core.memory.store.recall_owner_records(item.speaker_id, args[1])
         ids = {str(record.id) for record in matches}
-        data["matching_record_count"] = sum(row["memory_id"] in ids for row in records)
+        data["returned_from_turn_count"] = sum(row["memory_id"] in ids for row in records)
+        data["recall_result_limit"] = 3
         data["search_complete"] = complete
     return {"kind": "memory_recall_inspect", "summary": "Verificação persistente sem conteúdo privado", "data": data}
 
