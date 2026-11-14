@@ -269,6 +269,83 @@ class MemoryStore:
             )
             return cur.rowcount > 0
 
+    def recall_owner_records(self, owner_id: str, topic: str, *, generic: bool = False,
+                             limit: int = 3, public_only: bool = False) -> tuple[list[MemoryRecord], bool]:
+        """Read-only, owner-scoped recall independent of conversation history.
+
+        Search the full eligible FTS corpus first. A bounded fallback covers
+        non-FTS backends, with explicit incomplete-search status. Never return
+        unrelated entity matches for a named subject.
+        """
+        from .recall_intent import topic_terms
+        terms = topic_terms(topic)
+        if not owner_id or (not generic and not terms):
+            return [], True
+        limit = max(1, min(5, limit))
+        now = self.clock.now().isoformat()
+        sql = ("SELECT * FROM memory_records WHERE owner_entity_id=? "
+               "AND privacy_scope IN ('PERSONAL','PRIVATE','SOCIAL','PUBLIC') "
+               "AND archived_at IS NULL AND (valid_from IS NULL OR valid_from<=?) "
+               "AND (valid_until IS NULL OR valid_until>=?)")
+        args = (owner_id, now, now)
+        if public_only:
+            sql += " AND privacy_scope='PUBLIC'"
+        order = " ORDER BY created_at DESC,id DESC"
+        def matches(row):
+            return generic or terms <= topic_terms(
+                str(row["content"]) + " " + str(row["summary"] or ""))
+        with self._lock:
+            if generic:
+                rows = self._conn.execute(sql + order + " LIMIT ?", (*args, limit)).fetchall()
+                return list(self._hydrate_many(list(rows)).values()), True
+            if self.fts_enabled:
+                expression = " AND ".join(f'"{term}"' for term in sorted(terms))
+                rows = self._conn.execute(
+                    "SELECT m.* FROM memory_fts JOIN (" + sql + ") AS m ON m.id=memory_fts.memory_id "
+                    "WHERE memory_fts MATCH ? ORDER BY m.created_at DESC,m.id DESC LIMIT 129",
+                    (*args, expression),
+                ).fetchall()
+                matched = [row for row in rows[:128] if matches(row)]
+                if matched:
+                    return list(self._hydrate_many(matched[:limit]).values()), len(rows) <= 128
+            # FTS can be unavailable or incomplete for a legacy record. Use
+            # bounded pages, Unicode-normalized exact terms and no broad recall.
+            matched = []
+            complete = False
+            for page in range(8):
+                rows = self._conn.execute(sql + order + " LIMIT 64 OFFSET ?", (*args, page * 64)).fetchall()
+                matched.extend(row for row in rows if matches(row))
+                if len(rows) < 64:
+                    complete = True
+                    break
+                if len(matched) >= limit:
+                    break
+            return list(self._hydrate_many(matched[:limit]).values()), complete
+
+    def owner_turn_memory_status(self, turn_id: str, owner_id: str) -> list[dict]:
+        """Operator-only metadata; never return the memory text or other owners."""
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT id,privacy_scope,remote_processing_allowed,archived_at,
+                          provenance_kind,provenance_source,valid_from,valid_until
+                   FROM memory_records WHERE owner_entity_id=?
+                     AND privacy_scope NOT IN ('AUTH','SECRET')
+                     AND json_extract(metadata_json,'$.turn_id')=?
+                   ORDER BY created_at,id LIMIT 50""",
+                (owner_id, str(turn_id)),
+            ).fetchall()
+        now = self.clock.now().isoformat()
+        return [{
+            "memory_id": str(row["id"]), "privacy_scope": row["privacy_scope"],
+            "remote_processing_allowed": bool(row["remote_processing_allowed"]),
+            "active": row["archived_at"] is None and
+                (row["valid_from"] is None or row["valid_from"] <= now) and
+                (row["valid_until"] is None or row["valid_until"] >= now),
+            "archived": row["archived_at"] is not None,
+            "provenance_kind": row["provenance_kind"],
+            "provenance_source": row["provenance_source"],
+        } for row in rows]
+
     def search(self, query: MemoryQuery) -> list[MemoryHit]:
         rows = self._candidate_rows(query)
         if not rows:
