@@ -11,6 +11,7 @@ import pytest
 
 from amora.app import AmoraCore
 from amora.messaging import ChannelType, RoutingAction
+from amora.latency_trace import current_trace
 from amora.storage.backend import SQLiteBackend
 from amora.storage.remote import LibSQLBackend
 from test_messaging_lifecycle_stability import CountingStructuredProvider, _clock
@@ -45,12 +46,15 @@ async def test_c02_core_storage_latency_baseline(tmp_path, monkeypatch, caplog, 
         monkeypatch.setenv("AMORA_HOME", str(folder / "runtime"))
         delay_enabled = False
         calls = 0
+        scoped_calls = 0
         server = HranaSQLite(folder / "remote.db") if name != "sqlite" else None
 
         def transport(request):
-            nonlocal calls
+            nonlocal calls, scoped_calls
             if delay_enabled:
                 calls += 1
+                if current_trace() is not None:
+                    scoped_calls += 1
                 if delay:
                     time.sleep(delay / 1000)
             return server(request)
@@ -68,6 +72,7 @@ async def test_c02_core_storage_latency_baseline(tmp_path, monkeypatch, caplog, 
             for index in range(7):
                 delay_enabled = index > 0
                 calls = 0
+                scoped_calls = 0
                 caplog.clear()
                 incoming = _message(core, message_id=f"bench-{index}",
                                     actor_id="111111111111111111", channel_type=ChannelType.DM,
@@ -91,10 +96,12 @@ async def test_c02_core_storage_latency_baseline(tmp_path, monkeypatch, caplog, 
                 assert trace["turn_total_ms"] > 0
                 if index:
                     if server is not None:
-                        assert trace["remote_sql_calls"] == calls > 0
+                        assert trace["remote_sql_calls"] == scoped_calls > 0
+                        assert calls >= scoped_calls
                     else:
                         assert trace.get("remote_sql_calls", 0) == 0
                     results.append({"backend": name, "turn": index, "wall_ms": round(wall_ms, 3),
+                                    "transport_calls": calls, "unscoped_transport_calls": calls - scoped_calls,
                                     "trace": trace})
                 delay_enabled = False
         finally:
