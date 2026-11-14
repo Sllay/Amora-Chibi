@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from amora.latency_trace import trace_stage, trace_messaging_turn, span
+from amora.latency_trace import trace_stage, trace_messaging_turn, span, set_ms, set_value, elapsed_ms
 
 import asyncio
 import hashlib
 import logging
 import os
 from contextvars import ContextVar
+from time import perf_counter
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from amora.cognition import CognitiveRequest
@@ -116,6 +117,15 @@ class PlatformMessagingService:
             task.add_done_callback(lambda done, key=key: self._drop_inflight(key, done))
         return await asyncio.shield(task)
 
+    async def stop_inflight(self):
+        # ASGI shutdown can outlive shielded inbound HTTP waiters. Join the
+        # owned tasks before closing their dedicated storage/HTTP lanes.
+        tasks = tuple(task for task in self._inflight.values() if not task.done())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     def progress_active(self, turn_id: UUID | str) -> bool:
         return str(turn_id) in self._active_dm_progress
 
@@ -132,6 +142,7 @@ class PlatformMessagingService:
         if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
             return await self._receive_once(message)
         turn_id = str(self._turn_id(message))
+        set_value("_critical_phase", "ingress")
         token = str(uuid4())
         deadline = asyncio.get_running_loop().time() + min(110, self.cognition_timeout_seconds + 5)
         with span("generation_lease_wait"):
@@ -176,6 +187,7 @@ class PlatformMessagingService:
 
     @trace_stage("inbound")
     async def _receive_once(self, message: InboundMessage) -> InboundResult:
+        ingress_started = perf_counter()
         from amora.events import PrivacyScope
         if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
             return InboundResult(decision=AttentionDecision(
@@ -415,14 +427,15 @@ class PlatformMessagingService:
 
         appraise = getattr(self.conversation, "_appraise_interaction", None)
         if callable(appraise):
-            await appraise(
-                cognitive_text,
-                speaker_id=actor_id,
-                addressee_id="ENTITY_AMORA",
-                source_event_id=request.turn_id,
-                privacy_scope=message.privacy_scope,
-                metadata=request.metadata,
-            )
+            with span("interaction_appraisal"):
+                await appraise(
+                    cognitive_text,
+                    speaker_id=actor_id,
+                    addressee_id="ENTITY_AMORA",
+                    source_event_id=request.turn_id,
+                    privacy_scope=message.privacy_scope,
+                    metadata=request.metadata,
+                )
 
         # Remote generation failures must not masquerade as a social acknowledgement.
         # Local-only conversation retains its legitimate local composition.
@@ -437,6 +450,9 @@ class PlatformMessagingService:
         cognitive_reasons: list[str] = []
         cognitive_turn_id = str(request.turn_id)
         generation_started = self.clock.monotonic()
+        set_ms("messaging_pre_cognition_ms", elapsed_ms(ingress_started))
+        set_value("_critical_phase", "cognition")
+        cognition_started = perf_counter()
         try:
             plan = await asyncio.wait_for(
                 self.cognition.respond(request, on_segment=None, fallback_text=fallback),
@@ -480,6 +496,8 @@ class PlatformMessagingService:
                 message.remote_processing_allowed,
             )
 
+        set_ms("messaging_cognition_ms", elapsed_ms(cognition_started))
+        set_value("_critical_phase", "delivery")
         if message.channel_type == ChannelType.GROUP and not self.attention.floor.validate_reply(message, decision):
             self.store.add_inbound_reason(
                 platform=message.platform,
