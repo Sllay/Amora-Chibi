@@ -237,11 +237,18 @@ def trace_messaging_turn(fn):
             interval = 0.1
             loop = asyncio.get_running_loop()
             last = [loop.time()]
+            def record_lag(now):
+                lag = (now - last[0] - interval) * 1000
+                max_ms("event_loop_lag_max_ms", lag)
+                phase = trace.get("_critical_phase")
+                if phase in {"ingress", "cognition", "delivery"}:
+                    max_ms("event_loop_lag_observed_" + phase + "_ms", lag)
+
             async def sample_lag():
                 while True:
                     await asyncio.sleep(max(0.0, last[0] + interval - loop.time()))
                     now = loop.time()
-                    max_ms("event_loop_lag_max_ms", (now - last[0] - interval) * 1000)
+                    record_lag(now)
                     increment("event_loop_samples")
                     last[0] = now
             sampler = asyncio.create_task(sample_lag(), name="amora-performance-lag")
@@ -255,10 +262,26 @@ def trace_messaging_turn(fn):
                 raise
             finally:
                 set_ms("turn_total_ms", elapsed_ms(started))
-                max_ms("event_loop_lag_max_ms", (loop.time() - last[0] - interval) * 1000)
+                record_lag(loop.time())
                 sampler.cancel()
                 # Cancelled sampler owns no resources and never writes after cancellation.
                 outbound = result.outbound[0] if result is not None and result.outbound else None
                 log_trace("messaging", trace, turn_id=self._turn_id(message),
+                          outbound_id=outbound.id if outbound is not None else None, outcome=outcome)
+                # Short independent record for log viewers that truncate the
+                # full trace. Lag phase is where the sampler resumed, not
+                # necessarily where the stall began.
+                keys = (
+                    "turn_total_ms", "messaging_pre_cognition_ms", "messaging_cognition_ms",
+                    "context_compile_ms", "stage_interaction_appraisal_ms",
+                    "stage_generation_lease_wait_ms", "stage_cognitive_db_lane_ms",
+                    "stage_cognitive_db_lane_calls", "stage_cognitive_db_lane_wait_ms",
+                    "stage_validated_plan_ms", "stage_provider_attempt_ms",
+                    "remote_sql_calls", "remote_sql_ms", "event_loop_lag_max_ms",
+                    "event_loop_lag_observed_ingress_ms", "event_loop_lag_observed_cognition_ms",
+                    "event_loop_lag_observed_delivery_ms",
+                )
+                log_trace("critical_path", {key: trace[key] for key in keys if key in trace},
+                          turn_id=self._turn_id(message),
                           outbound_id=outbound.id if outbound is not None else None, outcome=outcome)
     return wrapped
