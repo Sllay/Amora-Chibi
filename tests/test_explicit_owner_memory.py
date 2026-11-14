@@ -28,6 +28,8 @@ SOURCE = "estou criando um projeto chamado Orquídea. Ele vai ter cinco mapas e 
     (TEXT, SOURCE),
     ("Amora, lembre que meu jogo tem cinco mapas.", "meu jogo tem cinco mapas."),
     ("Guarda na memória: meu projeto chama Orquídea.", "meu projeto chama Orquídea."),
+    ("Guarde na memória que o jogo terá mapas.", "o jogo terá mapas."),
+    ("Lembre-se de que meu jogo terá mapas.", "meu jogo terá mapas."),
     ("Salva isso na memória: o jogo terá cinco mapas.", "o jogo terá cinco mapas."),
     ("Meu projeto terá cinco mapas. Não esquece disso.", "Meu projeto terá cinco mapas"),
     ("Quero que você lembre disso.", None),
@@ -90,6 +92,9 @@ async def test_owner_save_is_local_durable_idempotent_and_recallable(tmp_path, m
         assert first.memory.store.count() == before + 1
         assert first.messaging.reflections.state(first.messaging._turn_id(request)) is None
         assert first.messaging.reflections.reconcile_missing() == 0
+        input_row = first.cognition.store.get_message_by_dedupe(
+            f"cognitive-input:{first.messaging._turn_id(request)}")
+        assert input_row.metadata["memory_consolidation"] is False
     finally:
         first.close()
 

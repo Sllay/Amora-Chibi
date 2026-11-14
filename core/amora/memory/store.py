@@ -108,6 +108,7 @@ class MemoryStore:
                        WHERE g.turn_id=? AND g.lease_token=? AND g.lease_until>?
                          AND m.speaker_id=? AND m.session_id=g.session_id
                          AND m.session_id=? AND m.privacy_scope=?
+                         AND (?=0 OR (m.remote_processing_allowed=1 AND m.privacy_scope='PERSONAL'))
                          AND json_extract(m.metadata_json,'$.explicit_memory_request')=1
                          AND json_extract(m.metadata_json,'$.channel_type')='dm'
                          AND NOT EXISTS (SELECT 1 FROM memory_reflection_invalidations x
@@ -115,7 +116,8 @@ class MemoryStore:
                              AND x.native_message_hash=g.native_message_hash
                              AND x.invalidated_through>=g.transport_revision)""",
                     (turn_id, token, self.clock.now().isoformat(), record.owner_entity_id,
-                     provenance.session_id, record.privacy_scope.value),
+                     provenance.session_id, record.privacy_scope.value,
+                     int(record.remote_processing_allowed)),
                 ).fetchone()
                 if lease is None:
                     raise RuntimeError("INBOUND_GENERATION_LEASE_LOST")

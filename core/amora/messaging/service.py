@@ -307,6 +307,7 @@ class PlatformMessagingService:
             # nor the automatic reflection queue can claim/duplicate its write.
             request.metadata["explicit_memory_request"] = True
             request.metadata["reflection_enqueue_requested"] = False
+            request.metadata["memory_consolidation"] = False
             self.cognition.observe_input(request)
             result = self._explicit_memory_result(message, decision, request, explicit_memory)
             result = result.model_copy(update={"duplicate": duplicate_recovery})

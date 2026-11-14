@@ -22,7 +22,7 @@ _TARGET = r"(?:disso|disto|isso|isto|essa\s+informa[cç][aã]o)"
 _REQUEST = rf"(?:{_WANT}{_VERB}\s+{_TARGET}(?:\s+na\s+mem[oó]ria)?|n[aã]o\s+esque[cç][ae]\s+{_TARGET})"
 _SUFFIX = re.compile(rf"(?:^|[.!;]\s+|\n+){_REQUEST}[.!]?\s*$", re.I)
 _PREFIX = re.compile(
-    rf"^(?:{_WANT}{_VERB}\s+(?:na\s+mem[oó]ria\s*[:,-]\s*|que\s+)|"
+    rf"^(?:{_WANT}{_VERB}\s+(?:na\s+mem[oó]ria\s*(?:[:,-]\s*|que\s+)|(?:de\s+)?que\s+)|"
     rf"{_WANT}{_VERB}\s+{_TARGET}\s+na\s+mem[oó]ria\s*:\s*)",
     re.I,
 )
