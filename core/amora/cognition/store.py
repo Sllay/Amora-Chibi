@@ -28,6 +28,20 @@ class CognitiveStore:
         self._lock = threading.RLock()
         self.backend = backend or SQLiteBackend()
         self._conn = self.backend.connect(database_path)
+        self.async_lane = None
+
+    def start_async_lane(self):
+        if self.backend.capabilities.remote and self.async_lane is None:
+            from .storage_lane import CognitiveStorageLane
+            self.async_lane = CognitiveStorageLane(self)
+
+    async def stop_async_lane(self):
+        lane = self.async_lane
+        if lane is not None:
+            try:
+                await lane.close()
+            finally:
+                self.async_lane = None
 
     def close(self) -> None:
         with trace_lock(self._lock):
