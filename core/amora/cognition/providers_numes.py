@@ -231,13 +231,15 @@ class NumesCognitiveProvider:
             observed = diagnostics.close(usage=usage, parsed=parsed if metrics["outcome"] == "completed" else None)
             for name, value in observed.items():
                 set_value("numes_diag_" + name, value)
-            # Separate short record: cloud log viewers may truncate full turn traces.
-            logging.getLogger("amora.cognition.numes").info(
-                "numes_stream_diagnostics", extra={
-                    "request_id": request_id, "phase": phase, "outcome": metrics["outcome"],
-                    **observed,
-                },
-            )
+            # Two compact records: cloud log viewers may truncate full turn traces.
+            identity = {"request_id": request_id, "phase": phase, "outcome": metrics["outcome"]}
+            logger = logging.getLogger("amora.cognition.numes")
+            logger.info("numes_stream_diagnostics", extra={
+                **identity, **{k: v for k, v in observed.items() if not k.startswith("loop_")},
+            })
+            logger.info("numes_stream_loop", extra={
+                **identity, **{k: v for k, v in observed.items() if k.startswith("loop_")},
+            })
         parsed["_usage"] = {
             "input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
             "status_code": metrics["status_code"], "latency_ms": metrics["elapsed_ms"],
