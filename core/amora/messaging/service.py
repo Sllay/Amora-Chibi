@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from amora.latency_trace import trace_stage, trace_messaging_turn
+from amora.latency_trace import trace_stage, trace_messaging_turn, span
 
 import asyncio
 import hashlib
@@ -129,13 +129,14 @@ class PlatformMessagingService:
         turn_id = str(self._turn_id(message))
         token = str(uuid4())
         deadline = asyncio.get_running_loop().time() + min(110, self.cognition_timeout_seconds + 5)
-        while not self.generations.claim(
-            turn_id, self._session_ref(message), self._hash(message.native_source_message_id),
-            message.transport_revision, token,
-        ):
-            if asyncio.get_running_loop().time() >= deadline:
-                raise InboundGenerationBusy("INBOUND_GENERATION_BUSY")
-            await asyncio.sleep(0.05)
+        with span("generation_lease_wait"):
+            while not self.generations.claim(
+                turn_id, self._session_ref(message), self._hash(message.native_source_message_id),
+                message.transport_revision, token,
+            ):
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise InboundGenerationBusy("INBOUND_GENERATION_BUSY")
+                await asyncio.sleep(0.05)
         context_token = _GENERATION_LEASE.set((turn_id, token))
         completed = False
         try:
