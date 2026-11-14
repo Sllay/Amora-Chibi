@@ -173,7 +173,7 @@ class NumesCognitiveProvider:
                 async with client.stream("POST", self.API_URL,
                         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                                  "Accept": "text/event-stream", "X-Request-Id": request_id},
-                        json=payload) as response:
+                        json=payload, extensions={"trace": diagnostics.http_trace}) as response:
                     metrics["headers_ms"] = elapsed()
                     metrics["status_code"] = response.status_code
                     metrics["stage"] = "waiting_first_event"
