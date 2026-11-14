@@ -250,7 +250,7 @@ class CognitiveStore:
                         id, turn_id, ordinal, display_text, speech_text, status, tts_provider, voice_id,
                         queued_at, started_at, finished_at, interrupted, metadata_json
                     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    self._segment_values(segment),,
+                    self._segment_values(segment),
                 )
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
