@@ -22,8 +22,13 @@ from .providers_structured import (
     GeminiCognitiveProvider as BaseGeminiCognitiveProvider,
     _dialogue_token_budget,
     _needs_reasoning_support,
+    _groq_request_error_category,
 )
 from .providers_v1 import _REFLECTION_INSTRUCTION
+from .reflection_contract import (
+    is_memory_only, memory_input, memory_instructions, memory_schema,
+    parse_memory_json, ReflectionSchemaError,
+)
 from .realization import realization_instruction
 
 
@@ -112,6 +117,8 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
         api_key = self.secrets.get("GROQ_API_KEY")
         if not api_key:
             raise ProviderError("GROQ_API_KEY is not configured")
+        if is_memory_only(context):
+            return await self._memory_proposals(context, api_key=api_key)
         _, payload = fit_provider_payload(context, lambda projected: {
             "model": self.model,
             "instructions": (
@@ -132,6 +139,42 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
         parsed = _parse_responses_json(root, error_message="Groq returned invalid structured cognitive proposals")
         parsed["_usage"] = _responses_usage(root, response)
         return parsed
+
+    async def _memory_proposals(self, context: CognitiveContext, *, api_key: str) -> dict:
+        # Match the structured Responses transport already used by social Qwen.
+        # One schema repair is bounded; HTTP transport/rate failures go to failover.
+        for attempt in range(2):
+            payload = {
+                "model": self.model,
+                "instructions": memory_instructions(repair=bool(attempt)),
+                "input": [{"role": "user", "content": memory_input(context)}],
+                "stream": False, "temperature": 0.15, "top_p": 0.8,
+                "max_output_tokens": 1200, "store": False,
+                "text": {"format": {"type": "json_schema", "name": "amora_memory_extraction",
+                                    "schema": memory_schema()}},
+            }
+            if self.model == "qwen/qwen3.8-27b":
+                payload["reasoning"] = {"effort": "none"}
+            elif self.model.startswith("openai/gpt-oss-"):
+                payload["reasoning"] = {"effort": "low"}
+            ensure_payload(context, payload)
+            try:
+                root, response = await self._post_responses(
+                    payload, api_key=api_key, error_label="memory extraction")
+                if root.get("status") in {"incomplete", "failed", "cancelled"}:
+                    raise ProviderError("Incomplete reflection response", status_code=response.status_code,
+                                        diagnostics={"provider_error_category": "incomplete_reflection"})
+                parsed = parse_memory_json(_responses_output_text(root), status_code=response.status_code)
+            except ProviderError as exc:
+                # Repair only format failures, not rate limits, auth or transport.
+                if attempt == 0 and (isinstance(exc, ReflectionSchemaError)
+                    or exc.diagnostics.get("provider_error_category") in {
+                        "json_generation_failed", "invalid_reflection_json", "incomplete_reflection"}):
+                    continue
+                raise
+            parsed["_usage"] = _responses_usage(root, response)
+            return parsed
+        raise AssertionError("unreachable memory extraction retry")
 
     async def _responses_realize(self, context: CognitiveContext, *, api_key: str) -> dict[str, object]:
         _, payload = fit_provider_payload(context, lambda projected: {
@@ -316,8 +359,7 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
                     "stage": "http_request_rejected",
                     "http_status_code": response.status_code,
                     "provider_error_category": (
-                        "request_body_too_large" if response.status_code == 413
-                        else "other_http_error"
+                        _groq_request_error_category(response)
                     ),
                     "estimated_input_tokens": estimate_payload(payload),
                 },
@@ -352,6 +394,14 @@ class GeminiCognitiveProvider(BaseGeminiCognitiveProvider):
 
         if json_output:
             generation["responseMimeType"] = "application/json"
+            if is_memory_only(context):
+                generation["responseJsonSchema"] = memory_schema()
+                generation["maxOutputTokens"] = 1200
+                return {
+                    "systemInstruction": {"parts": [{"text": memory_instructions()}]},
+                    "contents": [{"role": "user", "parts": [{"text": memory_input(context)}]}],
+                    "generationConfig": generation,
+                }
             return {
                 "systemInstruction": {
                     "parts": [{"text": system_text + "\n\n" + _REFLECTION_INSTRUCTION}]

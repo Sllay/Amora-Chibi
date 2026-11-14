@@ -34,7 +34,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
         # Never log context, prompts, response bodies or exception text.
         super()._journal(request, stage, **fields)
         if stage not in {JournalStage.CONTEXT_COMPILED, JournalStage.PROVIDER_SELECTED,
-                         JournalStage.MODEL_STARTED, JournalStage.ERROR}:
+                         JournalStage.MODEL_STARTED, JournalStage.ERROR,
+                         JournalStage.REFLECTION_STARTED, JournalStage.PROPOSALS_GATED}:
             return
         payload = fields.get("payload") or {}
         safe = {
@@ -46,10 +47,15 @@ class CognitiveEngine(ProductionCognitiveEngine):
         }
         for key in ("status_code", "candidate_index", "candidate_count",
                     "provider_total_budget_seconds", "provider_attempt_budget_seconds",
-                    "remaining_provider_budget_seconds"):
+                    "remaining_provider_budget_seconds", "memory_candidate_count", "accepted_memory_count"):
             value = payload.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 safe[key] = value
+        if payload.get("phase") == "reflection":
+            safe["phase"] = "reflection"
+            for key in ("failure_code", "provider_error_category", "validation_issues", "retry_after_seconds"):
+                if payload.get(key) is not None:
+                    safe[key] = payload[key]
         logging.getLogger("amora.cognition.generation").info("generation_stage", extra=safe)
 
     def state(self) -> dict[str, object]:

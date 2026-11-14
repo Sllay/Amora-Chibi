@@ -575,7 +575,56 @@ async def _command_memory_historical_authorize(core: Any, args: list[str]) -> di
             "memory_id": str(memory_id)}
 
 
+async def _command_memory_reflection_probe(core: Any, args: list[str]) -> dict[str, Any]:
+    """One synthetic Groq extraction; no memory writes or real conversation data."""
+    if args:
+        raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "use memory reflection probe")
+    from amora.cognition.models import CognitiveContext
+    from amora.cognition.reflection_contract import (
+        MEMORY_ONLY_REASON, safe_reflection_failure, validate_memory_extraction,
+    )
+    from amora.events import PrivacyScope
+    provider = core.cognition._providers.get("groq")
+    if provider is None or not provider.descriptor.available:
+        raise AdminCommandError("GROQ_NOT_AVAILABLE", "Groq indisponível")
+    context = CognitiveContext(
+        turn_id=uuid4(), created_at=core.clock.now(), speaker_id="SYNTHETIC_TEST_PERSON",
+        target_id="ENTITY_AMORA", user_text="Meu projeto fictício Orquidea terá cinco mapas.",
+        privacy_scope=PrivacyScope.PERSONAL, remote_processing_allowed=True,
+        reason_codes=["COGNITIVE_REFLECTION", MEMORY_ONLY_REASON],
+    )
+    try:
+        result = dict(await provider.propose(context))
+        result.pop("_usage", None)
+        checked = validate_memory_extraction(result)
+    except Exception as exc:
+        return {"kind": "memory_reflection_probe", "summary": "Falha na extração sintética",
+                "data": {"success": False, "model": provider.descriptor.model,
+                         **safe_reflection_failure(exc)}}
+    from amora.memory import MemoryCandidate, MemoryProvenance, ProvenanceKind
+    # A valid empty object/list proves only syntax, not useful consolidation.
+    accepted = 0
+    for item in checked["memory_candidates"]:
+        candidate = MemoryCandidate(
+            **{key: value for key, value in item.items() if key != "confidence"},
+            provenance=MemoryProvenance(kind=ProvenanceKind.INFERENCE, source="synthetic_probe",
+                                        confidence=item["confidence"]),
+            privacy_scope=PrivacyScope.PERSONAL, remote_processing_allowed=False,
+        )
+        text = (candidate.content + " " + (candidate.summary or "")).casefold()
+        if ("orquidea" in text or "orquídea" in text) and ("cinco" in text or "5" in text):
+            if core.memory.gate.evaluate(candidate).store:
+                accepted += 1
+    return {"kind": "memory_reflection_probe", "summary": "Extração sintética concluída",
+            "data": {"success": accepted > 0, "model": provider.descriptor.model,
+                     "candidate_count": len(checked["memory_candidates"]),
+                     "would_store_count": accepted, "persisted": False}}
+
+
 _COMMANDS: tuple[RegisteredCommand, ...] = (
+    RegisteredCommand(("memory", "reflection", "probe"), "memory reflection probe",
+                      "Sonda Groq com texto fictício, sem gravação de memória.", 65.0,
+                      _command_memory_reflection_probe, exclusive=True),
     RegisteredCommand(("memory", "reflection", "status"), "memory reflection status",
                       "Estado e falhas da fila sem conteúdo de conversas.", 5.0, _command_memory_reflection_status),
     RegisteredCommand(("memory", "reflection", "retry"), "memory reflection retry TURN_UUID",
