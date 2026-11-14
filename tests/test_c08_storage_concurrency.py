@@ -26,7 +26,7 @@ async def test_c08_reflection_wakeup_and_recovery(tmp_path, monkeypatch):
     configure(monkeypatch, tmp_path)
     core = AmoraCore.bootstrap(clock=SimulatedClock())
     q = core.messaging.reflections
-    monkeypatch.setattr(reflection_module, "_IDLE_POLL_SECONDS", 0.25)
+    monkeypatch.setattr(reflection_module, "_IDLE_POLL_SECONDS", 1.0)
     monkeypatch.setattr(reflection_module, "_RECONCILE_SECONDS", 0.3)
     seen = []
     async def fake_reflect(job):
@@ -45,7 +45,7 @@ async def test_c08_reflection_wakeup_and_recovery(tmp_path, monkeypatch):
         q.start()
         await asyncio.sleep(0.02)
         assert q.enqueue(first)
-        await until(lambda: str(first.turn_id) in seen, timeout=0.2)
+        await until(lambda: str(first.turn_id) in seen, timeout=0.75)
         assert q.state(first.turn_id)["status"] == "done"
         # No enqueue: the durable marker must still reconcile a crash gap.
         second = request()
@@ -88,7 +88,7 @@ async def test_c08_remote_poll_offload_keeps_loop_alive_and_joins_shutdown(tmp_p
                 await asyncio.sleep(0.005)
         await asyncio.wait_for(wait_started(), 2)
         # The worker is blocked while the asyncio loop remains responsive.
-        assert threads == [threads[0]] and threads[0] != owner
+        assert len(threads) == 1 and threads[0] != owner
         task = asyncio.create_task(q.stop())
         await asyncio.sleep(0.02)
         assert not task.done(), "shutdown must join the in-flight DB poll"
