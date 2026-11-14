@@ -19,7 +19,7 @@ def normalize_recall(value: str) -> str:
 # scan arbitrary text for an embedded authorization: a quotation, negation,
 # hypothetical or reported command must not become a publication grant.
 _DISCOURSE_LEAD_IN = re.compile(
-    r"^(?:(?:pior\s+que|mas|eu)\s+)?(?:nao|n)\s+(?:tou|to|estou)\s+inventando"
+    r"^(?:(?:pior\s+que|mas)\s+)?(?:eu\s+)?(?:nao|n)\s+(?:tou|to|estou)\s+inventando"
     r"\s*[:,.!]\s+(?=amora\s*[,!:])"
     r"|^(?:sim|certo|beleza|entao|olha|agora|e\s+serio|to\s+falando\s+serio|estou\s+falando\s+serio)"
     r"\s*[:,.!]\s+(?=amora\s*[,!:])"
