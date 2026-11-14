@@ -100,7 +100,8 @@ async def test_c02_core_storage_latency_baseline(tmp_path, monkeypatch, caplog, 
                         assert calls >= scoped_calls
                         # Baseline 90–93 owned calls before C03: seven drive
                         # transactions -> one atomic write, memory access -> one.
-                        assert trace["remote_sql_calls"] <= 73
+                        # C04.1 additionally eliminates post-persist text metadata reads.
+                        assert trace["remote_sql_calls"] <= 68
                         assert trace["stage_autonomy_drive_read_sql_calls"] == 1
                         assert trace["stage_autonomy_drive_write_sql_calls"] == 1
                         assert trace.get("stage_memory_access_write_sql_calls", 0) <= 1
