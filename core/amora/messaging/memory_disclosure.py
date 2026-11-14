@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from uuid import UUID
 
-from amora.memory.recall_intent import normalize_recall, topic_terms
+from amora.memory.recall_intent import normalize_memory_request, topic_terms
 from .explicit_memory import _CREDENTIAL
 
 _PREFIX = re.compile(
@@ -17,7 +17,7 @@ _PREFIX = re.compile(
     r"(?:aqui|neste canal|nesse canal|neste grupo|nesse grupo)\s+"
 )
 _RECALL = re.compile(
-    r"^(?:o\s+que\s+(?:(?:voce|vc|tu|ce)\s+)?(?:se\s+)?(?:lembra|recorda)\s+"
+    r"^(?:o\s*que\s+(?:(?:voce|vc|tu|ce)\s+)?(?:se\s+)?(?:lembra|recorda)\s+"
     r"(?:sobre|do|da|dos|das|de)\s+|(?:a\s+)?(?:memoria|lembranca)\s+(?:sobre|do|da|dos|das|de)\s+)"
 )
 _BROAD = re.compile(r"\b(?:tudo|todas|todos|qualquer|inteiro|inteira|completo|completa|historico|conversas)\b")
@@ -33,12 +33,9 @@ class DisclosureIntent:
 
 
 def parse_disclosure_intent(text: str) -> DisclosureIntent | None:
-    raw = text.strip()
-    if not raw or raw.startswith(('"', "'", "“", "«", ">")):
+    value = normalize_memory_request(text)
+    if value is None:
         return None
-    value = normalize_recall(raw)
-    value = re.sub(r"^amora\s*[,!:]\s*", "", value)
-    value = " ".join(value.strip(" ?!.,").split())
     match = _PREFIX.match(value)
     if not match:
         return None

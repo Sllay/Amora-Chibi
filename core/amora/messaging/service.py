@@ -787,8 +787,9 @@ class PlatformMessagingService:
                 reason = "MEMORY_RECALL_PUBLIC_FOUND" if shared else "MEMORY_RECALL_PERSISTENT_FOUND"
             elif shared:
                 reason = "MEMORY_RECALL_SHARED_SCOPE_RESTRICTED"
-                text = ("Neste canal só posso consultar lembranças públicas. "
-                        "Para procurar suas memórias pessoais, me chama no privado.")
+                text = ("Aqui só consigo consultar lembranças públicas sem uma autorização específica. "
+                        "Se quiser, me pede para compartilhar aqui o que lembro de um assunto seu, "
+                        "ou me chama no privado.")
             elif not complete:
                 reason = "MEMORY_RECALL_SEARCH_INCOMPLETE"
                 text = "Não encontrei uma correspondência nessa busca limitada. Pode indicar o assunto com mais detalhes?"
