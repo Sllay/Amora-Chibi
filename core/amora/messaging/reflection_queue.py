@@ -72,7 +72,12 @@ class ReflectionQueue:
     def _notify(self):
         loop, wake = self._loop, self._wake
         if loop is not None and wake is not None and not loop.is_closed():
-            loop.call_soon_threadsafe(wake.set)
+            try:
+                loop.call_soon_threadsafe(wake.set)
+            except RuntimeError:
+                # Shutdown can race a producer on a synchronous API thread.
+                # Durable polling recovers the job on the next startup.
+                pass
 
     @trace_stage("reflection_reconcile")
     def reconcile_missing(self):
@@ -310,6 +315,10 @@ class ReflectionQueue:
                 cancelled = True
                 if task.cancelled():
                     raise
+            except Exception:
+                if cancelled:
+                    raise asyncio.CancelledError from None
+                raise
         if cancelled:
             if job is not None:
                 self.finish(job, "REFLECTION_SHUTDOWN", retry=True)
