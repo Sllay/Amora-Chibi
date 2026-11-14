@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -200,9 +201,14 @@ class MessagingStore:
         if not isinstance(grant, dict):
             return False
         now = self.clock.now().isoformat()
-        if (grant.get("owner_id") != OWNER_ENTITY_ID
+        session_id = f"MSG_{message.platform.value.upper()}_" + hashlib.sha256(
+            (message.account_scope + "|" + message.conversation_id).encode("utf-8")).hexdigest()
+        if (grant.get("session_id") != session_id
+                or grant.get("turn_id") != message.metadata.get("cognitive_turn_id")
+                or grant.get("owner_id") != OWNER_ENTITY_ID
                 or message.target_entity_id != OWNER_ENTITY_ID
-                or not grant.get("record_id") or not grant.get("updated_at")):
+                or not grant.get("record_id") or not grant.get("updated_at")
+                or not grant.get("expires_at") or grant["expires_at"] <= now):
             return False
         with self.database._lock:
             row = self.database._conn.execute(
@@ -245,6 +251,8 @@ class MessagingStore:
                     or message.target_entity_id != OWNER_ENTITY_ID):
                 raise InboundGenerationLost("MEMORY_DISCLOSURE_GRANT_INVALID")
             now = self.clock.now().isoformat()
+            if not self.disclosure_is_current(message):
+                raise InboundGenerationLost("MEMORY_DISCLOSURE_GRANT_INVALID")
             sql += " AND EXISTS (SELECT 1 FROM memory_records m WHERE " + SHAREABLE_MEMORY_SQL + " AND m.id=? AND m.updated_at=?)"
             values += (OWNER_ENTITY_ID, now, now, grant.get("record_id"), grant.get("updated_at"))
             sql += " AND EXISTS (SELECT 1 FROM messaging_inbound_generation g WHERE g.turn_id=? AND g.session_id=?)"

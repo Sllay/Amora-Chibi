@@ -654,12 +654,14 @@ class PlatformMessagingService:
         return (
             message.channel_type == ChannelType.GROUP
             and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)
+            and outbound.status.value != "cancelled"
             and self.store.disclosure_is_current(outbound)
             and public_text_allowed(outbound.text)
             and audience_text_allowed(outbound.text, audience_id=self._session_ref(message))
         )
 
     def _memory_disclosure_result(self, message, decision, request, intent) -> InboundResult:
+        from datetime import timedelta
         from amora.events import PrivacyScope
 
         grant = None
@@ -705,7 +707,8 @@ class PlatformMessagingService:
                     # No scope or remote-consent mutation, no provider payload.
                     grant = {"record_id": str(record.id), "updated_at": record.updated_at.isoformat(),
                              "owner_id": OWNER_ENTITY_ID, "session_id": request.session_id,
-                             "turn_id": str(request.turn_id)}
+                             "turn_id": str(request.turn_id),
+                             "expires_at": (self.clock.now() + timedelta(minutes=5)).isoformat()}
         if message.channel_type == ChannelType.GROUP and (
                 not public_text_allowed(text) or not audience_text_allowed(text, audience_id=request.session_id)):
             # Do not echo a blocked excerpt or confirm the existence of a record.

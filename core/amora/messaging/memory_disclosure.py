@@ -18,7 +18,7 @@ _PREFIX = re.compile(
 )
 _RECALL = re.compile(
     r"^(?:o\s+que\s+(?:(?:voce|vc|tu|ce)\s+)?(?:se\s+)?(?:lembra|recorda)\s+"
-    r"(?:sobre|do|da|dos|das|de)\s+|(?:sobre|do|da|dos|das|de)\s+)"
+    r"(?:sobre|do|da|dos|das|de)\s+|(?:a\s+)?(?:memoria|lembranca)\s+(?:sobre|do|da|dos|das|de)\s+)"
 )
 _BROAD = re.compile(r"\b(?:tudo|todas|todos|qualquer|inteiro|inteira|completo|completa|historico|conversas)\b")
 _ID = re.compile(r"^(?:a\s+)?memoria\s+([0-9a-f-]{36})$")
@@ -49,7 +49,12 @@ def parse_disclosure_intent(text: str) -> DisclosureIntent | None:
             return DisclosureIntent(record_id=str(UUID(exact.group(1))), valid=True)
         except ValueError:
             return DisclosureIntent()
-    subject = _RECALL.sub("", subject, count=1).strip()
+    # Permission to talk about a topic is not permission to disclose memory.
+    # Require an explicit recollection/remembered-record reference.
+    recall = _RECALL.match(subject)
+    if recall is None:
+        return DisclosureIntent() if _BROAD.search(subject) or re.search(r"\b(?:memoria|lembranca|lembrancas)\b", subject) else None
+    subject = subject[recall.end():].strip()
     terms = topic_terms(subject)
     if not terms or len(subject) > 160 or len(terms) > 12 or _BROAD.search(subject):
         return DisclosureIntent()
