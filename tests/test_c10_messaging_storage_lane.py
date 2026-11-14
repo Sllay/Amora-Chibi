@@ -184,3 +184,89 @@ async def test_c10_invalidation_during_audit_wait_blocks_stale_delivery(remote_c
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
         await service.stop_storage_lane()
+
+
+@pytest.mark.asyncio
+async def test_c10_comparable_turns_move_sql_off_loop(tmp_path, monkeypatch, caplog, capsys):
+    """Identical fresh databases, C09 vs C10, 5 ms synthetic transport."""
+    import os
+    import statistics
+    import time
+    import httpx
+    from amora.app import AmoraCore
+    from amora.latency_trace import current_trace
+    from amora.storage.remote import LibSQLBackend
+    from test_messaging_lifecycle_stability import _clock
+    from test_platform_messaging_step2 import _bind_bk
+    from test_remote_storage import HranaSQLite
+
+    for key in tuple(os.environ):
+        if key.startswith("AMORA_SECRET_") or key in {"AMORA_MODE", "AMORA_SOCIAL_PRIMARY"}:
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("AMORA_ASSET_STORAGE", "database")
+    caplog.set_level("INFO", logger="amora.performance")
+    rows = []
+    owner = threading.get_ident()
+    for enabled in (False, True):
+        folder = tmp_path / ("c10" if enabled else "c09")
+        folder.mkdir()
+        monkeypatch.setenv("AMORA_HOME", str(folder / "runtime"))
+        server = HranaSQLite(folder / "remote.db")
+        counts = {"owner": 0, "worker": 0, "messaging": 0}
+        measuring = False
+
+        def transport(request):
+            if measuring and current_trace() is not None:
+                if threading.get_ident() == owner:
+                    counts["owner"] += 1
+                else:
+                    counts["worker"] += 1
+                    if threading.current_thread().name.startswith("amora-messaging-db"):
+                        counts["messaging"] += 1
+                time.sleep(.005)
+            return server(request)
+
+        core = AmoraCore.bootstrap(clock=_clock(), storage=LibSQLBackend(
+            "https://database.example", "synthetic-only", transport=httpx.MockTransport(transport)))
+        provider = CountingStructuredProvider(name="c10-benchmark", delay=.01)
+        _bind_bk(core)
+        core.cognition.register_provider(provider)
+        core.cognition.store.start_async_lane()
+        if enabled:
+            core.messaging.start_storage_lane()
+        try:
+            for index in range(4):
+                caplog.clear()
+                counts = {"owner": 0, "worker": 0, "messaging": 0}
+                measuring = index > 0
+                result = await core.messaging.receive(incoming(core, f"c10-bench-{index}"))
+                assert result.outbound[0].text == "Resposta remota estável."
+                assert not result.outbound[0].metadata["fallback_used"]
+                assert provider.calls == index + 1
+                if measuring:
+                    full = [json.loads(x.getMessage().split("metrics=", 1)[1])
+                            for x in caplog.records if x.name == "amora.performance"
+                            and "kind=messaging " in x.getMessage()]
+                    assert len(full) == 1
+                    trace = full[0]
+                    assert counts["owner"] + counts["worker"] == trace["remote_sql_calls"]
+                    rows.append({"lane": enabled, **counts, "total_ms": trace["turn_total_ms"],
+                                 "lag_ms": trace["event_loop_lag_max_ms"],
+                                 "sql": trace["remote_sql_calls"]})
+            measuring = False
+        finally:
+            await core.messaging.stop_storage_lane()
+            await core.cognition.store.stop_async_lane()
+            core.close()
+        assert not server.streams
+    baseline = [x for x in rows if not x["lane"]]
+    migrated = [x for x in rows if x["lane"]]
+    assert min(x["messaging"] for x in migrated) >= 9
+    assert max(x["owner"] for x in migrated) <= min(x["owner"] for x in baseline) - 6
+    assert max(x["sql"] for x in migrated) <= max(x["sql"] for x in baseline) + 2
+    summary = {name: {key: round(statistics.median(x[key] for x in data), 3)
+                      for key in ("owner", "worker", "messaging", "total_ms", "lag_ms", "sql")}
+               for name, data in (("c09", baseline), ("c10", migrated))}
+    with capsys.disabled():
+        print("C10_BENCHMARK_JSON=" + json.dumps({"summary": summary, "samples": rows},
+                                                sort_keys=True), flush=True)
