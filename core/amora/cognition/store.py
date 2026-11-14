@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage, trace_lock
+
 import json
 import sqlite3
 import threading
@@ -28,13 +30,14 @@ class CognitiveStore:
         self._conn = self.backend.connect(database_path)
 
     def close(self) -> None:
-        with self._lock:
+        with trace_lock(self._lock):
             self._conn.close()
 
     @staticmethod
     def _is_redacted(scope: PrivacyScope) -> bool:
         return scope in {PrivacyScope.SECRET, PrivacyScope.AUTH}
 
+    @trace_stage("message_persist")
     def put_message(self, item: ConversationMessage) -> bool:
         redacted = self._is_redacted(item.privacy_scope)
         metadata = dict(item.metadata)
@@ -51,7 +54,7 @@ class CognitiveStore:
             item.started_at.isoformat(), item.finished_at.isoformat() if item.finished_at else None,
             json.dumps(metadata, ensure_ascii=False, separators=(",", ":")), item.dedupe_key,
         )
-        with self._lock:
+        with trace_lock(self._lock):
             try:
                 execute_atomic_statement(
                     self.backend,
@@ -70,10 +73,11 @@ class CognitiveStore:
         return True
 
     def get_message_by_dedupe(self, dedupe_key: str) -> ConversationMessage | None:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute("SELECT * FROM conversation_messages WHERE dedupe_key = ?", (dedupe_key,)).fetchone()
         return self._message_from_row(row) if row else None
 
+    @trace_stage("history_read")
     def list_messages(
         self,
         *,
@@ -105,14 +109,14 @@ class CognitiveStore:
             )""")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         args.append(max(1, min(500, int(limit))))
-        with self._lock:
+        with trace_lock(self._lock):
             rows = self._conn.execute(
                 f"SELECT * FROM conversation_messages{where} ORDER BY started_at DESC LIMIT ?", tuple(args)
             ).fetchall()
         return [self._message_from_row(row) for row in reversed(rows)]
 
     def reflection_lease_valid(self, turn_id, lease_token):
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute(
                 "SELECT 1 FROM memory_reflection_jobs WHERE turn_id=? AND status='claimed' "
                 "AND lease_token=? AND lease_until>?",
@@ -128,7 +132,7 @@ class CognitiveStore:
         spoken_text: str | None = None,
         interrupted: bool | None = None,
     ) -> bool:
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             row = self._conn.execute("SELECT privacy_scope FROM conversation_messages WHERE id = ?", (str(message_id),)).fetchone()
             if row is None:
                 return False
@@ -149,6 +153,7 @@ class CognitiveStore:
             )
             return cur.rowcount > 0
 
+    @trace_stage("journal_persist")
     def put_journal(self, entry: CognitiveJournalEntry) -> bool:
         redacted = self._is_redacted(entry.privacy_scope)
         summary = "REDACTED" if redacted and entry.summary else entry.summary
@@ -164,7 +169,7 @@ class CognitiveStore:
             str(entry.correlation_id) if entry.correlation_id else None, entry.error_code,
             json.dumps(metadata, ensure_ascii=False, separators=(",", ":")), entry.dedupe_key,
         )
-        with self._lock:
+        with trace_lock(self._lock):
             cursor = execute_atomic_statement(
                 self.backend,
                 self._conn,
@@ -180,21 +185,22 @@ class CognitiveStore:
         return cursor.rowcount == 1
 
     def journal_for_turn(self, turn_id: UUID | str) -> list[CognitiveJournalEntry]:
-        with self._lock:
+        with trace_lock(self._lock):
             rows = self._conn.execute(
                 "SELECT * FROM cognitive_journal WHERE turn_id = ? ORDER BY timestamp, rowid", (str(turn_id),)
             ).fetchall()
         return [self._journal_from_row(row) for row in rows]
 
     def recent_journal(self, *, limit: int = 100) -> list[CognitiveJournalEntry]:
-        with self._lock:
+        with trace_lock(self._lock):
             rows = self._conn.execute(
                 "SELECT * FROM cognitive_journal ORDER BY timestamp DESC LIMIT ?", (max(1, min(1000, int(limit))),)
             ).fetchall()
         return [self._journal_from_row(row) for row in reversed(rows)]
 
+    @trace_stage("segment_persist")
     def put_segment(self, segment: SpeechSegment) -> bool:
-        with self._lock:
+        with trace_lock(self._lock):
             try:
                 execute_atomic_statement(
                     self.backend,
@@ -217,8 +223,9 @@ class CognitiveStore:
                 return False
         return True
 
+    @trace_stage("segments_read")
     def list_segments(self, turn_id: UUID | str) -> list[SpeechSegment]:
-        with self._lock:
+        with trace_lock(self._lock):
             rows = self._conn.execute(
                 "SELECT * FROM speech_segments WHERE turn_id = ? ORDER BY ordinal", (str(turn_id),)
             ).fetchall()
@@ -228,7 +235,7 @@ class CognitiveStore:
         now = self.clock.now().isoformat()
         started = now if status == MessageStatus.SPEAKING else None
         finished = now if status in {MessageStatus.SPOKEN, MessageStatus.INTERRUPTED, MessageStatus.FAILED} else None
-        with self._lock:
+        with trace_lock(self._lock):
             cur = execute_atomic_statement(
                 self.backend,
                 self._conn,
@@ -255,7 +262,7 @@ class CognitiveStore:
         remaining_tokens: int | None = None,
         metadata: dict[str, object] | None = None,
     ) -> None:
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             self._conn.execute(
                 """INSERT INTO model_usage(timestamp, provider, model, task_class, success, input_tokens, output_tokens,
                    latency_ms, status_code, rate_limit_remaining_requests, rate_limit_remaining_tokens, turn_id, metadata_json)
@@ -268,12 +275,12 @@ class CognitiveStore:
             )
 
     def message_count(self) -> int:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute("SELECT COUNT(*) FROM conversation_messages").fetchone()
             return int(row[0]) if row else 0
 
     def journal_count(self) -> int:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute("SELECT COUNT(*) FROM cognitive_journal").fetchone()
             return int(row[0]) if row else 0
 
