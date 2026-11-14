@@ -98,6 +98,7 @@ class PlatformMessagingService:
         self._active_dm_progress: set[str] = set()
         self.reflections = ReflectionQueue(store.database, cognition, clock)
         self.generations = InboundGeneration(store.database, clock)
+        self.storage_lane = None
 
     async def receive(self, message: InboundMessage) -> InboundResult:
         """Process one logical inbound exactly once per Core process.
@@ -116,6 +117,36 @@ class PlatformMessagingService:
             self._inflight[key] = task
             task.add_done_callback(lambda done, key=key: self._drop_inflight(key, done))
         return await asyncio.shield(task)
+
+    def start_storage_lane(self):
+        if self.store.database.backend.capabilities.remote and self.storage_lane is None:
+            from .storage_lane import MessagingStorageLane
+            self.storage_lane = MessagingStorageLane(self.store.database, self.clock)
+
+    async def stop_storage_lane(self):
+        lane = self.storage_lane
+        if lane is not None:
+            try:
+                await lane.close()
+            finally:
+                self.storage_lane = None
+
+    def _use_storage_lane(self, message):
+        from amora.events import PrivacyScope
+        return (self.storage_lane is not None
+                and message.channel_type == ChannelType.DM
+                and message.remote_processing_allowed
+                and message.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET})
+
+    async def _generation_call(self, message, method, *args, **kwargs):
+        if self._use_storage_lane(message):
+            return await self.storage_lane.call(method, *args, **kwargs)
+        return getattr(self.generations, method)(*args, **kwargs)
+
+    async def _audit_call(self, message, method, *args, **kwargs):
+        if self._use_storage_lane(message):
+            return await self.storage_lane.call(method, *args, **kwargs)
+        return getattr(self.store, method)(*args, **kwargs)
 
     async def stop_inflight(self):
         # ASGI shutdown can outlive shielded inbound HTTP waiters. Join the
@@ -146,13 +177,20 @@ class PlatformMessagingService:
         token = str(uuid4())
         deadline = asyncio.get_running_loop().time() + min(110, self.cognition_timeout_seconds + 5)
         with span("generation_lease_wait"):
-            while not self.generations.claim(
-                turn_id, self._session_ref(message), self._hash(message.native_source_message_id),
-                message.transport_revision, token,
-            ):
-                if asyncio.get_running_loop().time() >= deadline:
-                    raise InboundGenerationBusy("INBOUND_GENERATION_BUSY")
-                await asyncio.sleep(0.05)
+            try:
+                while not await self._generation_call(
+                    message, "claim", turn_id, self._session_ref(message),
+                    self._hash(message.native_source_message_id), message.transport_revision, token,
+                ):
+                    if asyncio.get_running_loop().time() >= deadline:
+                        raise InboundGenerationBusy("INBOUND_GENERATION_BUSY")
+                    await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                # The worker joins a started claim before propagating cancellation.
+                # Release only our token; this is safe even if no lease was acquired.
+                if self._use_storage_lane(message):
+                    await self._generation_call(message, "release", turn_id, token, completed=False)
+                raise
         context_token = _GENERATION_LEASE.set((turn_id, token))
         completed = False
         try:
@@ -167,7 +205,7 @@ class PlatformMessagingService:
         finally:
             self._active_dm_progress.discard(turn_id)
             _GENERATION_LEASE.reset(context_token)
-            self.generations.release(turn_id, token, completed=completed)
+            await self._generation_call(message, "release", turn_id, token, completed=completed)
 
     def _invalidated_result(self, message):
         audit = self.store.get_audit(platform=message.platform, account_scope=message.account_scope,
@@ -196,8 +234,10 @@ class PlatformMessagingService:
         if self._source_invalidated(message):
             return self._invalidated_result(message)
         lease = _GENERATION_LEASE.get()
-        prepared = self.generations.prepared(*lease) if lease is not None else None
+        prepared = await self._generation_call(message, "prepared", *lease) if lease is not None else None
         if prepared is not None:
+            if self._use_storage_lane(message) and self._source_invalidated(message):
+                return self._invalidated_result(message)
             outbound, decision, reasons = prepared
             if outbound.metadata.get("memory_disclosure") and not self._disclosure_replay_allowed(message, decision, outbound):
                 self.generations.invalidate_prepared(
@@ -211,13 +251,15 @@ class PlatformMessagingService:
                 return self._invalidated_result(message)
             outbound = self._persist_prepared_outbound(message, decision, outbound, reasons)
             return InboundResult(decision=decision, duplicate=True, outbound=[outbound])
-        existing_audit = self.store.get_audit(
+        existing_audit = await self._audit_call(message, "get_audit",
             platform=message.platform,
             account_scope=message.account_scope,
             conversation_id=message.conversation_id,
             message_id=message.message_id,
         )
         if existing_audit is not None:
+            if self._use_storage_lane(message) and self._source_invalidated(message):
+                return self._invalidated_result(message)
             duplicate_result = self._completed_duplicate_result(message, existing_audit)
             if duplicate_result is not None:
                 self._log_result(duplicate_result)
@@ -267,14 +309,16 @@ class PlatformMessagingService:
                     "deterministic_outbound_id": str(self._outbound_id(message)),
                 },
             )
-            if not self.store.append_audit(inbound_audit):
-                raced = self.store.get_audit(
+            if not await self._audit_call(message, "append_audit", inbound_audit):
+                raced = await self._audit_call(message, "get_audit",
                     platform=message.platform,
                     account_scope=message.account_scope,
                     conversation_id=message.conversation_id,
                     message_id=message.message_id,
                 )
                 if raced is not None:
+                    if self._use_storage_lane(message) and self._source_invalidated(message):
+                        return self._invalidated_result(message)
                     duplicate_result = self._completed_duplicate_result(message, raced)
                     if duplicate_result is not None:
                         self._log_result(duplicate_result)
@@ -283,6 +327,9 @@ class PlatformMessagingService:
                     update={"reason_codes": [*decision.reason_codes, "AUDIT_DEDUPE_RACE_RECOVERY"]}
                 )
                 duplicate_recovery = True
+
+        if self._use_storage_lane(message) and self._source_invalidated(message):
+            return self._invalidated_result(message)
 
         actor_id = decision.speaker_entity_id or decision.speaker_actor_ref
         cognitive_text = self._cognitive_text(message)
@@ -556,7 +603,7 @@ class PlatformMessagingService:
             )
             return result
 
-        outbound = self._queue_outbound(
+        outbound = await self._queue_generated_outbound(
             message,
             decision,
             text,
@@ -949,15 +996,13 @@ class PlatformMessagingService:
         )
         return InboundResult(decision=decision, outbound=[outbound])
 
-    @trace_stage("outbound_prepare")
-    def _queue_outbound(
+    def _build_outbound(
         self,
         message: InboundMessage,
         decision: AttentionDecision,
         text: str,
         *,
         metadata: dict[str, object],
-        reason_codes: list[str],
     ) -> OutboundMessage:
         native_source_id = message.native_source_message_id
         outbound = OutboundMessage(
@@ -975,58 +1020,32 @@ class PlatformMessagingService:
                 "idempotency_key_hash": self._hash(self._inbound_key(message)),
             },
         )
+        return outbound
+
+    @trace_stage("outbound_prepare")
+    def _queue_outbound(self, message, decision, text, *, metadata, reason_codes):
+        outbound = self._build_outbound(message, decision, text, metadata=metadata)
         lease = _GENERATION_LEASE.get()
         if lease is not None and not self.generations.stage(*lease, outbound, decision, reason_codes):
             raise InboundGenerationLost("INBOUND_GENERATION_LEASE_LOST")
         return self._persist_prepared_outbound(message, decision, outbound, reason_codes)
 
-    @trace_stage("outbound_persist")
-    def _persist_prepared_outbound(self, message, decision, outbound, reason_codes):
-        native_source_id = message.native_source_message_id
-        metadata = outbound.metadata
+    async def _queue_generated_outbound(self, message, decision, text, *, metadata, reason_codes):
         lease = _GENERATION_LEASE.get()
-        inserted = (self.store.put_outbound(outbound, generation_lease=lease)
-                    if lease is not None else self.store.put_outbound(outbound))
-        if not inserted:
-            existing = self.store.get_outbound(outbound.id)
-            if existing is None:
-                raise RuntimeError("deterministic outbound insert conflicted without readable row")
-            outbound = existing
-        self.store.append_audit(
-            MessagingAuditRecord(
-                platform=message.platform,
-                account_scope=message.account_scope,
-                conversation_id=message.conversation_id,
-                message_id=str(outbound.id),
-                direction=AuditDirection.OUTBOUND,
-                channel_type=message.channel_type,
-                speaker_entity_id="ENTITY_AMORA",
-                text=outbound.text,
-                reply_to_message_id=native_source_id,
-                routing_action=RoutingAction.RESPOND,
-                reason_codes=reason_codes,
-                responded=True,
-                timestamp=outbound.created_at,
-                metadata={
-                    "outbound_id": str(outbound.id),
-                    "source_message_id_hash": self._hash(native_source_id),
-                    "target_entity_id": decision.speaker_entity_id,
-                    "transport_revision": message.transport_revision,
-                    **{
-                        key: value
-                        for key, value in metadata.items()
-                        if key.startswith("presence_control_") or key == "local_control"
-                    },
-                },
+        if not self._use_storage_lane(message) or lease is None:
+            return self._queue_outbound(message, decision, text, metadata=metadata, reason_codes=reason_codes)
+        outbound = self._build_outbound(message, decision, text, metadata=metadata)
+        with span("outbound_prepare"):
+            return await self.storage_lane.call(
+                "persist_reply", message, decision, outbound, reason_codes, lease,
+                self._hash(message.native_source_message_id),
             )
+
+    def _persist_prepared_outbound(self, message, decision, outbound, reason_codes):
+        return self.store.persist_prepared_reply(
+            message, decision, outbound, reason_codes, lease=_GENERATION_LEASE.get(),
+            native_hash=self._hash(message.native_source_message_id),
         )
-        self.store.mark_inbound_responded(
-            platform=message.platform,
-            account_scope=message.account_scope,
-            conversation_id=message.conversation_id,
-            message_id=message.message_id,
-        )
-        return outbound
 
     def invalidate_transport(self, invalidation: TransportInvalidation) -> dict[str, object]:
         generation, floor_invalidated = self.attention.floor.invalidate_source(

@@ -281,6 +281,53 @@ class MessagingStore:
                 raise InboundGenerationLost("INBOUND_GENERATION_LEASE_LOST")
             raise RuntimeError("OUTBOUND_INSERT_UNEXPECTED_ROWCOUNT")
 
+    @trace_stage("outbound_persist")
+    def persist_prepared_reply(self, message, decision, outbound, reason_codes, *, lease, native_hash):
+        native_source_id = message.native_source_message_id
+        metadata = outbound.metadata
+        inserted = (self.put_outbound(outbound, generation_lease=lease)
+                    if lease is not None else self.put_outbound(outbound))
+        if not inserted:
+            existing = self.get_outbound(outbound.id)
+            if existing is None:
+                raise RuntimeError("deterministic outbound insert conflicted without readable row")
+            outbound = existing
+        self.append_audit(
+            MessagingAuditRecord(
+                platform=message.platform,
+                account_scope=message.account_scope,
+                conversation_id=message.conversation_id,
+                message_id=str(outbound.id),
+                direction=AuditDirection.OUTBOUND,
+                channel_type=message.channel_type,
+                speaker_entity_id="ENTITY_AMORA",
+                text=outbound.text,
+                reply_to_message_id=native_source_id,
+                routing_action=RoutingAction.RESPOND,
+                reason_codes=reason_codes,
+                responded=True,
+                timestamp=outbound.created_at,
+                metadata={
+                    "outbound_id": str(outbound.id),
+                    "source_message_id_hash": native_hash,
+                    "target_entity_id": decision.speaker_entity_id,
+                    "transport_revision": message.transport_revision,
+                    **{
+                        key: value
+                        for key, value in metadata.items()
+                        if key.startswith("presence_control_") or key == "local_control"
+                    },
+                },
+            )
+        )
+        self.mark_inbound_responded(
+            platform=message.platform,
+            account_scope=message.account_scope,
+            conversation_id=message.conversation_id,
+            message_id=message.message_id,
+        )
+        return outbound
+
     def get_outbound(self, message_id: UUID | str) -> OutboundMessage | None:
         with trace_lock(self.database._lock):
             row = self.database._conn.execute(
