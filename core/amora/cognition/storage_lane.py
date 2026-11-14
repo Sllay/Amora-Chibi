@@ -13,7 +13,7 @@ from contextvars import copy_context
 from amora.latency_trace import span
 
 _ALLOWED = frozenset({"list_messages", "get_message_by_dedupe", "put_message",
-                      "put_journal", "list_segments"})
+                      "put_journal", "list_segments", "source_invalidated"})
 
 
 class CognitiveStorageLane:
@@ -22,6 +22,7 @@ class CognitiveStorageLane:
         self.loop = asyncio.get_running_loop()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="amora-cognitive-db")
         self.lock = asyncio.Lock()
+        self.compile_lock = asyncio.Lock()
         self.worker = None
         self.closing = False
 
