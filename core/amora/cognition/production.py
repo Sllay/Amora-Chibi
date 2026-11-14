@@ -51,7 +51,8 @@ class CognitiveEngine(ResilientCognitiveEngine):
         # Serialize snapshot construction for the migrated DM path. The
         # compiler's stateful operations remain on the owning event loop.
         async with lane.compile_lock:
-            await self._record_input_async(request)
+            if not self._input_already_observed(request):
+                await self._record_input_async(request)
             context = await self.compiler.compile_async(request)
             entry = self._replay_snapshot_entry(request, context)
             if entry is not None:
