@@ -1,0 +1,7 @@
+# Memory recall follow-ups: production regression
+
+The owner shared the Orquídea memory successfully in #chat. In #lobby a short question ("E a memória da Orquidia?") and an explicit sharing request preceded by "Pior que n tou inventando:" received ordinary model responses denying memory. The code explains the routing difference: both parsers were anchored at the start of the message and did not recognize those forms. This is not evidence of lost storage.
+
+The fix recognizes bounded conversational lead-ins and short, named recall questions. Explicit publication still requires verified owner, specific subject and permission in the current channel. No scanning for arbitrary embedded commands, no quotation/negation promotion, no fuzzy sharing and no reuse of grants. Misspelled topics are not silently mapped to other memories. Group recall without permission receives a neutral scope explanation, not a claim that the private record was never stored.
+
+Tests reproduce both screenshot requests across independent channels, ensure the same persistent record is recovered, and verify no provider call, no unrelated disclosure, unchanged privacy and denial of quoted/conditional requests. No migration, memory reset, personality or worker changes. Live check still requires deployment and logs.

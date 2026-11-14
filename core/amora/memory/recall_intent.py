@@ -15,6 +15,29 @@ def normalize_recall(value: str) -> str:
                    if not unicodedata.combining(c))
 
 
+# Only bounded, non-command conversational lead-ins may be stripped. Never
+# scan arbitrary text for an embedded authorization: a quotation, negation,
+# hypothetical or reported command must not become a publication grant.
+_DISCOURSE_LEAD_IN = re.compile(
+    r"^(?:(?:pior\s+que|mas|eu)\s+)?(?:nao|n)\s+(?:tou|to|estou)\s+inventando"
+    r"\s*[:,.!]\s+(?=amora\s*[,!:])"
+    r"|^(?:sim|certo|beleza|entao|olha|agora|e\s+serio|to\s+falando\s+serio|estou\s+falando\s+serio)"
+    r"\s*[:,.!]\s+(?=amora\s*[,!:])"
+)
+
+
+def normalize_memory_request(value: str) -> str | None:
+    raw = value.strip()
+    if not raw or raw.startswith(('"', "'", "“", "«", ">", "\x60")):
+        return None
+    normalized = normalize_recall(raw)
+    normalized = _DISCOURSE_LEAD_IN.sub("", normalized, count=1)
+    normalized = re.sub(r"^amora\s*[,!:]\s*", "", normalized, count=1)
+    # Preserve the command boundary: a second paragraph is not automatically
+    # an independent authorization unless it followed a known lead-in above.
+    return " ".join(normalized.strip(" ?!.,").split())
+
+
 _FILLER = frozenset(
     "a o as os um uma uns umas de do da dos das em no na nos nas sobre acerca "
     "meu minha meus minhas nosso nossa nossos nossas seu sua seus suas "
@@ -49,16 +72,29 @@ _NAMED = re.compile(
 )
 
 
+_SHORT_RECALL = re.compile(
+    r"^(?:e\s+)?a\s+(?:memoria|lembranca)\s+(?:sobre|do|da|dos|das|de)\s+(.+)$"
+)
+_POLITE_RECALL = re.compile(r"^posso\s+(?:te\s+)?perguntar\s+(?=o\s*que\s+)")
+_PRIOR_CHAT_REFERENCE = re.compile(
+    r"\s*\?\s*que\s+(?:eu\s+)?(?:te\s+)?(?:falei|contei|disse|comentei)\s+"
+    r"(?:no\s+pv|no\s+privado|na\s+dm|em\s+particular)"
+    r"(?:\s+(?:um\s+tempinho\s+atras|um\s+tempo\s+atras|antes|ontem|anteriormente))?$"
+)
+
+
 def parse_recall_intent(value: str) -> RecallIntent | None:
-    raw = value.strip()
-    if not raw or raw.startswith(("\"", "'", "“", "«", ">")):
+    text = normalize_memory_request(value)
+    if text is None:
         return None
-    text = normalize_recall(raw)
-    text = re.sub(r"^amora\s*[,!:]\s*", "", text)
-    text = " ".join(text.strip(" ?!.,").split())
+    text = _POLITE_RECALL.sub("", text, count=1)
+    text = _PRIOR_CHAT_REFERENCE.sub("", text, count=1)
+
     if _GENERIC.fullmatch(text):
         return RecallIntent("", generic=True)
     match = _NAMED.fullmatch(text)
+    if not match and value.rstrip().endswith("?"):
+        match = _SHORT_RECALL.fullmatch(text)
     if not match:
         return None
     topic = re.sub(r"^que\s+(?:eu\s+)?(?:falei|contei|disse|comentei)\s+(?:sobre|do|da|de)\s+", "", match.group(1)).strip()
