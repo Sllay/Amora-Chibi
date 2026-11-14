@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import hashlib
 import json
 import logging
 from functools import wraps
@@ -10,6 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from time import perf_counter
 from typing import Any
+from uuid import UUID
 
 
 _trace: ContextVar[dict[str, Any] | None] = ContextVar("amora_latency_trace", default=None)
@@ -135,6 +137,22 @@ def install_remote_storage_probe() -> None:
                 add_ms(f"stage_{stage}_sql_ms", elapsed)
                 increment(f"stage_{stage}_sql_calls")
             increment("remote_sql_statements", sum(item.get("type") == "execute" for item in requests))
+            # Exact SQL shape repetition is diagnostic, not proof of redundancy.
+            # Keep only transient hashes; never log them or inspect bound values.
+            shapes = current_trace().setdefault("_sql_shapes", set())
+            for item in requests:
+                if item.get("type") != "execute":
+                    continue
+                sql = item.get("stmt", {}).get("sql") or ""
+                verb = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
+                if verb not in {"SELECT", "WITH", "INSERT", "UPDATE", "DELETE", "REPLACE"}:
+                    continue
+                shape = hashlib.sha256(sql.encode("utf-8")).digest()
+                if shape in shapes:
+                    increment("remote_sql_repeated_shapes")
+                elif len(shapes) < 512:
+                    shapes.add(shape)
+                    increment("remote_sql_unique_shapes")
 
     traced_pipeline._amora_latency_probe = True  # type: ignore[attr-defined]
     RemoteConnection._pipeline = traced_pipeline
@@ -191,12 +209,19 @@ def trace_lock(lock):
             add_ms("lock_held_ms", elapsed_ms(held))
 
 
-def log_trace(kind: str, trace: dict[str, Any], *, turn_id=None, outcome: str = "ok"):
+def _safe_uuid(value):
+    try:
+        return str(UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        return "-"
+
+
+def log_trace(kind: str, trace: dict[str, Any], *, turn_id=None, outbound_id=None, outcome: str = "ok"):
     # No text, SQL, arguments, headers, model output or arbitrary trace values.
     numeric = {key: value for key, value in trace.items()
                if type(value) in (int, float)}
-    _LOG.info("performance_trace kind=%s turn_id=%s outcome=%s metrics=%s",
-              kind, turn_id or "-", outcome,
+    _LOG.info("performance_trace kind=%s turn_id=%s outbound_id=%s outcome=%s metrics=%s",
+              kind, _safe_uuid(turn_id), _safe_uuid(outbound_id), outcome,
               json.dumps(numeric, sort_keys=True, separators=(",", ":")))
 
 
@@ -204,7 +229,7 @@ def trace_messaging_turn(fn):
     """One trace per owned logical turn, not per HTTP retry/waiter."""
     @wraps(fn)
     async def wrapped(self, message):
-        if message.privacy_scope.value in {"auth", "secret"}:
+        if message.privacy_scope.value in {"AUTH", "SECRET"}:
             return await fn(self, message)
         install_remote_storage_probe()
         with bind_latency_trace() as trace:
@@ -221,8 +246,10 @@ def trace_messaging_turn(fn):
                     last[0] = now
             sampler = asyncio.create_task(sample_lag(), name="amora-performance-lag")
             outcome = "ok"
+            result = None
             try:
-                return await fn(self, message)
+                result = await fn(self, message)
+                return result
             except BaseException:
                 outcome = "error"
                 raise
@@ -231,5 +258,7 @@ def trace_messaging_turn(fn):
                 max_ms("event_loop_lag_max_ms", (loop.time() - last[0] - interval) * 1000)
                 sampler.cancel()
                 # Cancelled sampler owns no resources and never writes after cancellation.
-                log_trace("messaging", trace, turn_id=self._turn_id(message), outcome=outcome)
+                outbound = result.outbound[0] if result is not None and result.outbound else None
+                log_trace("messaging", trace, turn_id=self._turn_id(message),
+                          outbound_id=outbound.id if outbound is not None else None, outcome=outcome)
     return wrapped
