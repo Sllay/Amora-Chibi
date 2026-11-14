@@ -43,6 +43,21 @@ class CognitiveEngine(ResilientCognitiveEngine):
         self._persist_replay_snapshot(request, context)
         return context
 
+    async def _prepare_context_async(self, request: CognitiveRequest) -> CognitiveContext:
+        from .context_v1 import ContextCompiler
+        if not self._async_storage_enabled(request) or type(self.compiler) is not ContextCompiler:
+            return self._prepare_context(request)
+        lane = self.store.async_lane
+        # Serialize snapshot construction for the migrated DM path. The
+        # compiler's stateful operations remain on the owning event loop.
+        async with lane.compile_lock:
+            await self._record_input_async(request)
+            context = await self.compiler.compile_async(request)
+            entry = self._replay_snapshot_entry(request, context)
+            if entry is not None:
+                await lane.call("put_journal", entry)
+            return context
+
     async def reflect(self, request: CognitiveRequest) -> CognitiveProposalBundle:
         """Run the canonical reflection gates with provider failover.
 
@@ -267,20 +282,23 @@ class CognitiveEngine(ResilientCognitiveEngine):
         return results
 
     def _persist_replay_snapshot(self, request: CognitiveRequest, context: CognitiveContext) -> None:
+        entry = self._replay_snapshot_entry(request, context)
+        if entry is not None:
+            self.store.put_journal(entry)
+
+    def _replay_snapshot_entry(self, request: CognitiveRequest, context: CognitiveContext) -> CognitiveJournalEntry | None:
         if request.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
-            return
-        self.store.put_journal(
-            CognitiveJournalEntry(
-                turn_id=request.turn_id,
-                stage=JournalStage.CONTEXT_COMPILED,
-                timestamp=self.clock.now(),
-                source="cognition:replay",
-                summary="immutable context snapshot for cognitive replay",
-                reason_codes=["REPLAY_SNAPSHOT", "LOCAL_ONLY", "NO_CHAIN_OF_THOUGHT"],
-                payload={"context": context.model_dump(mode="json")},
-                privacy_scope=request.privacy_scope,
-                dedupe_key=f"journal:replay-snapshot:{request.turn_id}",
-            )
+            return None
+        return CognitiveJournalEntry(
+            turn_id=request.turn_id,
+            stage=JournalStage.CONTEXT_COMPILED,
+            timestamp=self.clock.now(),
+            source="cognition:replay",
+            summary="immutable context snapshot for cognitive replay",
+            reason_codes=["REPLAY_SNAPSHOT", "LOCAL_ONLY", "NO_CHAIN_OF_THOUGHT"],
+            payload={"context": context.model_dump(mode="json")},
+            privacy_scope=request.privacy_scope,
+            dedupe_key=f"journal:replay-snapshot:{request.turn_id}",
         )
 
     def _replay_context(self, turn_id: UUID | str) -> CognitiveContext:

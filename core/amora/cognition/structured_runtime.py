@@ -35,6 +35,17 @@ class CognitiveEngine(ProductionCognitiveEngine):
         # Only a fixed diagnostic projection leaves the privacy-controlled journal.
         # Never log context, prompts, response bodies or exception text.
         super()._journal(request, stage, **fields)
+        self._log_generation_journal(request, stage, **fields)
+
+    async def _journal_async(self, request, stage, **fields):
+        if not self._async_storage_enabled(request):
+            self._journal(request, stage, **fields)
+            return
+        await self._persist_journal_async(request, stage, **fields)
+        self._log_generation_journal(request, stage, **fields)
+
+    @staticmethod
+    def _log_generation_journal(request, stage, **fields):
         if stage not in {JournalStage.CONTEXT_COMPILED, JournalStage.PROVIDER_SELECTED,
                          JournalStage.MODEL_STARTED, JournalStage.ERROR,
                          JournalStage.REFLECTION_STARTED, JournalStage.PROPOSALS_GATED}:
@@ -147,12 +158,12 @@ class CognitiveEngine(ProductionCognitiveEngine):
     ) -> CognitiveResponsePlan:
         started = perf_counter()
         try:
-            context = self._prepare_context(request)
+            context = await self._prepare_context_async(request)
         except ContextBudgetExceeded:
             return await self._fallback_plan(request, "Esse contexto ficou grande demais para processar com segurança.",
                 on_segment=on_segment, reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "LOCAL_FALLBACK"], started=started)
         estimated_tokens = max(1, len(context.model_dump_json()) // 4)
-        self._journal(
+        await self._journal_async(
             request,
             JournalStage.CONTEXT_COMPILED,
             summary="canonical context compiled",
@@ -203,7 +214,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 reason = "REMOTE_PROCESSING_NOT_ALLOWED"
             elif excluded:
                 reason = "PROVIDERS_IN_BACKOFF"
-            self._journal(
+            await self._journal_async(
                 request,
                 JournalStage.PRIVACY_FILTERED,
                 summary="structured remote realization skipped",
@@ -244,7 +255,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     "code": last_failure,
                     "turn_id": str(request.turn_id),
                 }
-                self._journal(
+                await self._journal_async(
                     request,
                     JournalStage.ERROR,
                     summary="provider skipped: no structured realization interface",
@@ -259,7 +270,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 remaining_budget = total_budget - provider_elapsed
                 if remaining_budget <= 0:
                     last_failure = "PROVIDER_TOTAL_BUDGET_EXHAUSTED"
-                    self._journal(
+                    await self._journal_async(
                         request,
                         JournalStage.ERROR,
                         summary="provider failover budget exhausted before next attempt",
@@ -271,7 +282,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     )
                     break
 
-            self._journal(
+            await self._journal_async(
                 request,
                 JournalStage.PROVIDER_SELECTED,
                 summary="structured realization provider selected",
@@ -290,7 +301,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     "remaining_provider_budget_seconds": remaining_budget,
                 },
             )
-            self._journal(
+            await self._journal_async(
                 request,
                 JournalStage.MODEL_STARTED,
                 summary="structured realization generation started",
@@ -298,6 +309,14 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 model=descriptor.model,
             )
 
+            if self._async_storage_enabled(request):
+                session = request.session_id
+                native_hash = request.metadata.get("native_message_id_hash")
+                revision = request.metadata.get("transport_revision")
+                if session and native_hash and isinstance(revision, int):
+                    if await self.store.async_lane.call("source_invalidated", session, native_hash, revision):
+                        from amora.messaging.generation_lifecycle import InboundGenerationLost
+                        raise InboundGenerationLost("INBOUND_SOURCE_INVALIDATED")
             provider_started = perf_counter()
             try:
                 timeout = attempt_budget
@@ -315,7 +334,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     )
             except ContextBudgetExceeded:
                 last_failure = "CONTEXT_ENVELOPE_OVERFLOW"
-                self._journal(request, JournalStage.ERROR, summary="provider envelope exceeds budget",
+                await self._journal_async(request, JournalStage.ERROR, summary="provider envelope exceeds budget",
                     reason_codes=[last_failure, "NO_SURFACE_REQUEST"], error_code=last_failure)
                 continue
             except NvidiaStreamTimeout as exc:
@@ -327,7 +346,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     "code": last_failure, "turn_id": str(request.turn_id), "failure_stage": safe_stage}
                 self._record_provider_failure(request, descriptor, error_code=last_failure,
                                               status_code=None, started=provider_started)
-                self._journal(request, JournalStage.ERROR, summary="NVIDIA stream deadline",
+                await self._journal_async(request, JournalStage.ERROR, summary="NVIDIA stream deadline",
                     reason_codes=[last_failure, "PROVIDER_TRANSPORT_TIMEOUT", "NO_SPEECH_EMITTED"],
                     error_code=last_failure, provider=descriptor.name, model=descriptor.model,
                     payload={"failure_stage": safe_stage, "timeout_kind": "idle" if kind == "idle" else "total_safety"})
@@ -352,7 +371,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     status_code=None,
                     started=provider_started,
                 )
-                self._journal(
+                await self._journal_async(
                     request,
                     JournalStage.ERROR,
                     summary="provider attempt exceeded turn budget",
@@ -380,7 +399,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     latency_ms=(perf_counter() - provider_started) * 1000.0,
                     metadata={"error_code": exc.code, "phase": "realization_validation"},
                 )
-                self._journal(
+                await self._journal_async(
                     request,
                     JournalStage.ERROR,
                     summary="provider realization rejected before speech",
@@ -494,7 +513,10 @@ class CognitiveEngine(ProductionCognitiveEngine):
         )
         segmenter = SpeechSegmenter()
         emitted: list[str] = []
-        ordinal = len(self.store.list_segments(request.turn_id))
+        if self._async_storage_enabled(request) and on_segment is None:
+            ordinal = len(await self.store.async_lane.call("list_segments", request.turn_id))
+        else:
+            ordinal = len(self.store.list_segments(request.turn_id))
         for raw in [*segmenter.feed(validated.text), *segmenter.flush()]:
             speech = await self._emit_segment(
                 request,
@@ -507,6 +529,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
             if speech is not None:
                 emitted.append(speech)
                 ordinal += 1
+            if self._async_storage_enabled(request) and on_segment is None:
+                await asyncio.sleep(0)
         if not emitted:
             return await self._fallback_plan(
                 request,
@@ -545,7 +569,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             "reason_codes": list(reason_codes),
         }
         self._last_realization_rejection = None
-        self._journal(
+        await self._journal_async(
             request,
             JournalStage.RESPONSE_PLANNED,
             summary="structured realization validated before delivery",

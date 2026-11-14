@@ -28,6 +28,20 @@ class CognitiveStore:
         self._lock = threading.RLock()
         self.backend = backend or SQLiteBackend()
         self._conn = self.backend.connect(database_path)
+        self.async_lane = None
+
+    def start_async_lane(self):
+        if self.backend.capabilities.remote and self.async_lane is None:
+            from .storage_lane import CognitiveStorageLane
+            self.async_lane = CognitiveStorageLane(self)
+
+    async def stop_async_lane(self):
+        lane = self.async_lane
+        if lane is not None:
+            try:
+                await lane.close()
+            finally:
+                self.async_lane = None
 
     def close(self) -> None:
         with trace_lock(self._lock):
@@ -114,6 +128,15 @@ class CognitiveStore:
                 f"SELECT * FROM conversation_messages{where} ORDER BY started_at DESC LIMIT ?", tuple(args)
             ).fetchall()
         return [self._message_from_row(row) for row in reversed(rows)]
+
+    def source_invalidated(self, session_id, native_message_hash, revision):
+        with trace_lock(self._lock):
+            row = self._conn.execute(
+                "SELECT 1 FROM memory_reflection_invalidations WHERE session_id=? "
+                "AND native_message_hash=? AND invalidated_through>=?",
+                (session_id, native_message_hash, revision),
+            ).fetchone()
+        return row is not None
 
     def reflection_lease_valid(self, turn_id, lease_token):
         with trace_lock(self._lock):

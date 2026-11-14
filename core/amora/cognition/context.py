@@ -3,6 +3,7 @@ from __future__ import annotations
 from amora.latency_trace import trace_stage, span
 
 from typing import Any
+import asyncio
 import re
 
 from amora.autonomy import AutonomyEngine
@@ -138,6 +139,42 @@ class ContextCompiler:
 
     @trace_stage("context_base")
     def compile(self, request: CognitiveRequest, *, token_budget: int = 16384) -> CognitiveContext:
+        # Both paths drive the exact same compiler; the synchronous API remains
+        # available for local tools, voice, reflection and custom subclasses.
+        steps = self._compile_steps(request, token_budget=token_budget)
+        value = None
+        try:
+            while True:
+                step = steps.send(value)
+                value = None if step is None else self.store.list_messages(**step)
+        except StopIteration as done:
+            return done.value
+        finally:
+            steps.close()
+
+    @trace_stage("context_base")
+    async def compile_async(self, request: CognitiveRequest, *, token_budget: int = 16384) -> CognitiveContext:
+        lane = self.store.async_lane
+        if lane is None:
+            return self.compile(request, token_budget=token_budget)
+        steps = self._compile_steps(request, token_budget=token_budget)
+        value = None
+        try:
+            while True:
+                step = steps.send(value)
+                if step is None:
+                    # Stateful read/modify/write operations stay on the event
+                    # loop and are never split across an await.
+                    await asyncio.sleep(0)
+                    value = None
+                else:
+                    value = await lane.call("list_messages", **step)
+        except StopIteration as done:
+            return done.value
+        finally:
+            steps.close()
+
+    def _compile_steps(self, request: CognitiveRequest, *, token_budget: int):
         from .expressive_profile import configured_profile, profile_text
         remote = self.privacy_gate.remote_allowed(request)
         visibility = resolve_scene_visibility(request)
@@ -192,14 +229,18 @@ class ContextCompiler:
         else:
             reasons.append("SPEAKER_CANONICAL_IDENTITY_UNKNOWN")
 
+        yield None
         mood = self.emotion.current_mood()
         affect: dict[str, float] = {}
+        yield None
         if speaker is not None:
             directed = self.emotion.affect_for(request.speaker_id)
             affect = {"anger": directed.anger, "affection": directed.affection, "trust": directed.trust,
                       "irritation": directed.irritation, "fear": directed.fear, "gratitude": directed.gratitude}
 
+        yield None
         drives = {item.drive.value: round(item.need, 6) for item in self.autonomy.current_drives()}
+        yield None
         current_intention = self.autonomy.store.current_intention()
         intention = current_intention.model_dump(mode="json") if current_intention is not None else None
         entity_ids = {request.speaker_id}
@@ -241,6 +282,7 @@ class ContextCompiler:
         if recall_intent:
             recall_text = "" if recall_intent.generic else " ".join(sorted(topic_terms(recall_intent.topic)))
             reasons.append("PERSISTENT_RECALL_TOPIC" if named_recall else "GENERIC_RECOLLECTION_ENTITY_RECALL")
+        yield None
         for hit in self.memory.recall(MemoryQuery(text=recall_text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78,
                                                  projection_recipient_id=request.speaker_id,
                                                  projection_public_only=shared, projection_remote_only=remote,
@@ -256,6 +298,7 @@ class ContextCompiler:
 
         claims: list[dict[str, Any]] = []
         authorized_relations: set[tuple[str, str, str]] = set()
+        yield None
         for claim in self.world.current_state():
             if shared and claim.privacy_scope != PrivacyScope.PUBLIC:
                 continue
@@ -272,7 +315,7 @@ class ContextCompiler:
             if len(claims) >= 10:
                 break
 
-        persisted_messages = self.store.list_messages(limit=96, session_id=request.session_id, exclude_invalidated=True)
+        persisted_messages = yield {"limit": 96, "session_id": request.session_id, "exclude_invalidated": True}
         reasons.append("RECENT_HISTORY_SESSION_SCOPED" if request.session_id is not None else "RECENT_HISTORY_UNSCOPED_LEGACY")
         test_turn_ids = {str(message.turn_id) for message in persisted_messages if bool(message.metadata.get("test_mode", False))}
         include_session_tests = bool(request.metadata.get("test_mode", False)) and request.session_id is not None
@@ -313,6 +356,7 @@ class ContextCompiler:
                                                              antecedents=antecedents).model_dump(mode="json")
                 reasons.append("ACIR_COMPILED")
 
+        yield None
         with span("self_projection"):
             self_snapshot = self.self_model.snapshot()
             if shared:

@@ -470,37 +470,83 @@ class CognitiveEngine:
             return next((item for item in self.store.list_segments(turn_id) if str(item.id) == str(segment_id)), None)
         return None
 
-    @trace_stage("record_input")
-    def _record_input(self, request: CognitiveRequest) -> None:
-        dedupe = f"cognitive-input:{request.source_event_id}" if request.source_event_id else f"cognitive-input:{request.turn_id}"
-        existing = self.store.get_message_by_dedupe(dedupe)
-        if existing is None:
-            self.store.put_message(
-                ConversationMessage(
-                    turn_id=request.turn_id,
-                    speaker_id=request.speaker_id,
-                    addressee_id=request.target_id,
-                    source=MessageSource.STT if request.source_event_id else MessageSource.TEXT,
-                    raw_text=request.text,
-                    normalized_text=request.text.strip(),
-                    privacy_scope=request.privacy_scope,
-                    remote_processing_allowed=request.remote_processing_allowed,
-                    stt_confidence=_as_float(request.metadata.get("stt_confidence")),
-                    source_event_id=request.source_event_id,
-                    session_id=request.session_id,
-                    started_at=self.clock.now(),
-                    status=MessageStatus.RECEIVED,
-                    metadata=request.metadata,
-                    dedupe_key=dedupe,
-                )
-            )
-        self._journal(
-            request,
-            JournalStage.INPUT_OBSERVED,
+    def _async_storage_enabled(self, request: CognitiveRequest) -> bool:
+        # Voice, shared audiences, CLI and custom/local stores retain the
+        # original synchronous runtime. Only platform DM text is migrated.
+        return (getattr(self.store, "async_lane", None) is not None
+                and request.metadata.get("surface") == "platform_messaging"
+                and request.metadata.get("channel_type") == "dm"
+                and request.remote_processing_allowed
+                and not request.metadata.get("durable_memory_reflection")
+                and not any(request.metadata.get(key) for key in (
+                    "explicit_memory_request", "memory_disclosure_request", "explicit_memory_recall"))
+                and request.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET})
+
+    def _input_message(self, request, dedupe):
+        return ConversationMessage(
+            turn_id=request.turn_id,
+            speaker_id=request.speaker_id,
+            addressee_id=request.target_id,
+            source=MessageSource.STT if request.source_event_id else MessageSource.TEXT,
+            raw_text=request.text,
+            normalized_text=request.text.strip(),
+            privacy_scope=request.privacy_scope,
+            remote_processing_allowed=request.remote_processing_allowed,
+            stt_confidence=_as_float(request.metadata.get("stt_confidence")),
+            source_event_id=request.source_event_id,
+            session_id=request.session_id,
+            started_at=self.clock.now(),
+            status=MessageStatus.RECEIVED,
+            metadata=request.metadata,
+            dedupe_key=dedupe,
+        )
+
+    @staticmethod
+    def _input_dedupe(request):
+        return f"cognitive-input:{request.source_event_id}" if request.source_event_id else f"cognitive-input:{request.turn_id}"
+
+    @staticmethod
+    def _input_journal_fields(request):
+        return dict(
             summary="utterance observed",
             reason_codes=["PERSISTENT_CONVERSATION_HISTORY"],
             payload={"speaker_id": request.speaker_id, "addressee_id": request.target_id, "chars": len(request.text)},
             dedupe_key=f"journal:input:{request.turn_id}",
+        )
+
+    @trace_stage("record_input")
+    def _record_input(self, request: CognitiveRequest) -> None:
+        dedupe = self._input_dedupe(request)
+        existing = self.store.get_message_by_dedupe(dedupe)
+        if existing is None:
+            self.store.put_message(self._input_message(request, dedupe))
+        self._journal(request, JournalStage.INPUT_OBSERVED, **self._input_journal_fields(request))
+
+    @trace_stage("record_input")
+    async def _record_input_async(self, request: CognitiveRequest) -> None:
+        if not self._async_storage_enabled(request):
+            self._record_input(request)
+            return
+        lane = self.store.async_lane
+        dedupe = self._input_dedupe(request)
+        if await lane.call("get_message_by_dedupe", dedupe) is None:
+            await lane.call("put_message", self._input_message(request, dedupe))
+        await self._journal_async(request, JournalStage.INPUT_OBSERVED, **self._input_journal_fields(request))
+
+    async def observe_input_async(self, request: CognitiveRequest) -> None:
+        if self._async_storage_enabled(request):
+            await self._record_input_async(request)
+        else:
+            self.observe_input(request)
+
+    async def record_turn_decision_async(self, request, state, reason_codes, score):
+        if not self._async_storage_enabled(request):
+            self.record_turn_decision(request, state, reason_codes, score)
+            return
+        await self._journal_async(
+            request, JournalStage.TURN_DECIDED, summary="turn manager decision",
+            reason_codes=list(reason_codes), payload={"turn_state": state, "score": score},
+            dedupe_key=f"journal:turn-decision:{request.turn_id}",
         )
 
     def _finish_plan(self, request: CognitiveRequest, plan: CognitiveResponsePlan) -> None:
@@ -527,7 +573,20 @@ class CognitiveEngine:
         )
 
     @trace_stage("cognitive_journal")
-    def _journal(
+    def _journal(self, request, stage, **fields):
+        self.store.put_journal(self._journal_entry(request, stage, **fields))
+
+    async def _journal_async(self, request, stage, **fields):
+        if not self._async_storage_enabled(request):
+            self._journal(request, stage, **fields)
+            return
+        await self._persist_journal_async(request, stage, **fields)
+
+    @trace_stage("cognitive_journal")
+    async def _persist_journal_async(self, request, stage, **fields):
+        await self.store.async_lane.call("put_journal", self._journal_entry(request, stage, **fields))
+
+    def _journal_entry(
         self,
         request: CognitiveRequest,
         stage: JournalStage,
@@ -540,22 +599,20 @@ class CognitiveEngine:
         duration_ms: float | None = None,
         error_code: str | None = None,
         dedupe_key: str | None = None,
-    ) -> None:
-        self.store.put_journal(
-            CognitiveJournalEntry(
-                turn_id=request.turn_id,
-                stage=stage,
-                timestamp=self.clock.now(),
-                summary=summary,
-                reason_codes=reason_codes or [],
-                payload=payload or {},
-                privacy_scope=request.privacy_scope,
-                provider=provider,
-                model=model,
-                duration_ms=duration_ms,
-                error_code=error_code,
-                dedupe_key=dedupe_key,
-            )
+    ) -> CognitiveJournalEntry:
+        return CognitiveJournalEntry(
+            turn_id=request.turn_id,
+            stage=stage,
+            timestamp=self.clock.now(),
+            summary=summary,
+            reason_codes=reason_codes or [],
+            payload=payload or {},
+            privacy_scope=request.privacy_scope,
+            provider=provider,
+            model=model,
+            duration_ms=duration_ms,
+            error_code=error_code,
+            dedupe_key=dedupe_key,
         )
 
     def _journal_segment(
