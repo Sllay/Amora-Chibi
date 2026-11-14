@@ -477,6 +477,66 @@ class CognitiveEngine(ProductionCognitiveEngine):
             started=started,
         )
 
+    def _text_finalize_enabled(self, request, on_segment):
+        return (self._async_storage_enabled(request) and on_segment is None
+                and not request.metadata.get("speech_device_id"))
+
+    @trace_stage("text_batch")
+    async def _persist_fresh_text(self, request, raw_segments, provider, model):
+        if self.is_turn_cancelled(request.turn_id):
+            return None
+        records = []
+        for raw in raw_segments:
+            built = self._build_segment_record(request, raw, len(records), provider, model)
+            if built is None:
+                continue
+            segment, message, fields = built
+            message.metadata.update(self._segment_execution_metadata(request, None, segment.speech_text))
+            records.append((segment, message, self._journal_entry(
+                request, JournalStage.SPEECH_SEGMENT_READY, **fields)))
+        # The remote transaction costs up to eight pipelines. Short text is
+        # cheaper through the existing three-write-per-segment path.
+        if len(records) < 3:
+            return None
+        try:
+            committed = await self.store.async_lane.call(
+                "persist_text_batch", records, session_id=request.session_id,
+                native_hash=request.metadata.get("native_message_id_hash"),
+                revision=request.metadata.get("transport_revision"),
+            )
+        except asyncio.CancelledError:
+            # An interrupt can arrive while the worker owns the transaction.
+            # The lane joins the operation before propagating cancellation.
+            # Settle any newly committed rows using the existing cancellation API.
+            if self.is_turn_cancelled(request.turn_id):
+                self.interrupt_turn(request.turn_id, reason="text_batch_cancelled")
+            raise
+        if not committed:
+            return None
+        if self.is_turn_cancelled(request.turn_id):
+            self.interrupt_turn(request.turn_id, reason="text_batch_cancelled")
+            return None
+        return [segment.speech_text for segment, _, _ in records]
+
+    @trace_stage("text_finalization")
+    async def _finish_validated_text(self, request, plan, validated_fields):
+        # The structured path has already compiled the identical speech plan.
+        # Keep the two durable journal entries (and their dedupe keys), but
+        # write them together. No voice callbacks or delivery status changes.
+        entries = [
+            self._journal_entry(request, JournalStage.RESPONSE_PLANNED, **validated_fields),
+            self._journal_entry(
+                request, JournalStage.RESPONSE_PLANNED,
+                summary="response plan completed",
+                reason_codes=plan.reason_codes, provider=plan.provider, model=plan.model,
+                duration_ms=plan.latency_ms,
+                payload={"segments": len(plan.speech_segments), "fallback_used": plan.fallback_used,
+                         "input_tokens": plan.input_tokens, "output_tokens": plan.output_tokens},
+                dedupe_key=f"journal:response-planned:{request.turn_id}",
+            ),
+        ]
+        await self.store.async_lane.call("put_text_final_journals", entries)
+
     @trace_stage("validated_plan")
     async def _plan_from_validated(
         self,
@@ -512,25 +572,30 @@ class CognitiveEngine(ProductionCognitiveEngine):
             validated.text, turn_id=request.turn_id, privacy_scope=request.privacy_scope,
         )
         segmenter = SpeechSegmenter()
+        raw_segments = [*segmenter.feed(validated.text), *segmenter.flush()]
         emitted: list[str] = []
-        if self._async_storage_enabled(request) and on_segment is None:
+        text_path = self._text_finalize_enabled(request, on_segment)
+        if text_path:
             ordinal = len(await self.store.async_lane.call("list_segments", request.turn_id))
         else:
             ordinal = len(self.store.list_segments(request.turn_id))
-        for raw in [*segmenter.feed(validated.text), *segmenter.flush()]:
-            speech = await self._emit_segment(
-                request,
-                raw,
-                ordinal,
-                provider,
-                model,
-                on_segment,
-            )
-            if speech is not None:
-                emitted.append(speech)
-                ordinal += 1
-            if self._async_storage_enabled(request) and on_segment is None:
-                await asyncio.sleep(0)
+        batched = None
+        if text_path and ordinal == 0 and len(raw_segments) >= 3:
+            batched = await self._persist_fresh_text(request, raw_segments, provider, model)
+        if batched is not None:
+            emitted = batched
+        else:
+            # Existing/partial history and short responses retain the canonical
+            # recovery path. No failed or uncertain batch is retried here.
+            if text_path and ordinal == 0 and len(raw_segments) >= 3:
+                ordinal = len(await self.store.async_lane.call("list_segments", request.turn_id))
+            for raw in raw_segments:
+                speech = await self._emit_segment(request, raw, ordinal, provider, model, on_segment)
+                if speech is not None:
+                    emitted.append(speech)
+                    ordinal += 1
+                if text_path:
+                    await asyncio.sleep(0)
         if not emitted:
             return await self._fallback_plan(
                 request,
@@ -569,19 +634,15 @@ class CognitiveEngine(ProductionCognitiveEngine):
             "reason_codes": list(reason_codes),
         }
         self._last_realization_rejection = None
-        await self._journal_async(
-            request,
-            JournalStage.RESPONSE_PLANNED,
+        validated_fields = dict(
             summary="structured realization validated before delivery",
             reason_codes=reason_codes,
-            provider=provider,
-            model=model,
-            payload={
-                "realization_frame": frame_dump,
-                "segments": len(emitted),
-            },
+            provider=provider, model=model,
+            payload={"realization_frame": frame_dump, "segments": len(emitted)},
             dedupe_key=f"journal:realization-validated:{request.turn_id}",
         )
+        if not text_path:
+            await self._journal_async(request, JournalStage.RESPONSE_PLANNED, **validated_fields)
         plan = CognitiveResponsePlan(
             turn_id=request.turn_id,
             display_text=validated.text,
@@ -604,7 +665,10 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 "usage_persistence": usage.get("persistence", "not_recorded"),
             },
         )
-        self._finish_plan(request, plan)
+        if text_path:
+            await self._finish_validated_text(request, plan, validated_fields)
+        else:
+            self._finish_plan(request, plan)
         return plan
 
 
