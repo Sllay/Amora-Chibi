@@ -140,6 +140,14 @@ async def test_c09_messaging_persists_replay_and_deduplicates(remote_core, caplo
                 for x in caplog.records if x.name == "amora.performance"
                 and "kind=messaging " in x.getMessage()]
         assert any(row.get("stage_cognitive_db_lane_calls", 0) > 0 for row in rows)
+        compact = [x.getMessage() for x in caplog.records if x.name == "amora.performance"
+                   and "kind=critical_path " in x.getMessage()]
+        assert compact and str(turn_id) in compact[0]
+        metrics = json.loads(compact[0].split("metrics=", 1)[1])
+        assert metrics["stage_cognitive_db_lane_calls"] > 0
+        assert metrics["messaging_pre_cognition_ms"] >= 0
+        assert metrics["messaging_cognition_ms"] >= 0
+        assert "Me conta" not in compact[0]
     finally:
         await store.stop_async_lane()
 
