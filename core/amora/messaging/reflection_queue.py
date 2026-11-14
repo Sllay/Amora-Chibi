@@ -289,13 +289,40 @@ class ReflectionQueue:
         counts.update({row["status"]: int(row["total"]) for row in rows})
         return counts
 
-    async def process_once(self, *, reconcile=True):
+    def _poll(self, reconcile):
+        # Each database operation owns its existing RLock/connection scope;
+        # no transaction is held across an await or transferred to a thread.
+        if reconcile:
+            self.reconcile_missing()
+        return self.claim()
+
+    async def _poll_remote(self, reconcile):
+        # Only the single background consumer offloads DB-only polling. Join
+        # the thread on shutdown before closing the database; a claimed job
+        # must be returned to the durable queue if cancellation won the race.
+        task = asyncio.create_task(asyncio.to_thread(self._poll, reconcile))
+        cancelled = False
+        while True:
+            try:
+                job = await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                cancelled = True
+                if task.cancelled():
+                    raise
+        if cancelled:
+            if job is not None:
+                self.finish(job, "REFLECTION_SHUTDOWN", retry=True)
+            raise asyncio.CancelledError
+        return job
+
+    async def process_once(self, *, reconcile=True, offload_poll=False):
         install_remote_storage_probe()
         with bind_latency_trace() as trace:
             started = perf_counter()
-            if reconcile:
-                self.reconcile_missing()
-            job = self.claim()
+            job = (await self._poll_remote(reconcile)
+                   if offload_poll and self.database.backend.capabilities.remote
+                   else self._poll(reconcile))
             if job is None:
                 # Log only unusually expensive idle polling, not every idle tick.
                 set_ms("reflection_poll_ms", elapsed_ms(started))
@@ -384,7 +411,7 @@ class ReflectionQueue:
             wake.clear()
             reconcile = loop.time() >= next_reconcile
             try:
-                worked = await self.process_once(reconcile=reconcile)
+                worked = await self.process_once(reconcile=reconcile, offload_poll=True)
                 if reconcile:
                     next_reconcile = loop.time() + _RECONCILE_SECONDS
             except Exception as exc:
