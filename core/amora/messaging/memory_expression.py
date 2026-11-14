@@ -31,7 +31,7 @@ _FIRST_POSSESSIVE = re.compile(r"^(meus?|minhas?)\b", re.I)
 # first-person clause that this limited grammar cannot safely conjugate.
 _COMPLEX = re.compile(
     r'["“”«»\n]|\b(?:disse|falou|perguntou|respondeu|contou|segundo|citou|afirmou|escreveu|'
-    r'porque|embora|se|quando|enquanto|mas|porém|por que|eu|n[oó]s|me|comigo|nosso|nossa|'
+    r'porque|embora|se|quando|enquanto|mas|porém|por que|eu|nós|me|comigo|nosso|nossa|'
     r'me\s+|mim|conosco)\b',
     re.I,
 )
