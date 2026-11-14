@@ -64,7 +64,10 @@ async def measure(provider, *, samples=3):
                     row = {"sample": index + 1, "profile": "large" if large else "small",
                            "payload_bytes": len(json.dumps(payload, ensure_ascii=False).encode())}
                     try:
-                        result = await provider._complete_stream(payload, key=key, phase="synthetic_benchmark")
+                        result = await asyncio.wait_for(
+                            provider._complete_stream(payload, key=key, phase="synthetic_benchmark"),
+                            timeout=75.0,
+                        )
                         row.update(success=isinstance(result.get("answer"), str), status_code=200)
                     except ProviderError as exc:
                         row.update(success=False, status_code=exc.status_code,
