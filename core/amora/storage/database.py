@@ -230,6 +230,29 @@ class AmoraDatabase:
             ).fetchone()
         return str(row["entity_id"]) if row else None
 
+    def has_verified_platform_binding(self, *, platform: str, identifier_type: str,
+                                      external_actor_id: str, account_scope: str,
+                                      entity_id: str) -> bool:
+        """Check only the exact native binding; never hydrate unrelated legacy rows."""
+        from pydantic import ValidationError
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT platform, identifier_type, external_actor_id, account_scope,
+                          entity_id, trust, confidence, enabled
+                   FROM platform_identity_bindings
+                   WHERE platform=? AND identifier_type=? AND external_actor_id=?
+                     AND account_scope=? AND entity_id=? AND enabled=1
+                     AND trust IN ('operator_verified','platform_authenticated')""",
+                (platform, identifier_type, external_actor_id, account_scope, entity_id),
+            ).fetchone()
+        if row is None:
+            return False
+        try:
+            binding = PlatformIdentityBinding.model_validate(dict(row))
+        except ValidationError:
+            return False
+        return binding.enabled
+
     def platform_binding_admin_rows_for(self, entity_id: str) -> tuple[dict[str, object], ...]:
         """Private operator-only read of raw bindings for non-destructive diagnostics.
 

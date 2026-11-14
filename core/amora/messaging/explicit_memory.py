@@ -9,8 +9,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from amora.identity.profiles import BindingTrust
-
 OWNER_ENTITY_ID = "PERSON_BK"
 PROVENANCE_SOURCE = "cognition:explicit_owner_request"
 _MAX_CONTENT = 2000
@@ -72,16 +70,9 @@ def is_verified_owner(profiles, message, speaker_entity_id: str | None) -> bool:
     if speaker_entity_id != OWNER_ENTITY_ID or message.platform.value != "discord":
         return False
     return any(
-        binding.enabled
-        and binding.trust in {BindingTrust.OPERATOR_VERIFIED, BindingTrust.PLATFORM_AUTHENTICATED}
-        and binding.platform.value == "discord"
-        and binding.account_scope == message.account_scope
-        and binding.identifier_type in {"discord_user_id", "user_id"}
-        and any(
-            ref.identifier_type in {"discord_user_id", "user_id"}
-            and ref.external_actor_id == binding.external_actor_id
-            and re.fullmatch(r"[0-9]{15,22}", ref.external_actor_id)
-            for ref in message.sender_identifiers
+        profiles.has_verified_discord_binding(
+            entity_id=OWNER_ENTITY_ID, identifier_type=ref.identifier_type,
+            external_actor_id=ref.external_actor_id, account_scope=message.account_scope,
         )
-        for binding in profiles.bindings_for(OWNER_ENTITY_ID)
+        for ref in message.sender_identifiers
     )

@@ -228,3 +228,42 @@ async def test_saved_source_edit_archives_memory_and_old_revision_cannot_rewrite
         assert core.memory.get(new_id).archived_at is None
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_owner_save_ignores_unrelated_legacy_invalid_binding(tmp_path, monkeypatch):
+    """Production regression: an old username row must not crash a verified DM."""
+    from pydantic import ValidationError
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE", "1")
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        now = core.clock.now().isoformat()
+        with core.database._lock, core.database._conn:
+            core.database._conn.execute(
+                """INSERT INTO platform_identity_bindings(
+                    platform, identifier_type, external_actor_id, account_scope,
+                    entity_id, trust, confidence, enabled, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                ("discord", "user_id", "old-discord-handle", "primary",
+                 "PERSON_BK", "operator_verified", 1.0, 1, now, now),
+            )
+        # Reproduce the old crash without weakening strict administrative reads.
+        with pytest.raises(ValidationError):
+            core.profiles.bindings_for("PERSON_BK")
+        before = core.memory.store.count()
+        result = await core.messaging.receive(_dm(core, "legacy-binding-save"))
+        assert result.outbound[0].metadata["cognitive_reason_codes"] == ["EXPLICIT_MEMORY_STORED"]
+        assert core.memory.store.count() == before + 1
+        assert core.memory.get(result.outbound[0].metadata["explicit_memory_id"]) is not None
+        assert not core.profiles.has_verified_discord_binding(
+            entity_id="PERSON_BK", identifier_type="user_id",
+            external_actor_id="old-discord-handle", account_scope="primary")
+        assert not core.profiles.has_verified_discord_binding(
+            entity_id="PERSON_BK", identifier_type="discord_user_id",
+            external_actor_id=OWNER, account_scope="other")
+        # Legacy rows remain intact for review; no migration or deletion.
+        assert len(core.database.platform_binding_admin_rows_for("PERSON_BK")) == 2
+    finally:
+        core.close()

@@ -137,6 +137,9 @@ class PersonProfileStore(Protocol):
         account_scope: str,
     ) -> str | None: ...
     def platform_bindings_for(self, entity_id: str) -> tuple[PlatformIdentityBinding, ...]: ...
+    def has_verified_platform_binding(self, *, platform: str, identifier_type: str,
+                                      external_actor_id: str, account_scope: str,
+                                      entity_id: str) -> bool: ...
 
 
 class PeopleProfileCatalogStore:
@@ -315,6 +318,19 @@ class PersonProfileService:
 
     def profiles(self) -> tuple[PersonProfileSeed, ...]:
         return self.store.list_person_profiles()
+
+    def has_verified_discord_binding(self, *, entity_id: str, identifier_type: str,
+                                     external_actor_id: str, account_scope: str) -> bool:
+        if (identifier_type not in {"discord_user_id", "user_id"}
+                or not _DISCORD_SNOWFLAKE.fullmatch(external_actor_id)
+                or self.identities.get(entity_id) is None):
+            return False
+        # Match the exact alias of the native identifier used by resolution.
+        return any(self.store.has_verified_platform_binding(
+            platform="discord", identifier_type=candidate,
+            external_actor_id=external_actor_id, account_scope=account_scope,
+            entity_id=entity_id,
+        ) for candidate in self._identifier_type_candidates("discord", identifier_type))
 
     def bindings_for(self, entity_id: str) -> tuple[PlatformIdentityBinding, ...]:
         return self.store.platform_bindings_for(entity_id)
