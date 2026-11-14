@@ -287,4 +287,20 @@ def trace_messaging_turn(fn):
                     log_trace("critical_path", {key: trace[key] for key in keys if key in trace},
                               turn_id=self._turn_id(message),
                               outbound_id=outbound.id if outbound is not None else None, outcome=outcome)
+                    # Separate small records: Northflank truncates long JSON messages.
+                    phases = {
+                        "critical_prepare": ("messaging_pre_cognition_ms", "context_compile_ms",
+                            "stage_record_input_ms", "stage_record_input_calls",
+                            "stage_interaction_appraisal_ms", "stage_generation_lease_wait_ms"),
+                        "critical_finalize": ("stage_validated_plan_ms", "stage_text_batch_ms",
+                            "stage_text_batch_persist_ms", "stage_text_batch_persist_sql_calls",
+                            "stage_text_finalization_ms", "stage_text_final_journals_sql_calls",
+                            "stage_segment_persist_sql_calls", "stage_message_persist_sql_calls",
+                            "stage_journal_persist_sql_calls", "stage_finish_plan_ms"),
+                    }
+                    for kind, phase_keys in phases.items():
+                        log_trace(kind, {key: trace[key] for key in phase_keys if key in trace},
+                                  turn_id=self._turn_id(message),
+                                  outbound_id=outbound.id if outbound is not None else None,
+                                  outcome=outcome)
     return wrapped

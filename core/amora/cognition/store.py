@@ -51,13 +51,13 @@ class CognitiveStore:
     def _is_redacted(scope: PrivacyScope) -> bool:
         return scope in {PrivacyScope.SECRET, PrivacyScope.AUTH}
 
-    @trace_stage("message_persist")
-    def put_message(self, item: ConversationMessage) -> bool:
+
+    def _message_values(self, item: ConversationMessage):
         redacted = self._is_redacted(item.privacy_scope)
         metadata = dict(item.metadata)
         if redacted:
             metadata = {"content_redacted": True}
-        values = (
+        return (
             str(item.id), str(item.turn_id), item.speaker_id, item.addressee_id, item.source.value,
             None if redacted else item.raw_text,
             None if redacted else item.normalized_text,
@@ -68,6 +68,10 @@ class CognitiveStore:
             item.started_at.isoformat(), item.finished_at.isoformat() if item.finished_at else None,
             json.dumps(metadata, ensure_ascii=False, separators=(",", ":")), item.dedupe_key,
         )
+
+    @trace_stage("message_persist")
+    def put_message(self, item: ConversationMessage) -> bool:
+        values = self._message_values(item)
         with trace_lock(self._lock):
             try:
                 execute_atomic_statement(
@@ -176,15 +180,15 @@ class CognitiveStore:
             )
             return cur.rowcount > 0
 
-    @trace_stage("journal_persist")
-    def put_journal(self, entry: CognitiveJournalEntry) -> bool:
+
+    def _journal_values(self, entry: CognitiveJournalEntry):
         redacted = self._is_redacted(entry.privacy_scope)
         summary = "REDACTED" if redacted and entry.summary else entry.summary
         payload = {} if redacted else entry.payload
         metadata = dict(entry.metadata)
         if redacted:
             metadata = {"content_redacted": True}
-        values = (
+        return (
             str(entry.id), str(entry.turn_id), entry.stage.value, entry.timestamp.isoformat(), entry.source,
             summary, json.dumps(entry.reason_codes, ensure_ascii=False),
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")), entry.privacy_scope.value,
@@ -192,6 +196,10 @@ class CognitiveStore:
             str(entry.correlation_id) if entry.correlation_id else None, entry.error_code,
             json.dumps(metadata, ensure_ascii=False, separators=(",", ":")), entry.dedupe_key,
         )
+
+    @trace_stage("journal_persist")
+    def put_journal(self, entry: CognitiveJournalEntry) -> bool:
+        values = self._journal_values(entry)
         with trace_lock(self._lock):
             cursor = execute_atomic_statement(
                 self.backend,
@@ -207,6 +215,25 @@ class CognitiveStore:
                 raise sqlite3.DatabaseError("SQL_UNEXPECTED_ROWCOUNT")
         return cursor.rowcount == 1
 
+    @trace_stage("text_final_journals")
+    def put_text_final_journals(self, entries):
+        """Keep both journal contracts, but persist them in one SQL statement."""
+        if len(entries) != 2 or any(
+                entry.stage.value != "response_planned"
+                or entry.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}
+                for entry in entries):
+            raise ValueError("INVALID_TEXT_FINAL_JOURNALS")
+        values = tuple(value for entry in entries for value in self._journal_values(entry))
+        with trace_lock(self._lock):
+            execute_atomic_statement(
+                self.backend, self._conn,
+                """INSERT INTO cognitive_journal(
+                    id, turn_id, stage, timestamp, source, summary, reason_codes_json, payload_json,
+                    privacy_scope, provider, model, duration_ms, correlation_id, error_code, metadata_json, dedupe_key
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(dedupe_key) DO NOTHING""", values,
+            )
+
     def journal_for_turn(self, turn_id: UUID | str) -> list[CognitiveJournalEntry]:
         with trace_lock(self._lock):
             rows = self._conn.execute(
@@ -221,6 +248,16 @@ class CognitiveStore:
             ).fetchall()
         return [self._journal_from_row(row) for row in reversed(rows)]
 
+    @staticmethod
+    def _segment_values(segment: SpeechSegment):
+        return (
+            str(segment.id), str(segment.turn_id), segment.ordinal, segment.display_text, segment.speech_text,
+            segment.status.value, segment.tts_provider, segment.voice_id, segment.queued_at.isoformat(),
+            segment.started_at.isoformat() if segment.started_at else None,
+            segment.finished_at.isoformat() if segment.finished_at else None, int(segment.interrupted),
+            json.dumps(segment.metadata, ensure_ascii=False, separators=(",", ":")),
+        )
+
     @trace_stage("segment_persist")
     def put_segment(self, segment: SpeechSegment) -> bool:
         with trace_lock(self._lock):
@@ -232,18 +269,60 @@ class CognitiveStore:
                         id, turn_id, ordinal, display_text, speech_text, status, tts_provider, voice_id,
                         queued_at, started_at, finished_at, interrupted, metadata_json
                     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        str(segment.id), str(segment.turn_id), segment.ordinal, segment.display_text, segment.speech_text,
-                        segment.status.value, segment.tts_provider, segment.voice_id, segment.queued_at.isoformat(),
-                        segment.started_at.isoformat() if segment.started_at else None,
-                        segment.finished_at.isoformat() if segment.finished_at else None, int(segment.interrupted),
-                        json.dumps(segment.metadata, ensure_ascii=False, separators=(",", ":")),
-                    ),
+                    self._segment_values(segment),
                 )
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise
                 return False
+        return True
+
+    @trace_stage("text_batch_persist")
+    def persist_text_batch(self, records, *, session_id, native_hash, revision):
+        """Commit fresh text-only history atomically; never retry uncertain writes.
+
+        Each record contains the legacy segment, history row and journal.
+        Existing partial turns use the original recovery path instead.
+        """
+        if not records:
+            return False
+        turn_id = str(records[0][0].turn_id)
+        if any(str(segment.turn_id) != turn_id or str(message.turn_id) != turn_id
+               or str(entry.turn_id) != turn_id
+               or message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}
+               for segment, message, entry in records):
+            raise ValueError("INVALID_TEXT_BATCH")
+        with trace_lock(self._lock), self._conn:
+            if session_id and native_hash and isinstance(revision, int):
+                if self.source_invalidated(session_id, native_hash, revision):
+                    from amora.messaging.generation_lifecycle import InboundGenerationLost
+                    raise InboundGenerationLost("INBOUND_SOURCE_INVALIDATED")
+            if self._conn.execute(
+                    "SELECT 1 FROM speech_segments WHERE turn_id=? "
+                    "UNION ALL SELECT 1 FROM conversation_messages "
+                    "WHERE turn_id=? AND speaker_id='ENTITY_AMORA' LIMIT 1",
+                    (turn_id, turn_id)).fetchone() is not None:
+                return False
+            for sql, values in (
+                ("""INSERT INTO speech_segments(
+                        id, turn_id, ordinal, display_text, speech_text, status, tts_provider, voice_id,
+                        queued_at, started_at, finished_at, interrupted, metadata_json
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 [self._segment_values(segment) for segment, _, _ in records]),
+                ("""INSERT INTO conversation_messages(
+                        id, turn_id, speaker_id, addressee_id, source, raw_text, normalized_text, spoken_text,
+                        privacy_scope, remote_processing_allowed, stt_confidence, provider, model, status, interrupted,
+                        source_event_id, session_id, started_at, finished_at, metadata_json, dedupe_key
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 [self._message_values(message) for _, message, _ in records]),
+                ("""INSERT INTO cognitive_journal(
+                    id, turn_id, stage, timestamp, source, summary, reason_codes_json, payload_json,
+                    privacy_scope, provider, model, duration_ms, correlation_id, error_code, metadata_json, dedupe_key
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(dedupe_key) DO NOTHING""",
+                 [self._journal_values(entry) for _, _, entry in records]),
+            ):
+                self._conn.executemany(sql, values)
         return True
 
     @trace_stage("segments_read")

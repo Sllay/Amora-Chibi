@@ -502,7 +502,7 @@ class PlatformMessagingService:
         cognition_started = perf_counter()
         try:
             plan = await asyncio.wait_for(
-                self.cognition.respond(request, on_segment=None, fallback_text=fallback),
+                self.cognition.respond_observed(request, on_segment=None, fallback_text=fallback),
                 timeout=self.cognition_timeout_seconds,
             )
             provider = plan.provider

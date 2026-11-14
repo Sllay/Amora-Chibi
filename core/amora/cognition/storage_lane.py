@@ -7,7 +7,8 @@ from amora.storage.owned_lane import OwnedStorageLane
 
 class CognitiveStorageLane(OwnedStorageLane):
     allowed = frozenset({"list_messages", "get_message_by_dedupe", "put_message",
-                         "put_journal", "list_segments", "source_invalidated"})
+                         "put_journal", "list_segments", "source_invalidated",
+                         "persist_text_batch", "put_text_final_journals"})
     trace_name = "cognitive_db_lane"
 
     def __init__(self, store):
