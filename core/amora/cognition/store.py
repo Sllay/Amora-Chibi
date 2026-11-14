@@ -215,6 +215,25 @@ class CognitiveStore:
                 raise sqlite3.DatabaseError("SQL_UNEXPECTED_ROWCOUNT")
         return cursor.rowcount == 1
 
+    @trace_stage("text_final_journals")
+    def put_text_final_journals(self, entries):
+        """Keep both journal contracts, but persist them in one SQL statement."""
+        if len(entries) != 2 or any(
+                entry.stage.value != "response_planned"
+                or entry.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}
+                for entry in entries):
+            raise ValueError("INVALID_TEXT_FINAL_JOURNALS")
+        values = tuple(value for entry in entries for value in self._journal_values(entry))
+        with trace_lock(self._lock):
+            execute_atomic_statement(
+                self.backend, self._conn,
+                """INSERT INTO cognitive_journal(
+                    id, turn_id, stage, timestamp, source, summary, reason_codes_json, payload_json,
+                    privacy_scope, provider, model, duration_ms, correlation_id, error_code, metadata_json, dedupe_key
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(dedupe_key) DO NOTHING""", values,
+            )
+
     def journal_for_turn(self, turn_id: UUID | str) -> list[CognitiveJournalEntry]:
         with trace_lock(self._lock):
             rows = self._conn.execute(
@@ -279,8 +298,10 @@ class CognitiveStore:
                     from amora.messaging.generation_lifecycle import InboundGenerationLost
                     raise InboundGenerationLost("INBOUND_SOURCE_INVALIDATED")
             if self._conn.execute(
-                    "SELECT 1 FROM speech_segments WHERE turn_id=? LIMIT 1",
-                    (turn_id,)).fetchone() is not None:
+                    "SELECT 1 FROM speech_segments WHERE turn_id=? "
+                    "UNION ALL SELECT 1 FROM conversation_messages "
+                    "WHERE turn_id=? AND speaker_id='ENTITY_AMORA' LIMIT 1",
+                    (turn_id, turn_id)).fetchone() is not None:
                 return False
             for sql, values in (
                 ("""INSERT INTO speech_segments(
