@@ -270,7 +270,8 @@ class MemoryStore:
             return cur.rowcount > 0
 
     def recall_owner_records(self, owner_id: str, topic: str, *, generic: bool = False,
-                             limit: int = 3, public_only: bool = False) -> tuple[list[MemoryRecord], bool]:
+                             limit: int = 3, public_only: bool = False,
+                             share_only: bool = False) -> tuple[list[MemoryRecord], bool]:
         """Read-only, owner-scoped recall independent of conversation history.
 
         Search the full eligible FTS corpus first. A bounded fallback covers
@@ -283,7 +284,11 @@ class MemoryStore:
             return [], True
         limit = max(1, min(5, limit))
         now = self.clock.now().isoformat()
-        sql = ("SELECT * FROM memory_records WHERE owner_entity_id=? "
+        if share_only:
+            from .disclosure import SHAREABLE_MEMORY_SQL
+            sql = "SELECT m.* FROM memory_records m WHERE " + SHAREABLE_MEMORY_SQL
+        else:
+            sql = ("SELECT * FROM memory_records WHERE owner_entity_id=? "
                "AND privacy_scope IN ('PERSONAL','PRIVATE','SOCIAL','PUBLIC') "
                "AND archived_at IS NULL AND (valid_from IS NULL OR valid_from<=?) "
                "AND (valid_until IS NULL OR valid_until>=?)")
@@ -321,6 +326,16 @@ class MemoryStore:
                 if len(matched) >= limit:
                     break
             return list(self._hydrate_many(matched[:limit]).values()), complete
+
+    def shareable_owner_record(self, owner_id: str, record_id: str) -> MemoryRecord | None:
+        from .disclosure import SHAREABLE_MEMORY_SQL
+        now = self.clock.now().isoformat()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT m.* FROM memory_records m WHERE " + SHAREABLE_MEMORY_SQL + " AND m.id=?",
+                (owner_id, now, now, record_id),
+            ).fetchone()
+            return self._hydrate(row) if row is not None else None
 
     def owner_turn_memory_status(self, turn_id: str, owner_id: str) -> list[dict]:
         """Operator-only metadata; never return the memory text or other owners."""

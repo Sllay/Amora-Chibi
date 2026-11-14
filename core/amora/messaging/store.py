@@ -192,6 +192,26 @@ class MessagingStore:
             ).fetchall()
         return tuple(self._audit_from_row(row) for row in rows)
 
+    def disclosure_is_current(self, message: OutboundMessage) -> bool:
+        """Recheck the single-use grant against the current source version."""
+        from amora.memory.disclosure import SHAREABLE_MEMORY_SQL
+        from .explicit_memory import OWNER_ENTITY_ID
+        grant = message.metadata.get("memory_disclosure")
+        if not isinstance(grant, dict):
+            return False
+        now = self.clock.now().isoformat()
+        if (grant.get("owner_id") != OWNER_ENTITY_ID
+                or message.target_entity_id != OWNER_ENTITY_ID
+                or not grant.get("record_id") or not grant.get("updated_at")):
+            return False
+        with self.database._lock:
+            row = self.database._conn.execute(
+                "SELECT 1 FROM memory_records m WHERE " + SHAREABLE_MEMORY_SQL +
+                " AND m.id=? AND m.updated_at=?",
+                (OWNER_ENTITY_ID, now, now, grant["record_id"], grant["updated_at"]),
+            ).fetchone()
+        return row is not None
+
     def put_outbound(self, message: OutboundMessage, *, generation_lease=None) -> bool:
         values = (
             str(message.id), message.platform.value, message.account_scope, message.conversation_id,
@@ -215,6 +235,20 @@ class MessagingStore:
                     WHERE x.session_id=g.session_id AND x.native_message_hash=g.native_message_hash
                     AND x.invalidated_through>=g.transport_revision))"""
             values += (turn_id, token, self.clock.now().isoformat())
+        grant = message.metadata.get("memory_disclosure")
+        if grant is not None:
+            from amora.memory.disclosure import SHAREABLE_MEMORY_SQL
+            from .explicit_memory import OWNER_ENTITY_ID
+            if (generation_lease is None or not isinstance(grant, dict)
+                    or grant.get("turn_id") != generation_lease[0]
+                    or grant.get("owner_id") != OWNER_ENTITY_ID
+                    or message.target_entity_id != OWNER_ENTITY_ID):
+                raise InboundGenerationLost("MEMORY_DISCLOSURE_GRANT_INVALID")
+            now = self.clock.now().isoformat()
+            sql += " AND EXISTS (SELECT 1 FROM memory_records m WHERE " + SHAREABLE_MEMORY_SQL + " AND m.id=? AND m.updated_at=?)"
+            values += (OWNER_ENTITY_ID, now, now, grant.get("record_id"), grant.get("updated_at"))
+            sql += " AND EXISTS (SELECT 1 FROM messaging_inbound_generation g WHERE g.turn_id=? AND g.session_id=?)"
+            values += (generation_lease[0], grant.get("session_id"))
         sql += " ON CONFLICT(id) DO NOTHING"
         with self.database._lock:
             cursor = execute_atomic_statement(self.database.backend, self.database._conn, sql, values)
@@ -256,6 +290,16 @@ class MessagingStore:
                 (platform.value, account_scope, now.isoformat(), limit),
             ).fetchall()
             for row in rows:
+                candidate = self._outbound_from_row(row)
+                if candidate.metadata.get("memory_disclosure"):
+                    from .disclosure import public_text_allowed, audience_text_allowed
+                    if (not self.disclosure_is_current(candidate)
+                            or not public_text_allowed(candidate.text)
+                            or not audience_text_allowed(candidate.text, audience_id=candidate.metadata["memory_disclosure"].get("session_id"))):
+                        self.database._conn.execute(
+                            "UPDATE messaging_outbound_queue SET status='cancelled',error_code='MEMORY_DISCLOSURE_STALE',claim_expires_at=NULL WHERE id=? AND status IN ('queued','claimed')",
+                            (row["id"],))
+                        continue
                 cursor = self.database._conn.execute(
                     """UPDATE messaging_outbound_queue
                        SET status='claimed', claimed_at=?, claim_expires_at=?
