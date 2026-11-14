@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage, span
+
 from typing import Any
 import re
 
@@ -134,6 +136,7 @@ class ContextCompiler:
         )
         world.subscribe_claim_observer(self.relationship_learning.observe_claim)
 
+    @trace_stage("context_base")
     def compile(self, request: CognitiveRequest, *, token_budget: int = 16384) -> CognitiveContext:
         from .expressive_profile import configured_profile, profile_text
         remote = self.privacy_gate.remote_allowed(request)
@@ -297,34 +300,36 @@ class ContextCompiler:
         recent = recent[-48:]
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
-        reference_registry = scoped_registry(self.identities, request.speaker_id,
-                                             authorized_relations=authorized_relations,
-                                             include_recipient_edges=not shared)
-        relationships = [relation.model_dump(mode="json") for relation in reference_registry.relationships]
-        if compile_acir:
-            resolver = PerspectiveResolver(reference_registry)
-            perspective = PerspectiveStack(PerspectiveFrame(speaker_id=request.speaker_id, addressee_id=request.target_id))
-            antecedents = history_antecedents(recent, resolver) if request.session_id is not None else []
-            acir = ACIRCompiler(resolver).compile_utterance(request.text, perspective,
-                                                         antecedents=antecedents).model_dump(mode="json")
-            reasons.append("ACIR_COMPILED")
+        with span("acir"):
+            reference_registry = scoped_registry(self.identities, request.speaker_id,
+                                                 authorized_relations=authorized_relations,
+                                                 include_recipient_edges=not shared)
+            relationships = [relation.model_dump(mode="json") for relation in reference_registry.relationships]
+            if compile_acir:
+                resolver = PerspectiveResolver(reference_registry)
+                perspective = PerspectiveStack(PerspectiveFrame(speaker_id=request.speaker_id, addressee_id=request.target_id))
+                antecedents = history_antecedents(recent, resolver) if request.session_id is not None else []
+                acir = ACIRCompiler(resolver).compile_utterance(request.text, perspective,
+                                                             antecedents=antecedents).model_dump(mode="json")
+                reasons.append("ACIR_COMPILED")
 
-        self_snapshot = self.self_model.snapshot()
-        if shared:
-            # Snapshot values have no audience metadata. Do not project learned
-            # preferences, relationship maps or private current-state summaries.
-            identity = self_snapshot.get("core_identity", {})
-            self_snapshot = {"core_identity": {
-                key: identity[key] for key in ("canonical_name",) if key in identity
-            }}
-            intention = None
-            reasons.append("SHARED_CONTEXT_SELF_MODEL_RESTRICTED")
-        if remote:
-            # Cross-person self-relationship maps are not safe to expose
-            # wholesale. Recipient-scoped relationships are projected above.
-            allowed_layers = {"core_identity", "traits", "preferences", "current_state"}
-            self_snapshot = {key: value for key, value in self_snapshot.items() if key in allowed_layers}
-            reasons.append("SELF_MODEL_REMOTE_LAYER_ALLOWLIST")
+        with span("self_projection"):
+            self_snapshot = self.self_model.snapshot()
+            if shared:
+                # Snapshot values have no audience metadata. Do not project learned
+                # preferences, relationship maps or private current-state summaries.
+                identity = self_snapshot.get("core_identity", {})
+                self_snapshot = {"core_identity": {
+                    key: identity[key] for key in ("canonical_name",) if key in identity
+                }}
+                intention = None
+                reasons.append("SHARED_CONTEXT_SELF_MODEL_RESTRICTED")
+            if remote:
+                # Cross-person self-relationship maps are not safe to expose
+                # wholesale. Recipient-scoped relationships are projected above.
+                allowed_layers = {"core_identity", "traits", "preferences", "current_state"}
+                self_snapshot = {key: value for key, value in self_snapshot.items() if key in allowed_layers}
+                reasons.append("SELF_MODEL_REMOTE_LAYER_ALLOWLIST")
 
         context = CognitiveContext(
             turn_id=request.turn_id, created_at=self.clock.now(), speaker_id=request.speaker_id, expression_profile=profile,
@@ -341,18 +346,20 @@ class ContextCompiler:
         # person/name without leaking the external account identifier.
         if speaker_identity is not None:
             context.dialogue_plan["speaker_identity"] = speaker_identity
-        dialogue_plan = self.dialogue.plan(context)
-        context.dialogue_plan = dialogue_plan.model_dump(mode="json")
-        if speaker_identity is not None:
-            context.dialogue_plan["speaker_identity"] = speaker_identity
-        if context.acir is not None:
-            context.dialogue_plan["input_acir"] = context.acir
-            context.reason_codes.append("ACIR_BOUND_TO_DIALOGUE_PLAN")
-        context.reason_codes.extend(code for code in dialogue_plan.reason_codes if code not in context.reason_codes)
-        context.reason_codes.append(f"DIALOGUE_ACT_{dialogue_plan.act.value.upper()}")
+        with span("dialogue_initial"):
+            dialogue_plan = self.dialogue.plan(context)
+            context.dialogue_plan = dialogue_plan.model_dump(mode="json")
+            if speaker_identity is not None:
+                context.dialogue_plan["speaker_identity"] = speaker_identity
+            if context.acir is not None:
+                context.dialogue_plan["input_acir"] = context.acir
+                context.reason_codes.append("ACIR_BOUND_TO_DIALOGUE_PLAN")
+            context.reason_codes.extend(code for code in dialogue_plan.reason_codes if code not in context.reason_codes)
+            context.reason_codes.append(f"DIALOGUE_ACT_{dialogue_plan.act.value.upper()}")
         return self._fit_budget(context, self.dialogue)
 
     @staticmethod
+    @trace_stage("context_budget")
     def _fit_budget(context: CognitiveContext, dialogue=None) -> CognitiveContext:
         from .context_budget import estimate_context, ContextBudgetExceeded
         def replan():
