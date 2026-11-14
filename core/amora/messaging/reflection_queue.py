@@ -275,19 +275,23 @@ class ReflectionQueue:
         return counts
 
     async def process_once(self):
-        self.reconcile_missing()
-        job = self.claim()
-        if job is None:
-            return False
-        turn_id, input_id, lease_token, _ = job
         install_remote_storage_probe()
         with bind_latency_trace() as trace:
             started = perf_counter()
+            self.reconcile_missing()
+            job = self.claim()
+            if job is None:
+                # Log only unusually expensive idle polling, not every idle tick.
+                set_ms("reflection_poll_ms", elapsed_ms(started))
+                if trace["reflection_poll_ms"] >= 1000:
+                    log_trace("reflection_idle", trace)
+                return False
+            turn_id = job[0]
             try:
                 return await self._process_claimed(job)
             finally:
                 set_ms("reflection_total_ms", elapsed_ms(started))
-                log_trace("reflection", trace, turn_id=turn_id)
+                log_trace("reflection", trace, turn_id=turn_id, outcome="processed")
 
     async def _process_claimed(self, job):
         turn_id, input_id, lease_token, _ = job
