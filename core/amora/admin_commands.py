@@ -648,7 +648,27 @@ async def _command_memory_recall_inspect(core: Any, args: list[str]) -> dict[str
     return {"kind": "memory_recall_inspect", "summary": "Verificação persistente sem conteúdo privado", "data": data}
 
 
+async def _command_numes_probe(core: Any, args: list[str]) -> dict[str, Any]:
+    if args:
+        raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "use providers numes probe")
+    provider = core.cognition._providers.get("numes")
+    if provider is None:
+        raise AdminCommandError("NUMES_NOT_AVAILABLE", "Numes não configurada")
+    try:
+        result = await asyncio.wait_for(provider.probe(), timeout=75.0)
+    except asyncio.TimeoutError:
+        result = {"success": False, "error_code": "PROBE_TIMEOUT"}
+    except Exception as exc:
+        from amora.cognition.providers import ProviderError
+        result = {"success": False, "error_code": type(exc).__name__,
+                  "status_code": exc.status_code if isinstance(exc, ProviderError) else None}
+    return {"kind": "numes_probe", "summary": "Sonda sintética Numes sem gravação", "data": result}
+
+
 _COMMANDS: tuple[RegisteredCommand, ...] = (
+    RegisteredCommand(("providers", "numes", "probe"), "providers numes probe",
+                      "Sonda SSE sintética com as mesmas restrições de rota, sem memória.", 85.0,
+                      _command_numes_probe, exclusive=True),
     RegisteredCommand(("memory", "recall", "inspect"), "memory recall inspect TURN_UUID [TOPIC]",
                       "Verificar registros, acesso remoto e busca de um turno do proprietário, sem conteúdo.", 15.0,
                       _command_memory_recall_inspect),
