@@ -317,6 +317,13 @@ class CognitiveEngine:
         self._finish_plan(request, plan)
         return plan
 
+    def _segment_execution_metadata(self, request, on_segment, speech_text) -> dict[str, object]:
+        return {}
+
+    def _after_segment_persisted(self, request, ordinal, speech_text, *, execution_persisted):
+        """Optional structured-runtime persistence hook after delivery callback."""
+        return None
+
     async def _emit_segment(
         self,
         request: CognitiveRequest,
@@ -378,8 +385,11 @@ class CognitiveEngine:
             dedupe_key=f"cognitive:{request.turn_id}:{ordinal}",
         )
         segment.metadata["message_id"] = str(message.id)
-        self.store.put_segment(segment)
-        self.store.put_message(message)
+        segment_inserted = self.store.put_segment(segment)
+        execution = self._segment_execution_metadata(request, on_segment, rendered.speech_text)
+        if segment_inserted and execution:
+            message.metadata.update(execution)
+        message_inserted = self.store.put_message(message)
         self._journal(
             request,
             JournalStage.SPEECH_SEGMENT_READY,
@@ -391,6 +401,10 @@ class CognitiveEngine:
         )
         if on_segment is not None:
             await on_segment(segment)
+        self._after_segment_persisted(
+            request, ordinal, rendered.speech_text,
+            execution_persisted=bool(execution and segment_inserted and message_inserted),
+        )
         return rendered.speech_text
 
     def mark_segment_speaking(self, segment_id: UUID | str, *, turn_id: UUID | str | None = None) -> None:
