@@ -98,7 +98,7 @@ export class MessagingCoreClient {
   }
 
   progress(turnId) {
-    return this.request(`/v1/messaging/worker/progress/${encodeURIComponent(turnId)}`, { timeoutMs: 2500 });
+    return this.request(`/v1/messaging/worker/progress/${encodeURIComponent(turnId)}`, { timeoutMs: 6500 });
   }
 
   invalidateSource({ conversationId, nativeMessageId, reason, transportRevision = null }) {
