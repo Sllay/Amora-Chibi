@@ -93,6 +93,8 @@ class PlatformMessagingService:
             presence=PlatformPresenceController(store, clock, reset_transient=False),
         )
         self._inflight: dict[str, asyncio.Task[InboundResult]] = {}
+        # Ephemeral, content-free status; only owned, authorized Discord DMs.
+        self._active_dm_progress: set[str] = set()
         self.reflections = ReflectionQueue(store.database, cognition, clock)
         self.generations = InboundGeneration(store.database, clock)
 
@@ -113,6 +115,9 @@ class PlatformMessagingService:
             self._inflight[key] = task
             task.add_done_callback(lambda done, key=key: self._drop_inflight(key, done))
         return await asyncio.shield(task)
+
+    def progress_active(self, turn_id: UUID | str) -> bool:
+        return str(turn_id) in self._active_dm_progress
 
     @trace_stage("source_invalidation")
     def _source_invalidated(self, message):
@@ -149,6 +154,7 @@ class PlatformMessagingService:
                 return self._invalidated_result(message)
             raise InboundGenerationBusy("INBOUND_GENERATION_LEASE_LOST") from None
         finally:
+            self._active_dm_progress.discard(turn_id)
             _GENERATION_LEASE.reset(context_token)
             self.generations.release(turn_id, token, completed=completed)
 
@@ -402,6 +408,10 @@ class PlatformMessagingService:
             [*decision.reason_codes, "MESSAGING_REPLY_AUTHORIZED"],
             decision.score,
         )
+
+        if (message.platform.value == "discord" and message.channel_type == ChannelType.DM
+                and decision.speaker_entity_id is not None and _GENERATION_LEASE.get() is not None):
+            self._active_dm_progress.add(str(request.turn_id))
 
         appraise = getattr(self.conversation, "_appraise_interaction", None)
         if callable(appraise):
