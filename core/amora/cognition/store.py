@@ -129,6 +129,15 @@ class CognitiveStore:
             ).fetchall()
         return [self._message_from_row(row) for row in reversed(rows)]
 
+    def source_invalidated(self, session_id, native_message_hash, revision):
+        with trace_lock(self._lock):
+            row = self._conn.execute(
+                "SELECT 1 FROM memory_reflection_invalidations WHERE session_id=? "
+                "AND native_message_hash=? AND invalidated_through>=?",
+                (session_id, native_message_hash, revision),
+            ).fetchone()
+        return row is not None
+
     def reflection_lease_valid(self, turn_id, lease_token):
         with trace_lock(self._lock):
             row = self._conn.execute(
