@@ -65,18 +65,18 @@ async def test_numes_chat_contract_and_zero_token_price(tmp_path, monkeypatch):
             payload = json.loads(req.content)
             payloads.append(payload)
             kind = ctx.dialogue_plan["response_moves"][0]
-            return httpx.Response(200, json={
-                "choices": [{"message": {"content": json.dumps({
-                    "moves": [{"kind": kind, "text": "Que legal, um jogo novo!"}],
-                    "closing": "statement"}), "reasoning_content": "not a final reply"},
-                    "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 100, "completion_tokens": 20, "cost": 0}})
+            return sse_reply({"moves": [{"kind": kind, "text": "Que legal, um jogo novo!"}],
+                              "closing": "statement"})
         fake_http(monkeypatch, handler)
         provider = NumesCognitiveProvider(core.secrets)
         result = await provider.realize(ctx)
         assert result["moves"][0]["text"] == "Que legal, um jogo novo!"
         payload = payloads[0]
         assert payload["store"] is False
+        assert payload["stream"] is True
+        assert result["_usage"]["transport"] == "sse"
+        assert result["_usage"]["first_content_ms"] is not None
+        assert result["_usage"]["first_reasoning_ms"] is not None
         assert payload["model"] == NumesCognitiveProvider.DEFAULT_MODEL
         assert payload["provider"]["max_price"] == {"prompt": 0, "completion": 0}
         assert payload["provider"]["zdr"] is True
@@ -222,3 +222,74 @@ def test_payload_metrics_contains_only_numeric_metadata(caplog):
     assert record.message_count == 1 and record.source_only is True
     assert record.max_output_tokens == 1200
     assert MARKER not in str(record.__dict__)
+
+
+
+def sse_reply(obj, *, finish="stop", done=True, error=None):
+    content = json.dumps(obj, ensure_ascii=False)
+    chunks = [
+        {"choices": [{"index": 0, "delta": {"reasoning": "PRIVATE_REASONING_MARKER"}}]},
+        {"choices": [{"index": 0, "delta": {"content": content[:len(content)//2]}}]},
+        {"choices": [{"index": 0, "delta": {"content": content[len(content)//2:]}}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": finish}]},
+        {"choices": [], "usage": {"prompt_tokens": 100, "completion_tokens": 20}},
+    ]
+    if error:
+        chunks.append({"error": error, "choices": []})
+    raw = "".join("data: " + json.dumps(c, ensure_ascii=False) + "\n\n" for c in chunks)
+    if done:
+        raw += "data: [DONE]\n\n"
+    return httpx.Response(200, content=raw.encode(), headers={"content-type": "text/event-stream"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["missing_done", "length", "in_band_429", "json_instead_of_sse"])
+async def test_numes_stream_rejects_incomplete_and_inband_errors(tmp_path, monkeypatch, mode):
+    configure(monkeypatch, tmp_path)
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        def handler(req):
+            if mode == "json_instead_of_sse":
+                return httpx.Response(200, json={"answer": "4"})
+            return sse_reply({"answer": "4"}, done=mode != "missing_done",
+                             finish="length" if mode == "length" else "stop",
+                             error={"code": 429, "message": MARKER} if mode == "in_band_429" else None)
+        fake_http(monkeypatch, handler)
+        with pytest.raises(ProviderError) as raised:
+            await NumesCognitiveProvider(core.secrets).probe()
+        if mode == "in_band_429":
+            assert raised.value.status_code == 429
+        assert MARKER not in str(raised.value)
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_numes_probe_is_synthetic_and_does_not_write(tmp_path, monkeypatch, caplog):
+    from amora.admin_commands import _command_numes_probe
+    import logging
+    configure(monkeypatch, tmp_path)
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        def handler(req):
+            payload = json.loads(req.content)
+            assert payload["stream"] is True
+            assert payload["provider"]["zdr"] is True
+            assert payload["response_format"] == {"type": "json_object"}
+            assert len(payload["messages"]) == 2
+            assert payload["messages"][-1]["content"] == "What is 2 + 2?"
+            return sse_reply({"answer": "4"})
+        fake_http(monkeypatch, handler)
+        before = core.memory.store.count()
+        with caplog.at_level(logging.INFO, logger="amora.cognition.numes"):
+            result = await _command_numes_probe(core, [])
+        assert result["data"]["success"] is True
+        assert core.memory.store.count() == before
+        assert result["data"]["first_reasoning_ms"] is not None
+        assert result["data"]["first_content_ms"] is not None
+        records = [r for r in caplog.records if r.name == "amora.cognition.numes"]
+        assert records[-1].outcome == "completed"
+        assert "PRIVATE_REASONING_MARKER" not in str([r.__dict__ for r in records])
+        assert "What is 2 + 2?" not in str([r.__dict__ for r in records])
+    finally:
+        core.close()
