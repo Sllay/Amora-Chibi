@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage
+
 from datetime import timedelta
 
 from amora.emotion import EmotionEngine, SocialBid, SocialBidType
@@ -84,6 +86,7 @@ class AutonomyEngine:
                 )
             )
 
+    @trace_stage("autonomy_current_drives")
     def current_drives(self) -> list[DriveState]:
         now = self.clock.now()
         states: list[DriveState] = []
@@ -95,8 +98,8 @@ class AutonomyEngine:
                     "updated_at": now,
                 }
             )
-            self.store.put_drive(updated)
             states.append(updated)
+        self.store.put_drives(states)
         return sorted(states, key=lambda item: item.drive.value)
 
     def adjust_drive(
