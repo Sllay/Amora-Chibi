@@ -281,7 +281,8 @@ def trace_messaging_turn(fn):
                     "event_loop_lag_observed_ingress_ms", "event_loop_lag_observed_cognition_ms",
                     "event_loop_lag_observed_delivery_ms",
                 )
-                log_trace("critical_path", {key: trace[key] for key in keys if key in trace},
-                          turn_id=self._turn_id(message),
-                          outbound_id=outbound.id if outbound is not None else None, outcome=outcome)
+                if trace.get("_critical_phase") in {"ingress", "cognition", "delivery"}:
+                    log_trace("critical_path", {key: trace[key] for key in keys if key in trace},
+                              turn_id=self._turn_id(message),
+                              outbound_id=outbound.id if outbound is not None else None, outcome=outcome)
     return wrapped
