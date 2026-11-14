@@ -212,3 +212,27 @@ async def test_owner_automatic_reflection_record_eligible_and_source_edit_blocks
         assert out.id not in {item.id for item in claimed}
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_remote_hrana_disclosure_uses_persistent_source_and_atomic_outbound(tmp_path, monkeypatch):
+    from test_remote_context_batching import _remote_core
+    core, server = _remote_core(tmp_path, monkeypatch)
+    try:
+        _bind_bk(core)
+        core.memory.store.fts_enabled = False
+        memory = _memory(core, SOURCE, remote=False)
+        request = _group(core, "remote-share")
+        out = (await core.messaging.receive(request)).outbound[0]
+        assert out.metadata["cognitive_reason_codes"] == ["MEMORY_DISCLOSURE_AUTHORIZED"]
+        assert out.metadata["memory_disclosure"]["record_id"] == str(memory.id)
+        assert "cinco mapas" in out.text
+        assert core.messaging.store.disclosure_is_current(out)
+        assert core.messaging.store.get_outbound(out.id).text == out.text
+        core.memory.archive(memory.id)
+        claimed = core.messaging.store.claim_outbound(
+            platform=MessagingPlatform.DISCORD, account_scope="primary")
+        assert out.id not in {item.id for item in claimed}
+        assert core.messaging.store.get_outbound(out.id).status.value == "cancelled"
+    finally:
+        core.close()
