@@ -109,17 +109,23 @@ class CognitiveEngine(ProductionCognitiveEngine):
         *,
         source=None,
     ) -> str | None:
-        speech = await super()._emit_segment(
-            request,
-            raw_text,
-            ordinal,
-            provider,
-            model,
-            on_segment,
-            source=source,
+        return await super()._emit_segment(
+            request, raw_text, ordinal, provider, model, on_segment, source=source,
         )
-        if not speech:
-            return speech
+
+    def _segment_execution_metadata(self, request, on_segment, speech_text) -> dict[str, object]:
+        # Text transport owns no voice callback. Include the already-authorized
+        # flags in the initial INSERT rather than reading/re-writing that row.
+        if (request.metadata.get("surface") == "platform_messaging"
+                and on_segment is None and speech_text
+                and request.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET}):
+            return _execution_metadata(request.metadata)
+        return {}
+
+    def _after_segment_persisted(self, request, ordinal, speech_text, *, execution_persisted):
+        if not speech_text or execution_persisted:
+            return
+        # Preserve legacy voice/callback ordering and deduplicated row recovery.
         execution = _execution_metadata(request.metadata)
         if execution:
             segment = next(
@@ -130,7 +136,6 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 message_id = segment.metadata.get("message_id")
                 if message_id:
                     self.store.merge_message_metadata(str(message_id), execution)
-        return speech
 
     @trace_stage("cognitive_response")
     async def _respond_with_failover(
