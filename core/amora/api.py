@@ -93,6 +93,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         numes = core.cognition._providers.get("numes")
         if callable(getattr(numes, "start_transport", None)):
             await numes.start_transport()
+        core.cognition.store.start_async_lane()
         core.autonomy.schedule_idle(core.scheduler)
         scheduler_runtime.start()
         core.messaging.reflections.start()
@@ -116,8 +117,11 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
                         backend.close()
                 finally:
                     try:
-                        if callable(getattr(numes, "stop_transport", None)):
-                            await numes.stop_transport()
+                        try:
+                            await core.cognition.store.stop_async_lane()
+                        finally:
+                            if callable(getattr(numes, "stop_transport", None)):
+                                await numes.stop_transport()
                     finally:
                         if own_core:
                             core.close()
