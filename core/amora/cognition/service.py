@@ -3,6 +3,7 @@ from __future__ import annotations
 from amora.latency_trace import trace_stage
 
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from time import perf_counter
 from typing import Any
 from uuid import UUID
@@ -29,6 +30,8 @@ from .usage import UsagePersistence, UsageRecorder
 
 
 SegmentSink = Callable[[SpeechSegment], Awaitable[None]]
+# Only an internal caller that has completed observe_input may bind this receipt.
+_OBSERVED_INPUT: ContextVar = ContextVar("observed_cognitive_input", default=None)
 
 
 class CognitiveEngine:
@@ -376,8 +379,7 @@ class CognitiveEngine:
             dedupe_key=f"cognitive:{request.turn_id}:{ordinal}",
         )
         segment.metadata["message_id"] = str(message.id)
-        entry = self._journal_entry(
-            request, JournalStage.SPEECH_SEGMENT_READY,
+        fields = dict(
             summary="speakable segment ready",
             reason_codes=["SPEECH_NORMALIZED", "SEGMENT_STABLE"],
             provider=provider, model=model,
@@ -385,7 +387,7 @@ class CognitiveEngine:
                      "message_id": str(message.id), "chars": len(rendered.speech_text),
                      "cues": list(rendered.nonverbal_cues)},
         )
-        return segment, message, entry
+        return segment, message, fields
 
     async def _emit_segment(
         self,
@@ -401,7 +403,7 @@ class CognitiveEngine:
         record = self._build_segment_record(request, raw_text, ordinal, provider, model, source=source)
         if record is None:
             return None
-        segment, message, entry = record
+        segment, message, fields = record
         speech_text = segment.speech_text
         segment_inserted = self.store.put_segment(segment)
         execution = self._segment_execution_metadata(request, on_segment, speech_text)
@@ -409,9 +411,7 @@ class CognitiveEngine:
             message.metadata.update(execution)
         message_inserted = self.store.put_message(message)
         self._journal(
-            request, JournalStage.SPEECH_SEGMENT_READY,
-            summary=entry.summary, reason_codes=entry.reason_codes,
-            provider=provider, model=model, payload=entry.payload,
+            request, JournalStage.SPEECH_SEGMENT_READY, **fields,
         )
         if on_segment is not None:
             await on_segment(segment)
@@ -546,6 +546,18 @@ class CognitiveEngine:
         if await lane.call("get_message_by_dedupe", dedupe) is None:
             await lane.call("put_message", self._input_message(request, dedupe))
         await self._journal_async(request, JournalStage.INPUT_OBSERVED, **self._input_journal_fields(request))
+
+    async def respond_observed(self, request: CognitiveRequest, **kwargs):
+        """Internal messaging continuation after successful durable observation."""
+        receipt = _OBSERVED_INPUT.set((self, request))
+        try:
+            return await self.respond(request, **kwargs)
+        finally:
+            _OBSERVED_INPUT.reset(receipt)
+
+    def _input_already_observed(self, request):
+        receipt = _OBSERVED_INPUT.get()
+        return receipt is not None and receipt[0] is self and receipt[1] is request
 
     async def observe_input_async(self, request: CognitiveRequest) -> None:
         if self._async_storage_enabled(request):
