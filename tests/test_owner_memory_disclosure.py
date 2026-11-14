@@ -133,7 +133,7 @@ async def test_denials_never_disclose_and_topic_excerpt_excludes_other_sentences
             assert "cinco mapas" not in out.text and "segredo protegido" not in out.text
         out = (await core.messaging.receive(_group(core, "excerpt"))).outbound[0]
         assert out.metadata["memory_disclosure"]["record_id"] == str(memory.id)
-        assert SOURCE in out.text and SECRET_MARKER not in out.text
+        assert "Orquídea terá cinco mapas e será de sobrevivência" in out.text and SECRET_MARKER not in out.text
         _memory(core, "Projeto Orquídea terá um protótipo.")
         ambiguous = (await core.messaging.receive(_group(core, "ambiguous"))).outbound[0]
         assert ambiguous.metadata["cognitive_reason_codes"] == ["MEMORY_DISCLOSURE_AMBIGUOUS"]

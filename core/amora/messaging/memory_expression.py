@@ -50,9 +50,10 @@ def _replace_possessive(match: re.Match[str]) -> str:
 
 
 def _direct_clause(text: str) -> str | None:
-    if _COMPLEX.search(text):
-        return None
     first = _FIRST_PERSON.match(text)
+    check = text[first.end():] if first else text
+    if _COMPLEX.search(check) or re.search(r"[';:]|\b(?:e|ou)\s+", check, re.I):
+        return None
     possessive = _FIRST_POSSESSIVE.match(text)
     if first:
         rest = text[first.end():]
@@ -90,7 +91,8 @@ def memory_clause(record, excerpt: str) -> str:
             # Only the first clause is conjugated; subsequent sentences must
             # not contain a new implicit first-person verb. Use a quote if they do.
             later = _SENTENCE.split(source)[1:]
-            if not any(_FIRST_PERSON.match(part) or _FIRST_POSSESSIVE.match(part) for part in later):
+            if all(re.match(r"^(?:ele|ela|esse sistema|essa ferramenta|esse projeto|o sistema|o projeto)\s+(?:ser[aá]|vai|tem|ter[aá]|[eé])\b", part, re.I)
+                   for part in later):
                 return "Você me contou que " + clause
         return "Você me contou: “" + source + "”"
     # Other provenance is a stored report/inference, not proof the owner said it.
