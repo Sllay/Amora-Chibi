@@ -103,6 +103,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             yield
         finally:
             app.state.accepting = False
+            await core.messaging.stop_inflight()
             await core.messaging.reflections.stop()
             core.scheduler.cancel("autonomy.idle")
             await scheduler_runtime.stop()
