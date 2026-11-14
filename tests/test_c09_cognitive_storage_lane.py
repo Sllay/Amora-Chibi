@@ -180,3 +180,34 @@ async def test_c09_invalidation_during_preparation_never_calls_provider(remote_c
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
         await store.stop_async_lane()
+
+
+@pytest.mark.asyncio
+async def test_c09_standalone_numes_benchmark_uses_only_synthetic_payloads(monkeypatch):
+    from amora.cognition.benchmark_numes import measure
+    from amora.cognition.providers_numes import NumesCognitiveProvider
+    from test_numes_groq_memory import sse_reply
+    class Secrets:
+        def get(self, name):
+            return "synthetic-key"
+    payloads = []
+    original = httpx.AsyncClient
+    async def handler(req):
+        payloads.append(json.loads(req.content))
+        return sse_reply({"answer": "Planeje recursos."})
+    def factory(*args, **kwargs):
+        return original(*args, **kwargs, transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+    provider = NumesCognitiveProvider(Secrets())
+    rows = await measure(provider, samples=1)
+    assert len(rows) == 2 and all(row["success"] for row in rows)
+    assert rows[0]["profile"] == "small" and rows[1]["profile"] == "large"
+    assert 30000 < rows[1]["payload_bytes"] < 45000
+    assert rows[0]["payload_bytes"] < 2000
+    assert all(row["metrics"]["numes_diag_content_chars"] > 0 for row in rows)
+    assert all(p["model"] == provider.model and p["store"] is False
+               and p["provider"]["max_price"] == {"prompt": 0, "completion": 0}
+               for p in payloads)
+    assert provider._http_client is None
+    assert "Planeje recursos." not in json.dumps(rows)
+    assert "synthetic-key" not in json.dumps(rows)
