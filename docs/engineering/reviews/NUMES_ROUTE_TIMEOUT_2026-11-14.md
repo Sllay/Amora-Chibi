@@ -1,0 +1,7 @@
+# Numes social / Groq memory route isolation
+
+Production turn 1708c567-cf6a-57ff-8415-74f97d2f3349: Numes selected as primary, outer attempt timed out at 75s; Groq Qwen social fallback received HTTP 413; Gemini completed. Independently GPT-OSS durable reflection accepted one candidate in 3.59s. The memory extractor sends only source message, speaker/addressee, extraction instructions and schema; social fallback is a separate path. Logs do not establish why Numes stalled or exact rejected body size.
+
+With AMORA_SOCIAL_PRIMARY=numes, Groq is now source-only for both primary GPT-OSS and Qwen fallback, not a social fallback. Gemini/other existing eligible social providers remain available. Legacy groq/mistral selection stays unchanged. Numes HTTP read timeout is 90s, while the existing 75s surface attempt and 90s total budget remain unchanged; no transparent retry of a stalled transport. Structured repair remains bounded within outer deadline. Log only numeric wire body size, estimated tokens, message count and output limit, phase/model/provider; no user text or secrets. No changes to persona, memory persistence, V3, dialogue.py, database or worker.
+
+Live validation: verify provider_payload log for memory_extraction and realization, repeat ordinary social turn, check Numes HTTP response or timeout and fallback order. A long upstream queue or unavailable free ZDR endpoint still requires provider-side verification; no authenticated request made by this change.

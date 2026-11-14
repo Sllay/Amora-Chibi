@@ -14,6 +14,7 @@ import httpx
 from amora.events import PrivacyScope
 from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from .context_budget import fit_provider_payload
+from .payload_metrics import log_payload_metrics
 from .models import CognitiveContext
 from .providers import ProviderError
 from .providers_identity import _identity_history
@@ -25,7 +26,7 @@ class NumesCognitiveProvider:
     DEFAULT_MODEL = "dealignai/deepseek-v4.1-flash-uncensored-fp8"
     API_URL = "https://api.numes.ai/api/v1/chat/completions"
 
-    def __init__(self, secrets, *, model=None, timeout_seconds=45.0):
+    def __init__(self, secrets, *, model=None, timeout_seconds=90.0):
         self.secrets = secrets
         self.model = model or os.getenv("AMORA_NUMES_DIALOGUE_MODEL", self.DEFAULT_MODEL)
         self.timeout_seconds = timeout_seconds
@@ -74,6 +75,7 @@ class NumesCognitiveProvider:
             }
 
         _, payload = fit_provider_payload(projected, build, ceiling=12000)
+        log_payload_metrics("numes", self.API_URL, payload, phase="realization")
         started = perf_counter()
         async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout_seconds, connect=10),
                                      follow_redirects=False) as client:

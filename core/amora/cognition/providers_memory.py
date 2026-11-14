@@ -8,13 +8,13 @@ from .reflection_contract import is_memory_only
 
 
 class GroqMemoryProvider:
-    def __init__(self, secrets, *, model: str):
+    def __init__(self, secrets, *, model: str, name: str = "groq_memory", primary: bool = True):
         self._transport = GroqCognitiveProvider(secrets, model=model)
         self.descriptor = replace(
-            self._transport.descriptor, name="groq_memory",
+            self._transport.descriptor, name=name,
             capabilities=frozenset({TaskClass.REASONING}),
             supports_streaming=False,
-            metadata={"memory_reflection_only": True},
+            metadata={"memory_reflection_only": True, "memory_primary_preference": primary},
         )
 
     async def propose(self, context):

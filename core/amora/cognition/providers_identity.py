@@ -13,6 +13,7 @@ from .mesh_providers import (
     OpenRouterCognitiveProvider as BaseOpenRouterCognitiveProvider,
 )
 from .context_budget import ensure_payload, fit_provider_payload, estimate_payload
+from .payload_metrics import log_payload_metrics
 from .models import CognitiveContext
 from .preview import preview_enabled, publish_preview
 from .prompt_frame import render_conversation_turn, render_current_turn, render_trusted_protocol
@@ -343,6 +344,10 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
         api_key: str,
         error_label: str,
     ) -> tuple[dict[str, object], Any]:
+        log_payload_metrics(
+            "groq", _GROQ_RESPONSES_URL, payload,
+            phase="memory_extraction" if error_label == "memory extraction" else "realization"
+            if error_label == "structured realization" else "proposal")
         timeout = httpx.Timeout(self.timeout_seconds, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             response = await client.post(
