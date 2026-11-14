@@ -15,14 +15,21 @@ export function messagingTurnId(message) {
     hex.slice(16, 20), hex.slice(20)].join('-');
 }
 
+const MAX_CONSECUTIVE_POLL_ERRORS = 3;
+const MAX_PROGRESS_MS = 120_000;
+
+function transientCoreError(error) {
+  return ['CORE_TIMEOUT', 'CORE_NETWORK_ERROR'].includes(error?.code)
+    || [502, 503, 504].includes(Number(error?.status));
+}
+
 /**
- * Best-effort, nonblocking typing signal. No text is sent here.
- * Poll the authorized Core state before each Discord typing call; stop on
- * completion, transport invalidation, errors, or a bounded number of polls.
- * Timers are injectable for deterministic unit tests.
+ * Best-effort typing signal. Revalidate Core authorization before every send.
+ * A transient Core polling failure must not permanently hide typing for a
+ * healthy inbound request. No retries on permission/Discord REST failures.
  */
 export function startTypingProgress({
-  poll, send, isCurrent, onStop = () => {},
+  poll, send, isCurrent, onStop = () => {}, onEvent = () => {},
   schedule = setTimeout, cancel = clearTimeout,
   now = () => performance.now(),
 }) {
@@ -31,38 +38,63 @@ export function startTypingProgress({
   let timer = null;
   let polls = 0;
   let wasActive = false;
-  function stop() {
+  let pollErrors = 0;
+  function stop(reason = 'cancelled') {
     if (stopped) return;
     stopped = true;
     if (timer !== null) cancel(timer);
-    onStop();
+    onStop(reason);
   }
   function later(delay) {
     if (stopped) return;
-    timer = schedule(tick, delay);
+    const remaining = MAX_PROGRESS_MS - (now() - started);
+    if (remaining <= 0) { stop('deadline'); return; }
+    timer = schedule(tick, Math.min(delay, remaining));
     timer?.unref?.();
+  }
+  function current() {
+    if (stopped) return false;
+    if (!isCurrent()) { stop('source_not_current'); return false; }
+    if (now() - started >= MAX_PROGRESS_MS) { stop('deadline'); return false; }
+    return true;
   }
   async function tick() {
     timer = null;
-    if (stopped || !isCurrent() || ++polls > 60 || now() - started >= 120_000) {
-      stop();
+    if (!current()) return;
+    if (++polls > 60) { stop('poll_limit'); return; }
+    let active;
+    try {
+      active = await poll();
+    } catch (error) {
+      if (!current()) return;
+      pollErrors += 1;
+      const retry = transientCoreError(error) && pollErrors <= MAX_CONSECUTIVE_POLL_ERRORS;
+      onEvent('poll_error', { status: Number(error?.status) || 0, retry, attempt: pollErrors });
+      if (retry) later(1000 * (2 ** (pollErrors - 1)));
+      else stop('poll_failed');
       return;
     }
-    try {
-      const active = await poll();
-      if (stopped || !isCurrent()) { stop(); return; }
-      if (active === true) {
-        wasActive = true;
+    if (!current()) return;
+    pollErrors = 0;
+    if (active === true) {
+      const first = !wasActive;
+      wasActive = true;
+      try {
         await send();
-        later(7000);
-      } else if (wasActive) {
-        stop();
-      } else {
-        later(2000);
+      } catch (error) {
+        if (!stopped) {
+          onEvent('send_error', { status: Number(error?.status) || 0 });
+          stop('discord_send_failed');
+        }
+        return;
       }
-    } catch {
-      // Optional progress never retries a 429/403 or blocks the real answer.
-      stop();
+      if (!current()) return;
+      if (first) onEvent('first_sent', {});
+      later(7000);
+    } else if (wasActive) {
+      stop('core_inactive');
+    } else {
+      later(2000);
     }
   }
   later(500);

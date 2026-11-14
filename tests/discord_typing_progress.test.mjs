@@ -10,17 +10,19 @@ test('turn correlation matches Python UUID v5', () => {
 
 function harness(states) {
   const queue = [];
-  let sent = 0, current = true, stopped = 0, polls = 0;
+  let sent = 0, current = true, stopped = 0, polls = 0, stopReason;
+  const events = [];
   const stop = startTypingProgress({
-    poll: async () => { polls++; return states.shift() ?? false; },
+    poll: async () => { polls++; const value = states.shift(); if (value instanceof Error) throw value; return value ?? false; },
     send: async () => { sent++; },
     isCurrent: () => current,
-    onStop: () => { stopped++; },
+    onStop: reason => { stopped++; stopReason = reason; },
+    onEvent: (event, fields) => events.push({event, ...fields}),
     schedule: (fn, delay) => { const item = {fn, delay}; queue.push(item); return item; },
     cancel: item => { const index = queue.indexOf(item); if (index >= 0) queue.splice(index, 1); },
     now: () => 0,
   });
-  return {queue, stop, next: async () => { await queue.shift()?.fn(); },
+  return {queue, stop, events, reason: () => stopReason, next: async () => { await queue.shift()?.fn(); },
     invalidate: () => { current = false; }, stats: () => ({sent, stopped, polls})};
 }
 
@@ -65,4 +67,98 @@ test('in-flight poll does not send after cancellation', async () => {
   resolve(true);
   await running;
   assert.equal(sent, 0);
+});
+
+function coreError(code, status = null) {
+  return Object.assign(new Error(code), { code, status });
+}
+
+test('transient Core timeout before authorization does not silently kill typing', async () => {
+  const h = harness([coreError('CORE_TIMEOUT'), false, true, true, false]);
+  await h.next();
+  assert.equal(h.queue[0].delay, 1000);
+  assert.equal(h.stats().sent, 0);
+  await h.next();
+  assert.equal(h.queue[0].delay, 2000);
+  await h.next();
+  assert.equal(h.stats().sent, 1);
+  await h.next();
+  assert.equal(h.stats().sent, 2);
+  await h.next();
+  assert.equal(h.reason(), 'core_inactive');
+  assert.deepEqual(h.events.map(x => x.event), ['poll_error', 'first_sent']);
+});
+
+test('transient error after typing still requires fresh active authorization', async () => {
+  const h = harness([true, coreError('CORE_HTTP_503', 503), true, false]);
+  await h.next();
+  await h.next();
+  assert.equal(h.stats().sent, 1);
+  assert.equal(h.queue[0].delay, 1000);
+  await h.next();
+  assert.equal(h.stats().sent, 2);
+  await h.next();
+  assert.equal(h.reason(), 'core_inactive');
+});
+
+test('poll errors are bounded and terminal failures never retry', async () => {
+  const timeout = () => coreError('CORE_TIMEOUT');
+  const h = harness([timeout(), timeout(), timeout(), timeout(), true]);
+  for (const delay of [1000, 2000, 4000]) {
+    await h.next();
+    assert.equal(h.queue[0].delay, delay);
+  }
+  await h.next();
+  assert.equal(h.reason(), 'poll_failed');
+  assert.equal(h.queue.length, 0);
+  assert.equal(h.stats().sent, 0);
+  for (const status of [401, 403, 404, 429]) {
+    const terminal = harness([coreError('CORE_HTTP_' + status, status), true]);
+    await terminal.next();
+    assert.equal(terminal.reason(), 'poll_failed');
+    assert.equal(terminal.queue.length, 0);
+  }
+});
+
+test('source invalidation during retry prevents any further progress request', async () => {
+  const h = harness([coreError('CORE_NETWORK_ERROR'), true]);
+  await h.next();
+  h.invalidate();
+  await h.next();
+  assert.equal(h.stats().polls, 1);
+  assert.equal(h.stats().sent, 0);
+  assert.equal(h.reason(), 'source_not_current');
+});
+
+test('deadline reached during a successful poll cannot send typing', async () => {
+  let now = 0, callback, resolve, sent = 0, reason;
+  startTypingProgress({
+    poll: () => new Promise(r => {resolve = r;}),
+    send: async () => {sent++;},
+    isCurrent: () => true,
+    now: () => now,
+    schedule: fn => {callback = fn; return 1;}, cancel: () => {},
+    onStop: value => {reason = value;},
+  });
+  const running = callback();
+  now = 120001;
+  resolve(true);
+  await running;
+  assert.equal(sent, 0);
+  assert.equal(reason, 'deadline');
+});
+
+test('Discord send failure is terminal, not a Core retry', async () => {
+  let callback, reason, polls = 0, sends = 0;
+  startTypingProgress({
+    poll: async () => {polls++; return true;},
+    send: async () => {sends++; throw coreError('RATE_LIMITED', 429);},
+    isCurrent: () => true,
+    schedule: fn => {callback = fn; return 1;}, cancel: () => {},
+    onStop: value => {reason = value;},
+  });
+  await callback();
+  assert.equal(reason, 'discord_send_failed');
+  assert.equal(polls, 1);
+  assert.equal(sends, 1);
 });
