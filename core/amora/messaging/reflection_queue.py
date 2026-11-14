@@ -17,6 +17,8 @@ _LOG = logging.getLogger("amora.messaging.reflection")
 _MAX_ATTEMPTS = 5
 _LEASE_SECONDS = 180
 _TIMEOUT_SECONDS = 60
+_IDLE_POLL_SECONDS = 10.0
+_RECONCILE_SECONDS = 30.0
 _RETRY_REASONS = {
     "REFLECTION_PROVIDER_FAILURE", "NO_STRUCTURED_REFLECTION_PROVIDER",
     "CONTEXT_ENVELOPE_OVERFLOW", "REFLECTION_SKIPPED", "REFLECTION_LEASE_LOST",
@@ -31,6 +33,8 @@ class ReflectionQueue:
         self.cognition = cognition
         self.clock = clock
         self._task = None
+        self._loop = None
+        self._wake = None
 
     def _write(self, sql, args):
         db = self.database
@@ -51,7 +55,7 @@ class ReflectionQueue:
         if input_row is None:
             raise RuntimeError("REFLECTION_INPUT_NOT_PERSISTED")
         now = self.clock.now().isoformat()
-        return bool(self._write(
+        inserted = bool(self._write(
             "INSERT INTO memory_reflection_jobs(turn_id,input_id,status,created_at,available_at) "
             "SELECT ?,?,'pending',?,? WHERE NOT EXISTS ("
             "SELECT 1 FROM memory_reflection_invalidations x WHERE x.session_id=? "
@@ -61,6 +65,19 @@ class ReflectionQueue:
              input_row.metadata.get("native_message_id_hash", ""),
              int(input_row.metadata.get("transport_revision", 1))),
         ))
+        if inserted:
+            self._notify()
+        return inserted
+
+    def _notify(self):
+        loop, wake = self._loop, self._wake
+        if loop is not None and wake is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(wake.set)
+            except RuntimeError:
+                # Shutdown can race a producer on a synchronous API thread.
+                # Durable polling recovers the job on the next startup.
+                pass
 
     @trace_stage("reflection_reconcile")
     def reconcile_missing(self):
@@ -137,12 +154,15 @@ class ReflectionQueue:
 
     def retry_failed(self, turn_id):
         """An operator can rearm exactly one failed task, never a cancelled task."""
-        return bool(self._write(
+        rearmed = bool(self._write(
             "UPDATE memory_reflection_jobs SET status='pending',attempts=0,available_at=?,"
             "lease_token=NULL,lease_until=NULL,last_reason='REFLECTION_OPERATOR_RETRY' "
             "WHERE turn_id=? AND status='failed'",
             (self.clock.now().isoformat(), str(turn_id)),
         ))
+        if rearmed:
+            self._notify()
+        return rearmed
 
     def recover_historical_turn(self, turn_id):
         """Explicit recovery of one observed, eligible private platform turn."""
@@ -274,12 +294,44 @@ class ReflectionQueue:
         counts.update({row["status"]: int(row["total"]) for row in rows})
         return counts
 
-    async def process_once(self):
+    def _poll(self, reconcile):
+        # Each database operation owns its existing RLock/connection scope;
+        # no transaction is held across an await or transferred to a thread.
+        if reconcile:
+            self.reconcile_missing()
+        return self.claim()
+
+    async def _poll_remote(self, reconcile):
+        # Only the single background consumer offloads DB-only polling. Join
+        # the thread on shutdown before closing the database; a claimed job
+        # must be returned to the durable queue if cancellation won the race.
+        task = asyncio.create_task(asyncio.to_thread(self._poll, reconcile))
+        cancelled = False
+        while True:
+            try:
+                job = await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                cancelled = True
+                if task.cancelled():
+                    raise
+            except Exception:
+                if cancelled:
+                    raise asyncio.CancelledError from None
+                raise
+        if cancelled:
+            if job is not None:
+                self.finish(job, "REFLECTION_SHUTDOWN", retry=True)
+            raise asyncio.CancelledError
+        return job
+
+    async def process_once(self, *, reconcile=True, offload_poll=False):
         install_remote_storage_probe()
         with bind_latency_trace() as trace:
             started = perf_counter()
-            self.reconcile_missing()
-            job = self.claim()
+            job = (await self._poll_remote(reconcile)
+                   if offload_poll and self.database.backend.capabilities.remote
+                   else self._poll(reconcile))
             if job is None:
                 # Log only unusually expensive idle polling, not every idle tick.
                 set_ms("reflection_poll_ms", elapsed_ms(started))
@@ -343,6 +395,8 @@ class ReflectionQueue:
 
     def start(self):
         if self._task is None or self._task.done():
+            self._loop = asyncio.get_running_loop()
+            self._wake = asyncio.Event()
             self._task = asyncio.create_task(self._run(), name="amora-reflection-queue")
 
     async def stop(self):
@@ -353,12 +407,31 @@ class ReflectionQueue:
                 await task
             except asyncio.CancelledError:
                 pass
+            finally:
+                self._loop = None
+                self._wake = None
 
     async def _run(self):
+        loop, wake = self._loop, self._wake
+        next_reconcile = 0.0
         while True:
+            # Clear before checking durable state, never after: an enqueue
+            # concurrent with the poll must leave a wakeup for the next cycle.
+            wake.clear()
+            reconcile = loop.time() >= next_reconcile
             try:
-                worked = await self.process_once()
+                worked = await self.process_once(reconcile=reconcile, offload_poll=True)
+                if reconcile:
+                    next_reconcile = loop.time() + _RECONCILE_SECONDS
             except Exception as exc:
                 _LOG.warning("reflection_queue_failed type=%s", type(exc).__name__)
                 worked = False
-            await asyncio.sleep(0.1 if worked else 2.0)
+            if worked:
+                await asyncio.sleep(0.1)
+                continue
+            # Durable retries, expired leases, other replicas and crash-gap
+            # reconciliation still progress without an in-process notification.
+            try:
+                await asyncio.wait_for(wake.wait(), timeout=_IDLE_POLL_SECONDS)
+            except TimeoutError:
+                pass

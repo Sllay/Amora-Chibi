@@ -302,6 +302,20 @@ class MessagingStore:
         now = self.clock.now()
         expires = now + timedelta(seconds=max(5, min(120, int(lease_seconds))))
         claimed: list[OutboundMessage] = []
+        if self.database.backend.capabilities.remote:
+            # Empty polls do not need a remote write transaction. This is
+            # only a hint: the transaction below still re-reads candidates
+            # and checks leases/disclosure before changing any row.
+            with trace_lock(self.database._lock):
+                ready = self.database._conn.execute(
+                    """SELECT 1 FROM messaging_outbound_queue
+                       WHERE platform=? AND account_scope=? AND (
+                           status='queued' OR (status='claimed' AND claim_expires_at < ?))
+                       LIMIT 1""",
+                    (platform.value, account_scope, now.isoformat()),
+                ).fetchone()
+            if ready is None:
+                return ()
         with trace_lock(self.database._lock), self.database._conn:
             rows = self.database._conn.execute(
                 """SELECT * FROM messaging_outbound_queue

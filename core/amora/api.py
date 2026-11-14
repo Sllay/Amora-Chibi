@@ -90,6 +90,9 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             ),
             on_error=lambda exc: core.operations.error("scheduler", "SCHEDULER_RUNTIME_ERROR"),
         )
+        numes = core.cognition._providers.get("numes")
+        if callable(getattr(numes, "start_transport", None)):
+            await numes.start_transport()
         core.autonomy.schedule_idle(core.scheduler)
         scheduler_runtime.start()
         core.messaging.reflections.start()
@@ -112,8 +115,12 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
                     if hasattr(backend, "close"):
                         backend.close()
                 finally:
-                    if own_core:
-                        core.close()
+                    try:
+                        if callable(getattr(numes, "stop_transport", None)):
+                            await numes.stop_transport()
+                    finally:
+                        if own_core:
+                            core.close()
 
     settings = SecuritySettings.from_environment()
     if settings.cloud and len((core.secrets.get("LOCAL_API_TOKEN") or "").encode()) < 32:
