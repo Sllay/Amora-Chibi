@@ -1,6 +1,9 @@
 """Durable, bounded reflection processing for accepted platform messages."""
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage, trace_lock, bind_latency_trace, log_trace, set_ms, elapsed_ms, install_remote_storage_probe
+from time import perf_counter
+
 import asyncio
 import logging
 from datetime import timedelta
@@ -31,9 +34,10 @@ class ReflectionQueue:
 
     def _write(self, sql, args):
         db = self.database
-        with db._lock:
+        with trace_lock(db._lock):
             return execute_atomic_statement(db.backend, db._conn, sql, args).rowcount
 
+    @trace_stage("reflection_enqueue")
     def enqueue(self, request: CognitiveRequest) -> bool:
         if (not request.remote_processing_allowed
                 or request.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}
@@ -58,6 +62,7 @@ class ReflectionQueue:
              int(input_row.metadata.get("transport_revision", 1))),
         ))
 
+    @trace_stage("reflection_reconcile")
     def reconcile_missing(self):
         """Recover the crash gap between persisted input and job insertion.
 
@@ -86,7 +91,7 @@ class ReflectionQueue:
         )
 
     def source_invalidated(self, session_id, native_message_hash, revision):
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             row = self.database._conn.execute(
                 "SELECT 1 FROM memory_reflection_invalidations WHERE session_id=? "
                 "AND native_message_hash=? AND invalidated_through>=?",
@@ -102,7 +107,7 @@ class ReflectionQueue:
         """
         db = self.database
         now = self.clock.now().isoformat()
-        with db._lock, db._conn:
+        with trace_lock(db._lock), db._conn:
             db._conn.execute(
                 "INSERT INTO memory_reflection_invalidations(session_id,native_message_hash,invalidated_through) "
                 "VALUES (?,?,?) ON CONFLICT(session_id,native_message_hash) DO UPDATE SET "
@@ -167,7 +172,7 @@ class ReflectionQueue:
 
     def historical_audit(self):
         """Counts and bounded identifiers only; no conversation or memory contents."""
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             conn = self.database._conn
             rows = conn.execute(
                 "SELECT m.turn_id FROM conversation_messages m "
@@ -190,7 +195,7 @@ class ReflectionQueue:
                 "queue": self.counts()}
 
     def failed_jobs(self, limit=50):
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             rows = self.database._conn.execute(
                 "SELECT turn_id,attempts,last_reason FROM memory_reflection_jobs "
                 "WHERE status='failed' ORDER BY created_at DESC LIMIT ?",
@@ -198,6 +203,7 @@ class ReflectionQueue:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    @trace_stage("reflection_claim")
     def claim(self):
         now = self.clock.now()
         stamp = now.isoformat()
@@ -208,7 +214,7 @@ class ReflectionQueue:
             "last_reason='REFLECTION_ATTEMPTS_EXHAUSTED' WHERE status='claimed' AND lease_until<=? AND attempts>=?",
             (stamp, _MAX_ATTEMPTS),
         )
-        with db._lock:
+        with trace_lock(db._lock):
             row = db._conn.execute(
                 "SELECT turn_id,input_id,attempts FROM memory_reflection_jobs "
                 "WHERE attempts<? AND ((status='pending' AND available_at<=?) "
@@ -228,6 +234,7 @@ class ReflectionQueue:
         )
         return (row["turn_id"], row["input_id"], token, int(row["attempts"]) + 1) if won else None
 
+    @trace_stage("reflection_finish")
     def finish(self, job, reason, *, retry=False):
         turn_id, _, token, attempts = job
         status = "pending" if retry and attempts < _MAX_ATTEMPTS else "failed" if retry else "done"
@@ -251,7 +258,7 @@ class ReflectionQueue:
         ))
 
     def state(self, turn_id):
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             row = self.database._conn.execute(
                 "SELECT status,attempts,last_reason FROM memory_reflection_jobs WHERE turn_id=?",
                 (str(turn_id),),
@@ -259,7 +266,7 @@ class ReflectionQueue:
         return dict(row) if row else None
 
     def counts(self):
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             rows = self.database._conn.execute(
                 "SELECT status, COUNT(*) AS total FROM memory_reflection_jobs GROUP BY status"
             ).fetchall()
@@ -272,6 +279,17 @@ class ReflectionQueue:
         job = self.claim()
         if job is None:
             return False
+        turn_id, input_id, lease_token, _ = job
+        install_remote_storage_probe()
+        with bind_latency_trace() as trace:
+            started = perf_counter()
+            try:
+                return await self._process_claimed(job)
+            finally:
+                set_ms("reflection_total_ms", elapsed_ms(started))
+                log_trace("reflection", trace, turn_id=turn_id)
+
+    async def _process_claimed(self, job):
         turn_id, input_id, lease_token, _ = job
         try:
             item = self.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn_id}")
