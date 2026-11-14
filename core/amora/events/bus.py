@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage, span
+
 import asyncio
 from collections import OrderedDict, defaultdict
 from collections.abc import Awaitable, Callable
@@ -57,6 +59,7 @@ class AsyncEventBus:
             if not handlers:
                 self._handlers.pop(event_type, None)
 
+    @trace_stage("event_publish")
     async def publish(self, event: AmoraEvent, *, persist: bool = True) -> PublishResult:
         dedupe_key = event.dedupe_key or str(event.id)
 
@@ -75,7 +78,8 @@ class AsyncEventBus:
         errors: list[str] = []
         for handler in handlers:
             try:
-                await handler(event)
+                with span("event_handler"):
+                    await handler(event)
             except Exception as exc:
                 errors.append(f"{type(exc).__name__}: {exc}")
         return PublishResult(str(event.id), False, len(handlers), tuple(errors))
