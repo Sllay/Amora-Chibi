@@ -281,6 +281,7 @@ class MessagingStore:
                 raise InboundGenerationLost("INBOUND_GENERATION_LEASE_LOST")
             raise RuntimeError("OUTBOUND_INSERT_UNEXPECTED_ROWCOUNT")
 
+    @trace_stage("outbound_persist")
     def persist_prepared_reply(self, message, decision, outbound, reason_codes, *, lease, native_hash):
         native_source_id = message.native_source_message_id
         metadata = outbound.metadata
