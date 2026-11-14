@@ -68,7 +68,9 @@ class NumesStreamDiagnostics:
     def reasoning(self, delta):
         self.metrics["reasoning_deltas"] += 1
         self.metrics["reasoning_chars"] += _reasoning_chars(delta)
-        self.metrics["last_reasoning_ms"] = self.elapsed()
+        now = self.elapsed()
+        self.metrics.setdefault("first_reasoning_ms", now)
+        self.metrics["last_reasoning_ms"] = now
 
     def content(self, value):
         now = self.elapsed()
@@ -119,10 +121,16 @@ class NumesStreamDiagnostics:
                 if self._loop.time() >= self._due:
                     self._record_lag()
         m = self.metrics
+        if "last_reasoning_ms" in m:
+            m["reasoning_span_ms"] = m["last_reasoning_ms"] - m["first_reasoning_ms"]
         if self._last_content is not None:
             m["content_span_ms"] = self._last_content - m["first_content_ms"]
+            if "last_reasoning_ms" in m:
+                m["last_reasoning_to_content_ms"] = m["first_content_ms"] - m["last_reasoning_ms"]
             if "done_ms" in m:
                 m["last_content_to_done_ms"] = m["done_ms"] - self._last_content
+        if "finish_reason_ms" in m and "done_ms" in m:
+            m["finish_to_done_ms"] = m["done_ms"] - m["finish_reason_ms"]
         usage = usage if isinstance(usage, dict) else {}
         details = usage.get("completion_tokens_details")
         details = details if isinstance(details, dict) else {}
