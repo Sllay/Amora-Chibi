@@ -35,6 +35,10 @@ def test_opt_in_provider_configuration_and_scope(tmp_path, monkeypatch):
         assert core.models.descriptor("groq_memory").model == "openai/gpt-oss-120b"
         assert TaskClass.SOCIAL_DIALOGUE not in core.models.descriptor("groq_memory").capabilities
         assert TaskClass.REASONING not in core.models.descriptor("numes").capabilities
+        assert TaskClass.SOCIAL_DIALOGUE not in core.models.descriptor("groq").capabilities
+        assert not callable(getattr(core.cognition._providers["groq"], "realize", None))
+        assert core.cognition._providers["numes"].max_retries == 0
+        assert core.cognition._providers["numes"].timeout_seconds == 90.0
         assert not any(d.name == "numes" for d in core.models.ranked_candidates(
             TaskClass.SOCIAL_DIALOGUE, privacy_scope=PrivacyScope.SECRET))
         assert not any(d.name == "numes" for d in core.models.ranked_candidates(
@@ -123,6 +127,10 @@ async def test_gpt_oss_memory_queue_and_qwen_fallback(tmp_path, monkeypatch, fai
             assert SOURCE in payload["input"][0]["content"]
             assert MARKER not in json.dumps(payload)
             assert payload["store"] is False
+            assert len(payload["input"]) == 1
+            assert set(json.loads(payload["input"][0]["content"])) == {"speaker_id", "addressee_id", "message"}
+            assert "não a personagem" in payload["instructions"]
+            assert "AMORA REALIZATION CONTRACT" not in payload["instructions"]
             if fail_primary and payload["model"] == "openai/gpt-oss-120b":
                 return httpx.Response(429, headers={"retry-after": "60"})
             return httpx.Response(200, json=response_object({"memory_candidates": [item()]}))
@@ -166,3 +174,51 @@ async def test_memory_probe_uses_configured_specialist(tmp_path, monkeypatch):
         assert core.memory.store.count() == before
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_numes_social_failure_does_not_route_to_groq(tmp_path, monkeypatch):
+    configure(monkeypatch, tmp_path)
+    monkeypatch.setenv("AMORA_SECRET_GEMINI_API_KEY", "synthetic-gemini-key")
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        req = CognitiveRequest(text="Estou criando um jogo novo.", speaker_id="PERSON_BK",
+                               remote_processing_allowed=True, session_id="synthetic")
+        ctx = core.cognition.compiler.compile(req)
+        called = []
+        async def numes(context):
+            called.append("numes")
+            raise ProviderError("synthetic unavailable", status_code=503)
+        async def gemini(context):
+            called.append("gemini")
+            return {"moves": [{"kind": context.dialogue_plan["response_moves"][0],
+                               "text": "Que legal, um jogo novo!"}], "closing": "statement"}
+        monkeypatch.setattr(core.cognition._providers["numes"], "realize", numes)
+        monkeypatch.setattr(core.cognition._providers["gemini"], "realize", gemini)
+        # The production router, not a hand-authored provider order.
+        ranked = core.models.ranked_candidates(TaskClass.SOCIAL_DIALOGUE,
+                                               require_structured_output=True)
+        assert ranked[0].name == "numes"
+        assert "groq" not in [d.name for d in ranked]
+        assert "groq_memory" not in [d.name for d in ranked]
+        plan = await core.cognition.respond(req)
+        assert plan.provider == "gemini"
+        assert called == ["numes", "gemini"]
+    finally:
+        core.close()
+
+
+def test_payload_metrics_contains_only_numeric_metadata(caplog):
+    from amora.cognition.payload_metrics import log_payload_metrics
+    import logging
+    payload = {"model": "synthetic", "input": [{"role": "user", "content": MARKER}],
+               "max_output_tokens": 1200}
+    with caplog.at_level(logging.INFO, logger="amora.cognition.payload"):
+        log_payload_metrics("groq", "https://api.groq.com/openai/v1/responses", payload,
+                            phase="memory_extraction")
+    record = caplog.records[-1]
+    assert record.body_bytes == len(httpx.Request("POST", "https://api.groq.com/openai/v1/responses",
+                                                   json=payload).content)
+    assert record.message_count == 1 and record.source_only is True
+    assert record.max_output_tokens == 1200
+    assert MARKER not in str(record.__dict__)

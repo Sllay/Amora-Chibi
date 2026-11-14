@@ -78,7 +78,8 @@ class CognitiveEngine(ResilientCognitiveEngine):
                            if durable or not item.metadata.get("memory_reflection_only"))
         if durable:
             candidates = tuple(sorted(candidates,
-                key=lambda item: bool(item.metadata.get("memory_reflection_only")), reverse=True))
+                key=lambda item: (bool(item.metadata.get("memory_primary_preference")),
+                                  bool(item.metadata.get("memory_reflection_only"))), reverse=True))
         if not candidates:
             if excluded:
                 bundle = CognitiveProposalBundle(reason_codes=["REFLECTION_PROVIDERS_IN_BACKOFF"])

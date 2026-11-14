@@ -204,6 +204,11 @@ def wrap_resilient_provider(provider: Any) -> Any:
         # or tie up the turn for minutes. Fail over to Groq instead.
         return ResilientProviderProxy(provider, max_retries=0, max_validation_retries=0,
                                       enforce_dialogue_plan=response_semantic_filter_enabled())
+    if provider.descriptor.name == "numes":
+        # The outer surface budget owns the deadline. Do not transparently
+        # repeat a stalled HTTP request; keep one bounded JSON repair.
+        return ResilientProviderProxy(provider, max_retries=0, max_validation_retries=1,
+                                      enforce_dialogue_plan=response_semantic_filter_enabled())
     # Fast structured providers retain one bounded repair attempt.
     return ResilientProviderProxy(provider, max_validation_retries=1,
                                   enforce_dialogue_plan=response_semantic_filter_enabled())

@@ -232,8 +232,14 @@ class AmoraCore:
 
         groq_cognition = GroqCognitiveProvider(secrets)
         if groq_cognition.descriptor.available:
-            cognition.register_provider(groq_cognition)
             memory_model = os.getenv("AMORA_GROQ_MEMORY_MODEL", "").strip()
+            if social_primary == "numes":
+                # Numes owns dialogue; Groq must never receive the social
+                # envelope as an implicit fallback in this configuration.
+                cognition.register_provider(GroqMemoryProvider(
+                    secrets, model=groq_cognition.model, name="groq", primary=False))
+            else:
+                cognition.register_provider(groq_cognition)
             if memory_model:
                 cognition.register_provider(GroqMemoryProvider(secrets, model=memory_model))
 
