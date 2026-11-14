@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage, trace_lock
+
 import json
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -35,6 +37,7 @@ class MessagingStore:
         self.database = database
         self.clock = clock
 
+    @trace_stage("audit_persist")
     def append_audit(self, record: MessagingAuditRecord) -> bool:
         values = (
             str(record.id),
@@ -56,7 +59,7 @@ class MessagingStore:
             record.timestamp.isoformat(),
             json.dumps(record.metadata, ensure_ascii=False, separators=(",", ":")),
         )
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             try:
                 execute_atomic_statement(
                     self.database.backend,
@@ -86,7 +89,7 @@ class MessagingStore:
         direction: AuditDirection = AuditDirection.INBOUND,
     ) -> MessagingAuditRecord | None:
         platform_value = platform.value if isinstance(platform, MessagingPlatform) else str(platform)
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             row = self.database._conn.execute(
                 """SELECT * FROM messaging_audit
                    WHERE platform=? AND account_scope=? AND conversation_id=?
@@ -120,7 +123,7 @@ class MessagingStore:
         conversation_id: str,
         message_id: str,
     ) -> None:
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             execute_atomic_statement(
                 self.database.backend,
                 self.database._conn,
@@ -139,7 +142,7 @@ class MessagingStore:
         message_id: str,
         reason: str,
     ) -> None:
-        with self.database._lock, self.database._conn:
+        with trace_lock(self.database._lock), self.database._conn:
             row = self.database._conn.execute(
                 """SELECT reason_codes_json FROM messaging_audit
                    WHERE platform=? AND account_scope=? AND conversation_id=?
@@ -165,7 +168,7 @@ class MessagingStore:
             )
 
     def count_audit(self) -> int:
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             row = self.database._conn.execute("SELECT COUNT(*) FROM messaging_audit").fetchone()
         return int(row[0]) if row else 0
 
@@ -186,7 +189,7 @@ class MessagingStore:
             clauses.append("conversation_id=?")
             params.append(conversation_id)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             rows = self.database._conn.execute(
                 f"SELECT * FROM messaging_audit{where} ORDER BY timestamp DESC LIMIT ?",
                 (*params, limit),
@@ -219,7 +222,7 @@ class MessagingStore:
                 or not public_text_allowed(message.text)
                 or not audience_text_allowed(message.text, audience_id=session_id)):
             return False
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             row = self.database._conn.execute(
                 "SELECT 1 FROM memory_records m WHERE " + SHAREABLE_MEMORY_SQL +
                 " AND m.id=? AND m.updated_at=?",
@@ -267,7 +270,7 @@ class MessagingStore:
             sql += " AND EXISTS (SELECT 1 FROM messaging_inbound_generation g WHERE g.turn_id=? AND g.session_id=?)"
             values += (generation_lease[0], grant.get("session_id"))
         sql += " ON CONFLICT(id) DO NOTHING"
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             cursor = execute_atomic_statement(self.database.backend, self.database._conn, sql, values)
             if cursor.rowcount == 1:
                 return True
@@ -279,13 +282,14 @@ class MessagingStore:
             raise RuntimeError("OUTBOUND_INSERT_UNEXPECTED_ROWCOUNT")
 
     def get_outbound(self, message_id: UUID | str) -> OutboundMessage | None:
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             row = self.database._conn.execute(
                 "SELECT * FROM messaging_outbound_queue WHERE id=?",
                 (str(message_id),),
             ).fetchone()
         return self._outbound_from_row(row) if row is not None else None
 
+    @trace_stage("outbound_claim")
     def claim_outbound(
         self,
         *,
@@ -298,7 +302,7 @@ class MessagingStore:
         now = self.clock.now()
         expires = now + timedelta(seconds=max(5, min(120, int(lease_seconds))))
         claimed: list[OutboundMessage] = []
-        with self.database._lock, self.database._conn:
+        with trace_lock(self.database._lock), self.database._conn:
             rows = self.database._conn.execute(
                 """SELECT * FROM messaging_outbound_queue
                    WHERE platform=? AND account_scope=? AND (
@@ -336,6 +340,7 @@ class MessagingStore:
                 )
         return tuple(claimed)
 
+    @trace_stage("outbound_ack")
     def ack_outbound(
         self,
         message_id: UUID | str,
@@ -345,7 +350,7 @@ class MessagingStore:
         error_code: str | None = None,
     ) -> bool:
         status = OutboundStatus.SENT if sent else OutboundStatus.FAILED
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             cursor = execute_atomic_statement(
                 self.database.backend,
                 self.database._conn,
@@ -357,7 +362,7 @@ class MessagingStore:
         return getattr(cursor, "rowcount", 1) > 0
 
     def cancel_outbound(self, message_id: UUID | str, *, reason: str) -> bool:
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             cursor = execute_atomic_statement(
                 self.database.backend,
                 self.database._conn,
@@ -379,7 +384,7 @@ class MessagingStore:
         through_revision: int = 1_000_000,
     ) -> int:
         """Cancel queued/claimed replies anchored to a stale native revision."""
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             cursor = execute_atomic_statement(
                 self.database.backend,
                 self.database._conn,
@@ -399,7 +404,7 @@ class MessagingStore:
         return max(0, int(getattr(cursor, "rowcount", 0) or 0))
 
     def pending_outbound_count(self) -> int:
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             row = self.database._conn.execute(
                 "SELECT COUNT(*) FROM messaging_outbound_queue WHERE status IN ('queued','claimed')"
             ).fetchone()
@@ -410,7 +415,7 @@ class MessagingStore:
         platform: MessagingPlatform,
         account_scope: str = "primary",
     ) -> PresenceSnapshot | None:
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             row = self.database._conn.execute(
                 "SELECT * FROM platform_presence WHERE platform=? AND account_scope=?",
                 (platform.value, account_scope),
@@ -418,7 +423,7 @@ class MessagingStore:
         return self._presence_from_row(row) if row else None
 
     def put_presence(self, snapshot: PresenceSnapshot) -> PresenceSnapshot:
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             execute_atomic_statement(
                 self.database.backend,
                 self.database._conn,
@@ -452,7 +457,7 @@ class MessagingStore:
         return snapshot
 
     def list_presence(self) -> tuple[PresenceSnapshot, ...]:
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             rows = self.database._conn.execute(
                 "SELECT * FROM platform_presence ORDER BY platform, account_scope"
             ).fetchall()
