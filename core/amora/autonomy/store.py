@@ -7,7 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
-from amora.storage.backend import SQLiteBackend, StorageBackend, is_duplicate_error
+from amora.storage.backend import SQLiteBackend, StorageBackend, execute_atomic_statement, is_duplicate_error
+from amora.latency_trace import trace_stage, trace_lock
 from amora.time import Clock
 
 from .models import (
@@ -55,24 +56,39 @@ class AutonomyStore:
             row = self._conn.execute("SELECT * FROM autonomy_drives WHERE drive = ?", (drive.value,)).fetchone()
         return self._hydrate_drive(row) if row else None
 
+    @trace_stage("autonomy_drive_read")
     def list_drives(self) -> list[DriveState]:
         with self._lock:
             rows = self._conn.execute("SELECT * FROM autonomy_drives ORDER BY drive").fetchall()
         return [self._hydrate_drive(row) for row in rows]
 
     def put_drive(self, state: DriveState) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
+        self.put_drives([state])
+
+    @trace_stage("autonomy_drive_write")
+    def put_drives(self, states: list[DriveState]) -> None:
+        """Persist the complete drive snapshot with one atomic SQL statement."""
+        if not states:
+            return
+        values = tuple(
+            value for state in states
+            for value in (state.drive.value, state.need, state.baseline,
+                          state.growth_per_hour, state.updated_at.isoformat())
+        )
+        placeholders = ", ".join("(?, ?, ?, ?, ?)" for _ in states)
+        with trace_lock(self._lock):
+            execute_atomic_statement(
+                self.backend, self._conn,
                 """
                 INSERT INTO autonomy_drives(drive, need, baseline, growth_per_hour, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES """ + placeholders + """
                 ON CONFLICT(drive) DO UPDATE SET
                     need=excluded.need,
                     baseline=excluded.baseline,
                     growth_per_hour=excluded.growth_per_hour,
                     updated_at=excluded.updated_at
                 """,
-                (state.drive.value, state.need, state.baseline, state.growth_per_hour, state.updated_at.isoformat()),
+                values,
             )
 
     def put_adjustment(self, item: DriveAdjustment) -> bool:
@@ -100,6 +116,7 @@ class AutonomyStore:
             row = self._conn.execute("SELECT * FROM drive_adjustments WHERE dedupe_key = ?", (dedupe_key,)).fetchone()
         return self._hydrate_adjustment(row) if row else None
 
+    @trace_stage("autonomy_current_intention")
     def current_intention(self) -> Intention | None:
         now = self.clock.now().isoformat()
         with self._lock, self._conn:
