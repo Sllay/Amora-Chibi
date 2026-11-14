@@ -23,7 +23,7 @@ class MemoryWriteGate:
         MemoryKind.RELATIONAL: 0.42,
     }
 
-    def evaluate(self, candidate: MemoryCandidate) -> MemoryWriteDecision:
+    def evaluate(self, candidate: MemoryCandidate, *, explicit_owner_request: bool = False) -> MemoryWriteDecision:
         if candidate.privacy_scope == PrivacyScope.AUTH:
             return MemoryWriteDecision(
                 store=False,
@@ -57,6 +57,24 @@ class MemoryWriteGate:
             reasons.append("HIGH_NOVELTY")
         if candidate.repetition >= 0.75:
             reasons.append("REPEATED_SIGNAL")
+
+        # The explicit request is an independent authorization, not a forged
+        # relevance score. Only the local MemoryService may select this route.
+        if explicit_owner_request:
+            allowed = (
+                candidate.privacy_scope in {PrivacyScope.PERSONAL, PrivacyScope.PRIVATE}
+                and candidate.provenance.kind == ProvenanceKind.USER_ASSERTION
+                and candidate.owner_entity_id == "PERSON_BK"
+                and candidate.provenance.actor_id == candidate.owner_entity_id
+                and candidate.provenance.source == "cognition:explicit_owner_request"
+                and not candidate.provenance.derived_from
+            )
+            if not allowed:
+                return MemoryWriteDecision(store=False, score=round(score, 6), threshold=threshold,
+                    reason_codes=[*reasons, "EXPLICIT_MEMORY_AUTHORITY_REJECTED"])
+            return MemoryWriteDecision(store=True, score=round(score, 6), threshold=0.0,
+                reason_codes=[*reasons, "EXPLICIT_OWNER_REQUEST", "WRITE_GATE_ACCEPT"],
+                recommended_kind=candidate.kind)
 
         store = score >= threshold
         reasons.append("WRITE_GATE_ACCEPT" if store else "WRITE_GATE_REJECT_LOW_SIGNAL")

@@ -24,7 +24,19 @@ class MemoryService:
         self.gate = gate or MemoryWriteGate()
 
     def remember(self, candidate: MemoryCandidate, *, record_id: UUID | None = None,
-                 reflection_lease: tuple[str, str] | None = None) -> RememberResult:
+                 reflection_lease: tuple[str, str] | None = None,
+                 explicit_owner_request: bool = False,
+                 generation_lease: tuple[str, str] | None = None) -> RememberResult:
+        # A direct owner request is only meaningful under a live platform
+        # generation lease. Provider proposals never select this path.
+        if explicit_owner_request and (
+            generation_lease is None or reflection_lease is not None
+            or record_id is None
+            or candidate.metadata.get("turn_id") != generation_lease[0]
+        ):
+            raise ValueError("EXPLICIT_MEMORY_REQUIRES_GENERATION_LEASE")
+        if generation_lease is not None and not explicit_owner_request:
+            raise ValueError("GENERATION_LEASE_REQUIRES_EXPLICIT_MEMORY")
         # A derived record cannot widen the disclosure permissions of its sources.
         # Missing provenance is not evidence of public authorization.
         if candidate.provenance.derived_from:
@@ -64,13 +76,24 @@ class MemoryService:
                 "remote_processing_allowed": candidate.remote_processing_allowed and
                     all(parent.remote_processing_allowed for parent in parents),
             })
-        decision = self.gate.evaluate(candidate)
+        decision = (self.gate.evaluate(candidate, explicit_owner_request=True)
+                    if explicit_owner_request else self.gate.evaluate(candidate))
         if not decision.store or decision.recommended_kind is None:
             return RememberResult(decision=decision, memory=None)
 
         if record_id is not None:
             existing = self.get(record_id)
             if existing is not None:
+                if explicit_owner_request and (
+                    existing.archived_at is not None
+                    or existing.owner_entity_id != candidate.owner_entity_id
+                    or existing.provenance.source != candidate.provenance.source
+                    or existing.metadata.get("turn_id") != generation_lease[0]
+                    or existing.content != candidate.content.strip()
+                ):
+                    return RememberResult(decision=MemoryWriteDecision(
+                        store=False, score=decision.score, threshold=decision.threshold,
+                        reason_codes=["EXPLICIT_MEMORY_EXISTING_RECORD_CONFLICT"]), memory=None)
                 return RememberResult(decision=decision, memory=existing)
         now = self.clock.now()
         remote_allowed = candidate.remote_processing_allowed
@@ -97,7 +120,9 @@ class MemoryService:
             gate_score=decision.score,
             metadata=candidate.metadata,
         )
-        if reflection_lease is None:
+        if generation_lease is not None:
+            self.store.put(record, generation_lease=generation_lease)
+        elif reflection_lease is None:
             self.store.put(record)
         else:
             self.store.put(record, reflection_lease=reflection_lease)

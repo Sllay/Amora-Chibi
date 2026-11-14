@@ -76,7 +76,8 @@ class MemoryStore:
             row = self._conn.execute(sql).fetchone()
         return int(row[0]) if row else 0
 
-    def put(self, record: MemoryRecord, *, reflection_lease: tuple[str, str] | None = None) -> None:
+    def put(self, record: MemoryRecord, *, reflection_lease: tuple[str, str] | None = None,
+            generation_lease: tuple[str, str] | None = None) -> None:
         provenance = record.provenance
         values = (
             str(record.id), record.kind.value, record.content, record.summary,
@@ -96,6 +97,28 @@ class MemoryStore:
             json.dumps(record.metadata, ensure_ascii=False, separators=(",", ":")),
         )
         with self._lock, self._conn:
+            if generation_lease is not None:
+                turn_id, token = generation_lease
+                # Verify the persisted source and active inbound lease in the
+                # write transaction; an edited/deleted source cannot be saved.
+                lease = self._conn.execute(
+                    """SELECT 1 FROM messaging_inbound_generation g
+                       JOIN conversation_messages m ON m.turn_id=g.turn_id
+                         AND m.dedupe_key='cognitive-input:' || g.turn_id
+                       WHERE g.turn_id=? AND g.lease_token=? AND g.lease_until>?
+                         AND m.speaker_id=? AND m.session_id=g.session_id
+                         AND m.session_id=? AND m.privacy_scope=?
+                         AND json_extract(m.metadata_json,'$.explicit_memory_request')=1
+                         AND json_extract(m.metadata_json,'$.channel_type')='dm'
+                         AND NOT EXISTS (SELECT 1 FROM memory_reflection_invalidations x
+                           WHERE x.session_id=g.session_id
+                             AND x.native_message_hash=g.native_message_hash
+                             AND x.invalidated_through>=g.transport_revision)""",
+                    (turn_id, token, self.clock.now().isoformat(), record.owner_entity_id,
+                     provenance.session_id, record.privacy_scope.value),
+                ).fetchone()
+                if lease is None:
+                    raise RuntimeError("INBOUND_GENERATION_LEASE_LOST")
             if reflection_lease is not None:
                 turn_id, token = reflection_lease
                 lease = self._conn.execute(

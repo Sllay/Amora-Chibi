@@ -23,6 +23,9 @@ from .models import (
     TransportInvalidation,
 )
 from .reflection_queue import ReflectionQueue
+from .explicit_memory import (
+    OWNER_ENTITY_ID, PROVENANCE_SOURCE, is_verified_owner, parse_explicit_memory,
+)
 from .generation_lifecycle import InboundGeneration, InboundGenerationBusy, InboundGenerationLost
 from .presence import PlatformPresenceController
 from .presence_control import PlatformPresenceControlService, PresenceControlOutcome
@@ -257,7 +260,9 @@ class PlatformMessagingService:
             self._log_result(result)
             return result
 
-        if decision.action == RoutingAction.RESPOND:
+        explicit_memory = (parse_explicit_memory(message.text)
+                           if decision.action == RoutingAction.RESPOND else None)
+        if decision.action == RoutingAction.RESPOND and explicit_memory is None:
             control = self.presence_control.handle(
                 message.text,
                 speaker_entity_id=decision.speaker_entity_id,
@@ -297,6 +302,20 @@ class PlatformMessagingService:
                 "provider_attempt_budget_seconds": self.provider_attempt_budget_seconds,
             },
         )
+        if explicit_memory is not None:
+            # The direct request owns its own receipt, so neither the provider
+            # nor the automatic reflection queue can claim/duplicate its write.
+            request.metadata["explicit_memory_request"] = True
+            request.metadata["reflection_enqueue_requested"] = False
+            self.cognition.observe_input(request)
+            result = self._explicit_memory_result(message, decision, request, explicit_memory)
+            result = result.model_copy(update={"duplicate": duplicate_recovery})
+            self._log_result(result, provider="local_control", fallback_used=False,
+                             cognitive_reason_codes=list(result.outbound[0].metadata.get("cognitive_reason_codes", []))
+                             if result.outbound else [],
+                             remote_processing_allowed=message.remote_processing_allowed)
+            return result
+
         enqueue_reflection = message.remote_processing_allowed and (
             decision.action == RoutingAction.RESPOND or (
                 decision.action == RoutingAction.CONTEXT_ONLY
@@ -579,6 +598,98 @@ class PlatformMessagingService:
                 "presence_control_platform": control.intent.platform.value,
                 "presence_control_authorized": control.authorized,
                 "presence_control_executed": control.executed,
+                "transport_revision": message.transport_revision,
+                "delivery_message_id": message.message_id,
+            },
+            reason_codes=[reason, "LOCAL_DETERMINISTIC_CONTROL_REPLY"],
+        )
+        return InboundResult(decision=decision, outbound=[outbound])
+
+    def _explicit_memory_result(self, message, decision, request, intent) -> InboundResult:
+        from amora.events import PrivacyScope
+        from amora.memory import MemoryCandidate, MemoryKind, MemoryProvenance, ProvenanceKind
+
+        reason = intent.reason
+        memory_id = None
+        remote_reuse = False
+        if message.channel_type != ChannelType.DM:
+            reason = "EXPLICIT_MEMORY_PRIVATE_DM_REQUIRED"
+            text = "Me peça para guardar isso em uma conversa privada."
+            if not self.attention.floor.validate_reply(message, decision):
+                return InboundResult(decision=decision.model_copy(
+                    update={"action": RoutingAction.SILENCE,
+                            "reason_codes": [*decision.reason_codes, "REPLY_LEASE_INVALIDATED"]}))
+        elif not is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id):
+            reason = "EXPLICIT_MEMORY_AUTHORITY_REJECTED"
+            text = "Não posso registrar uma memória por solicitação direta nessa conversa."
+        elif message.privacy_scope not in {PrivacyScope.PERSONAL, PrivacyScope.PRIVATE}:
+            reason = "EXPLICIT_MEMORY_PRIVACY_BLOCKED"
+            text = "Não posso salvar isso com essa classificação de privacidade."
+        elif intent.content is None:
+            text = {
+                "EXPLICIT_MEMORY_CONTENT_TOO_LONG": "É muita informação para uma lembrança só. Me diga em partes o que devo guardar.",
+                "EXPLICIT_MEMORY_CREDENTIAL_BLOCKED": "Não vou guardar senhas ou chaves de acesso na minha memória.",
+            }.get(reason, "O que exatamente você quer que eu guarde na memória?")
+        else:
+            lease = _GENERATION_LEASE.get()
+            if lease is None:
+                raise InboundGenerationLost("INBOUND_GENERATION_LEASE_LOST")
+            remote_reuse = (
+                message.privacy_scope == PrivacyScope.PERSONAL
+                and message.remote_processing_allowed
+                and os.getenv("AMORA_REFLECTION_REMOTE_REUSE", "0") == "1"
+            )
+            # Keep the source wording and attribution. The request does not
+            # grant authority to write a world fact, change identity or run tools.
+            candidate = MemoryCandidate(
+                kind=MemoryKind.EPISODIC,
+                content=f"Relato de {OWNER_ENTITY_ID}: {intent.content}",
+                provenance=MemoryProvenance(
+                    kind=ProvenanceKind.USER_ASSERTION, source=PROVENANCE_SOURCE,
+                    actor_id=OWNER_ENTITY_ID, session_id=request.session_id,
+                ),
+                privacy_scope=message.privacy_scope, owner_entity_id=OWNER_ENTITY_ID,
+                remote_processing_allowed=remote_reuse,
+                entity_refs={OWNER_ENTITY_ID: 1.0}, tags={"explicit_owner_memory"},
+                importance=1.0,
+                metadata={"turn_id": str(request.turn_id), "explicit_owner_request": True},
+            )
+            try:
+                stored = self.cognition.compiler.memory.remember(
+                    candidate, record_id=uuid5(NAMESPACE_URL, f"amora:explicit-memory:{request.turn_id}"),
+                    explicit_owner_request=True, generation_lease=lease,
+                )
+            except RuntimeError as exc:
+                if str(exc) == "INBOUND_GENERATION_LEASE_LOST":
+                    raise InboundGenerationLost("INBOUND_GENERATION_LEASE_LOST") from None
+                # No success receipt on a database failure; the inbound retry
+                # can safely recover the deterministic record id.
+                raise
+            if stored.memory is not None:
+                memory_id = str(stored.memory.id)
+                remote_reuse = stored.memory.remote_processing_allowed
+                reason = "EXPLICIT_MEMORY_STORED"
+                text = ("Pronto, salvei essa informação na minha memória."
+                        if remote_reuse else
+                        "Salvei essa informação na minha memória local. Ela ainda não está liberada para eu usar nas conversas com modelos externos.")
+            else:
+                reason = "EXPLICIT_MEMORY_NOT_STORED"
+                text = "Não consegui salvar essa informação na memória. Pode tentar novamente?"
+
+        self.cognition.record_turn_decision(
+            request, "TAKE_TURN", [reason, "LOCAL_DETERMINISTIC_CONTROL_REPLY"], decision.score,
+        )
+        self.store.add_inbound_reason(
+            platform=message.platform, account_scope=message.account_scope,
+            conversation_id=message.conversation_id, message_id=message.message_id, reason=reason,
+        )
+        outbound = self._queue_outbound(
+            message, decision, text,
+            metadata={
+                "local_control": True, "cognitive_turn_id": str(request.turn_id),
+                "generation_stage": "explicit_memory", "generation_error_code": None,
+                "provider": "local_control", "cognitive_reason_codes": [reason],
+                "explicit_memory_id": memory_id, "explicit_memory_remote_reuse": remote_reuse,
                 "transport_revision": message.transport_revision,
                 "delivery_message_id": message.message_id,
             },
