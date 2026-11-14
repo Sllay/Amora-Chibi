@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
+import json
+import logging
+from functools import wraps
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -8,6 +13,8 @@ from typing import Any
 
 
 _trace: ContextVar[dict[str, Any] | None] = ContextVar("amora_latency_trace", default=None)
+_stage: ContextVar[str | None] = ContextVar("amora_latency_stage", default=None)
+_LOG = logging.getLogger("amora.performance")
 
 
 @contextmanager
@@ -21,9 +28,11 @@ def bind_latency_trace() -> Iterator[dict[str, Any]]:
     """
     trace: dict[str, Any] = {}
     token = _trace.set(trace)
+    stage_token = _stage.set(None)
     try:
         yield trace
     finally:
+        _stage.reset(stage_token)
         _trace.reset(token)
 
 
@@ -108,6 +117,8 @@ def install_remote_storage_probe() -> None:
         return
 
     def traced_pipeline(self, requests):
+        if current_trace() is None:
+            return original(self, requests)
         category = _pipeline_class(requests)
         started = perf_counter()
         try:
@@ -119,6 +130,106 @@ def install_remote_storage_probe() -> None:
             max_ms("remote_sql_max_ms", elapsed)
             add_ms(f"remote_sql_{category}_ms", elapsed)
             increment(f"remote_sql_{category}_calls")
+            stage = _stage.get()
+            if stage is not None:
+                add_ms(f"stage_{stage}_sql_ms", elapsed)
+                increment(f"stage_{stage}_sql_calls")
+            increment("remote_sql_statements", sum(item.get("type") == "execute" for item in requests))
 
     traced_pipeline._amora_latency_probe = True  # type: ignore[attr-defined]
     RemoteConnection._pipeline = traced_pipeline
+
+
+@contextmanager
+def span(name: str):
+    """Inclusive stage time; remote RTTs are assigned only to the innermost stage."""
+    if current_trace() is None:
+        yield
+        return
+    token = _stage.set(name)
+    started = perf_counter()
+    try:
+        yield
+    finally:
+        add_ms(f"stage_{name}_ms", elapsed_ms(started))
+        increment(f"stage_{name}_calls")
+        _stage.reset(token)
+
+
+def trace_stage(name: str):
+    """Trace a fixed, code-defined stage without changing its return/exception contract."""
+    def decorate(fn):
+        if inspect.iscoroutinefunction(fn):
+            @wraps(fn)
+            async def async_wrapped(*args, **kwargs):
+                with span(name):
+                    return await fn(*args, **kwargs)
+            return async_wrapped
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            with span(name):
+                return fn(*args, **kwargs)
+        return wrapped
+    return decorate
+
+
+@contextmanager
+def trace_lock(lock):
+    """Record acquisition wait separately from time holding a synchronous lock."""
+    if current_trace() is None:
+        with lock:
+            yield
+        return
+    started = perf_counter()
+    with lock:
+        add_ms("lock_wait_ms", elapsed_ms(started))
+        increment("lock_acquisitions")
+        held = perf_counter()
+        try:
+            yield
+        finally:
+            add_ms("lock_held_ms", elapsed_ms(held))
+
+
+def log_trace(kind: str, trace: dict[str, Any], *, turn_id=None, outcome: str = "ok"):
+    # No text, SQL, arguments, headers, model output or arbitrary trace values.
+    numeric = {key: value for key, value in trace.items()
+               if type(value) in (int, float)}
+    _LOG.info("performance_trace kind=%s turn_id=%s outcome=%s metrics=%s",
+              kind, turn_id or "-", outcome,
+              json.dumps(numeric, sort_keys=True, separators=(",", ":")))
+
+
+def trace_messaging_turn(fn):
+    """One trace per owned logical turn, not per HTTP retry/waiter."""
+    @wraps(fn)
+    async def wrapped(self, message):
+        if message.privacy_scope.value in {"auth", "secret"}:
+            return await fn(self, message)
+        install_remote_storage_probe()
+        with bind_latency_trace() as trace:
+            started = perf_counter()
+            interval = 0.1
+            loop = asyncio.get_running_loop()
+            last = [loop.time()]
+            async def sample_lag():
+                while True:
+                    await asyncio.sleep(max(0.0, last[0] + interval - loop.time()))
+                    now = loop.time()
+                    max_ms("event_loop_lag_max_ms", (now - last[0] - interval) * 1000)
+                    increment("event_loop_samples")
+                    last[0] = now
+            sampler = asyncio.create_task(sample_lag(), name="amora-performance-lag")
+            outcome = "ok"
+            try:
+                return await fn(self, message)
+            except BaseException:
+                outcome = "error"
+                raise
+            finally:
+                set_ms("turn_total_ms", elapsed_ms(started))
+                max_ms("event_loop_lag_max_ms", (loop.time() - last[0] - interval) * 1000)
+                sampler.cancel()
+                # Cancelled sampler owns no resources and never writes after cancellation.
+                log_trace("messaging", trace, turn_id=self._turn_id(message), outcome=outcome)
+    return wrapped
