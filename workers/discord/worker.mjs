@@ -36,6 +36,16 @@ function safeLog(code, detail = '') {
   process.stderr.write(`[amora-discord] ${code}${suffix}\n`);
 }
 
+function traceUuid(value) {
+  const id = String(value || '');
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : '-';
+}
+
+function traceDelivery(stage, item, metrics) {
+  const values = Object.entries(metrics).map(([key, value]) => `${key}=${Math.round(Math.max(0, value))}`).join(' ');
+  safeLog('PERFORMANCE_TRACE', `stage=${stage} outbound_id=${traceUuid(item?.id)} ${values}`);
+}
+
 function errorLabel(error) {
   if (error?.code) return String(error.code);
   if (error?.status) return `HTTP_${error.status}`;
@@ -502,6 +512,7 @@ export class DiscordWorker {
   }
 
   async deliverNormalized(message, { revision = 1, syntheticMessageId = null } = {}) {
+    const normalizedStarted = performance.now();
     const normalized = normalizeDiscordMessage(message, {
       botUserId: this.botUserId,
       accountScope: this.accountScope,
@@ -511,6 +522,8 @@ export class DiscordWorker {
       syntheticMessageId,
     });
     if (!normalized) return null;
+    const normalizationMs = performance.now() - normalizedStarted;
+    const inboundStarted = performance.now();
 
     const started = Date.now();
     let attempt = 0;
@@ -524,6 +537,7 @@ export class DiscordWorker {
           ? result.decision.reason_codes.slice(0, 6).join(',')
           : 'none';
         safeLog('CORE_INBOUND_OK', `action=${action} outbound=${outboundCount} duplicate=${Boolean(result?.duplicate)} reasons=${reasons}`);
+        traceDelivery('inbound', result?.outbound?.[0], { normalization_ms: normalizationMs, core_ms: performance.now() - inboundStarted, attempts: attempt });
         if (outboundCount > 0 && this.ready) await this.flushOutbound();
         return result;
       } catch (error) {
@@ -614,11 +628,13 @@ export class DiscordWorker {
     this.processingOutbound = true;
     try {
       for (let drained = 0; drained < 8; drained += 1) {
+        const claimStarted = performance.now();
         const claimed = await this.core.claimOutbound(1, OUTBOUND_CLAIM_LEASE_SECONDS);
         const messages = claimed?.messages || [];
         if (!messages.length) break;
         safeLog('OUTBOUND_CLAIMED', messages.length);
         const item = messages[0];
+        traceDelivery('claim', item, { claim_ms: performance.now() - claimStarted });
         const validation = this.runtime.validateOutbound(item);
         if (!validation.ok) {
           await this.core.cancelOutbound(item.id, `DISCORD_${validation.reason}`).catch(() => {});
@@ -626,8 +642,10 @@ export class DiscordWorker {
         }
 
         let externalMessageId = null;
+        const sendStarted = performance.now();
         try {
           externalMessageId = await this.sendOutbound(item);
+          traceDelivery('send', item, { send_ms: performance.now() - sendStarted });
         } catch (error) {
           const label = errorLabel(error);
           safeLog('OUTBOUND_SEND_FAILED', label);
@@ -646,7 +664,9 @@ export class DiscordWorker {
         }
 
         try {
+          const ackStarted = performance.now();
           await this.core.ackOutbound(item.id, { sent: true, externalMessageId });
+          traceDelivery('ack', item, { ack_ms: performance.now() - ackStarted });
           safeLog('OUTBOUND_SENT');
         } catch (error) {
           // Discord already accepted the message. Never convert an ACK transport
