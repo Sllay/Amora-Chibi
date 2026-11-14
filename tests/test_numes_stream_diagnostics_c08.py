@@ -41,6 +41,9 @@ def test_diagnostic_phases_and_usage_are_distinct():
     assert m["content_deltas"] == 2 and m["content_chars"] == 11
     assert m["surface_chars"] == 11
     assert m["last_reasoning_ms"] == 1000
+    assert m["reasoning_span_ms"] == 0
+    assert m["last_reasoning_to_content_ms"] == 2000
+    assert m["finish_to_done_ms"] == 4000
     assert m["content_span_ms"] == 2000
     assert m["content_max_gap_ms"] == 2000
     assert m["last_content_to_done_ms"] == 5000
@@ -112,7 +115,11 @@ async def test_numes_emits_compact_diagnostics_on_success_and_failure(tmp_path, 
         logs = [r for r in caplog.records if r.name == "amora.cognition.numes"]
         rows = [r for r in logs if r.getMessage() == "numes_stream_diagnostics"]
         assert len(rows) == 1
+        loop_rows = [r for r in logs if r.getMessage() == "numes_stream_loop"]
+        assert len(loop_rows) == 1
         row = rows[0]
+        assert loop_rows[0].request_id == row.request_id
+        assert loop_rows[0].loop_lag_max_ms == trace["numes_diag_loop_lag_max_ms"]
         assert row.outcome == ("completed" if done else "failed")
         assert row.reasoning_chars == len("PRIVATE_REASONING")
         assert row.content_chars == len(raw_text)
