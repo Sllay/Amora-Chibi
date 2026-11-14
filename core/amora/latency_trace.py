@@ -276,6 +276,8 @@ def trace_messaging_turn(fn):
                     "context_compile_ms", "stage_interaction_appraisal_ms",
                     "stage_generation_lease_wait_ms", "stage_cognitive_db_lane_ms",
                     "stage_cognitive_db_lane_calls", "stage_cognitive_db_lane_wait_ms",
+                    "stage_messaging_db_lane_ms", "stage_messaging_db_lane_calls",
+                    "stage_messaging_db_lane_wait_ms", "stage_messaging_db_lane_sql_ms",
                     "stage_validated_plan_ms", "stage_provider_attempt_ms",
                     "remote_sql_calls", "remote_sql_ms", "event_loop_lag_max_ms",
                     "event_loop_lag_observed_ingress_ms", "event_loop_lag_observed_cognition_ms",
