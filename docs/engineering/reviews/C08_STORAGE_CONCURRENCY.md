@@ -19,11 +19,13 @@ proof a prior SQL operation committed or rolled back.
    it rechecks candidates, disclosure and lease conditions. An enqueue
    concurrent with an empty check is available on the next poll.
 3. Only background remote reflection reconcile/claim moves off the event loop.
-   One consumer awaits each DB-only poll; existing store RLock owns the
-   connection for each operation. No transaction spans an await. Cancellation
-   joins the thread and returns a freshly claimed lease through normal retry.
-   Direct process_once and SQLite retain the existing synchronous path.
-   Shared lock contention and the main cognitive prepare/commit path remain;
+   One consumer awaits each DB-only poll on a dedicated single-thread executor
+   and an independently owned remote database connection. No transaction spans
+   an await. Cancellation joins the poll, returns a freshly claimed lease
+   through normal retry, closes the worker connection on its own lane and joins
+   the executor. Direct process_once and SQLite retain the synchronous path.
+   The primary database lock is no longer needed for background polling;
+   database-level contention and the main cognitive prepare/commit path remain;
    this is NOT a full async storage migration. Do not infer a <100 ms
    turn-wide lag from this change. Memory gating and persistence are unchanged.
 4. Numes uses a lifespan-owned HTTP pool on the serving event loop, closes it
