@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -9,6 +8,7 @@ from amora.storage.backend import execute_atomic_statement
 from amora.time import Clock
 
 from .generation_lifecycle import InboundGenerationLost
+from .session_identity import messaging_session_ref
 from .models import (
     AuditDirection,
     ChannelType,
@@ -201,8 +201,7 @@ class MessagingStore:
         if not isinstance(grant, dict):
             return False
         now = self.clock.now().isoformat()
-        session_id = f"MSG_{message.platform.value.upper()}_" + hashlib.sha256(
-            (message.account_scope + "|" + message.conversation_id).encode("utf-8")).hexdigest()
+        session_id = messaging_session_ref(message.platform.value, message.account_scope, message.conversation_id)
         if (grant.get("session_id") != session_id
                 or grant.get("turn_id") != message.metadata.get("cognitive_turn_id")
                 or grant.get("owner_id") != OWNER_ENTITY_ID

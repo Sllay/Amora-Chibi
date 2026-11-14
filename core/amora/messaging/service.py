@@ -10,6 +10,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from amora.cognition import CognitiveRequest
 from amora.memory.recall_intent import parse_recall_intent
 from .memory_disclosure import parse_disclosure_intent, disclosure_excerpt
+from .session_identity import messaging_session_ref
 
 from .attention import SocialAttentionRouter
 from .disclosure import public_text_allowed, audience_text_allowed
@@ -1099,4 +1100,4 @@ class PlatformMessagingService:
 
     @classmethod
     def _session_ref(cls, message: InboundMessage) -> str:
-        return f"MSG_{message.platform.value.upper()}_{cls._hash(message.account_scope + '|' + message.conversation_id)}"
+        return messaging_session_ref(message.platform.value, message.account_scope, message.conversation_id)
