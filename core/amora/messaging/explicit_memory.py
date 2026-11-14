@@ -66,7 +66,7 @@ def parse_explicit_memory(text: str) -> ExplicitMemoryIntent | None:
 
 def is_verified_owner(profiles, message, speaker_entity_id: str | None) -> bool:
     # Never authorize by alias, display name, relationship claim or an observed
-    # identity binding. Keep the first version scoped to Discord DMs.
+    # identity binding. Callers independently enforce the allowed channel scope.
     if speaker_entity_id != OWNER_ENTITY_ID or message.platform.value != "discord":
         return False
     return any(

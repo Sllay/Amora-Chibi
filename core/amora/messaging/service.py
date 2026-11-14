@@ -9,6 +9,8 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from amora.cognition import CognitiveRequest
 from amora.memory.recall_intent import parse_recall_intent
+from .memory_disclosure import parse_disclosure_intent, disclosure_excerpt
+from .session_identity import messaging_session_ref
 
 from .attention import SocialAttentionRouter
 from .disclosure import public_text_allowed, audience_text_allowed
@@ -172,6 +174,10 @@ class PlatformMessagingService:
         prepared = self.generations.prepared(*lease) if lease is not None else None
         if prepared is not None:
             outbound, decision, reasons = prepared
+            if outbound.metadata.get("memory_disclosure") and not self._disclosure_replay_allowed(message, decision, outbound):
+                self.generations.invalidate_prepared(
+                    self._session_ref(message), self._hash(message.native_source_message_id), message.transport_revision)
+                return self._invalidated_result(message)
             if message.channel_type == ChannelType.GROUP and (
                 not self.attention.floor.validate_reply(message, decision)
                 or not public_text_allowed(outbound.text)
@@ -263,12 +269,16 @@ class PlatformMessagingService:
 
         explicit_memory = (parse_explicit_memory(message.text)
                            if decision.action == RoutingAction.RESPOND else None)
+        disclosure_intent = (parse_disclosure_intent(message.text)
+                             if decision.action == RoutingAction.RESPOND and explicit_memory is None else None)
         recall_intent = (parse_recall_intent(message.text)
-                         if decision.action == RoutingAction.RESPOND and explicit_memory is None else None)
+                         if decision.action == RoutingAction.RESPOND and explicit_memory is None
+                         and disclosure_intent is None else None)
         if recall_intent is not None and not is_verified_owner(
                 self.attention.profiles, message, decision.speaker_entity_id):
             recall_intent = None
-        if decision.action == RoutingAction.RESPOND and explicit_memory is None and recall_intent is None:
+        if (decision.action == RoutingAction.RESPOND and explicit_memory is None
+                and recall_intent is None and disclosure_intent is None):
             control = self.presence_control.handle(
                 message.text,
                 speaker_entity_id=decision.speaker_entity_id,
@@ -316,6 +326,19 @@ class PlatformMessagingService:
             request.metadata["memory_consolidation"] = False
             self.cognition.observe_input(request)
             result = self._explicit_memory_result(message, decision, request, explicit_memory)
+            result = result.model_copy(update={"duplicate": duplicate_recovery})
+            self._log_result(result, provider="local_control", fallback_used=False,
+                             cognitive_reason_codes=list(result.outbound[0].metadata.get("cognitive_reason_codes", []))
+                             if result.outbound else [],
+                             remote_processing_allowed=message.remote_processing_allowed)
+            return result
+
+        if disclosure_intent is not None:
+            request.metadata["memory_disclosure_request"] = True
+            request.metadata["reflection_enqueue_requested"] = False
+            request.metadata["memory_consolidation"] = False
+            self.cognition.observe_input(request)
+            result = self._memory_disclosure_result(message, decision, request, disclosure_intent)
             result = result.model_copy(update={"duplicate": duplicate_recovery})
             self._log_result(result, provider="local_control", fallback_used=False,
                              cognitive_reason_codes=list(result.outbound[0].metadata.get("cognitive_reason_codes", []))
@@ -546,6 +569,9 @@ class PlatformMessagingService:
                 addressee_id="ENTITY_AMORA",
                 reason_codes=[*reasons, "DUPLICATE_OUTBOUND_REUSED"],
             )
+            if outbound.metadata.get("memory_disclosure") and not self._disclosure_replay_allowed(message, decision, outbound):
+                self.store.cancel_outbound(outbound.id, reason="MEMORY_DISCLOSURE_STALE")
+                return self._invalidated_result(message)
             return InboundResult(decision=decision, duplicate=True, outbound=[outbound])
 
         terminal_reason = next((reason for reason in reasons if reason in _TERMINAL_DUPLICATE_REASONS), None)
@@ -623,6 +649,95 @@ class PlatformMessagingService:
             },
             reason_codes=[reason, "LOCAL_DETERMINISTIC_CONTROL_REPLY"],
         )
+        return InboundResult(decision=decision, outbound=[outbound])
+
+    def _disclosure_replay_allowed(self, message, decision, outbound) -> bool:
+        return (
+            message.channel_type == ChannelType.GROUP
+            and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)
+            and outbound.status.value != "cancelled"
+            and self.store.disclosure_is_current(outbound)
+            and public_text_allowed(outbound.text)
+            and audience_text_allowed(outbound.text, audience_id=self._session_ref(message))
+        )
+
+    def _memory_disclosure_result(self, message, decision, request, intent) -> InboundResult:
+        from datetime import timedelta
+        from amora.events import PrivacyScope
+
+        grant = None
+        if message.channel_type != ChannelType.GROUP:
+            reason = "MEMORY_DISCLOSURE_GROUP_REQUIRED"
+            text = "Para compartilhar uma lembrança aqui, faça o pedido no canal de destino."
+        elif not self.attention.floor.validate_reply(message, decision):
+            return self._invalidated_result(message)
+        elif not is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id):
+            reason = "MEMORY_DISCLOSURE_AUTHORITY_REJECTED"
+            text = "Não posso compartilhar lembranças pessoais por esse pedido."
+        elif message.privacy_scope not in {PrivacyScope.PERSONAL, PrivacyScope.PUBLIC, PrivacyScope.SOCIAL}:
+            reason = "MEMORY_DISCLOSURE_PRIVACY_BLOCKED"
+            text = "Não posso compartilhar uma lembrança com essa classificação de privacidade."
+        elif not intent.valid:
+            reason = "MEMORY_DISCLOSURE_NEEDS_TOPIC"
+            text = "Indique uma lembrança específica que você quer compartilhar neste canal."
+        else:
+            memory_store = self.cognition.compiler.memory.store
+            if intent.record_id:
+                record = memory_store.shareable_owner_record(OWNER_ENTITY_ID, intent.record_id)
+                records, complete = ([record] if record else []), True
+            else:
+                records, complete = memory_store.recall_owner_records(
+                    OWNER_ENTITY_ID, intent.topic, limit=2, share_only=True)
+            if not complete or len(records) > 1:
+                reason = "MEMORY_DISCLOSURE_AMBIGUOUS"
+                text = ("Preciso de uma lembrança mais específica. Confira no privado qual registro quer "
+                        "compartilhar e autorize somente ele aqui.")
+            elif not records:
+                reason = "MEMORY_DISCLOSURE_NO_ELIGIBLE_MATCH"
+                text = "Não encontrei uma lembrança que possa compartilhar por esse pedido. Podemos conferir no privado."
+            else:
+                record = records[0]
+                excerpt = disclosure_excerpt(record, intent)
+                if excerpt is None:
+                    reason = "MEMORY_DISCLOSURE_NEEDS_REVIEW"
+                    text = "Não consegui selecionar um trecho seguro e específico. Vamos conferir no privado."
+                else:
+                    reason = "MEMORY_DISCLOSURE_AUTHORIZED"
+                    text = "Com sua autorização, aqui está o registro que encontrei na memória: " + excerpt
+                    # Bind the exact record version to this one outbound/turn.
+                    # No scope or remote-consent mutation, no provider payload.
+                    grant = {"record_id": str(record.id), "updated_at": record.updated_at.isoformat(),
+                             "owner_id": OWNER_ENTITY_ID, "session_id": request.session_id,
+                             "turn_id": str(request.turn_id),
+                             "expires_at": (self.clock.now() + timedelta(minutes=5)).isoformat()}
+        if message.channel_type == ChannelType.GROUP and (
+                not public_text_allowed(text) or not audience_text_allowed(text, audience_id=request.session_id)):
+            # Do not echo a blocked excerpt or confirm the existence of a record.
+            grant = None
+            reason = "MEMORY_DISCLOSURE_POLICY_BLOCKED"
+            text = "Não posso compartilhar essa informação neste canal."
+            if not public_text_allowed(text) or not audience_text_allowed(text, audience_id=request.session_id):
+                return InboundResult(decision=decision.model_copy(update={
+                    "action": RoutingAction.SILENCE,
+                    "reason_codes": [*decision.reason_codes, "CONFIDENTIAL_OUTPUT_SUPPRESSED"],
+                }))
+        self.cognition.record_turn_decision(
+            request, "TAKE_TURN", [reason, "LOCAL_OWNER_DISCLOSURE"], decision.score)
+        self.store.add_inbound_reason(
+            platform=message.platform, account_scope=message.account_scope,
+            conversation_id=message.conversation_id, message_id=message.message_id, reason=reason)
+        metadata = {
+            "local_control": True, "cognitive_turn_id": str(request.turn_id),
+            "generation_stage": "memory_disclosure", "provider": "local_control",
+            "generation_error_code": None, "cognitive_reason_codes": [reason],
+            "transport_revision": message.transport_revision,
+            "delivery_message_id": message.message_id,
+        }
+        if grant is not None:
+            metadata["memory_disclosure"] = grant
+        outbound = self._queue_outbound(
+            message, decision, text, metadata=metadata,
+            reason_codes=[reason, "LOCAL_OWNER_DISCLOSURE"])
         return InboundResult(decision=decision, outbound=[outbound])
 
     def _explicit_recall_result(self, message, decision, request, intent) -> InboundResult:
@@ -985,4 +1100,4 @@ class PlatformMessagingService:
 
     @classmethod
     def _session_ref(cls, message: InboundMessage) -> str:
-        return f"MSG_{message.platform.value.upper()}_{cls._hash(message.account_scope + '|' + message.conversation_id)}"
+        return messaging_session_ref(message.platform.value, message.account_scope, message.conversation_id)

@@ -1,0 +1,10 @@
+# Step 3 — Owner-authorized memory disclosure
+
+Verified Discord owner PERSON_BK can explicitly request one remembered subject in the current server channel, e.g. "Amora, pode falar aqui o que lembra do meu projeto Orquídea?". Ordinary recall and permission to talk about a topic are not disclosure authorization.
+
+- A natural request selects a unique active PERSONAL record with matching topic terms and publishes only sentences explicitly matching the topic (or a matching stored summary if needed). A mixed record is not fully projected. Ambiguous, broad, incomplete or unmatched searches fail closed. A reviewed exact record can be expressly authorized with "Compartilhe aqui a memória UUID"; that authorizes the full bounded record. The operator can find IDs using Step 2 inspection. No model is called.
+- Owner, trusted native Discord binding, channel, current inbound generation lease, exact record ID/version and five-minute delivery expiry are enforced. Only one outbound for the current turn; no reusable grant and no memory scope/remote permission change. Other channels and later ordinary questions cannot reuse the grant.
+- PRIVATE, SECRET, AUTH, non-owner, third-party audience and derived records cannot be shared. Inference requires a persisted matching owner PERSONAL DM source, not merely a provider claim. Existing literal and audience disclosure policies still override the request. Replays and queued claims recheck source validity; an archived or expired record cannot be delivered again. A message already delivered cannot be recalled from Discord by this mechanism.
+- Topic matching is lexical, not semantic DLP. Sentence-level excerpts can omit pronoun-dependent facts; explicitly review and authorize the exact record for full details. No automatic permission expansion or memory migration.
+
+Tests cover one-turn disclosure after restart, no provider or unrelated record leakage, denial and ambiguity, explicit UUID, source edit/archive and expiry, and unchanged group projection. Production deploy and original Orquídea/Aurora inspection still require live validation.
