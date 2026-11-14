@@ -397,5 +397,10 @@ class ContextCompiler:
             if reason not in context.reason_codes:
                 context.reason_codes.append(reason)
             replan()
-        replan()
+        # The default planner is deterministic for the current context. The
+        # last replan already describes the final snapshot (initial or after
+        # the last trim); another identical pass cannot change its inputs.
+        # Preserve historical behavior for custom/subclassed planners.
+        if dialogue is not None and type(dialogue) is not DialogueOrchestrator:
+            replan()
         return context
