@@ -1,0 +1,7 @@
+# Step 4 — Conversational memory expression
+
+Production screenshots verified that the owner can recover and authorize disclosure of the existing Orquídea memory. The stored reflection wording ("O falante está criando...") was exposed verbatim, producing a database-like reply.
+
+This change applies a narrow local Portuguese perspective renderer after the existing authorization/selection path. It recognizes owner-attributed cognitive reflection reports and a small set of direct first-person clauses, preserves original facts, and falls back to a quotation for complex/ambiguous perspective. It does not change storage, reflection, persona files, provider routing or memory scope. No model is called; the renderer receives only the already selected excerpt. Multiple memories remain distinct. Both raw authorized excerpt and rendered output pass the configured disclosure checks, including replay/claim; the original authorized excerpt is carried in the existing one-turn grant metadata for these checks. No extra memory is exported. Existing grants remain compatible.
+
+This is intentionally limited grammar, not unrestricted generative paraphrasing or a semantic validator. Complex statements may remain quoted. No new migration or worker update. Production validation: repeat the Orquídea DM and group authorization, expect conversational wording and unchanged reason codes; verify Aurora as a direct owner report. The HTTP 413 social-provider issue is separate.

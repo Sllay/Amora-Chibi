@@ -11,6 +11,7 @@ from amora.cognition import CognitiveRequest
 from amora.memory.recall_intent import parse_recall_intent
 from .memory_disclosure import parse_disclosure_intent, disclosure_excerpt
 from .session_identity import messaging_session_ref
+from .memory_expression import render_memory_reply
 
 from .attention import SocialAttentionRouter
 from .disclosure import public_text_allowed, audience_text_allowed
@@ -703,15 +704,19 @@ class PlatformMessagingService:
                     text = "Não consegui selecionar um trecho seguro e específico. Vamos conferir no privado."
                 else:
                     reason = "MEMORY_DISCLOSURE_AUTHORIZED"
-                    text = "Com sua autorização, aqui está o registro que encontrei na memória: " + excerpt
+                    text = render_memory_reply([(record, excerpt)])
                     # Bind the exact record version to this one outbound/turn.
                     # No scope or remote-consent mutation, no provider payload.
                     grant = {"record_id": str(record.id), "updated_at": record.updated_at.isoformat(),
                              "owner_id": OWNER_ENTITY_ID, "session_id": request.session_id,
                              "turn_id": str(request.turn_id),
-                             "expires_at": (self.clock.now() + timedelta(minutes=5)).isoformat()}
+                             "expires_at": (self.clock.now() + timedelta(minutes=5)).isoformat(),
+                             "source_excerpt": excerpt}
         if message.channel_type == ChannelType.GROUP and (
-                not public_text_allowed(text) or not audience_text_allowed(text, audience_id=request.session_id)):
+                not public_text_allowed(text) or not audience_text_allowed(text, audience_id=request.session_id)
+                or (grant is not None and (
+                    not public_text_allowed(grant["source_excerpt"])
+                    or not audience_text_allowed(grant["source_excerpt"], audience_id=request.session_id)))):
             # Do not echo a blocked excerpt or confirm the existence of a record.
             grant = None
             reason = "MEMORY_DISCLOSURE_POLICY_BLOCKED"
@@ -768,16 +773,17 @@ class PlatformMessagingService:
                 # No disclosure of private record existence, IDs or content.
                 records = [r for r in records if r.privacy_scope == PrivacyScope.PUBLIC]
             if records:
-                parts = []
-                for record in records:
-                    content = record.content
-                    if content.startswith("Relato de PERSON_BK: "):
-                        content = content[len("Relato de PERSON_BK: "):]
-                    content = content.strip()
-                    parts.append(content[:500] + ("…" if len(content) > 500 else ""))
-                heading = ("Estas são algumas lembranças recentes registradas, não uma transcrição da conversa:"
-                           if intent.generic else "Encontrei estes registros na memória:")
-                text = heading + "\n" + "\n".join(f"• {part}" for part in dict.fromkeys(parts))
+                excerpts = [(record, record.content.strip()[:500] +
+                             ("…" if len(record.content.strip()) > 500 else "")) for record in records]
+                if shared and any(
+                        not public_text_allowed(excerpt)
+                        or not audience_text_allowed(excerpt, audience_id=request.session_id)
+                        for _, excerpt in excerpts):
+                    return InboundResult(decision=decision.model_copy(update={
+                        "action": RoutingAction.SILENCE,
+                        "reason_codes": [*decision.reason_codes, "CONFIDENTIAL_OUTPUT_SUPPRESSED"],
+                    }))
+                text = render_memory_reply(excerpts, generic=intent.generic)
                 reason = "MEMORY_RECALL_PUBLIC_FOUND" if shared else "MEMORY_RECALL_PERSISTENT_FOUND"
             elif shared:
                 reason = "MEMORY_RECALL_SHARED_SCOPE_RESTRICTED"
