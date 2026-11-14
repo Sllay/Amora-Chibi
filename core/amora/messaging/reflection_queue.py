@@ -6,12 +6,15 @@ from time import perf_counter
 
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from datetime import timedelta
 from uuid import UUID, uuid4
 
 from amora.cognition import CognitiveRequest, JournalStage
 from amora.events import PrivacyScope
 from amora.storage.backend import execute_atomic_statement
+from amora.storage.database import AmoraDatabase
 
 _LOG = logging.getLogger("amora.messaging.reflection")
 _MAX_ATTEMPTS = 5
@@ -35,6 +38,8 @@ class ReflectionQueue:
         self._task = None
         self._loop = None
         self._wake = None
+        self._poll_executor = None
+        self._poll_worker = None
 
     def _write(self, sql, args):
         db = self.database
@@ -301,11 +306,31 @@ class ReflectionQueue:
             self.reconcile_missing()
         return self.claim()
 
+    def _poll_owned(self, reconcile):
+        # The background lane owns a separate remote connection for its entire
+        # lifetime. Enqueue, invalidation and ACKs keep the primary connection;
+        # the durable compare-and-set lease is still the cross-connection arbiter.
+        if self._poll_worker is None:
+            db = AmoraDatabase(self.database.path, backend=self.database.backend)
+            self._poll_worker = ReflectionQueue(db, self.cognition, self.clock)
+        return self._poll_worker._poll(reconcile)
+
+    def _close_poll_worker(self):
+        worker, self._poll_worker = self._poll_worker, None
+        if worker is not None:
+            worker.database.close()
+
     async def _poll_remote(self, reconcile):
         # Only the single background consumer offloads DB-only polling. Join
         # the thread on shutdown before closing the database; a claimed job
         # must be returned to the durable queue if cancellation won the race.
-        task = asyncio.create_task(asyncio.to_thread(self._poll, reconcile))
+        executor = self._poll_executor
+        if executor is None:
+            raise RuntimeError("REFLECTION_POLL_LANE_NOT_STARTED")
+        context = copy_context()
+        task = asyncio.get_running_loop().run_in_executor(
+            executor, context.run, self._poll_owned, reconcile,
+        )
         cancelled = False
         while True:
             try:
@@ -401,17 +426,36 @@ class ReflectionQueue:
 
     async def stop(self):
         if self._task is not None:
-            task, self._task = self._task, None
+            task = self._task
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
             finally:
-                self._loop = None
-                self._wake = None
+                if self._task is task:
+                    self._task = None
+                    self._loop = None
+                    self._wake = None
 
     async def _run(self):
+        executor = None
+        if self.database.backend.capabilities.remote:
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="amora-reflection-db")
+            self._poll_executor = executor
+        try:
+            await self._run_loop()
+        finally:
+            if executor is not None:
+                # _poll_remote joins its pending SQL before returning. Dispose
+                # the connection on the same lane, then join the idle thread.
+                try:
+                    await asyncio.get_running_loop().run_in_executor(executor, self._close_poll_worker)
+                finally:
+                    executor.shutdown(wait=True)
+                    self._poll_executor = None
+
+    async def _run_loop(self):
         loop, wake = self._loop, self._wake
         next_reconcile = 0.0
         while True:
