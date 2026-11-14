@@ -81,6 +81,11 @@ def register_messaging_routes(app, core, require_auth) -> None:
         except InboundGenerationBusy:
             raise HTTPException(status_code=503, detail="INBOUND_GENERATION_BUSY") from None
 
+    @app.get("/v1/messaging/worker/progress/{turn_id}", dependencies=[Depends(require_auth)])
+    async def messaging_progress(turn_id: UUID):
+        # No database, private text, model output or native identifiers.
+        return {"active": core.messaging.progress_active(turn_id)}
+
     @app.post("/v1/messaging/worker/invalidate", dependencies=[Depends(require_auth)])
     def messaging_transport_invalidate(payload: TransportInvalidation):
         return core.messaging.invalidate_transport(payload)

@@ -15,6 +15,7 @@ import {
   splitDiscordText,
 } from './normalize.mjs';
 import { DiscordSocialRuntime } from './social-runtime.mjs';
+import { messagingTurnId, startTypingProgress } from './typing-progress.mjs';
 
 const TRUE = new Set(['1', 'true', 'yes', 'on']);
 const TERMINAL_GATEWAY_CLOSE_CODES = new Set([4004, 4010, 4011, 4013, 4014]);
@@ -92,6 +93,7 @@ export class DiscordWorker {
     this.registeredCommandGuild = null;
     this.rest = rest || new DiscordRestClient({ token });
     this.runtime = runtime || new DiscordSocialRuntime();
+    this.typingProgress = new Map();
     this.socket = null;
     this.ready = false;
     this.stopped = false;
@@ -511,6 +513,36 @@ export class DiscordWorker {
     return referencedAuthorId;
   }
 
+  beginTypingProgress(normalized) {
+    if (normalized.channel_type !== 'dm' || !this.ready || this.stopped
+        || typeof this.core.progress !== 'function'
+        || !enabled('AMORA_DISCORD_TYPING_PROGRESS', true)) return () => {};
+    const channel = normalized.conversation_id;
+    this.typingProgress.get(channel)?.();
+    if (this.typingProgress.size >= 8) return () => {};
+    const isCurrent = () => {
+      const validation = this.runtime.validateOutbound({
+        conversation_id: channel, source_message_id: normalized.native_message_id,
+        metadata: { transport_revision: normalized.transport_revision },
+      });
+      return this.ready && !this.stopped && validation.ok && validation.reason === 'SOURCE_CURRENT';
+    };
+    if (!isCurrent()) return () => {};
+    const turnId = messagingTurnId(normalized);
+    const stop = startTypingProgress({
+      isCurrent,
+      poll: async () => (await this.core.progress(turnId))?.active === true,
+      send: () => this.rest.request(`/channels/${encodeURIComponent(channel)}/typing`, {
+        method: 'POST', timeoutMs: 2000, maxAttempts: 1,
+      }),
+      onStop: () => {
+        if (this.typingProgress.get(channel) === stop) this.typingProgress.delete(channel);
+      },
+    });
+    this.typingProgress.set(channel, stop);
+    return stop;
+  }
+
   async deliverNormalized(message, { revision = 1, syntheticMessageId = null } = {}) {
     const normalizedStarted = performance.now();
     const normalized = normalizeDiscordMessage(message, {
@@ -525,35 +557,41 @@ export class DiscordWorker {
     const normalizationMs = performance.now() - normalizedStarted;
     const inboundStarted = performance.now();
 
-    const started = Date.now();
-    let attempt = 0;
-    while (true) {
-      attempt += 1;
-      try {
-        const result = await this.core.inbound(normalized);
-        const action = result?.decision?.action || 'unknown';
-        const outboundCount = Array.isArray(result?.outbound) ? result.outbound.length : 0;
-        const reasons = Array.isArray(result?.decision?.reason_codes)
-          ? result.decision.reason_codes.slice(0, 6).join(',')
-          : 'none';
-        safeLog('CORE_INBOUND_OK', `action=${action} outbound=${outboundCount} duplicate=${Boolean(result?.duplicate)} reasons=${reasons}`);
-        traceDelivery('inbound', result?.outbound?.[0], { normalization_ms: normalizationMs, core_ms: performance.now() - inboundStarted, attempts: attempt });
-        if (outboundCount > 0 && this.ready) await this.flushOutbound();
-        return result;
-      } catch (error) {
-        const label = errorLabel(error);
-        if (!isRetryableCoreError(error)) {
-          safeLog('CORE_INBOUND_FAILED', label);
-          throw error;
+    const stopTyping = this.beginTypingProgress(normalized);
+    try {
+      const started = Date.now();
+      let attempt = 0;
+      while (true) {
+        attempt += 1;
+        try {
+          const result = await this.core.inbound(normalized);
+          stopTyping();
+          const action = result?.decision?.action || 'unknown';
+          const outboundCount = Array.isArray(result?.outbound) ? result.outbound.length : 0;
+          const reasons = Array.isArray(result?.decision?.reason_codes)
+            ? result.decision.reason_codes.slice(0, 6).join(',')
+            : 'none';
+          safeLog('CORE_INBOUND_OK', `action=${action} outbound=${outboundCount} duplicate=${Boolean(result?.duplicate)} reasons=${reasons}`);
+          traceDelivery('inbound', result?.outbound?.[0], { normalization_ms: normalizationMs, core_ms: performance.now() - inboundStarted, attempts: attempt });
+          if (outboundCount > 0 && this.ready) await this.flushOutbound();
+          return result;
+        } catch (error) {
+          const label = errorLabel(error);
+          if (!isRetryableCoreError(error)) {
+            safeLog('CORE_INBOUND_FAILED', label);
+            throw error;
+          }
+          const delay = boundedRetryDelay(attempt);
+          if ((Date.now() - started) + delay >= INBOUND_RETRY_WINDOW_MS) {
+            safeLog('CORE_INBOUND_FAILED', `${label} retry_window_exhausted`);
+            throw error;
+          }
+          safeLog('CORE_INBOUND_RETRY', `${label} attempt=${attempt + 1}`);
+          await sleep(delay);
         }
-        const delay = boundedRetryDelay(attempt);
-        if ((Date.now() - started) + delay >= INBOUND_RETRY_WINDOW_MS) {
-          safeLog('CORE_INBOUND_FAILED', `${label} retry_window_exhausted`);
-          throw error;
-        }
-        safeLog('CORE_INBOUND_RETRY', `${label} attempt=${attempt + 1}`);
-        await sleep(delay);
       }
+    } finally {
+      stopTyping();
     }
   }
 
