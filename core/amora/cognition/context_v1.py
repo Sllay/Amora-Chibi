@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage, span
+
 from time import perf_counter
 
 from amora.latency_trace import set_ms
@@ -19,6 +21,7 @@ class ContextCompiler(BaseContextCompiler):
     capability slice is projected from the live Action runtime.
     """
 
+    @trace_stage("context_compile")
     def compile(self, request: CognitiveRequest, *, token_budget: int = 16384) -> CognitiveContext:
         started = perf_counter()
         try:
@@ -60,15 +63,17 @@ class ContextCompiler(BaseContextCompiler):
                 )
                 context.reason_codes.append(f"DIALOGUE_ACT_{dialogue_plan.act.value.upper()}")
 
-            projection = CapabilityContextProjector(self.autonomy.events).project(request, context)
-            context.capabilities = projection.capabilities
-            context.reason_codes.extend(
-                code for code in projection.reason_codes if code not in context.reason_codes
-            )
+            with span("capability_projection"):
+                projection = CapabilityContextProjector(self.autonomy.events).project(request, context)
+                context.capabilities = projection.capabilities
+                context.reason_codes.extend(
+                    code for code in projection.reason_codes if code not in context.reason_codes
+                )
             return self._fit_with_capabilities(context)
         finally:
             set_ms("context_compile_ms", (perf_counter() - started) * 1000.0)
 
+    @trace_stage("context_capabilities_budget")
     def _fit_with_capabilities(self, context: CognitiveContext) -> CognitiveContext:
         """Respect the global context budget after capability projection."""
 
