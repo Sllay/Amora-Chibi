@@ -13,7 +13,7 @@ from typing import Iterable
 from uuid import UUID
 
 from amora.identity import EntityRegistry
-from amora.storage.backend import SQLiteBackend, StorageBackend
+from amora.storage.backend import SQLiteBackend, StorageBackend, execute_atomic_statement
 from amora.time import Clock
 
 from .models import MemoryHit, MemoryKind, MemoryProvenance, MemoryQuery, MemoryRecord, ProvenanceKind
@@ -624,8 +624,9 @@ class MemoryStore:
         if not memory_ids:
             return
         placeholders = ",".join("?" for _ in memory_ids)
-        with trace_lock(self._lock), self._conn:
-            self._conn.execute(
+        with trace_lock(self._lock):
+            execute_atomic_statement(
+                self.backend, self._conn,
                 f"UPDATE memory_records SET access_count = access_count + 1, last_accessed_at = ? WHERE id IN ({placeholders})",
                 (now.isoformat(), *memory_ids),
             )
