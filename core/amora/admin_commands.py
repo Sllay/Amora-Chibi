@@ -584,7 +584,8 @@ async def _command_memory_reflection_probe(core: Any, args: list[str]) -> dict[s
         MEMORY_ONLY_REASON, safe_reflection_failure, validate_memory_extraction,
     )
     from amora.events import PrivacyScope
-    provider = core.cognition._providers.get("groq")
+    provider = (core.cognition._providers.get("groq_memory")
+                or core.cognition._providers.get("groq"))
     if provider is None or not provider.descriptor.available:
         raise AdminCommandError("GROQ_NOT_AVAILABLE", "Groq indisponível")
     context = CognitiveContext(

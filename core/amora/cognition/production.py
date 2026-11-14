@@ -71,6 +71,14 @@ class CognitiveEngine(ResilientCognitiveEngine):
             estimated_input_tokens=max(1, len(context.model_dump_json()) // 4),
             excluded_names=excluded,
         )
+        durable = bool(request.metadata.get("durable_memory_reflection"))
+        # Specialist only handles the durable, compact extraction contract.
+        # Preserve original non-memory reasoning and ranked fallback behavior.
+        candidates = tuple(item for item in candidates
+                           if durable or not item.metadata.get("memory_reflection_only"))
+        if durable:
+            candidates = tuple(sorted(candidates,
+                key=lambda item: bool(item.metadata.get("memory_reflection_only")), reverse=True))
         if not candidates:
             if excluded:
                 bundle = CognitiveProposalBundle(reason_codes=["REFLECTION_PROVIDERS_IN_BACKOFF"])
@@ -82,7 +90,6 @@ class CognitiveEngine(ResilientCognitiveEngine):
 
         last = CognitiveProposalBundle(reason_codes=["NO_STRUCTURED_REFLECTION_PROVIDER"])
         started = perf_counter()
-        durable = bool(request.metadata.get("durable_memory_reflection"))
         for index, descriptor in enumerate(candidates):
             attempt = request
             if durable:
