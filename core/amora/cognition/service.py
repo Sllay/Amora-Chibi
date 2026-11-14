@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage
+
 from collections.abc import Awaitable, Callable
 from time import perf_counter
 from typing import Any
@@ -82,6 +84,7 @@ class CognitiveEngine:
             ],
         }
 
+    @trace_stage("provider_usage")
     def _record_usage(self, **usage: Any) -> UsagePersistence:
         return self.usage.record(**usage)
 
@@ -453,6 +456,7 @@ class CognitiveEngine:
             return next((item for item in self.store.list_segments(turn_id) if str(item.id) == str(segment_id)), None)
         return None
 
+    @trace_stage("record_input")
     def _record_input(self, request: CognitiveRequest) -> None:
         dedupe = f"cognitive-input:{request.source_event_id}" if request.source_event_id else f"cognitive-input:{request.turn_id}"
         existing = self.store.get_message_by_dedupe(dedupe)
@@ -508,6 +512,7 @@ class CognitiveEngine:
             model=plan.model,
         )
 
+    @trace_stage("cognitive_journal")
     def _journal(
         self,
         request: CognitiveRequest,

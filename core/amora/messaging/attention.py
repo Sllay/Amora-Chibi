@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage
+
 import hashlib
 import logging
 import re
@@ -420,6 +422,7 @@ class SocialAttentionRouter:
             )
             self.floor.runtime = self.runtime
 
+    @trace_stage("speaker_resolution")
     def resolve_speaker(
         self,
         message: InboundMessage,
@@ -550,6 +553,7 @@ class SocialAttentionRouter:
             speaker_entity_id=speaker_entity_id,
         )
 
+    @trace_stage("attention_route")
     def route(self, message: InboundMessage) -> AttentionDecision:
         speaker_entity_id, actor_ref = self.resolve_speaker(message)
 

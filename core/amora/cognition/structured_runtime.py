@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage, span
+
 import asyncio
 import logging
 from time import perf_counter
@@ -95,6 +97,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             )
         return await super().reflect(request)
 
+    @trace_stage("speech_segment")
     async def _emit_segment(
         self,
         request: CognitiveRequest,
@@ -129,6 +132,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     self.store.merge_message_metadata(str(message_id), execution)
         return speech
 
+    @trace_stage("cognitive_response")
     async def _respond_with_failover(
         self,
         request: CognitiveRequest,
@@ -219,7 +223,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
             nonlocal provider_elapsed
             attempt_started = perf_counter()
             try:
-                return await realize(context)
+                with span("provider_attempt"):
+                    return await realize(context)
             finally:
                 provider_elapsed += max(0.0, perf_counter() - attempt_started)
 
@@ -299,9 +304,10 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     raw_result = await timed_realize(realize)
                 raw = dict(raw_result)
                 usage = raw.pop("_usage", {}) if isinstance(raw.get("_usage"), dict) else {}
-                validated = RealizationValidator.parse_and_validate(
-                    context, raw, enforce_dialogue_plan=response_semantic_filter_enabled(),
-                )
+                with span("realization_validate"):
+                    validated = RealizationValidator.parse_and_validate(
+                        context, raw, enforce_dialogue_plan=response_semantic_filter_enabled(),
+                    )
             except ContextBudgetExceeded:
                 last_failure = "CONTEXT_ENVELOPE_OVERFLOW"
                 self._journal(request, JournalStage.ERROR, summary="provider envelope exceeds budget",
@@ -447,6 +453,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             started=started,
         )
 
+    @trace_stage("validated_plan")
     async def _plan_from_validated(
         self,
         request: CognitiveRequest,

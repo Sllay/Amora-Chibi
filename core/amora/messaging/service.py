@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage, trace_messaging_turn, span
+
 import asyncio
 import hashlib
 import logging
@@ -112,12 +114,14 @@ class PlatformMessagingService:
             task.add_done_callback(lambda done, key=key: self._drop_inflight(key, done))
         return await asyncio.shield(task)
 
+    @trace_stage("source_invalidation")
     def _source_invalidated(self, message):
         return self.reflections.source_invalidated(
             self._session_ref(message), self._hash(message.native_source_message_id),
             message.transport_revision,
         )
 
+    @trace_messaging_turn
     async def _receive_owned(self, message: InboundMessage) -> InboundResult:
         from amora.events import PrivacyScope
         if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
@@ -125,13 +129,14 @@ class PlatformMessagingService:
         turn_id = str(self._turn_id(message))
         token = str(uuid4())
         deadline = asyncio.get_running_loop().time() + min(110, self.cognition_timeout_seconds + 5)
-        while not self.generations.claim(
-            turn_id, self._session_ref(message), self._hash(message.native_source_message_id),
-            message.transport_revision, token,
-        ):
-            if asyncio.get_running_loop().time() >= deadline:
-                raise InboundGenerationBusy("INBOUND_GENERATION_BUSY")
-            await asyncio.sleep(0.05)
+        with span("generation_lease_wait"):
+            while not self.generations.claim(
+                turn_id, self._session_ref(message), self._hash(message.native_source_message_id),
+                message.transport_revision, token,
+            ):
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise InboundGenerationBusy("INBOUND_GENERATION_BUSY")
+                await asyncio.sleep(0.05)
         context_token = _GENERATION_LEASE.set((turn_id, token))
         completed = False
         try:
@@ -163,6 +168,7 @@ class PlatformMessagingService:
         if self._inflight.get(key) is task:
             self._inflight.pop(key, None)
 
+    @trace_stage("inbound")
     async def _receive_once(self, message: InboundMessage) -> InboundResult:
         from amora.events import PrivacyScope
         if message.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
@@ -915,6 +921,7 @@ class PlatformMessagingService:
         )
         return InboundResult(decision=decision, outbound=[outbound])
 
+    @trace_stage("outbound_prepare")
     def _queue_outbound(
         self,
         message: InboundMessage,
@@ -945,6 +952,7 @@ class PlatformMessagingService:
             raise InboundGenerationLost("INBOUND_GENERATION_LEASE_LOST")
         return self._persist_prepared_outbound(message, decision, outbound, reason_codes)
 
+    @trace_stage("outbound_persist")
     def _persist_prepared_outbound(self, message, decision, outbound, reason_codes):
         native_source_id = message.native_source_message_id
         metadata = outbound.metadata

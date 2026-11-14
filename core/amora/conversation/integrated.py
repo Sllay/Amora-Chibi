@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage
+
 import os
 from datetime import timedelta
 from uuid import UUID
@@ -124,6 +126,7 @@ class ConversationEngine(BaseConversationEngine):
         await self.cognition.reflect(reflection_request)
         return decision, item
 
+    @trace_stage("interaction_appraisal")
     async def _appraise_interaction(
         self,
         text: str,

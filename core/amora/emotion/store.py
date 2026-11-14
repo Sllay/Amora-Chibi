@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_lock
+
 import json
 import sqlite3
 import threading
@@ -32,16 +34,16 @@ class EmotionStore:
         self._conn = self.backend.connect(path)
 
     def close(self) -> None:
-        with self._lock:
+        with trace_lock(self._lock):
             self._conn.close()
 
     def event_count(self) -> int:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute("SELECT COUNT(*) FROM emotion_events").fetchone()
         return int(row[0]) if row else 0
 
     def put_event(self, event: EmotionEvent) -> bool:
-        with self._lock:
+        with trace_lock(self._lock):
             try:
                 execute_atomic_statement(
                     self.backend,
@@ -69,12 +71,12 @@ class EmotionStore:
         return True
 
     def get_event(self, event_id: UUID | str) -> EmotionEvent | None:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute("SELECT * FROM emotion_events WHERE id = ?", (str(event_id),)).fetchone()
         return self._hydrate_event(row) if row else None
 
     def get_event_by_dedupe(self, dedupe_key: str) -> EmotionEvent | None:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute("SELECT * FROM emotion_events WHERE dedupe_key = ?", (dedupe_key,)).fetchone()
         return self._hydrate_event(row) if row else None
 
@@ -86,12 +88,12 @@ class EmotionStore:
             params.append(target_id)
         sql += " ORDER BY created_at DESC LIMIT ?"
         params.append(max(1, min(200, int(limit))))
-        with self._lock:
+        with trace_lock(self._lock):
             rows = self._conn.execute(sql, params).fetchall()
         return [self._hydrate_event(row) for row in rows]
 
     def get_mood(self) -> MoodState:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute("SELECT * FROM mood_state WHERE singleton_id = 1").fetchone()
         if row is None:
             return MoodState(updated_at=self.clock.now())
@@ -103,7 +105,7 @@ class EmotionStore:
         )
 
     def put_mood(self, mood: MoodState) -> None:
-        with self._lock:
+        with trace_lock(self._lock):
             execute_atomic_statement(
                 self.backend,
                 self._conn,
@@ -120,14 +122,14 @@ class EmotionStore:
             )
 
     def get_affect(self, entity_id: str) -> EntityAffect | None:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute("SELECT * FROM entity_affect WHERE entity_id = ?", (entity_id,)).fetchone()
         if row is None:
             return None
         return self._hydrate_affect(row)
 
     def put_affect(self, affect: EntityAffect) -> None:
-        with self._lock:
+        with trace_lock(self._lock):
             execute_atomic_statement(
                 self.backend,
                 self._conn,
@@ -151,12 +153,12 @@ class EmotionStore:
             )
 
     def list_affect(self) -> list[EntityAffect]:
-        with self._lock:
+        with trace_lock(self._lock):
             rows = self._conn.execute("SELECT * FROM entity_affect ORDER BY entity_id").fetchall()
         return [self._hydrate_affect(row) for row in rows]
 
     def put_bid(self, bid: SocialBid) -> None:
-        with self._lock:
+        with trace_lock(self._lock):
             execute_atomic_statement(
                 self.backend,
                 self._conn,
@@ -175,7 +177,7 @@ class EmotionStore:
 
     def list_bids(self, *, include_expired: bool = False, limit: int = 50) -> list[SocialBid]:
         now = self.clock.now().isoformat()
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             self._conn.execute(
                 "UPDATE social_bids SET status = ? WHERE status = ? AND expires_at <= ?",
                 (SocialBidStatus.EXPIRED.value, SocialBidStatus.PENDING.value, now),
@@ -191,7 +193,7 @@ class EmotionStore:
         return [self._hydrate_bid(row) for row in rows]
 
     def set_bid_status(self, bid_id: UUID | str, status: SocialBidStatus) -> bool:
-        with self._lock:
+        with trace_lock(self._lock):
             cur = execute_atomic_statement(
                 self.backend,
                 self._conn,

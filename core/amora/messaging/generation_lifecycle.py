@@ -1,6 +1,8 @@
 """Durable generation ownership and prepared outbound recovery."""
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage, trace_lock
+
 import json
 from datetime import timedelta
 
@@ -23,9 +25,10 @@ class InboundGeneration:
 
     def _write(self, sql, args):
         db = self.database
-        with db._lock:
+        with trace_lock(db._lock):
             return execute_atomic_statement(db.backend, db._conn, sql, args).rowcount
 
+    @trace_stage("generation_claim")
     def claim(self, turn_id, session_id, native_hash, revision, token, *, seconds=180):
         now = self.clock.now()
         return bool(self._write(
@@ -39,6 +42,7 @@ class InboundGeneration:
              (now + timedelta(seconds=seconds)).isoformat(), now.isoformat()),
         ))
 
+    @trace_stage("generation_release")
     def release(self, turn_id, token, *, completed=False):
         clear = ",prepared_outbound_json=NULL,prepared_decision_json=NULL,prepared_reasons_json=NULL" if completed else ""
         return bool(self._write(
@@ -47,6 +51,7 @@ class InboundGeneration:
             (str(turn_id), token),
         ))
 
+    @trace_stage("generation_stage")
     def stage(self, turn_id, token, outbound, decision, reasons):
         return bool(self._write(
             """UPDATE messaging_inbound_generation SET prepared_outbound_json=?,prepared_decision_json=?,prepared_reasons_json=?
@@ -59,8 +64,9 @@ class InboundGeneration:
              str(turn_id), token, self.clock.now().isoformat()),
         ))
 
+    @trace_stage("generation_prepared")
     def prepared(self, turn_id, token):
-        with self.database._lock:
+        with trace_lock(self.database._lock):
             row = self.database._conn.execute(
                 "SELECT prepared_outbound_json,prepared_decision_json,prepared_reasons_json "
                 "FROM messaging_inbound_generation WHERE turn_id=? AND lease_token=?",

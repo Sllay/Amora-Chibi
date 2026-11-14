@@ -5,6 +5,8 @@ All memory access and final realization validation remain in the Core.
 """
 from __future__ import annotations
 
+from amora.latency_trace import set_ms, increment, span
+
 import asyncio
 import json
 import logging
@@ -193,9 +195,10 @@ class NumesCognitiveProvider:
                         raise ProviderError("Numes incomplete realization stream",
                                             status_code=response.status_code)
                     try:
-                        parsed = json.loads("".join(pieces))
-                        if not isinstance(parsed, dict):
-                            raise ValueError("not object")
+                        with span("numes_json_parse"):
+                            parsed = json.loads("".join(pieces))
+                            if not isinstance(parsed, dict):
+                                raise ValueError("not object")
                     except (TypeError, ValueError):
                         raise ProviderError("Numes returned invalid realization JSON",
                                             status_code=response.status_code) from None
@@ -212,6 +215,10 @@ class NumesCognitiveProvider:
             raise
         finally:
             metrics["elapsed_ms"] = elapsed()
+            increment("numes_stream_attempts")
+            for name in ("headers_ms", "first_event_ms", "first_reasoning_ms", "first_content_ms", "elapsed_ms"):
+                if metrics[name] is not None:
+                    set_ms("numes_" + name, metrics[name])
             event("numes_stream_finished")
         parsed["_usage"] = {
             "input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),

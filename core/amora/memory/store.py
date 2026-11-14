@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage, trace_lock
+
 import json
 import re
 import sqlite3
@@ -45,12 +47,12 @@ class MemoryStore:
         self.fts_enabled = self._ensure_fts()
 
     def close(self) -> None:
-        with self._lock:
+        with trace_lock(self._lock):
             self._conn.close()
 
     def _ensure_fts(self) -> bool:
         try:
-            with self._lock, self._conn:
+            with trace_lock(self._lock), self._conn:
                 self._conn.execute(
                     """
                     CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
@@ -72,7 +74,7 @@ class MemoryStore:
         sql = "SELECT COUNT(*) FROM memory_records"
         if not include_archived:
             sql += " WHERE archived_at IS NULL"
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute(sql).fetchone()
         return int(row[0]) if row else 0
 
@@ -96,7 +98,7 @@ class MemoryStore:
             record.archived_at.isoformat() if record.archived_at else None,
             json.dumps(record.metadata, ensure_ascii=False, separators=(",", ":")),
         )
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             if generation_lease is not None:
                 turn_id, token = generation_lease
                 # Verify the persisted source and active inbound lease in the
@@ -176,14 +178,14 @@ class MemoryStore:
                 )
 
     def get(self, memory_id: UUID | str) -> MemoryRecord | None:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute("SELECT * FROM memory_records WHERE id = ?", (str(memory_id),)).fetchone()
             if row is None:
                 return None
             return self._hydrate(row)
 
     def local_only_reflection_audit(self) -> dict:
-        with self._lock:
+        with trace_lock(self._lock):
             count = self._conn.execute(
                 "SELECT COUNT(*) FROM memory_records WHERE archived_at IS NULL "
                 "AND remote_processing_allowed=0 AND provenance_source LIKE 'cognition:%'"
@@ -203,7 +205,7 @@ class MemoryStore:
         """
         if self.identities.get(owner_id) is None:
             return False
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             cursor = self._conn.execute(
                 """UPDATE memory_records SET remote_processing_allowed=1,
                        owner_entity_id=?, updated_at=?
@@ -236,7 +238,7 @@ class MemoryStore:
 
     def link(self, source_memory_id: UUID | str, target_memory_id: UUID | str, link_type: str, confidence: float = 1.0) -> None:
         confidence = max(0.0, min(1.0, float(confidence)))
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             self._conn.execute(
                 """
                 INSERT INTO memory_links(source_memory_id, target_memory_id, link_type, confidence)
@@ -249,7 +251,7 @@ class MemoryStore:
 
     def degrade_retrievability(self, memory_id: UUID | str, factor: float) -> float | None:
         factor = max(0.0, min(1.0, float(factor)))
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             row = self._conn.execute("SELECT retrievability FROM memory_records WHERE id = ?", (str(memory_id),)).fetchone()
             if row is None:
                 return None
@@ -262,7 +264,7 @@ class MemoryStore:
 
     def archive(self, memory_id: UUID | str) -> bool:
         now = self.clock.now().isoformat()
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             cur = self._conn.execute(
                 "UPDATE memory_records SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL",
                 (now, now, str(memory_id)),
@@ -299,7 +301,7 @@ class MemoryStore:
         def matches(row):
             return generic or terms <= topic_terms(
                 str(row["content"]) + " " + str(row["summary"] or ""))
-        with self._lock:
+        with trace_lock(self._lock):
             if generic:
                 rows = self._conn.execute(sql + order + " LIMIT ?", (*args, limit)).fetchall()
                 return list(self._hydrate_many(list(rows)).values()), True
@@ -330,7 +332,7 @@ class MemoryStore:
     def shareable_owner_record(self, owner_id: str, record_id: str) -> MemoryRecord | None:
         from .disclosure import SHAREABLE_MEMORY_SQL
         now = self.clock.now().isoformat()
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute(
                 "SELECT m.* FROM memory_records m WHERE " + SHAREABLE_MEMORY_SQL + " AND m.id=?",
                 (owner_id, now, now, record_id),
@@ -339,7 +341,7 @@ class MemoryStore:
 
     def owner_turn_memory_status(self, turn_id: str, owner_id: str) -> list[dict]:
         """Operator-only metadata; never return the memory text or other owners."""
-        with self._lock:
+        with trace_lock(self._lock):
             rows = self._conn.execute(
                 """SELECT id,privacy_scope,remote_processing_allowed,archived_at,
                           provenance_kind,provenance_source,valid_from,valid_until
@@ -361,6 +363,7 @@ class MemoryStore:
             "provenance_source": row["provenance_source"],
         } for row in rows]
 
+    @trace_stage("memory_search")
     def search(self, query: MemoryQuery) -> list[MemoryHit]:
         rows = self._candidate_rows(query)
         if not rows:
@@ -448,6 +451,7 @@ class MemoryStore:
             hit.memory.last_accessed_at = now
         return hits
 
+    @trace_stage("memory_candidates")
     def _candidate_rows(self, query: MemoryQuery) -> list[sqlite3.Row]:
         where: list[str] = []
         params: list[object] = []
@@ -488,7 +492,7 @@ class MemoryStore:
             sql += " WHERE " + " AND ".join(where)
         baseline = sql + " ORDER BY (importance * retrievability) DESC, created_at DESC, id LIMIT 300"
         tokens = sorted(_tokens(query.text))[:16]
-        with self._lock:
+        with trace_lock(self._lock):
             rows = list(self._conn.execute(baseline, params).fetchall())
             if not tokens:
                 return rows
@@ -523,13 +527,14 @@ class MemoryStore:
             # At most 450 hydrated candidates, regardless of corpus size.
             return list({row["id"]: row for row in [*rows, *matched]}.values())
 
+    @trace_stage("memory_text_rank")
     def _text_rank(self, text: str, records: dict[str, MemoryRecord]) -> list[str]:
         query_tokens = sorted(_tokens(text))[:16]
         if not query_tokens:
             return []
         if self.fts_enabled:
             expression = " OR ".join(f'"{token}"' for token in query_tokens)
-            with self._lock:
+            with trace_lock(self._lock):
                 rows = self._conn.execute(
                     "SELECT memory_id, bm25(memory_fts) AS rank FROM memory_fts WHERE memory_fts MATCH ? "
                     "AND memory_id IN (" + ",".join("?" for _ in records) + ") ORDER BY rank, memory_id LIMIT 150",
@@ -550,12 +555,13 @@ class MemoryStore:
         scored.sort(reverse=True)
         return [memory_id for _, memory_id in scored]
 
+    @trace_stage("memory_entity_rank")
     def _entity_ranks(self, entity_ids: set[str], candidate_ids: Iterable[str]) -> tuple[list[str], list[str]]:
         if not entity_ids:
             return [], []
         candidate_set = set(candidate_ids)
         placeholders = ",".join("?" for _ in entity_ids)
-        with self._lock:
+        with trace_lock(self._lock):
             rows = self._conn.execute(
                 f"SELECT memory_id, entity_id, confidence FROM memory_entities WHERE entity_id IN ({placeholders}) ORDER BY confidence DESC",
                 sorted(entity_ids),
@@ -572,7 +578,7 @@ class MemoryStore:
         related: list[str] = []
         if related_entities:
             placeholders = ",".join("?" for _ in related_entities)
-            with self._lock:
+            with trace_lock(self._lock):
                 rows = self._conn.execute(
                     f"SELECT memory_id, confidence FROM memory_entities WHERE entity_id IN ({placeholders}) ORDER BY confidence DESC",
                     sorted(related_entities),
@@ -613,22 +619,24 @@ class MemoryStore:
             remaining.remove(best_id)
         return selected
 
+    @trace_stage("memory_access_write")
     def _mark_accessed(self, memory_ids: list[str], now: datetime) -> None:
         if not memory_ids:
             return
         placeholders = ",".join("?" for _ in memory_ids)
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             self._conn.execute(
                 f"UPDATE memory_records SET access_count = access_count + 1, last_accessed_at = ? WHERE id IN ({placeholders})",
                 (now.isoformat(), *memory_ids),
             )
 
+    @trace_stage("memory_hydrate")
     def _hydrate_many(self, rows: list[sqlite3.Row]) -> dict[str, MemoryRecord]:
         if not rows:
             return {}
         memory_ids = [str(row["id"]) for row in rows]
         placeholders = ",".join("?" for _ in memory_ids)
-        with self._lock:
+        with trace_lock(self._lock):
             entity_rows = self._conn.execute(
                 f"SELECT memory_id, entity_id, confidence FROM memory_entities WHERE memory_id IN ({placeholders}) ORDER BY memory_id, entity_id",
                 memory_ids,
@@ -662,7 +670,7 @@ class MemoryStore:
     ) -> MemoryRecord:
         memory_id = row["id"]
         if entity_rows is None or tag_rows is None:
-            with self._lock:
+            with trace_lock(self._lock):
                 loaded_entities = self._conn.execute(
                     "SELECT entity_id, confidence FROM memory_entities WHERE memory_id = ? ORDER BY entity_id",
                     (memory_id,),

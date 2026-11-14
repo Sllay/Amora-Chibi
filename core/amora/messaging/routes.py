@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Literal
+from time import perf_counter
+
+from amora.latency_trace import bind_latency_trace, elapsed_ms, log_trace, set_ms, install_remote_storage_probe
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, status
@@ -69,6 +72,7 @@ def register_messaging_routes(app, core, require_auth) -> None:
     """Register a narrow worker boundary plus operator audit/presence controls."""
 
     register_visual_enrichment_routes(app, core, require_auth)
+    install_remote_storage_probe()
 
     @app.post("/v1/messaging/worker/inbound", dependencies=[Depends(require_auth)])
     async def messaging_inbound(message: InboundMessage):
@@ -88,28 +92,33 @@ def register_messaging_routes(app, core, require_auth) -> None:
         limit: int = Query(default=1, ge=1, le=32),
         lease_seconds: int = Query(default=120, ge=5, le=120),
     ):
-        return {
-            "messages": [
-                item.model_dump(mode="json")
-                for item in core.messaging_store.claim_outbound(
-                    platform=platform,
-                    account_scope=account_scope,
-                    limit=limit,
-                    lease_seconds=lease_seconds,
-                )
-            ]
-        }
+        with bind_latency_trace() as trace:
+            started = perf_counter()
+            items = core.messaging_store.claim_outbound(
+                platform=platform, account_scope=account_scope,
+                limit=limit, lease_seconds=lease_seconds,
+            )
+            result = {"messages": [item.model_dump(mode="json") for item in items]}
+            set_ms("outbound_claim_total_ms", elapsed_ms(started))
+            if items or trace["outbound_claim_total_ms"] >= 1000:
+                log_trace("outbound_claim", trace, outbound_id=items[0].id if items else None)
+            return result
 
     @app.post("/v1/messaging/worker/outbound/{message_id}/ack", dependencies=[Depends(require_auth)])
     def messaging_outbound_ack(message_id: UUID, payload: OutboundAckRequest):
-        if not core.messaging_store.ack_outbound(
-            message_id,
-            sent=payload.sent,
-            external_message_id=payload.external_message_id,
-            error_code=payload.error_code,
-        ):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="outbound message not claimable")
-        return {"status": "ok"}
+        with bind_latency_trace() as trace:
+            started = perf_counter()
+            accepted = core.messaging_store.ack_outbound(
+                message_id, sent=payload.sent,
+                external_message_id=payload.external_message_id,
+                error_code=payload.error_code,
+            )
+            set_ms("outbound_ack_total_ms", elapsed_ms(started))
+            log_trace("outbound_ack", trace, outbound_id=message_id,
+                      outcome="ok" if accepted else "not_claimable")
+            if not accepted:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="outbound message not claimable")
+            return {"status": "ok"}
 
     @app.post("/v1/messaging/worker/outbound/{message_id}/cancel", dependencies=[Depends(require_auth)])
     def messaging_outbound_cancel(message_id: UUID, payload: OutboundCancelRequest):

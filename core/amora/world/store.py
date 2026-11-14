@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from amora.latency_trace import trace_stage, trace_lock
+
 import json
 import sqlite3
 import threading
@@ -35,16 +37,16 @@ class WorldStore:
         self._conn = self.backend.connect(path)
 
     def close(self) -> None:
-        with self._lock:
+        with trace_lock(self._lock):
             self._conn.close()
 
     def claim_count(self) -> int:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute("SELECT COUNT(*) FROM world_claims").fetchone()
         return int(row[0]) if row else 0
 
     def put_claim(self, claim: WorldClaim) -> None:
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             self._conn.execute(
                 """
                 INSERT INTO world_claims(
@@ -77,14 +79,14 @@ class WorldStore:
             )
 
     def get_claim(self, claim_id: UUID | str) -> WorldClaim | None:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute("SELECT * FROM world_claims WHERE id = ?", (str(claim_id),)).fetchone()
             if row is None:
                 return None
             return self._hydrate_claim(row)
 
     def expire_claim(self, claim_id: UUID | str, when: datetime) -> bool:
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             cur = self._conn.execute(
                 """
                 UPDATE world_claims
@@ -104,7 +106,7 @@ class WorldStore:
         at: datetime | None = None,
     ) -> WorldClaim | None:
         instant = (at or self.clock.now()).isoformat()
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute(
                 """
                 SELECT * FROM world_claims
@@ -148,10 +150,11 @@ class WorldStore:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY valid_from DESC, created_at DESC LIMIT ?"
         params.append(query.limit)
-        with self._lock:
+        with trace_lock(self._lock):
             rows = self._conn.execute(sql, params).fetchall()
         return self._hydrate_claims(rows)
 
+    @trace_stage("world_state")
     def current_state(self, *, subject_id: str | None = None, at: datetime | None = None) -> list[WorldClaim]:
         return self.query_claims(
             WorldQuery(
@@ -165,7 +168,7 @@ class WorldStore:
         )
 
     def upsert_self_entry(self, entry: SelfEntry) -> SelfEntry:
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             row = self._conn.execute(
                 "SELECT id, created_at FROM self_entries WHERE layer = ? AND key = ?",
                 (entry.layer.value, entry.key),
@@ -196,13 +199,14 @@ class WorldStore:
         return entry
 
     def get_self_entry(self, layer: SelfLayer, key: str) -> SelfEntry | None:
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute(
                 "SELECT * FROM self_entries WHERE layer = ? AND key = ?",
                 (layer.value, key),
             ).fetchone()
         return self._hydrate_self(row) if row else None
 
+    @trace_stage("self_entries")
     def list_self_entries(self, layer: SelfLayer | None = None) -> list[SelfEntry]:
         sql = "SELECT * FROM self_entries"
         params: tuple[object, ...] = ()
@@ -210,12 +214,12 @@ class WorldStore:
             sql += " WHERE layer = ?"
             params = (layer.value,)
         sql += " ORDER BY layer, key"
-        with self._lock:
+        with trace_lock(self._lock):
             rows = self._conn.execute(sql, params).fetchall()
         return [self._hydrate_self(row) for row in rows]
 
     def put_relationship(self, relation: RelationshipState) -> None:
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             self._conn.execute(
                 """
                 INSERT INTO relationship_revisions(
@@ -233,7 +237,7 @@ class WorldStore:
             )
 
     def expire_relationship(self, relation_id: UUID | str, when: datetime) -> bool:
-        with self._lock, self._conn:
+        with trace_lock(self._lock), self._conn:
             cur = self._conn.execute(
                 """
                 UPDATE relationship_revisions SET valid_until = ?
@@ -245,7 +249,7 @@ class WorldStore:
 
     def current_relationship(self, source_id: str, relation_type: str, target_id: str, *, at: datetime | None = None) -> RelationshipState | None:
         instant = (at or self.clock.now()).isoformat()
-        with self._lock:
+        with trace_lock(self._lock):
             row = self._conn.execute(
                 """
                 SELECT * FROM relationship_revisions
@@ -264,16 +268,17 @@ class WorldStore:
             sql += " AND target_id = ?"
             params.append(target_id)
         sql += " ORDER BY valid_from DESC, created_at DESC"
-        with self._lock:
+        with trace_lock(self._lock):
             rows = self._conn.execute(sql, params).fetchall()
         return [self._hydrate_relationship(row) for row in rows]
 
+    @trace_stage("world_hydrate")
     def _hydrate_claims(self, rows) -> list[WorldClaim]:
         if not rows:
             return []
         claim_ids = [str(row["id"]) for row in rows]
         placeholders = ",".join("?" for _ in claim_ids)
-        with self._lock:
+        with trace_lock(self._lock):
             evidence_rows = self._conn.execute(
                 f"SELECT claim_id, kind, ref_id, confidence, note FROM world_evidence WHERE claim_id IN ({placeholders}) ORDER BY claim_id, ordinal",
                 claim_ids,
@@ -288,7 +293,7 @@ class WorldStore:
 
     def _hydrate_claim(self, row: sqlite3.Row, *, evidence_rows=None) -> WorldClaim:
         if evidence_rows is None:
-            with self._lock:
+            with trace_lock(self._lock):
                 evidence_rows = self._conn.execute(
                     "SELECT kind, ref_id, confidence, note FROM world_evidence WHERE claim_id = ? ORDER BY ordinal",
                     (row["id"],),
