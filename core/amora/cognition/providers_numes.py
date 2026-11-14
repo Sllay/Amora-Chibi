@@ -5,7 +5,7 @@ All memory access and final realization validation remain in the Core.
 """
 from __future__ import annotations
 
-from amora.latency_trace import set_ms, increment, span
+from amora.latency_trace import set_ms, set_value, increment, span
 
 import asyncio
 import json
@@ -21,6 +21,7 @@ from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from .context_budget import fit_provider_payload
 from .payload_metrics import log_payload_metrics
 from .models import CognitiveContext
+from .numes_stream_diagnostics import NumesStreamDiagnostics
 from .providers import ProviderError
 from .providers_identity import _identity_history
 from .prompt_frame import render_current_turn, render_trusted_protocol
@@ -106,6 +107,8 @@ class NumesCognitiveProvider:
     async def _complete_stream(self, payload, *, key, phase):
         log_payload_metrics("numes", self.API_URL, payload, phase=phase)
         started = perf_counter()
+        diagnostics = NumesStreamDiagnostics()
+        parsed = None
         request_id = str(uuid4())
         metrics = {"request_id": request_id, "phase": phase, "provider": "numes",
                    "model": self.model, "headers_ms": None, "first_event_ms": None,
@@ -124,6 +127,7 @@ class NumesCognitiveProvider:
             logging.getLogger("amora.cognition.numes").info(name, extra=dict(metrics))
 
         event("numes_stream_started")
+        diagnostics.start_sampler()
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout_seconds, connect=10),
                                          follow_redirects=False) as client:
@@ -146,6 +150,7 @@ class NumesCognitiveProvider:
                         if not line.startswith("data:"):
                             continue
                         data = line[5:].strip()
+                        diagnostics.data_event(done=data == "[DONE]")
                         if data == "[DONE]":
                             done = True
                             break
@@ -173,6 +178,7 @@ class NumesCognitiveProvider:
                             if not isinstance(delta, dict):
                                 raise ProviderError("Numes invalid SSE delta")
                             if delta.get("reasoning") or delta.get("reasoning_content") or delta.get("reasoning_details"):
+                                diagnostics.reasoning(delta)
                                 if metrics["first_reasoning_ms"] is None:
                                     metrics["first_reasoning_ms"] = elapsed()
                                     if metrics["first_content_ms"] is None:
@@ -180,6 +186,7 @@ class NumesCognitiveProvider:
                                     event("numes_stream_first_reasoning")
                             content = delta.get("content")
                             if isinstance(content, str) and content:
+                                diagnostics.content(content)
                                 if metrics["first_content_ms"] is None:
                                     metrics["first_content_ms"] = elapsed()
                                     metrics["stage"] = "visible_partial"
@@ -189,6 +196,7 @@ class NumesCognitiveProvider:
                                     raise ProviderError("Numes stream output exceeds local bound")
                                 pieces.append(content)
                             if choice.get("finish_reason") is not None:
+                                diagnostics.finish()
                                 finish = choice["finish_reason"]
                                 metrics["stage"] = "waiting_terminator"
                     if not done or finish != "stop":
@@ -220,6 +228,16 @@ class NumesCognitiveProvider:
                 if metrics[name] is not None:
                     set_ms("numes_" + name, metrics[name])
             event("numes_stream_finished")
+            observed = diagnostics.close(usage=usage, parsed=parsed if metrics["outcome"] == "completed" else None)
+            for name, value in observed.items():
+                set_value("numes_diag_" + name, value)
+            # Separate short record: cloud log viewers may truncate full turn traces.
+            logging.getLogger("amora.cognition.numes").info(
+                "numes_stream_diagnostics", extra={
+                    "request_id": request_id, "phase": phase, "outcome": metrics["outcome"],
+                    **observed,
+                },
+            )
         parsed["_usage"] = {
             "input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
             "status_code": metrics["status_code"], "latency_ms": metrics["elapsed_ms"],
