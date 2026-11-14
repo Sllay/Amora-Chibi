@@ -71,7 +71,7 @@ async def test_c08_remote_poll_offload_keeps_loop_alive_and_joins_shutdown(tmp_p
     started, release = threading.Event(), threading.Event()
     owner = threading.get_ident()
     threads = []
-    original_poll = q._poll
+    original_poll = q._poll_owned
     try:
         seed = request()
         core.cognition.observe_input(seed)
@@ -81,7 +81,7 @@ async def test_c08_remote_poll_offload_keeps_loop_alive_and_joins_shutdown(tmp_p
             started.set()
             assert release.wait(5)
             return original_poll(reconcile)
-        monkeypatch.setattr(q, "_poll", blocked_poll)
+        monkeypatch.setattr(q, "_poll_owned", blocked_poll)
         q.start()
         async def wait_started():
             while not started.is_set():
@@ -163,3 +163,52 @@ async def test_c08_pool_lifecycle_and_transport_trace(monkeypatch):
     await provider.stop_transport()
     assert (await provider.probe())["success"]
     assert len(clients) == 2 and clients[1].is_closed
+
+
+@pytest.mark.asyncio
+async def test_c08_remote_poll_owns_independent_connection_and_thread(tmp_path, monkeypatch):
+    configure(monkeypatch, tmp_path)
+    monkeypatch.setenv("AMORA_ASSET_STORAGE", "database")
+    server = HranaSQLite(tmp_path / "remote.db")
+    core = AmoraCore.bootstrap(clock=SimulatedClock(), storage=LibSQLBackend(
+        "https://database.example", "synthetic-only", transport=httpx.MockTransport(server)))
+    q = core.messaging.reflections
+    complete = threading.Event()
+    observed = []
+    original_poll = q._poll_owned
+    owner = threading.get_ident()
+    try:
+        def probe(reconcile):
+            result = original_poll(reconcile)
+            worker = q._poll_worker
+            observed.append((threading.get_ident(), worker.database, worker.database._conn))
+            complete.set()
+            return result
+        monkeypatch.setattr(q, "_poll_owned", probe)
+        async def wait_complete():
+            while not complete.is_set():
+                await asyncio.sleep(0.005)
+        # Holding the primary lock must not block the remote worker's polling.
+        # No transaction is held here; DB-level contention is a separate concern.
+        with core.database._lock:
+            q.start()
+            await asyncio.wait_for(wait_complete(), 2)
+        thread, db, conn = observed[0]
+        assert thread != owner
+        assert db is not core.database
+        assert conn is not core.database._conn
+        assert db._lock is not core.database._lock
+        await q.stop()
+        assert conn._closed
+        assert q._poll_worker is None and q._poll_executor is None
+        # Restart must not reuse a closed connection.
+        complete.clear()
+        q.start()
+        await asyncio.wait_for(wait_complete(), 2)
+        _, new_db, new_conn = observed[-1]
+        assert new_db is not db and new_conn is not conn
+        await q.stop()
+        assert new_conn._closed
+    finally:
+        await q.stop()
+        core.close()
