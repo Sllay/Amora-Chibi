@@ -504,7 +504,7 @@ async def test_discord_private_memory_reaches_realization_after_core_restart_not
         second.cognition.register_provider(provider)
         private = _message(second, message_id="private-project-recall",
             actor_id="111111111111111111", channel_type=ChannelType.DM,
-            conversation_id="private-project-channel", text="Amora, lembra do projeto Orquidea?").model_copy(
+            conversation_id="private-project-channel", text="Amora, me conte sobre o projeto Orquidea.").model_copy(
                 update={"remote_processing_allowed": True})
         assert (await second.messaging.receive(private)).outbound
         assert provider.contexts
@@ -512,7 +512,7 @@ async def test_discord_private_memory_reaches_realization_after_core_restart_not
         assert any(m.id == str(remembered.id) for m in context.memories)
         group = _message(second, message_id="group-project-recall",
             actor_id="111111111111111111", channel_type=ChannelType.GROUP,
-            conversation_id="unrelated-group-channel", text="Amora, lembra do projeto Orquidea?",
+            conversation_id="unrelated-group-channel", text="Amora, me conte sobre o projeto Orquidea.",
             mention=True).model_copy(update={"remote_processing_allowed": True})
         assert (await second.messaging.receive(group)).outbound
         shared_context = provider.contexts[-1]

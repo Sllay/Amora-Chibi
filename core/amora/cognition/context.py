@@ -232,10 +232,17 @@ class ContextCompiler:
             r"\b(?:que|qual)\b.{0,80}\b(?:falei|contei|disse|comentei)\b",
             normalized_recall,
         ))
+        from amora.memory.recall_intent import parse_recall_intent, topic_terms
+        recall_intent = parse_recall_intent(request.text)
+        named_recall = bool(recall_intent and not recall_intent.generic)
+        if recall_intent:
+            recall_text = "" if recall_intent.generic else " ".join(sorted(topic_terms(recall_intent.topic)))
+            reasons.append("PERSISTENT_RECALL_TOPIC" if named_recall else "GENERIC_RECOLLECTION_ENTITY_RECALL")
         for hit in self.memory.recall(MemoryQuery(text=recall_text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78,
                                                  projection_recipient_id=request.speaker_id,
                                                  projection_public_only=shared, projection_remote_only=remote,
-                                                 allow_entity_fallback=explicit_recall and not shared)):
+                                                 require_topic_match=named_recall,
+                                                 allow_entity_fallback=explicit_recall and not shared and not named_recall)):
             item = hit.memory
             if shared and item.privacy_scope != PrivacyScope.PUBLIC:
                 continue

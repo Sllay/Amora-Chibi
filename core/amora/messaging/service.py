@@ -8,6 +8,7 @@ from contextvars import ContextVar
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from amora.cognition import CognitiveRequest
+from amora.memory.recall_intent import parse_recall_intent
 
 from .attention import SocialAttentionRouter
 from .disclosure import public_text_allowed, audience_text_allowed
@@ -262,7 +263,12 @@ class PlatformMessagingService:
 
         explicit_memory = (parse_explicit_memory(message.text)
                            if decision.action == RoutingAction.RESPOND else None)
-        if decision.action == RoutingAction.RESPOND and explicit_memory is None:
+        recall_intent = (parse_recall_intent(message.text)
+                         if decision.action == RoutingAction.RESPOND and explicit_memory is None else None)
+        if recall_intent is not None and not is_verified_owner(
+                self.attention.profiles, message, decision.speaker_entity_id):
+            recall_intent = None
+        if decision.action == RoutingAction.RESPOND and explicit_memory is None and recall_intent is None:
             control = self.presence_control.handle(
                 message.text,
                 speaker_entity_id=decision.speaker_entity_id,
@@ -310,6 +316,19 @@ class PlatformMessagingService:
             request.metadata["memory_consolidation"] = False
             self.cognition.observe_input(request)
             result = self._explicit_memory_result(message, decision, request, explicit_memory)
+            result = result.model_copy(update={"duplicate": duplicate_recovery})
+            self._log_result(result, provider="local_control", fallback_used=False,
+                             cognitive_reason_codes=list(result.outbound[0].metadata.get("cognitive_reason_codes", []))
+                             if result.outbound else [],
+                             remote_processing_allowed=message.remote_processing_allowed)
+            return result
+
+        if recall_intent is not None:
+            request.metadata["explicit_memory_recall"] = True
+            request.metadata["reflection_enqueue_requested"] = False
+            request.metadata["memory_consolidation"] = False
+            self.cognition.observe_input(request)
+            result = self._explicit_recall_result(message, decision, request, recall_intent)
             result = result.model_copy(update={"duplicate": duplicate_recovery})
             self._log_result(result, provider="local_control", fallback_used=False,
                              cognitive_reason_codes=list(result.outbound[0].metadata.get("cognitive_reason_codes", []))
@@ -603,6 +622,82 @@ class PlatformMessagingService:
                 "delivery_message_id": message.message_id,
             },
             reason_codes=[reason, "LOCAL_DETERMINISTIC_CONTROL_REPLY"],
+        )
+        return InboundResult(decision=decision, outbound=[outbound])
+
+    def _explicit_recall_result(self, message, decision, request, intent) -> InboundResult:
+        from amora.events import PrivacyScope
+        from amora.memory.recall_intent import topic_terms
+
+        shared = message.channel_type != ChannelType.DM
+        records = []
+        complete = True
+        if shared and not self.attention.floor.validate_reply(message, decision):
+            return InboundResult(decision=decision.model_copy(update={
+                "action": RoutingAction.SILENCE,
+                "reason_codes": [*decision.reason_codes, "REPLY_LEASE_INVALIDATED"],
+            }))
+        if message.privacy_scope not in {PrivacyScope.PERSONAL, PrivacyScope.PRIVATE,
+                                         PrivacyScope.PUBLIC, PrivacyScope.SOCIAL}:
+            reason = "MEMORY_RECALL_PRIVACY_BLOCKED"
+            text = "Não posso consultar lembranças nesse contexto."
+        elif not intent.generic and not topic_terms(intent.topic):
+            reason = "MEMORY_RECALL_NEEDS_TOPIC"
+            text = "Qual informação você quer que eu procure na memória?"
+        else:
+            # Shared sessions never query personal records, even for their owner.
+            # A missing public match does not reveal whether a private one exists.
+            records, complete = self.cognition.compiler.memory.store.recall_owner_records(
+                OWNER_ENTITY_ID, intent.topic, generic=intent.generic, public_only=shared)
+            if shared:
+                # No disclosure of private record existence, IDs or content.
+                records = [r for r in records if r.privacy_scope == PrivacyScope.PUBLIC]
+            if records:
+                parts = []
+                for record in records:
+                    content = record.content
+                    if content.startswith("Relato de PERSON_BK: "):
+                        content = content[len("Relato de PERSON_BK: "):]
+                    content = content.strip()
+                    parts.append(content[:500] + ("…" if len(content) > 500 else ""))
+                heading = ("Estas são algumas lembranças recentes registradas, não uma transcrição da conversa:"
+                           if intent.generic else "Encontrei estes registros na memória:")
+                text = heading + "\n" + "\n".join(f"• {part}" for part in dict.fromkeys(parts))
+                reason = "MEMORY_RECALL_PUBLIC_FOUND" if shared else "MEMORY_RECALL_PERSISTENT_FOUND"
+            elif shared:
+                reason = "MEMORY_RECALL_SHARED_SCOPE_RESTRICTED"
+                text = ("Neste canal só posso consultar lembranças públicas. "
+                        "Para procurar suas memórias pessoais, me chama no privado.")
+            elif not complete:
+                reason = "MEMORY_RECALL_SEARCH_INCOMPLETE"
+                text = "Não encontrei uma correspondência nessa busca limitada. Pode indicar o assunto com mais detalhes?"
+            else:
+                reason = "MEMORY_RECALL_NO_MATCH"
+                text = "Não encontrei uma lembrança correspondente no armazenamento. Isso não significa que você nunca me contou. Pode me dar mais detalhes?"
+        if shared and (not public_text_allowed(text) or not audience_text_allowed(text, audience_id=request.session_id)):
+            return InboundResult(decision=decision.model_copy(update={
+                "action": RoutingAction.SILENCE,
+                "reason_codes": [*decision.reason_codes, "CONFIDENTIAL_OUTPUT_SUPPRESSED"],
+            }))
+        self.cognition.record_turn_decision(
+            request, "TAKE_TURN", [reason, "LOCAL_PERSISTENT_MEMORY_RECALL"], decision.score)
+        self.store.add_inbound_reason(
+            platform=message.platform, account_scope=message.account_scope,
+            conversation_id=message.conversation_id, message_id=message.message_id, reason=reason)
+        outbound = self._queue_outbound(
+            message, decision, text,
+            metadata={
+                "local_control": True, "cognitive_turn_id": str(request.turn_id),
+                "generation_stage": "persistent_recall", "provider": "local_control",
+                "generation_error_code": None, "cognitive_reason_codes": [reason],
+                "memory_recall_count": len(records), "memory_recall_source": "persistent_store",
+                "memory_recall_search_complete": complete,
+                # The group receives no private record IDs or status.
+                "memory_recall_ids": [str(r.id) for r in records],
+                "transport_revision": message.transport_revision,
+                "delivery_message_id": message.message_id,
+            },
+            reason_codes=[reason, "LOCAL_PERSISTENT_MEMORY_RECALL"],
         )
         return InboundResult(decision=decision, outbound=[outbound])
 

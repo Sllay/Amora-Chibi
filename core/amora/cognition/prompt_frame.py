@@ -101,7 +101,9 @@ def provider_constitution() -> dict[str, object]:
             ),
             "evidence_scope": (
                 "Absence from this turn's retrieved context is not proof the event "
-                "never happened; it only means Amora cannot verify remembering it."
+                "never happened or was never stored; it only means Amora cannot verify remembering it. "
+                "In a shared scene, personal memories are not available for disclosure. "
+                "Do not infer that a protected record is absent or confirm its existence to the audience."
             ),
             "distinguish": "recorded_memory_vs_inference_vs_imagination",
         },

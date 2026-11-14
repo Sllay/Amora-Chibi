@@ -621,7 +621,36 @@ async def _command_memory_reflection_probe(core: Any, args: list[str]) -> dict[s
                      "would_store_count": accepted, "persisted": False}}
 
 
+async def _command_memory_recall_inspect(core: Any, args: list[str]) -> dict[str, Any]:
+    """Read-only metadata for one owner turn, optionally verify named retrieval."""
+    if len(args) < 1 or len(args) > 2:
+        raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "use memory recall inspect TURN_UUID [TOPIC]")
+    from amora.events import PrivacyScope
+    from amora.memory.recall_intent import topic_terms
+    turn_id = _memory_uuid(args[0])
+    item = core.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn_id}")
+    if (item is None or item.speaker_id != "PERSON_BK"
+            or item.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}):
+        raise AdminCommandError("MEMORY_TURN_INELIGIBLE", "turno não encontrado ou fora do escopo autorizado")
+    records = core.memory.store.owner_turn_memory_status(str(turn_id), item.speaker_id)
+    data = {"turn_id": str(turn_id), "owner_entity_id": item.speaker_id,
+            "records": records, "record_count": len(records),
+            "reflection": core.messaging.reflections.state(turn_id)}
+    if len(args) == 2:
+        if not topic_terms(args[1]) or len(args[1]) > 160:
+            raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "informe um assunto específico")
+        matches, complete = core.memory.store.recall_owner_records(item.speaker_id, args[1])
+        ids = {str(record.id) for record in matches}
+        data["returned_from_turn_count"] = sum(row["memory_id"] in ids for row in records)
+        data["recall_result_limit"] = 3
+        data["search_complete"] = complete
+    return {"kind": "memory_recall_inspect", "summary": "Verificação persistente sem conteúdo privado", "data": data}
+
+
 _COMMANDS: tuple[RegisteredCommand, ...] = (
+    RegisteredCommand(("memory", "recall", "inspect"), "memory recall inspect TURN_UUID [TOPIC]",
+                      "Verificar registros, acesso remoto e busca de um turno do proprietário, sem conteúdo.", 15.0,
+                      _command_memory_recall_inspect),
     RegisteredCommand(("memory", "reflection", "probe"), "memory reflection probe",
                       "Sonda Groq com texto fictício, sem gravação de memória.", 65.0,
                       _command_memory_reflection_probe, exclusive=True),
