@@ -20,11 +20,12 @@ SECRET_MARKER = "UNRELATED_PRIVATE_MARKER"
 
 
 @pytest.mark.parametrize("text, topic, generic", [
-    ("Amora, o que você lembra sobre o meu projeto Orquídea?", "meu projeto orquidea", False),
+    ("Amora, o que você lembra sobre o meu projeto Orquídea?", "o meu projeto orquidea", False),
     ("Vc se lembra do projeto Orquídea?", "projeto orquidea", False),
     ("Tu lembra do que eu falei sobre Orquídea?", "orquidea", False),
     ("Oque estávamos conversando um tempo atrás?", "", True),
     ("O que você lembra de mim?", "", True),
+    ("Você lembra do que eu disse?", "", True),
 ])
 def test_recall_intent(text, topic, generic):
     intent = parse_recall_intent(text)
@@ -167,5 +168,21 @@ def test_non_fts_recall_is_accent_insensitive_and_excludes_archived_and_unrelate
         assert complete and [r.id for r in matches] == [active.id]
         assert not core.memory.store.recall_owner_records("PERSON_BK", "projeto inexistente")[0]
         assert topic_terms("Projeto Orquídea") == {"orquidea"}
+    finally:
+        core.close()
+
+
+def test_remote_hrana_owner_recall_is_read_only_and_bounded(tmp_path, monkeypatch):
+    from test_remote_context_batching import _remote_core
+    core, server = _remote_core(tmp_path, monkeypatch)
+    try:
+        core.memory.store.fts_enabled = False
+        saved = _memory(core, SOURCE)
+        _memory(core, SECRET_MARKER, owner="ENTITY_CHATGPT")
+        server.pipeline_calls = 0
+        records, complete = core.memory.store.recall_owner_records("PERSON_BK", "Orquidea")
+        assert complete and [item.id for item in records] == [saved.id]
+        assert server.pipeline_calls <= 3
+        assert core.memory.get(saved.id).access_count == 0
     finally:
         core.close()

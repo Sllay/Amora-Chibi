@@ -39,7 +39,8 @@ _GENERIC = re.compile(
     r"^(?:(?:o\s*que|qual)\s+(?:(?:voce|vc|tu|ce)\s+)?"
     r"(?:(?:lembra|recorda)\s+(?:de mim|sobre mim|das nossas conversas|do que conversamos)"
     r"|(?:a gente\s+|nos\s+)?(?:estavamos\s+)?conversando(?:\s+(?:um tempo atras|antes|ontem|anteriormente))?)"
-    r"|(?:(?:voce|vc|tu|ce)\s+)?(?:lembra|recorda)\s+(?:de mim|do que conversamos|das nossas conversas))$"
+    r"|(?:(?:voce|vc|tu|ce)\s+)?(?:se\s+)?(?:lembra|recorda)\s+"
+    r"(?:de mim|do que conversamos|das nossas conversas|do que (?:eu\s+)?(?:disse|falei|contei|comentei)))$"
 )
 _NAMED = re.compile(
     r"^(?:(?:o\s*que|quais? (?:informacoes|lembrancas))\s+)?"
