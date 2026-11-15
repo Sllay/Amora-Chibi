@@ -17,6 +17,12 @@ from amora.cognition.store import CognitiveStore
 from amora.events import PrivacyScope
 from amora.memory import MemoryQuery
 from amora.memory.store import MemoryStore
+from amora.memory.projection import ReplicaMemoryReadView, VerifiedMemoryRecall
+from amora.latency_trace import bind_latency_trace
+from amora.settings import RuntimePaths
+from amora.storage import AmoraDatabase
+from amora.cognition.providers_numes import NumesCognitiveProvider
+from test_pcs1_local_storage_lab import request as context_request, digest
 from amora.messaging import ChannelType, RoutingAction
 from amora.messaging.models import TransportInvalidation
 from amora.storage import LATEST_SCHEMA_VERSION
@@ -147,6 +153,57 @@ def install_lab_epoch(primary):
                                 f"AFTER {verb} ON {table} BEGIN "
                                 "UPDATE amora_projection_epoch SET revision=revision+1 "
                                 "WHERE singleton=1; END")
+
+
+async def certify_context_projection(core, primary, factory, tmp_path, monkeypatch, session, pub):
+    """Same durable snapshot, actual compiler, actual Numes envelope, no inference."""
+    snapshot = core.create_backup("pcs3-context.db")
+    original_home = os.environ["AMORA_HOME"]
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "context-baseline"))
+    AmoraDatabase.restore_backup(snapshot, RuntimePaths.from_environment().database)
+    baseline = AmoraCore.bootstrap(clock=_clock(), storage=SQLiteBackend())
+    monkeypatch.setenv("AMORA_HOME", original_home)
+    backend = ReplicaReadBackend(factory)
+    view = ReplicaMemoryReadView(tmp_path / "context-view", core.clock, core.identities,
+                                backend=backend)
+    group = VersionedReplicaReadGroup(backend, lambda: read_projection_stamp(primary))
+    projection = VerifiedMemoryRecall(core.memory.store, view, group)
+    compiler = core.cognition.compiler
+
+    async def payload_hash(context):
+        provider = NumesCognitiveProvider({"NUMES_API_KEY": "fixture-only"})
+        captured = []
+        async def capture(payload, *, key, phase):
+            assert key == "fixture-only" and phase == "realization"
+            captured.append(digest(payload))
+            return {}
+        provider._complete_stream = capture
+        await provider.realize(context)
+        assert len(captured) == 1
+        return captured[0]
+
+    try:
+        req = context_request("O que você acha do desenho aurora?", 3001).model_copy(
+            update={"session_id": session})
+        expected = baseline.cognition.compiler.compile(req)
+        compiler.memory_projection = projection
+        with bind_latency_trace() as trace:
+            actual = compiler.compile(req)
+        assert trace.get("pcs_memory_projection_used") == 1, "projection not used"
+        assert not trace.get("pcs_memory_projection_revision_fallback")
+        assert str(pub.id) in {item.id for item in actual.memories}
+        assert digest(actual.model_dump(mode="json")) == digest(expected.model_dump(mode="json")), (
+            "hybrid context differs from same-snapshot baseline")
+        assert await payload_hash(actual) == await payload_hash(expected), "Numes payload differs"
+        assert actual.expression_profile == "amora-v3"
+        assert core.memory.get(pub.id).model_dump(mode="json") == (
+            baseline.memory.get(pub.id).model_dump(mode="json"))
+        return {"full_context_equal": True, "numes_payload_equal": True,
+                "canonical_access_equal": True, "projection_used": 1}
+    finally:
+        compiler.memory_projection = None
+        view.close()
+        baseline.close()
 
 
 @pytest.mark.skipif(os.getenv("AMORA_PCS2_NATIVE_LAB") != "1",
@@ -328,6 +385,9 @@ async def test_pcs2_native_full_schema_and_shadow_reads(tmp_path, monkeypatch, c
                 writer.close()
                 primary_shadow.close()
 
+            context_metrics = await certify_context_projection(
+                core, primary, factory, tmp_path, monkeypatch, session, pub)
+
             # Canonical mutations are visible on the next verified read without
             # an explicit caller invalidation or a fresh sync on every hot read.
             assert core.memory.archive(pub.id)
@@ -358,7 +418,8 @@ async def test_pcs2_native_full_schema_and_shadow_reads(tmp_path, monkeypatch, c
                       "shadow_recall_ms": round(local_recall_ms, 3),
                       "full_schema_equal": True, "memory_ranking_equal": True,
                       "history_equal": True, "archive_and_edit_after_sync": True,
-                      "rebuild_after_disk_loss": True, "version_fence": fence_metrics}
+                      "rebuild_after_disk_loss": True, "version_fence": fence_metrics,
+                      "context_projection": context_metrics}
             with capsys.disabled():
                 print("PCS2_NATIVE_JSON=" + json.dumps(report, sort_keys=True), flush=True)
         finally:
