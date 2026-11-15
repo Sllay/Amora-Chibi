@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import resource
+import shutil
 import sqlite3
 import tempfile
 import time
@@ -110,8 +111,16 @@ def main():
                 second.close()
             first.close()
 
-        # Loss of the local replica must not lose a confirmed remote commit.
-        # Use a completely new replica path, not raw sqlite3 on an SDK-owned file.
+        # Remove only the disposable local files after all SDK handles close.
+        # The primary is a separate server/container and remains untouched.
+        report["replica_files_before_loss_bytes"] = sum(
+            p.stat().st_size for p in root.rglob("*") if p.is_file())
+        for path in root.iterdir():
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        # A new empty path must recover every confirmed primary write.
         rebuilt = connect(root / "rebuilt.db")
         try:
             rebuilt.sync()
