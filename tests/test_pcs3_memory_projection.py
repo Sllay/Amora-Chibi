@@ -23,9 +23,11 @@ class NativeSnapshot:
     """Test double for native sync; copies committed state into an isolated DB."""
     def __init__(self, source):
         self.source = source
+        self.syncs = 0
         self.connection = sqlite3.connect(":memory:")
 
     def sync(self):
+        self.syncs += 1
         with sqlite3.connect(self.source) as source:
             source.backup(self.connection)
 
@@ -133,3 +135,40 @@ def test_pcs3_context_uses_projection_only_for_ordinary_remote_dm(lab, monkeypat
     )
     for variant in variants:
         compiler.compile(variant)
+
+def test_pcs3b_access_only_writes_keep_semantic_snapshot_warm(lab):
+    core, memory, projection, query = lab
+    primary = core.memory.store
+    native = projection.view._conn._connection
+    stamp = read_projection_stamp(core.database._conn)
+    initial = primary.get(memory.id).access_count
+    for offset in range(1, 5):
+        hits = projection.recall(query)
+        assert hits[0].memory.access_count == initial + offset
+        assert primary.get(memory.id).access_count == initial + offset
+        assert hits[0].memory.last_accessed_at == core.clock.now()
+        assert read_projection_stamp(core.database._conn) == stamp
+    assert native.syncs == 1
+    # Replica's access fields are stale, but are never returned as canonical.
+    assert core.memory.forget_softly(memory.id, .9) is not None
+    assert read_projection_stamp(core.database._conn) != stamp
+    hits = projection.recall(query)
+    assert native.syncs == 2
+    assert hits[0].memory.access_count == initial + 5
+    assert hits[0].memory.retrievability == primary.get(memory.id).retrievability
+
+
+def test_pcs3b_independent_access_writer_is_reflected_without_resync(lab):
+    core, memory, projection, query = lab
+    primary = core.memory.store
+    native = projection.view._conn._connection
+    first = projection.recall(query)[0].memory.access_count
+    stamp = read_projection_stamp(core.database._conn)
+    with sqlite3.connect(core.database.path) as writer:
+        writer.execute("UPDATE memory_records SET access_count=access_count+7 WHERE id=?",
+                       (str(memory.id),))
+    assert read_projection_stamp(core.database._conn) == stamp
+    result = projection.recall(query)[0].memory
+    assert result.access_count == first + 8
+    assert result.access_count == primary.get(memory.id).access_count
+    assert native.syncs == 1
