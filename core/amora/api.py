@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import os
 from contextlib import asynccontextmanager
@@ -100,10 +101,17 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         core.messaging.reflections.start()
         app.state.scheduler_runtime = scheduler_runtime
         app.state.accepting = True
+        pcs4_task = None
+        if os.getenv("AMORA_PCS4_PREFLIGHT") == "1":
+            from amora.storage.pcs4_probe import run as pcs4_preflight
+            # One bounded diagnostic, separate connection, never the reply path.
+            pcs4_task = asyncio.create_task(asyncio.to_thread(pcs4_preflight))
         try:
             yield
         finally:
             app.state.accepting = False
+            if pcs4_task is not None:
+                await asyncio.shield(pcs4_task)
             try:
                 await core.messaging.stop_inflight()
             finally:
