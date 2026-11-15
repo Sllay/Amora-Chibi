@@ -26,17 +26,28 @@ class ReplicaReadConnection:
     def __init__(self, connection):
         self._connection = connection
         self._ready = False
+        self._synced = False
         self._closed = False
 
     def sync(self):
         if self._closed:
             raise sqlite3.OperationalError("REPLICA_CLOSED")
-        self._ready = False
+        self.invalidate()
         self._connection.sync()
+        self._synced = True
         self._ready = True
 
     def invalidate(self):
         self._ready = False
+        self._synced = False
+
+    def _suspend(self):
+        self._ready = False
+
+    def _resume(self):
+        if self._closed or not self._synced:
+            raise sqlite3.OperationalError("REPLICA_NOT_SYNCHRONIZED")
+        self._ready = True
 
     def execute(self, sql, parameters=()):
         if self._closed or not self._ready:
@@ -54,7 +65,7 @@ class ReplicaReadConnection:
     def close(self):
         if not self._closed:
             self._closed = True
-            self._ready = False
+            self.invalidate()
             self._connection.close()
 
     def __enter__(self):
@@ -96,6 +107,18 @@ class ReplicaReadBackend:
     def invalidate_all(self):
         for connection in self.connections:
             connection.invalidate()
+
+    def _suspend_all(self):
+        for connection in self.connections:
+            connection._suspend()
+
+    def _resume_all(self):
+        try:
+            for connection in self.connections:
+                connection._resume()
+        except BaseException:
+            self.invalidate_all()
+            raise
 
     def backup(self, connection, destination):
         raise sqlite3.OperationalError("REPLICA_READ_ONLY")
