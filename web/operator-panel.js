@@ -1,4 +1,4 @@
-import { OperatorState } from "./operator-state.mjs";
+import { OperatorState } from "./operator-state.mjs?v=20261115-1";
 
 const $ = (id) => document.getElementById(id);
 const operatorState = new OperatorState(globalThis.localStorage);
