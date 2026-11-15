@@ -75,3 +75,35 @@ handled by the separate existing recovery utility. A successful restore
 does not prove native replica synchronization or authorization freshness.
 Production projection remains disabled. Do not close #221 or promote until
 the real recovery, durable retention and restart/recall gates are met.
+
+
+## Final restart/recall gate (operator-only)
+
+After a successful restore, keep the same independent destination disconnected
+from serving Core/Discord and mount the verified backup pair in the isolated job.
+Use the same source origin and destination-specific environment variables from
+step 3. Execute:
+
+`python -m amora.storage.pcs4_restart /private/amora-pre-pcs4c.db --isolated-restored-destination`
+
+The command first re-exports the destination and checks exact logical parity.
+It then boots Core from a private SQLite copy of the backup, and boots the
+independent remote Core twice in separate processes with fresh private homes
+and a shared fixed clock. Each boot runs five canonical read-only ranking
+queries (owner, owner+remote, public+remote, include archived, lexical).
+It checks result equality, access permissions and nonempty overall coverage.
+No HTTP server, scheduler, Discord or external AI inference is started;
+only destination storage credentials are passed into remote child processes.
+Core bootstrap itself can write initialization state in the isolated database,
+so do not run it on production, and do not assume the destination remains
+byte-identical afterwards. Temporary homes and private result digests are
+deleted on normal exit. The source backup is not modified.
+
+Report only `PCS4C_RESTART` status, boots, query_count, rank_equal, hit_counts,
+private_hits, archived_hits, public_hits and nonremote_hits. Zero coverage for a
+class means that class was not exercised by the actual sample, not that the
+policy passed a positive test; use the existing synthetic test for that class,
+or arrange a controlled isolated fixture for stronger real-data coverage.
+Do not report fingerprints or memory text. An error or timeout is not a
+certification. Keep #221 open until private durable retention and both real
+restore and restart evidence have been reviewed.
