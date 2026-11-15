@@ -148,6 +148,10 @@ def install_lab_epoch(primary):
                         "CHECK(singleton=1), epoch_id TEXT NOT NULL, revision INTEGER NOT NULL "
                         "CHECK(revision>=0))")
         primary.execute("INSERT INTO amora_projection_epoch VALUES (1,'pcs2-fixture',0)")
+        primary.execute("CREATE TABLE amora_memory_projection_epoch (singleton INTEGER PRIMARY KEY "
+                        "CHECK(singleton=1), epoch_id TEXT NOT NULL, revision INTEGER NOT NULL "
+                        "CHECK(revision>=0))")
+        primary.execute("INSERT INTO amora_memory_projection_epoch VALUES (1,'pcs2-memory-fixture',0)")
         semantic_columns = [
             row["name"] for row in primary.execute("PRAGMA table_info(memory_records)").fetchall()
             if row["name"] not in {"access_count", "last_accessed_at"}
@@ -164,6 +168,13 @@ def install_lab_epoch(primary):
                                 f"AFTER {event} ON {table} BEGIN "
                                 "UPDATE amora_projection_epoch SET revision=revision+1 "
                                 "WHERE singleton=1; END")
+                # Ordinary conversation inserts/updates are not memory changes.
+                # Invalidation remains covered: edits can revoke derived facts.
+                if table != "conversation_messages":
+                    primary.execute(f"CREATE TRIGGER pcs3_memory_epoch_{table}_{verb.lower()} "
+                                    f"AFTER {event} ON {table} BEGIN "
+                                    "UPDATE amora_memory_projection_epoch SET revision=revision+1 "
+                                    "WHERE singleton=1; END")
 
 
 async def certify_context_projection(core, primary, factory, tmp_path, monkeypatch, session, pub):
@@ -184,7 +195,8 @@ async def certify_context_projection(core, primary, factory, tmp_path, monkeypat
         syncs += 1
         return original_sync()
     backend.sync_all = counted_sync
-    group = VersionedReplicaReadGroup(backend, lambda: read_projection_stamp(primary))
+    group = VersionedReplicaReadGroup(backend, lambda: read_projection_stamp(primary, 'memory'),
+                                      scope='memory')
     projection = VerifiedMemoryRecall(core.memory.store, view, group)
     compiler = core.cognition.compiler
 
@@ -220,7 +232,7 @@ async def certify_context_projection(core, primary, factory, tmp_path, monkeypat
                             projection_recipient_id="PERSON_BK", projection_remote_only=True)
         projection.recall(query)
         warm_syncs = syncs
-        stamp = read_projection_stamp(primary)
+        stamp = read_projection_stamp(primary, 'memory')
         count = core.memory.get(pub.id).access_count
         durations = []
         for offset in range(1, 4):
@@ -230,17 +242,36 @@ async def certify_context_projection(core, primary, factory, tmp_path, monkeypat
             hit = next(item for item in hits if item.memory.id == pub.id)
             assert hit.memory.access_count == count + offset
             assert core.memory.get(pub.id).access_count == count + offset
-            assert read_projection_stamp(primary) == stamp
+            assert read_projection_stamp(primary, 'memory') == stamp
         assert syncs == warm_syncs, "access-only writes refreshed semantic replica"
+
+        # Exercise the actual normal messaging path, not only direct recall.
+        # No reflection worker is started in this isolated fixture.
+        combined_before = read_projection_stamp(primary)
+        before_turns = core.memory.get(pub.id).access_count
+        for offset in range(2):
+            incoming = _message(core, message_id=f"pcs3c-dm-{offset}",
+                                actor_id="111111111111111111", channel_type=ChannelType.DM,
+                                conversation_id="pcs3c-separate-dm",
+                                text="O que você acha do desenho aurora?").model_copy(
+                                    update={"remote_processing_allowed": True})
+            reply = await core.messaging.receive(incoming)
+            assert reply.decision.action == RoutingAction.RESPOND
+            assert reply.outbound[0].text == "Resposta remota estável."
+        assert read_projection_stamp(primary) != combined_before
+        assert read_projection_stamp(primary, 'memory') == stamp
+        assert syncs == warm_syncs, "history writes refreshed memory replica"
+        assert core.memory.get(pub.id).access_count == before_turns + 2
         assert core.memory.forget_softly(pub.id, .9) is not None
-        assert read_projection_stamp(primary) != stamp
+        assert read_projection_stamp(primary, 'memory') != stamp
         projection.recall(query)
         assert syncs == warm_syncs + 1
         return {"full_context_equal": True, "numes_payload_equal": True,
                 "canonical_access_equal": True, "projection_used": 1,
                 "hot_access_samples": 3, "hot_access_refreshes": 0,
                 "hot_access_median_ms": round(statistics.median(durations), 3),
-                "semantic_change_refreshes": 1}
+                "semantic_change_refreshes": 1,
+                "ordinary_dm_turns": 2, "ordinary_dm_memory_refreshes": 0}
     finally:
         compiler.memory_projection = None
         view.close()
