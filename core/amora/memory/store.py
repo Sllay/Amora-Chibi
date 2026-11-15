@@ -477,7 +477,7 @@ class MemoryStore:
         if len(ids) != len(set(ids)):
             raise ValueError("REPLICA_DUPLICATE_MEMORY_HIT")
         with trace_lock(self._lock), self._conn:
-            if read_projection_stamp(self._conn) != stamp:
+            if read_projection_stamp(self._conn, stamp.scope) != stamp:
                 raise ReplicaCoherenceError("REPLICA_ACCESS_REVISION_CHANGED")
             now = self.clock.now()
             placeholders = ",".join("?" for _ in ids)
