@@ -480,9 +480,26 @@ class MemoryStore:
             if read_projection_stamp(self._conn) != stamp:
                 raise ReplicaCoherenceError("REPLICA_ACCESS_REVISION_CHANGED")
             now = self.clock.now()
-            if self._mark_accessed(ids, now) != len(ids):
+            placeholders = ",".join("?" for _ in ids)
+            # Access metadata is not a ranking input. A semantic revision may
+            # intentionally ignore access-only writes, so the replica's count
+            # can be stale. Obtain the authoritative post-update values in the
+            # same write, without replay or an extra hydration round-trip.
+            rows = self._conn.execute(
+                f"UPDATE memory_records SET access_count=access_count+1, last_accessed_at=? "
+                f"WHERE id IN ({placeholders}) RETURNING id,access_count,last_accessed_at",
+                (now.isoformat(), *ids),
+            ).fetchall()
+            counts = {row["id"]: row["access_count"] for row in rows}
+            if (len(rows) != len(ids) or set(counts) != set(ids)
+                    or any(type(count) is not int or count < 1 for count in counts.values())
+                    or any(row["last_accessed_at"] != now.isoformat() for row in rows)):
                 raise ReplicaCoherenceError("REPLICA_ACCESS_ROWS_CHANGED")
-        return self._apply_access(hits, now)
+        # Publish only after the transaction's successful commit.
+        for hit in hits:
+            hit.memory.access_count = counts[str(hit.memory.id)]
+            hit.memory.last_accessed_at = now
+        return hits
 
     @trace_stage("memory_candidates")
     def _candidate_rows(self, query: MemoryQuery) -> list[sqlite3.Row]:

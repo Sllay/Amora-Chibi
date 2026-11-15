@@ -3,6 +3,9 @@
 No environment activation or schema migration. A deployment must first provide
 an authoritative monotonic revision updated atomically with every relevant
 write, including external writers, and rotate the epoch on restore/replacement.
+A stamp covers the audited projection, not necessarily every database field.
+Excluded metadata must never affect ranking/authorization and must be obtained
+from the primary before being exposed as current.
 The fence does not grant authorization or replace a provider-dispatch check.
 """
 from __future__ import annotations

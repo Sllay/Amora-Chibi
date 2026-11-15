@@ -135,9 +135,10 @@ def assert_full_schema(primary, replica):
 def install_lab_epoch(primary):
     """Synthetic additive revision mechanism; deliberately not a runtime migration.
 
-    All mutations in the selected memory/history projection must update this
-    row in the same primary transaction. FTS is maintained by the canonical
-    memory write transaction, not independently in this fixture.
+    All ranking/content/permission mutations update this row in the same
+    primary transaction. Access-only metadata is excluded from the semantic
+    stamp and returned authoritatively by record_verified_access. FTS is
+    maintained by the canonical memory write transaction in this fixture.
     """
     tables = ("memory_records", "memory_entities", "memory_tags",
               "conversation_messages", "memory_reflection_invalidations",
@@ -147,10 +148,20 @@ def install_lab_epoch(primary):
                         "CHECK(singleton=1), epoch_id TEXT NOT NULL, revision INTEGER NOT NULL "
                         "CHECK(revision>=0))")
         primary.execute("INSERT INTO amora_projection_epoch VALUES (1,'pcs2-fixture',0)")
+        semantic_columns = [
+            row["name"] for row in primary.execute("PRAGMA table_info(memory_records)").fetchall()
+            if row["name"] not in {"access_count", "last_accessed_at"}
+        ]
+        assert "remote_processing_allowed" in semantic_columns
+        assert "retrievability" in semantic_columns and "content" in semantic_columns
+        quoted_columns = ",".join('"' + name.replace('"', '""') + '"' for name in semantic_columns)
         for table in tables:
             for verb in ("INSERT", "UPDATE", "DELETE"):
+                event = verb
+                if table == "memory_records" and verb == "UPDATE":
+                    event += " OF " + quoted_columns
                 primary.execute(f"CREATE TRIGGER pcs2_epoch_{table}_{verb.lower()} "
-                                f"AFTER {verb} ON {table} BEGIN "
+                                f"AFTER {event} ON {table} BEGIN "
                                 "UPDATE amora_projection_epoch SET revision=revision+1 "
                                 "WHERE singleton=1; END")
 
@@ -166,6 +177,13 @@ async def certify_context_projection(core, primary, factory, tmp_path, monkeypat
     backend = ReplicaReadBackend(factory)
     view = ReplicaMemoryReadView(tmp_path / "context-view", core.clock, core.identities,
                                 backend=backend)
+    syncs = 0
+    original_sync = backend.sync_all
+    def counted_sync():
+        nonlocal syncs
+        syncs += 1
+        return original_sync()
+    backend.sync_all = counted_sync
     group = VersionedReplicaReadGroup(backend, lambda: read_projection_stamp(primary))
     projection = VerifiedMemoryRecall(core.memory.store, view, group)
     compiler = core.cognition.compiler
@@ -198,8 +216,31 @@ async def certify_context_projection(core, primary, factory, tmp_path, monkeypat
         assert actual.expression_profile == "amora-v3"
         assert core.memory.get(pub.id).model_dump(mode="json") == (
             baseline.memory.get(pub.id).model_dump(mode="json"))
+        query = MemoryQuery(text="desenho aurora", entity_ids={"PERSON_BK"},
+                            projection_recipient_id="PERSON_BK", projection_remote_only=True)
+        projection.recall(query)
+        warm_syncs = syncs
+        stamp = read_projection_stamp(primary)
+        count = core.memory.get(pub.id).access_count
+        durations = []
+        for offset in range(1, 4):
+            tick = time.perf_counter()
+            hits = projection.recall(query)
+            durations.append((time.perf_counter() - tick) * 1000)
+            hit = next(item for item in hits if item.memory.id == pub.id)
+            assert hit.memory.access_count == count + offset
+            assert core.memory.get(pub.id).access_count == count + offset
+            assert read_projection_stamp(primary) == stamp
+        assert syncs == warm_syncs, "access-only writes refreshed semantic replica"
+        assert core.memory.forget_softly(pub.id, .9) is not None
+        assert read_projection_stamp(primary) != stamp
+        projection.recall(query)
+        assert syncs == warm_syncs + 1
         return {"full_context_equal": True, "numes_payload_equal": True,
-                "canonical_access_equal": True, "projection_used": 1}
+                "canonical_access_equal": True, "projection_used": 1,
+                "hot_access_samples": 3, "hot_access_refreshes": 0,
+                "hot_access_median_ms": round(statistics.median(durations), 3),
+                "semantic_change_refreshes": 1}
     finally:
         compiler.memory_projection = None
         view.close()
