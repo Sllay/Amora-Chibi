@@ -58,12 +58,16 @@ def test_child_environment_does_not_inherit_source_or_providers(tmp_path, monkey
     monkeypatch.setenv("AMORA_SECRET_LIBSQL_AUTH_TOKEN", "source-token")
     monkeypatch.setenv("AMORA_SECRET_GROQ_API_KEY", "provider-token")
     monkeypatch.setenv("GROQ_API_KEY", "other-provider-token")
+    monkeypatch.setenv("PYTHONPATH", "/untrusted/operator/path")
     backend = LibSQLBackend("https://restore.example", "destination-token")
     env = restart._child_env(tmp_path, backend)
     assert env["AMORA_SECRET_LIBSQL_AUTH_TOKEN"] == "destination-token"
     assert env["AMORA_LIBSQL_URL"] == "https://restore.example"
     assert "AMORA_SECRET_GROQ_API_KEY" not in env and "GROQ_API_KEY" not in env
     assert "source-token" not in env.values()
+    assert env["PYTHONPATH"] != "/untrusted/operator/path"
+    from pathlib import Path
+    assert Path(env["PYTHONPATH"], "amora", "storage", "pcs4_restart.py").is_file()
 
 
 def test_local_child_real_process(backup, tmp_path):
