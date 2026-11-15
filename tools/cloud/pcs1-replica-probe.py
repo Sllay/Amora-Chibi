@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Native libSQL replica experiment against a disposable LOOPBACK sqld only.
 
-Requires libsql==0.1.11 and a fresh sqld primary on 127.0.0.1:8080.
+Requires libsql==0.1.8 (classic replica protocol; laboratory only) and a fresh sqld primary on 127.0.0.1:8080.
 No Amora runtime, credentials, production endpoint or personal data.
 This is a capability probe, not a production backend.
 """
 from __future__ import annotations
 
 import json
+from importlib.metadata import version
 from pathlib import Path
 import resource
 import shutil
@@ -21,7 +22,7 @@ URL = "http://127.0.0.1:8080"
 
 
 def connect(path):
-    return libsql.connect(str(path), sync_url=URL, auth_token="")
+    return libsql.connect(str(path), sync_url=URL, auth_token="", isolation_level=None)
 
 
 def scalar(connection, sql, args=()):
@@ -30,7 +31,7 @@ def scalar(connection, sql, args=()):
 
 def main():
     start = time.perf_counter()
-    report = {}
+    report = {"sdk_version": version("libsql")}
     with tempfile.TemporaryDirectory(prefix="amora-pcs1-") as directory:
         root = Path(directory)
         first = connect(root / "first.db")
@@ -80,7 +81,8 @@ def main():
                 first.commit()
                 report["unique_constraint"] = False
             except Exception as exc:
-                report["unique_constraint"] = True
+                report["unique_constraint"] = any(
+                    token in str(exc).lower() for token in ("unique", "constraint", "primary key"))
                 report["unique_exception_type"] = type(exc).__name__
                 report["sqlite_integrity_error"] = isinstance(exc, sqlite3.IntegrityError)
                 try:
@@ -91,7 +93,10 @@ def main():
             # Check driver surface, without assuming sqlite3 compatibility is exact.
             cursor = first.execute("SELECT * FROM probe ORDER BY id")
             report["cursor_rowcount_supported"] = hasattr(cursor, "rowcount")
-            report["row_factory_supported"] = hasattr(first, "row_factory")
+            try:
+                report["row_factory_supported"] = hasattr(first, "row_factory")
+            except NotImplementedError:
+                report["row_factory_supported"] = False
             report["in_transaction_supported"] = hasattr(first, "in_transaction")
             report["context_manager_supported"] = hasattr(first, "__enter__")
             report["executemany_supported"] = hasattr(first, "executemany")
