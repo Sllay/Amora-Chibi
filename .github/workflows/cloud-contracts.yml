@@ -31,35 +31,3 @@ jobs:
             tests/test_platform_messaging_remote.py \
             tests/test_storage.py \
             tests/test_conversation_runtime_v15.py
-
-  native-replica:
-    # Experimental SDK checks are limited to PCS laboratory PRs.
-    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.12'
-      - name: Install pinned native SDK (laboratory only)
-        run: python -m pip install --only-binary=:all: libsql==0.1.11
-      - name: Start disposable loopback primary
-        run: |
-          docker run --name pcs1-sqld -d -p 127.0.0.1:8080:8080 \
-            -e SQLD_NODE=primary \
-            -e SQLD_HTTP_LISTEN_ADDR=0.0.0.0:8080 \
-            -e SQLD_GRPC_LISTEN_ADDR=0.0.0.0:5001 \
-            ghcr.io/tursodatabase/libsql-server@sha256:1bc51611928ccc51229bdc40ca0defcb915907f8f9f6a664b43529de0ca45fab
-          for attempt in $(seq 1 30); do
-            if curl --max-time 2 -sS -o /dev/null http://127.0.0.1:8080/; then exit 0; fi
-            sleep 1
-          done
-          exit 1
-      - name: Exercise native replica and recovery contracts
-        run: timeout 120s python tools/cloud/pcs1-replica-probe.py
-      - name: Dispose of fixture
-        if: always()
-        run: |
-          docker logs pcs1-sqld || true
-          docker rm -f pcs1-sqld || true
