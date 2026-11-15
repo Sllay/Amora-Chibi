@@ -64,7 +64,7 @@ def test_pcs4_budget_stops_before_content_fetch(seeded, tmp_path, monkeypatch):
     cache = tmp_path / "probe"
     with pytest.raises(probe.ProbeLimit, match="SNAPSHOT_BUDGET"):
         probe.certify(backend, cache)
-    assert not any(sql.startswith('SELECT * FROM "entities"') for sql in server.calls)
+    assert not any(sql.startswith('SELECT rowid AS pcs4_rowid,* FROM "entities"') for sql in server.calls)
     assert not list(cache.iterdir())
     assert not server.streams
 
@@ -98,3 +98,12 @@ def test_pcs4_default_no_remote_probe(monkeypatch):
     report = probe.run()
     assert report["status"] == "skipped"
     assert report["reason"] == "REQUIRES_LIBSQL"
+
+
+def test_pcs4_pagination_preserves_rank_and_rows(seeded, tmp_path, monkeypatch):
+    backend, server = seeded
+    monkeypatch.setattr(probe, "FETCH_BATCH", 2)
+    report = probe.certify(backend, tmp_path / "probe")
+    assert report["status"] == "ok"
+    assert report["rank_equal"] == [True, True]
+    assert any('FROM "memory_records" WHERE rowid > ?' in sql for sql in server.calls)
