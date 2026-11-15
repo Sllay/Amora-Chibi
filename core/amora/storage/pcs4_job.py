@@ -6,16 +6,10 @@ import os
 from pathlib import Path
 import time
 
-from .pcs4_web import RecoveryPanel, _mounted, _STEPS
+from .pcs4_web import RecoveryPanel, _mounted
+from .pcs4_contract import CONFIRMATIONS, MARKER, STEPS as _STEPS
 from .remote import LibSQLBackend
 
-CONFIRMATIONS = {
-    "backup": "SNAPSHOT CONSISTENTE",
-    "verify": "VOLUME PRIVADO",
-    "restore": "DESTINO VAZIO E INDEPENDENTE",
-    "restart": "DESTINO ISOLADO",
-}
-MARKER = "PCS4C_JOB_REPORT "
 
 
 def run(panel, action):
