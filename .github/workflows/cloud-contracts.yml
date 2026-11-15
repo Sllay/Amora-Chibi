@@ -33,6 +33,8 @@ jobs:
             tests/test_conversation_runtime_v15.py
 
   native-replica:
+    # Experimental SDK checks are limited to PCS laboratory PRs.
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
