@@ -122,6 +122,8 @@ class ContextCompiler:
         self.clock = clock
         self.identities = identities
         self.memory = memory
+        # Explicit internal injection only; no environment/default activation.
+        self.memory_projection = None
         self.world = world
         self.self_model = self_model
         self.emotion = emotion
@@ -283,11 +285,26 @@ class ContextCompiler:
             recall_text = "" if recall_intent.generic else " ".join(sorted(topic_terms(recall_intent.topic)))
             reasons.append("PERSISTENT_RECALL_TOPIC" if named_recall else "GENERIC_RECOLLECTION_ENTITY_RECALL")
         yield None
-        for hit in self.memory.recall(MemoryQuery(text=recall_text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78,
-                                                 projection_recipient_id=request.speaker_id,
-                                                 projection_public_only=shared, projection_remote_only=remote,
-                                                 require_topic_match=named_recall,
-                                                 allow_entity_fallback=explicit_recall and not shared and not named_recall)):
+        query = MemoryQuery(text=recall_text, entity_ids=entity_ids, limit=8, mmr_lambda=0.78,
+                            projection_recipient_id=request.speaker_id,
+                            projection_public_only=shared, projection_remote_only=remote,
+                            require_topic_match=named_recall,
+                            allow_entity_fallback=explicit_recall and not shared and not named_recall)
+        projection = self.memory_projection
+        use_projection = (
+            projection is not None and remote and not shared
+            and request.privacy_scope == PrivacyScope.PERSONAL
+            and request.source_event_id is None
+            and request.metadata.get("surface") == "platform_messaging"
+            and request.metadata.get("channel_type") == "dm"
+            and request.metadata.get("cognitive_mode", "reply") == "reply"
+            and not explicit_recall and recall_intent is None
+            and not any(request.metadata.get(key) for key in (
+                "durable_memory_reflection", "explicit_memory_request",
+                "memory_disclosure_request", "explicit_memory_recall", "speech_device_id"))
+        )
+        hits = projection.recall(query) if use_projection else self.memory.recall(query)
+        for hit in hits:
             item = hit.memory
             if shared and item.privacy_scope != PrivacyScope.PUBLIC:
                 continue

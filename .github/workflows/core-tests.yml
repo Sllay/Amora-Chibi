@@ -54,7 +54,7 @@ jobs:
           docker logs pcs1-sqld || true
           docker rm -f pcs1-sqld || true
       - name: Start full-schema disposable primary
-        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs2')
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs2') || startsWith(github.head_ref, 'lab/pcs3'))
         run: |
           docker run --name pcs2-sqld -d -p 127.0.0.1:8081:8080 \
             -e SQLD_NODE=primary \
@@ -68,12 +68,12 @@ jobs:
           done
           exit 1
       - name: Certify full schema with real native replica
-        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs2')
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs2') || startsWith(github.head_ref, 'lab/pcs3'))
         env:
           AMORA_PCS2_NATIVE_LAB: '1'
         run: timeout 180s python -m pytest -s tests/test_pcs2_native_schema.py
       - name: Dispose of full-schema fixture
-        if: always() && matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs2')
+        if: always() && matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs2') || startsWith(github.head_ref, 'lab/pcs3'))
         run: |
           docker logs pcs2-sqld || true
           docker rm -f pcs2-sqld || true

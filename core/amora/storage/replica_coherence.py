@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import inspect
 import sqlite3
 import threading
-from typing import Callable, TypeVar
+from typing import Callable, Generic, TypeVar
 
 from .replica_read import ReplicaReadBackend
 
@@ -39,6 +39,12 @@ def read_projection_stamp(connection) -> ProjectionStamp:
     if len(rows) != 1:
         raise ReplicaCoherenceError("REPLICA_STAMP_MISSING")
     return ProjectionStamp(rows[0]["epoch_id"], rows[0]["revision"])
+
+
+@dataclass(frozen=True)
+class VerifiedRead(Generic[T]):
+    value: T
+    stamp: ProjectionStamp
 
 
 class VersionedReplicaReadGroup:
@@ -73,6 +79,9 @@ class VersionedReplicaReadGroup:
         return stamp
 
     def read(self, operation: Callable[[], T]) -> T:
+        return self.read_verified(operation).value
+
+    def read_verified(self, operation: Callable[[], T]) -> VerifiedRead[T]:
         with self._lock:
             if self._running:
                 raise ReplicaCoherenceError("REPLICA_NESTED_READ")
@@ -100,7 +109,7 @@ class VersionedReplicaReadGroup:
                     raise ReplicaCoherenceError("REPLICA_CHANGED_DURING_READ")
                 self._stamp, self._members = start, members
                 self.backend._suspend_all()
-                return result
+                return VerifiedRead(result, start)
             except BaseException:
                 self.invalidate()
                 raise
