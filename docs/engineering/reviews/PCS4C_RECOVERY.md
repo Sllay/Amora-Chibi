@@ -92,6 +92,9 @@ independent remote Core twice in separate processes with fresh private homes
 and a shared fixed clock. Each boot runs five canonical read-only ranking
 queries (owner, owner+remote, public+remote, include archived, lexical).
 It checks result equality, access permissions and nonempty overall coverage.
+After both boots, it re-exports the isolated target and verifies the four
+logical memory tables still match the original backup; the source backup
+and companion hashes must also remain unchanged.
 No HTTP server, scheduler, Discord or external AI inference is started;
 only destination storage credentials are passed into remote child processes.
 Core bootstrap itself can write initialization state in the isolated database,
@@ -99,7 +102,7 @@ so do not run it on production, and do not assume the destination remains
 byte-identical afterwards. Temporary homes and private result digests are
 deleted on normal exit. The source backup is not modified.
 
-Report only `PCS4C_RESTART` status, boots, query_count, rank_equal, hit_counts,
+Report only `PCS4C_RESTART` status, boots, query_count, rank_equal, memory_tables_equal, hit_counts,
 private_hits, archived_hits, public_hits and nonremote_hits. Zero coverage for a
 class means that class was not exercised by the actual sample, not that the
 policy passed a positive test; use the existing synthetic test for that class,
