@@ -66,3 +66,27 @@ jobs:
           python -m amora backup --name ci.db
           test -f "$AMORA_HOME/backups/ci.db"
           test -f "$AMORA_HOME/backups/ci.db.avatar.zip"
+      - name: Install pinned native SDK (laboratory only)
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
+        run: python -m pip install --only-binary=:all: libsql==0.1.11
+      - name: Start disposable loopback primary
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
+        run: |
+          docker run --name pcs1-sqld -d -p 127.0.0.1:8080:8080 \
+            -e SQLD_NODE=primary \
+            -e SQLD_HTTP_LISTEN_ADDR=0.0.0.0:8080 \
+            -e SQLD_GRPC_LISTEN_ADDR=0.0.0.0:5001 \
+            ghcr.io/tursodatabase/libsql-server@sha256:1bc51611928ccc51229bdc40ca0defcb915907f8f9f6a664b43529de0ca45fab
+          for attempt in $(seq 1 30); do
+            if curl --max-time 2 -sS -o /dev/null http://127.0.0.1:8080/; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Exercise native replica and recovery contracts
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
+        run: timeout 120s python tools/cloud/pcs1-replica-probe.py
+      - name: Dispose of fixture
+        if: always() && matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
+        run: |
+          docker logs pcs1-sqld || true
+          docker rm -f pcs1-sqld || true
