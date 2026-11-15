@@ -1,3 +1,5 @@
+> **Preferido:** [Painel Dev existente + Job manual](PCS4C_DEV_RECOVERY.md). Este serviço web separado é apenas uma alternativa, não é necessário no Northflank com dois serviços ocupados.
+
 # PCS.4C — Painel web privado (sem Shell)
 
 A interface é um serviço temporário separado, com a MESMA imagem do Core.
