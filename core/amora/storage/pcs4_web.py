@@ -82,7 +82,7 @@ def _mounted(path):
     return False
 
 
-def export_backup(source, snapshot):
+def export_backup(source, snapshot, *, read_only=False):
     """Existing audited full export and SQL asset archive; no Core bootstrap."""
     from amora.avatar.store import AvatarStore
     from amora.storage.backend import SQLiteBackend
@@ -91,7 +91,20 @@ def export_backup(source, snapshot):
     import sqlite3
 
     with closing(source.connect(snapshot)) as connection:
-        source.backup(connection, snapshot)
+        if read_only:
+            class ReadSnapshot:
+                def __enter__(self):
+                    self.transaction = connection.read_transaction()
+                    return self.transaction.__enter__()
+                def __exit__(self, *args):
+                    return self.transaction.__exit__(*args)
+                def execute(self, sql, parameters=()):
+                    if not sql.lstrip().upper().startswith('SELECT '):
+                        raise ValueError('PCS4C_SOURCE_READ_ONLY')
+                    return connection.execute(sql, parameters)
+            source.backup(ReadSnapshot(), snapshot)
+        else:
+            source.backup(connection, snapshot)
     # Archive is derived from the same snapshot, not the live source.
     with closing(sqlite3.connect(snapshot.resolve().as_uri() + "?mode=ro", uri=True)) as read:
         store = AvatarStore(snapshot, snapshot.parent / "assets-private", SystemClock(),
@@ -104,11 +117,12 @@ def export_backup(source, snapshot):
 
 
 class RecoveryPanel:
-    def __init__(self, root, source, destination=destination_from_environment):
+    def __init__(self, root, source, destination=destination_from_environment, *, online_snapshot=False):
         self.root = Path(root)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.root.chmod(0o700)
         self.source = source
+        self.online_snapshot = online_snapshot
         self.destination = destination
         self.state_path = self.root / "state.json"
         self.snapshot = self.root / "backup" / _NAME
@@ -168,6 +182,8 @@ class RecoveryPanel:
         expected = {"backup": "PAUSEI OS ESCRITORES", "verify": "VOLUME PRIVADO",
                     "restore": "DESTINO VAZIO E INDEPENDENTE",
                     "restart": "DESTINO ISOLADO"}[action]
+        if action == "backup" and self.online_snapshot:
+            expected = "SNAPSHOT CONSISTENTE"
         if confirmation != expected:
             raise HTTPException(400, "confirmation required")
         try:
@@ -222,7 +238,7 @@ class RecoveryPanel:
                     pair = directory / "pair"
                     pair.mkdir(mode=0o700)
                     snapshot = pair / _NAME
-                    report = export_backup(self.source, snapshot)
+                    report = export_backup(self.source, snapshot, read_only=self.online_snapshot)
                     for path in (snapshot, Path(str(snapshot) + ".avatar.zip")):
                         path.chmod(0o600)
                         with path.open("rb") as stream:
