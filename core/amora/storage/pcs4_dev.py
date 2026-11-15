@@ -5,6 +5,7 @@ deployment overrides, secret input, raw logs or storage operations in Core.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import re
@@ -21,6 +22,32 @@ _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
 _BASE = "https://api.northflank.com/v1"
 _NUMERIC = _REPORT_KEYS - {"rank_equal", "hit_counts"}
+# The dashboard may show a CRI timestamp in front of the stream prefix;
+# the documented API example instead supplies ts as a separate field.
+_CRI_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2}) ")
+
+
+def _report_line(line):
+    if not isinstance(line, str):
+        return None
+    line = _CRI_TIMESTAMP.sub("", line, count=1)
+    if line.startswith("stdout F "):
+        line = line[len("stdout F "):]
+    # Never accept partial CRI frames, stderr, or a marker embedded in
+    # unrelated log text.
+    return line[len(MARKER):] if line.startswith(MARKER) else None
+
+
+def _report_window(started, concluded):
+    start = datetime.fromisoformat(started.replace("Z", "+00:00"))
+    end = datetime.fromisoformat(concluded.replace("Z", "+00:00"))
+    if start.tzinfo is None or end.tzinfo is None or end < start:
+        raise ValueError("invalid run time")
+    # Provider run boundaries and container log timestamps can differ.
+    # The runId still strictly scopes every query to the same execution.
+    return ((start - timedelta(minutes=2)).astimezone(timezone.utc).isoformat(),
+            (end + timedelta(minutes=2)).astimezone(timezone.utc).isoformat())
+
 
 
 def _safe_report(raw):
@@ -121,26 +148,37 @@ class NorthflankRecovery:
             return _state("error", reason="JOB_FAILED_REVIEW_REQUIRED")
         if not detail.get("startedAt") or not detail.get("concludedAt"):
             return _state("blocked", reason="JOB_REPORT_UNAVAILABLE")
-        logs = self._request("GET", "/logs", params={
+        try:
+            start, end = _report_window(detail["startedAt"], detail["concludedAt"])
+        except (ValueError, TypeError, AttributeError, OverflowError):
+            return _state("blocked", reason="JOB_REPORT_UNAVAILABLE")
+        # Read a bounded tail of this exact run without relying on the
+        # provider's text-search index. The report is the worker's final line.
+        params = {
             "runId": run_id, "type": "runtime", "queryType": "range",
-            "startTime": detail["startedAt"], "endTime": detail["concludedAt"],
-            "lineLimit": 10, "direction": "backward", "textIncludes": MARKER.strip(),
-        })
+            "startTime": start, "endTime": end,
+            "lineLimit": 100, "direction": "backward",
+        }
+        logs = self._request("GET", "/logs", params=params)
+        if not isinstance(logs, list):
+            return _state("blocked", reason="JOB_REPORT_INVALID")
         found = []
         for entry in logs:
-            line = entry.get("log", "")
-            if not isinstance(line, str):
+            if not isinstance(entry, dict):
+                return _state("blocked", reason="JOB_REPORT_INVALID")
+            payload = _report_line(entry.get("log"))
+            if payload is None:
                 continue
-            # Northflank runtime logs include a CRI stdout prefix.
-            if line.startswith("stdout F "):
-                line = line[len("stdout F "):]
-            if line.startswith(MARKER):
-                try:
-                    found.append(_safe_report(json.loads(line[len(MARKER):])))
-                except (ValueError, TypeError, AttributeError):
-                    return _state("blocked", reason="JOB_REPORT_INVALID")
-        if len(found) != 1:
+            try:
+                report = _safe_report(json.loads(payload))
+            except (ValueError, TypeError, AttributeError):
+                return _state("blocked", reason="JOB_REPORT_INVALID")
+            if report not in found:
+                found.append(report)
+        if not found:
             return _state("blocked", reason="JOB_REPORT_UNAVAILABLE")
+        if len(found) != 1:
+            return _state("blocked", reason="JOB_REPORT_INVALID")
         return found[0]
 
     def status(self):
