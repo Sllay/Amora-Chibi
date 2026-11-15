@@ -110,8 +110,6 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             yield
         finally:
             app.state.accepting = False
-            if pcs4_task is not None:
-                await asyncio.shield(pcs4_task)
             try:
                 await core.messaging.stop_inflight()
             finally:
@@ -119,6 +117,10 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             await core.messaging.reflections.stop()
             core.scheduler.cancel("autonomy.idle")
             await scheduler_runtime.stop()
+            if pcs4_task is not None:
+                # The preflight owns its connection and temporary files. Join
+                # before Core disposal, without delaying inbound drain.
+                await asyncio.shield(pcs4_task)
             console = getattr(app.state, "server_console", None)
             try:
                 if console is not None:
