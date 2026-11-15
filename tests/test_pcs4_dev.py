@@ -19,6 +19,8 @@ class FakeNorthflank:
         self.runs = []
         self.calls = []
         self.report = None
+        self.logs = None
+        self.expected_window = ("2026-11-15T00:58:00+00:00", "2026-11-15T01:03:00+00:00")
         self.fail_submission = False
 
     def __call__(self, request):
@@ -40,8 +42,10 @@ class FakeNorthflank:
             return httpx.Response(200, json={"data": self.runs[0]})
         if path.endswith("/logs"):
             assert request.url.params["runId"] == "run-1"
-            assert request.url.params["textIncludes"] == MARKER.strip()
-            rows = [{"log": "stdout F " + MARKER + json.dumps(self.report)}] if self.report else []
+            assert "textIncludes" not in request.url.params
+            assert request.url.params["lineLimit"] == "100"
+            assert (request.url.params["startTime"], request.url.params["endTime"]) == self.expected_window
+            rows = self.logs if self.logs is not None else ([{"log": "stdout F " + MARKER + json.dumps(self.report)}] if self.report else [])
             return httpx.Response(200, json={"data": rows})
         return httpx.Response(404)
 
@@ -126,3 +130,50 @@ def test_job_online_backup_reuses_audited_export_without_writer_reservation(back
     assert not unexpected, unexpected
     assert run(panel, "verify")["completed"] == ["backup", "verify"]
     assert not server.streams
+
+
+def test_real_northflank_log_format_recovers_existing_backup():
+    """Reproduce the observed CRI line, including nanosecond timestamp."""
+    fake = FakeNorthflank()
+    # Simulate provider timestamps rounded down to seconds at the run boundary.
+    fake.runs = [{"id": "run-1", "status": "SUCCESS", "active": 0, "concluded": True,
+                  "startedAt": "2026-11-15T14:32:51Z", "concludedAt": "2026-11-15T14:33:23Z"}]
+    fake.expected_window = ("2026-11-15T14:30:51+00:00", "2026-11-15T14:35:23+00:00")
+    report = {"status": "ok", "running": None, "completed": ["backup"],
+              "reports": {"backup": {"status": "ok", "rows": 48059, "schema_version": 18,
+                                     "assets": 0, "tables": 51}}, "reason": None,
+              "next": "verify", "action": "backup"}
+    line = "2026-11-15T14:33:23.637046321Z stdout F " + MARKER + json.dumps(report)
+    fake.logs = [
+        {"log": "2026-11-15T14:33:24.018846197Z stdout F Process terminated with exit code 0"},
+        {"log": line},
+        {"log": "stdout F " + MARKER + json.dumps(report)},  # duplicate shipping, same report
+        {"log": "stdout F unrelated private text"},
+    ]
+    control = controller(fake)
+    result = control.status()
+    assert result["status"] == "ok" and result["next"] == "verify"
+    assert result["reports"]["backup"]["rows"] == 48059
+    assert "private text" not in json.dumps(result)
+    assert all(method == "GET" for method, _ in fake.calls)
+    # A second distinct report is never accepted as certification.
+    report["reports"]["backup"]["rows"] = 1
+    fake.logs.append({"log": "stdout F " + MARKER + json.dumps(report)})
+    assert control.status()["reason"] == "JOB_REPORT_INVALID"
+
+
+def test_missing_report_stays_blocked_and_partial_frames_not_accepted():
+    fake = FakeNorthflank()
+    fake.runs = [{"id": "run-1", "status": "SUCCESS", "active": 0, "concluded": True,
+                  "startedAt": "2026-11-15T01:00:00Z", "concludedAt": "2026-11-15T01:01:00Z"}]
+    fake.logs = [
+        {"log": "stdout P " + MARKER + "{}"},
+        {"log": "stderr F " + MARKER + "{}"},
+        {"log": "stdout F unrelated " + MARKER + "{}"},
+    ]
+    control = controller(fake)
+    assert control.status()["reason"] == "JOB_REPORT_UNAVAILABLE"
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        control.start("verify", CONFIRMATIONS["verify"])
+    assert all(method == "GET" for method, _ in fake.calls)
