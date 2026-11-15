@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sqlite3
+import statistics
 import time
 from pathlib import Path
 
@@ -22,6 +23,8 @@ from amora.storage import LATEST_SCHEMA_VERSION
 from amora.storage.backend import SQLiteBackend
 from amora.storage.remote import LibSQLBackend
 from amora.storage.replica_read import ReplicaReadBackend, ReplicaReadConnection
+from amora.storage.replica_coherence import (ReplicaCoherenceError, VersionedReplicaReadGroup,
+                                             read_projection_stamp)
 from test_memory_v03 import important_candidate
 from test_messaging_lifecycle_stability import CountingStructuredProvider, _clock
 from test_platform_messaging_step2 import _bind_bk, _message
@@ -123,6 +126,29 @@ def assert_full_schema(primary, replica):
     return len(table_names)
 
 
+def install_lab_epoch(primary):
+    """Synthetic additive revision mechanism; deliberately not a runtime migration.
+
+    All mutations in the selected memory/history projection must update this
+    row in the same primary transaction. FTS is maintained by the canonical
+    memory write transaction, not independently in this fixture.
+    """
+    tables = ("memory_records", "memory_entities", "memory_tags",
+              "conversation_messages", "memory_reflection_invalidations",
+              "entities", "relationships")
+    with primary:
+        primary.execute("CREATE TABLE amora_projection_epoch (singleton INTEGER PRIMARY KEY "
+                        "CHECK(singleton=1), epoch_id TEXT NOT NULL, revision INTEGER NOT NULL "
+                        "CHECK(revision>=0))")
+        primary.execute("INSERT INTO amora_projection_epoch VALUES (1,'pcs2-fixture',0)")
+        for table in tables:
+            for verb in ("INSERT", "UPDATE", "DELETE"):
+                primary.execute(f"CREATE TRIGGER pcs2_epoch_{table}_{verb.lower()} "
+                                f"AFTER {verb} ON {table} BEGIN "
+                                "UPDATE amora_projection_epoch SET revision=revision+1 "
+                                "WHERE singleton=1; END")
+
+
 @pytest.mark.skipif(os.getenv("AMORA_PCS2_NATIVE_LAB") != "1",
                     reason="requires isolated loopback sqld fixture on port 8081")
 @pytest.mark.asyncio
@@ -138,8 +164,14 @@ async def test_pcs2_native_full_schema_and_shadow_reads(tmp_path, monkeypatch, c
     monkeypatch.setenv("AMORA_SOCIAL_EXPRESSION_PROFILE", "amora-v3")
     # Keep the actual Core Hrana adapter, but map its test-only HTTPS origin
     # to a disposable local server. No production credentials are accepted.
+    transport_calls = 0
+    transport_delay = 0.0
     with httpx.Client(trust_env=False, timeout=20) as client:
         def transport(request):
+            nonlocal transport_calls
+            transport_calls += 1
+            if transport_delay:
+                time.sleep(transport_delay)
             assert request.url.host == "database.example"
             assert request.url.path == "/v2/pipeline"
             response = client.post(URL + "/v2/pipeline", content=request.content,
@@ -215,21 +247,98 @@ async def test_pcs2_native_full_schema_and_shadow_reads(tmp_path, monkeypatch, c
                 core.cognition.store.list_messages(session_id=session, exclude_invalidated=True))
             assert shadow_history.list_messages(session_id=session)
 
-            # Shadow views are explicitly invalidated before authoritative changes.
-            # This does NOT establish cross-process freshness; no production read
-            # can use this view without a future revision/coherence contract.
-            replica.invalidate_all()
+            # PCS.2D: all shadow results pass a primary revision fence before
+            # leaving the group. The laboratory stamp is maintained by triggers,
+            # not a wall-clock TTL or a process-local invalidation flag.
+            install_lab_epoch(primary)
+            group = VersionedReplicaReadGroup(replica, lambda: read_projection_stamp(primary))
+            primary_shadow = ShadowMemoryStore(tmp_path / "primary-shadow", core.clock,
+                                               core.identities, backend=primary_backend)
+            writer = primary_backend.connect(tmp_path / "independent-writer")
+            def local_pair():
+                return (shadow_memory.search(query),
+                        shadow_history.list_messages(session_id=session, exclude_invalidated=True))
+            def remote_pair():
+                return (primary_shadow.search(query),
+                        core.cognition.store.list_messages(session_id=session, exclude_invalidated=True))
+            try:
+                started = time.perf_counter()
+                cold = group.read(local_pair)
+                cold_ms = (time.perf_counter() - started) * 1000
+                assert cold == remote_pair()
+                assert pub.id in {hit.memory.id for hit in cold[0]}
+                with pytest.raises(sqlite3.OperationalError, match="NOT_SYNCHRONIZED"):
+                    local_pair()
+                # Paired hot read group with identical synthetic primary RTT;
+                # native refresh is not part of the warm samples.
+                paired = {"remote": [], "local": []}
+                transport_delay = .020
+                for _ in range(3):
+                    for name, operation in (("remote", remote_pair),
+                                            ("local", lambda: group.read(local_pair))):
+                        before = transport_calls
+                        tick = time.perf_counter()
+                        assert operation() == cold
+                        paired[name].append(((time.perf_counter() - tick) * 1000,
+                                             transport_calls - before))
+                transport_delay = 0
+                assert all(calls == 2 for _, calls in paired["local"])
+                assert min(calls for _, calls in paired["remote"]) > 2
+                fence_metrics = {
+                    "cold_sync_and_read_ms": round(cold_ms, 3),
+                    "hot_local_median_ms": round(statistics.median(
+                        ms for ms, _ in paired["local"]), 3),
+                    "hot_remote_median_ms": round(statistics.median(
+                        ms for ms, _ in paired["remote"]), 3),
+                    "hot_local_primary_calls": 2,
+                    "hot_remote_primary_calls": paired["remote"][0][1],
+                    "synthetic_primary_rtt_ms": 20, "paired_samples": 3,
+                }
+
+                before = read_projection_stamp(primary)
+                with pytest.raises(RuntimeError, match="fixture rollback"):
+                    with writer:
+                        writer.execute("UPDATE memory_records SET remote_processing_allowed=0 WHERE id=?",
+                                       (str(pub.id),))
+                        raise RuntimeError("fixture rollback")
+                assert read_projection_stamp(primary) == before
+                assert pub.id in {hit.memory.id for hit in group.read(local_pair)[0]}
+
+                # An independent authoritative writer revokes disclosure after
+                # local retrieval but before the final primary stamp check.
+                def revoke_during_read():
+                    old = local_pair()
+                    with writer:
+                        writer.execute("UPDATE memory_records SET remote_processing_allowed=0 WHERE id=?",
+                                       (str(pub.id),))
+                    return old
+                with pytest.raises(ReplicaCoherenceError, match="CHANGED_DURING_READ"):
+                    group.read(revoke_during_read)
+                with pytest.raises(sqlite3.OperationalError, match="NOT_SYNCHRONIZED"):
+                    local_pair()
+                assert pub.id not in {hit.memory.id for hit in group.read(local_pair)[0]}
+                with writer:
+                    writer.execute("UPDATE memory_records SET remote_processing_allowed=1 WHERE id=?",
+                                   (str(pub.id),))
+                assert pub.id in {hit.memory.id for hit in group.read(local_pair)[0]}
+                fence_metrics["revocation_race_rejected"] = True
+                fence_metrics["rollback_stamp_unchanged"] = True
+            finally:
+                transport_delay = 0
+                writer.close()
+                primary_shadow.close()
+
+            # Canonical mutations are visible on the next verified read without
+            # an explicit caller invalidation or a fresh sync on every hot read.
             assert core.memory.archive(pub.id)
             core.messaging.invalidate_transport(TransportInvalidation(
                 platform=message.platform, account_scope=message.account_scope,
                 conversation_id=message.conversation_id, native_message_id=message.native_source_message_id,
                 reason="DISCORD_MESSAGE_UPDATED", transport_revision=2))
-            with pytest.raises(sqlite3.OperationalError, match="NOT_SYNCHRONIZED"):
-                shadow_memory.search(query)
-            replica.sync_all()
-            assert pub.id not in {hit.memory.id for hit in shadow_memory.search(query)}
-            assert shadow_history.list_messages(session_id=session, exclude_invalidated=True) == []
-            assert_full_schema(primary, raw)
+            updated_hits, updated_history = group.read(local_pair)
+            assert pub.id not in {hit.memory.id for hit in updated_hits}
+            assert updated_history == []
+            group.read(lambda: assert_full_schema(primary, raw))
 
             # Rebuild all views after local files are physically removed.
             shadow_memory.close()
@@ -249,7 +358,7 @@ async def test_pcs2_native_full_schema_and_shadow_reads(tmp_path, monkeypatch, c
                       "shadow_recall_ms": round(local_recall_ms, 3),
                       "full_schema_equal": True, "memory_ranking_equal": True,
                       "history_equal": True, "archive_and_edit_after_sync": True,
-                      "rebuild_after_disk_loss": True}
+                      "rebuild_after_disk_loss": True, "version_fence": fence_metrics}
             with capsys.disabled():
                 print("PCS2_NATIVE_JSON=" + json.dumps(report, sort_keys=True), flush=True)
         finally:
