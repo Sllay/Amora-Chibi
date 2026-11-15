@@ -94,7 +94,11 @@ def _child_env(home, backend=None):
                                       "SSL_CERT_DIR") if k in os.environ}
     env.update(HOME=str(home), AMORA_HOME=str(home), AMORA_MODE="local",
                AMORA_ASSET_STORAGE="database", AMORA_STORAGE_BACKEND="sqlite",
-               PYTHONDONTWRITEBYTECODE="1")
+               PYTHONDONTWRITEBYTECODE="1",
+               # The validation image uses a source checkout and a test-only
+               # interpreter. Resolve our own package root, never inherit an
+               # arbitrary PYTHONPATH from the operator environment.
+               PYTHONPATH=str(Path(__file__).resolve().parents[2]))
     if backend is not None:
         env.update(AMORA_STORAGE_BACKEND="libsql", AMORA_LIBSQL_URL=backend.url,
                    AMORA_SECRET_LIBSQL_AUTH_TOKEN=backend._token)
