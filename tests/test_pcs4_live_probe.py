@@ -1,10 +1,13 @@
 """PCS.4A diagnostic: exact ranking, resource bounds and no primary writes."""
 import json
 import sqlite3
+import threading
 
 import pytest
 
 from amora.app import AmoraCore
+from amora.api import create_api
+from fastapi.testclient import TestClient
 from amora.events import PrivacyScope
 from amora.storage import pcs4_probe as probe
 from amora.storage.schema import LATEST_SCHEMA_VERSION
@@ -32,6 +35,10 @@ def seeded(remote, tmp_path, monkeypatch):
     finally:
         core.close()
     server.calls.clear()
+    monkeypatch.setattr(probe, "resources", lambda _: {
+        "process_rss_bytes": 1_000_000, "disk_free_bytes": 10**9,
+        "cgroup_current_bytes": 100_000_000, "cgroup_limit_bytes": 500_000_000,
+    })
     yield backend, server
     assert not server.streams
 
@@ -107,3 +114,28 @@ def test_pcs4_pagination_preserves_rank_and_rows(seeded, tmp_path, monkeypatch):
     assert report["status"] == "ok"
     assert report["rank_equal"] == [True, True]
     assert any('FROM "memory_records" WHERE rowid > ?' in sql for sql in server.calls)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_pcs4_startup_probe_is_opt_in_and_runs_once(enabled, tmp_path, monkeypatch):
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "runtime"))
+    monkeypatch.setenv("AMORA_MODE", "local")
+    monkeypatch.setenv("AMORA_ASSET_STORAGE", "database")
+    monkeypatch.setenv("AMORA_PCS4_PREFLIGHT", "1" if enabled else "0")
+    calls = []
+    completed = threading.Event()
+    def fake_run():
+        calls.append(threading.current_thread().name)
+        completed.set()
+        return {"status": "ok"}
+    monkeypatch.setattr(probe, "run", fake_run)
+    core = AmoraCore.bootstrap(clock=_clock())
+    try:
+        with TestClient(create_api(core)) as client:
+            assert client.get("/live").status_code == 200
+            if enabled:
+                assert completed.wait(2)
+            assert client.get("/live").status_code == 200
+        assert len(calls) == int(enabled)
+    finally:
+        core.close()
