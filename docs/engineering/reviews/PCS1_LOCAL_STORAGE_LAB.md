@@ -6,7 +6,10 @@ This PR changes no Core, Worker, provider, V3, schema or runtime dependency. Loc
 
 ## Reproduce
 - `pytest -s tests/test_pcs1_local_storage_lab.py` — creates synthetic remote fixture, exports snapshot, restores local, compares full context, trusted protocol and actual Numes payload, validates DM delivery/dedupe.
-- `tools/cloud/pcs1-replica-probe.py` — pinned libsql 0.1.11, disposable loopback sqld only, no production env variables. Core CI (Python 3.12, PCS lab branches only) starts a pinned server image. Tests read-own-write, FTS5, JSON, cross-replica sync, transaction rollback, unique constraints, multiple handles, DB-API surface and rebuilding a new replica. Numeric output includes peak RSS of probe alone, not Core or Northflank.
+- `tools/cloud/pcs1-replica-probe.py` — pinned libsql 0.1.8 (classic protocol, lab only), disposable loopback sqld only, no production env variables. Core CI (Python 3.12, PCS lab branches only) starts a pinned server image. Tests read-own-write, FTS5, JSON, cross-replica sync, transaction rollback, unique constraints, multiple handles, DB-API surface and rebuilding a new replica. Numeric output includes peak RSS of probe alone, not Core or Northflank.
+
+## Observed compatibility failure
+Native SDK 0.1.11 was installed successfully in Python 3.12, but connect(sync_url=...) against pinned sqld 0.24.33 failed with HTTP 404 `failed to pull db export` before any test write. Upstream [0.1.11 source](https://github.com/tursodatabase/libsql-python/blob/v0.1.11/src/lib.rs) uses `new_synced_database` with remote_writes, whereas [0.1.8 source](https://github.com/tursodatabase/libsql-python/blob/v0.1.8/src/lib.rs) uses `new_remote_replica`. The local sqld fixture does not certify the newer cloud sync endpoint. Testing 0.1.8 separately identifies the classic protocol behavior; it is not a recommendation to downgrade production or a claim of current cloud compatibility.
 
 ## Design decision
 Official docs: https://docs.turso.tech/sdk/python/reference and https://docs.turso.tech/features/embedded-replicas/introduction .
