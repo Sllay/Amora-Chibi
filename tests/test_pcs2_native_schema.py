@@ -349,6 +349,13 @@ async def test_pcs2_native_full_schema_and_shadow_reads(tmp_path, monkeypatch, c
             assert result.outbound[0].text == "Resposta remota estável."
             assert provider.calls == 1
 
+            from amora.storage.pcs4_probe import certify
+            live_preflight = certify(primary_backend, tmp_path / "pcs4-live-preflight")
+            assert live_preflight["status"] == "ok"
+            assert live_preflight["rank_equal"] == [True, True]
+            assert live_preflight["hit_counts"][0] > 0
+            assert not list((tmp_path / "pcs4-live-preflight").iterdir())
+
             raw = replica.connect(tmp_path / "raw")
             shadow_memory = ShadowMemoryStore(tmp_path / "memory", core.clock, core.identities,
                                               backend=replica)

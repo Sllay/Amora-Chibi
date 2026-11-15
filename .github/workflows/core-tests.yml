@@ -28,12 +28,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
       - name: Install pinned native SDK (laboratory only)
-        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs') || startsWith(github.head_ref, 'feat/pcs4-'))
         run: |
           printf '%s\n' 'libsql==0.1.8 --hash=sha256:74f3e999dd7a710dd5fc361f5d6299b7bbb1c62db9090ae7958d2d2cb49ff920' > /tmp/pcs1-libsql.txt
           python -m pip install --only-binary=:all: --require-hashes -r /tmp/pcs1-libsql.txt
       - name: Start disposable loopback primary
-        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs') || startsWith(github.head_ref, 'feat/pcs4-'))
         run: |
           docker run --name pcs1-sqld -d -p 127.0.0.1:8080:8080 \
             -e SQLD_NODE=primary \
@@ -46,15 +46,15 @@ jobs:
           done
           exit 1
       - name: Exercise native replica and recovery contracts
-        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs') || startsWith(github.head_ref, 'feat/pcs4-'))
         run: timeout 120s python tools/cloud/pcs1-replica-probe.py
       - name: Dispose of fixture
-        if: always() && matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
+        if: always() && matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs') || startsWith(github.head_ref, 'feat/pcs4-'))
         run: |
           docker logs pcs1-sqld || true
           docker rm -f pcs1-sqld || true
       - name: Start full-schema disposable primary
-        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs2') || startsWith(github.head_ref, 'lab/pcs3'))
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs2') || startsWith(github.head_ref, 'lab/pcs3') || startsWith(github.head_ref, 'feat/pcs4-'))
         run: |
           docker run --name pcs2-sqld -d -p 127.0.0.1:8081:8080 \
             -e SQLD_NODE=primary \
@@ -68,12 +68,12 @@ jobs:
           done
           exit 1
       - name: Certify full schema with real native replica
-        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs2') || startsWith(github.head_ref, 'lab/pcs3'))
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs2') || startsWith(github.head_ref, 'lab/pcs3') || startsWith(github.head_ref, 'feat/pcs4-'))
         env:
           AMORA_PCS2_NATIVE_LAB: '1'
         run: timeout 180s python -m pytest -s tests/test_pcs2_native_schema.py
       - name: Dispose of full-schema fixture
-        if: always() && matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs2') || startsWith(github.head_ref, 'lab/pcs3'))
+        if: always() && matrix.python-version == '3.12' && github.event_name == 'pull_request' && (startsWith(github.head_ref, 'lab/pcs2') || startsWith(github.head_ref, 'lab/pcs3') || startsWith(github.head_ref, 'feat/pcs4-'))
         run: |
           docker logs pcs2-sqld || true
           docker rm -f pcs2-sqld || true

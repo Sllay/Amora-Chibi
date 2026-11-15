@@ -11,6 +11,7 @@ import logging
 import sqlite3
 import sys
 from collections.abc import Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -450,12 +451,24 @@ class RemoteConnection:
             raise
 
     def __enter__(self):
+        return self._begin("BEGIN IMMEDIATE")
+
+    @contextmanager
+    def read_transaction(self):
+        """Deferred snapshot for audited SELECT-only callers; no writer reservation."""
+        self._begin("BEGIN")
+        try:
+            yield self
+        finally:
+            self.__exit__(RuntimeError, None, None)
+
+    def _begin(self, sql):
         if self._transaction:
             raise RuntimeError("nested transactions are not supported")
         self._ensure_ready()
         self._transaction = True
         try:
-            self.execute("BEGIN IMMEDIATE")
+            self.execute(sql)
         except BaseException:
             try:
                 if not self._broken and self._baton is not None:
