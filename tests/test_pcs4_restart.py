@@ -33,6 +33,7 @@ def test_restored_core_reopens_and_ranks_exactly(backup, tmp_path, monkeypatch):
     report = restart.certify_restart(backup, backend)
     assert boots == [False, True, True]
     assert report["rank_equal"] is True
+    assert report["memory_tables_equal"] == 4
     assert report["boots"] == 2 and report["query_count"] == 5
     assert report["private_hits"] > 0
     assert report["nonremote_hits"] > 0
