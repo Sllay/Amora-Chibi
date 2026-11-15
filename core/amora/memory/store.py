@@ -365,6 +365,11 @@ class MemoryStore:
 
     @trace_stage("memory_search")
     def search(self, query: MemoryQuery) -> list[MemoryHit]:
+        hits = self.rank(query)
+        return self._finish_access(hits, self.clock.now())
+
+    def rank(self, query: MemoryQuery) -> list[MemoryHit]:
+        """Canonical retrieval/ranking without durable access side effects."""
         rows = self._candidate_rows(query)
         if not rows:
             return []
@@ -436,7 +441,6 @@ class MemoryStore:
             ranked = sorted(scores, key=scores.get, reverse=True)
         selected = self._mmr_select(ranked, records, scores, query.limit, query.mmr_lambda)
         max_score = max((scores[memory_id] for memory_id in selected), default=1.0) or 1.0
-        now = self.clock.now()
         hits = [
             MemoryHit(
                 memory=records[memory_id],
@@ -445,11 +449,40 @@ class MemoryStore:
             )
             for memory_id in selected
         ]
-        self._mark_accessed(selected, now)
+        return hits
+
+    def _finish_access(self, hits: list[MemoryHit], now: datetime) -> list[MemoryHit]:
+        self._mark_accessed([str(hit.memory.id) for hit in hits], now)
+        return self._apply_access(hits, now)
+
+    @staticmethod
+    def _apply_access(hits: list[MemoryHit], now: datetime) -> list[MemoryHit]:
         for hit in hits:
             hit.memory.access_count += 1
             hit.memory.last_accessed_at = now
         return hits
+
+    @trace_stage("memory_verified_access")
+    def record_verified_access(self, hits: list[MemoryHit], stamp) -> list[MemoryHit]:
+        """Commit one canonical access update only under the verified primary revision.
+
+        The experimental epoch must be installed by a certified storage setup.
+        No retry on unknown transaction/commit outcome. A definite mismatch
+        before commit raises a coherence error and leaves all rows unchanged.
+        """
+        from amora.storage.replica_coherence import ReplicaCoherenceError, read_projection_stamp
+        if not hits:
+            return hits
+        ids = [str(hit.memory.id) for hit in hits]
+        if len(ids) != len(set(ids)):
+            raise ValueError("REPLICA_DUPLICATE_MEMORY_HIT")
+        with trace_lock(self._lock), self._conn:
+            if read_projection_stamp(self._conn) != stamp:
+                raise ReplicaCoherenceError("REPLICA_ACCESS_REVISION_CHANGED")
+            now = self.clock.now()
+            if self._mark_accessed(ids, now) != len(ids):
+                raise ReplicaCoherenceError("REPLICA_ACCESS_ROWS_CHANGED")
+        return self._apply_access(hits, now)
 
     @trace_stage("memory_candidates")
     def _candidate_rows(self, query: MemoryQuery) -> list[sqlite3.Row]:
@@ -620,16 +653,16 @@ class MemoryStore:
         return selected
 
     @trace_stage("memory_access_write")
-    def _mark_accessed(self, memory_ids: list[str], now: datetime) -> None:
+    def _mark_accessed(self, memory_ids: list[str], now: datetime) -> int:
         if not memory_ids:
-            return
+            return 0
         placeholders = ",".join("?" for _ in memory_ids)
         with trace_lock(self._lock):
-            execute_atomic_statement(
+            return execute_atomic_statement(
                 self.backend, self._conn,
                 f"UPDATE memory_records SET access_count = access_count + 1, last_accessed_at = ? WHERE id IN ({placeholders})",
                 (now.isoformat(), *memory_ids),
-            )
+            ).rowcount
 
     @trace_stage("memory_hydrate")
     def _hydrate_many(self, rows: list[sqlite3.Row]) -> dict[str, MemoryRecord]:
