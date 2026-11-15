@@ -26,12 +26,7 @@ from .pcs4_recovery import (
 from .pcs4_restart import certify_restart
 from .remote import LibSQLBackend
 
-_STEPS = ("backup", "verify", "restore", "restart")
-_REPORT_KEYS = frozenset({
-    "schema_version", "tables", "rows", "assets", "equal_tables",
-    "boots", "query_count", "rank_equal", "memory_tables_equal", "hit_counts",
-    "private_hits", "archived_hits", "public_hits", "nonremote_hits",
-})
+from .pcs4_contract import STEPS as _STEPS, REPORT_KEYS as _REPORT_KEYS
 _HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
