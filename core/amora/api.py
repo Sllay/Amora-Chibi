@@ -262,6 +262,9 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         return JSONResponse(report, status_code=200 if report["status"] == "ready" else 503,
                             headers={"Cache-Control": "no-store"})
 
+    from amora.storage.pcs4_dev import register_pcs4_dev_routes
+    register_pcs4_dev_routes(app)
+
     @app.get("/v1/operations/state", dependencies=[Depends(require_auth)])
     def operations_state():
         from amora.operations import operational_snapshot

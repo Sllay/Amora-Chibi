@@ -222,10 +222,84 @@ function installDiscordConsole(operatorApi) {
   refresh().catch((error) => { errorNode.textContent = humanError(error); });
 }
 
+
+function installPCS4Recovery(operatorApi) {
+  const summary = document.getElementById('consoleSummary');
+  if (!summary || document.getElementById('pcs4RecoveryCard')) return;
+  const card = document.createElement('section');
+  card.id = 'pcs4RecoveryCard';
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="section-title-row"><h3>Backup e recuperação · PCS.4C</h3><span id="pcs4RecoveryState" class="pill">—</span></div>
+    <p class="subtle">Job isolado no Northflank. O Core e o Discord continuam nos serviços atuais. Nenhum dado é restaurado na produção.</p>
+    <p id="pcs4RecoveryDetail" class="subtle" aria-live="polite">verificando…</p>
+    <div class="form-actions">
+      <button type="button" data-pcs4="backup" disabled>Criar backup</button>
+      <button type="button" data-pcs4="verify" disabled>Verificar backup</button>
+      <button type="button" data-pcs4="restore" disabled>Restaurar banco de teste</button>
+      <button type="button" data-pcs4="restart" disabled>Certificar reinicialização</button>
+      <button type="button" id="pcs4RecoveryCopy" class="ghost" disabled>Copiar resultados</button>
+    </div>
+    <pre id="pcs4RecoveryReport" class="subtle" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>`;
+  summary.insertAdjacentElement('afterend', card);
+  const stateNode = card.querySelector('#pcs4RecoveryState');
+  const detail = card.querySelector('#pcs4RecoveryDetail');
+  const report = card.querySelector('#pcs4RecoveryReport');
+  const copy = card.querySelector('#pcs4RecoveryCopy');
+  const buttons = [...card.querySelectorAll('[data-pcs4]')];
+  const confirms = {backup:'SNAPSHOT CONSISTENTE', verify:'VOLUME PRIVADO', restore:'DESTINO VAZIO E INDEPENDENTE', restart:'DESTINO ISOLADO'};
+  const labels = {idle:'Pronto', ok:'Etapa concluída', running:'Executando', disabled:'Não configurado', blocked:'Bloqueado', error:'Falha'};
+  let busy = false;
+  let reading = false;
+  let latest = {};
+  function render(state) {
+    stateNode.textContent = labels[state.status] || 'Indisponível';
+    detail.textContent = state.status === 'disabled'
+      ? 'Configure um Job dedicado e o token de API no Northflank. Não é necessário outro serviço web.'
+      : state.status === 'running' ? 'O Job está executando. Pode fechar a página; consulte novamente depois.'
+      : state.reason || (state.next ? 'Próxima etapa: ' + state.next : 'Certificação concluída.');
+    buttons.forEach(button => { button.disabled = busy || state.next !== button.dataset.pcs4; });
+    latest = state.reports || {};
+    report.textContent = JSON.stringify(latest, null, 2);
+    copy.disabled = !Object.keys(latest).length;
+  }
+  async function refresh() {
+    if (reading || busy || document.getElementById('consoleView')?.classList.contains('hidden')) return;
+    reading = true;
+    try { render(await operatorApi('/v1/operator/recovery/status')); }
+    catch (error) {
+      buttons.forEach(button => { button.disabled = true; });
+      stateNode.textContent = 'Indisponível'; detail.textContent = humanError(error);
+    } finally { reading = false; }
+  }
+  buttons.forEach(button => button.addEventListener('click', async () => {
+    const action = button.dataset.pcs4;
+    const confirmation = window.prompt('Confirme esta etapa digitando: ' + confirms[action]);
+    if (confirmation !== confirms[action]) return;
+    busy = true;
+    buttons.forEach(item => { item.disabled = true; });
+    try {
+      await operatorApi('/v1/operator/recovery/' + action, {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify({confirmation})});
+      stateNode.textContent = 'Executando';
+    } catch (error) { detail.textContent = humanError(error); }
+    finally { busy = false; await refresh(); }
+  }));
+  copy.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(JSON.stringify(latest, null, 2)); detail.textContent = 'Resultados copiados.'; }
+    catch (_) { detail.textContent = 'Selecione o relatório para copiar.'; }
+  });
+  document.querySelector('[data-surface="consoleView"]')?.addEventListener('click', () => setTimeout(refresh, 0));
+  document.getElementById('refreshConsole')?.addEventListener('click', refresh);
+  setInterval(refresh, 5000);
+  refresh();
+}
+
 export function installOperatorRecoveryControls({ operatorKey }) {
   if (typeof document === 'undefined') return;
   const operatorApi = operatorClient(operatorKey);
   installAliasGuard();
   installFamilyRestore(operatorApi);
   installDiscordConsole(operatorApi);
+  installPCS4Recovery(operatorApi);
 }
