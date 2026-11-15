@@ -28,8 +28,9 @@ from amora.time import SimulatedClock, SystemClock
 logger = logging.getLogger(__name__)
 TABLES = ("entities", "aliases", "relationships", "memory_records",
           "memory_entities", "memory_tags", "memory_fts")
-MAX_ROWS = 25_000
-MAX_BYTES = 8 * 1024 * 1024
+MAX_ROWS = 10_000
+MAX_BYTES = 4 * 1024 * 1024
+FETCH_BATCH = 128
 MIN_DISK = 64 * 1024 * 1024
 MAX_SECONDS = 25
 
@@ -59,9 +60,17 @@ def resources(path):
                 break
     except (OSError, ValueError):
         pass
+    current = _read_number("/sys/fs/cgroup/memory.current")
+    limit = _read_number("/sys/fs/cgroup/memory.max")
+    if current is None:
+        current = _read_number("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+        limit = _read_number("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+    # Linux cgroup v1 uses a very large sentinel for an unlimited group.
+    if limit is not None and limit >= 2**60:
+        limit = None
     return {"process_rss_bytes": rss,
-            "cgroup_current_bytes": _read_number("/sys/fs/cgroup/memory.current"),
-            "cgroup_limit_bytes": _read_number("/sys/fs/cgroup/memory.max"),
+            "cgroup_current_bytes": current,
+            "cgroup_limit_bytes": limit,
             "disk_free_bytes": shutil.disk_usage(path).free}
 
 
@@ -110,13 +119,22 @@ def _copy_table(reader, target, table, definition, remaining_rows, remaining_byt
     if count > remaining_rows or size > remaining_bytes:
         raise ProbeLimit("SNAPSHOT_BUDGET")
     target.execute(definition)
-    rows = reader.execute("SELECT * FROM " + quoted + " ORDER BY rowid").fetchall()
-    if len(rows) != count:
+    # Keyset pagination bounds transport decoding and preserves FTS row order.
+    # No OFFSET or unbounded response allocation, even within the byte cap.
+    copied, last_rowid = 0, None
+    insert = "INSERT INTO " + quoted + " VALUES (" + ",".join("?" for _ in columns) + ")"
+    while copied < count:
+        where = "" if last_rowid is None else " WHERE rowid > ?"
+        args = (FETCH_BATCH,) if last_rowid is None else (last_rowid, FETCH_BATCH)
+        rows = reader.execute("SELECT rowid AS pcs4_rowid,* FROM " + quoted + where +
+                              " ORDER BY rowid LIMIT ?", args).fetchall()
+        if not rows:
+            raise ProbeLimit("SNAPSHOT_COUNT_CHANGED")
+        target.executemany(insert, [tuple(row[col] for col in columns) for row in rows])
+        last_rowid = rows[-1]["pcs4_rowid"]
+        copied += len(rows)
+    if copied != count:
         raise ProbeLimit("SNAPSHOT_COUNT_CHANGED")
-    if rows:
-        target.executemany("INSERT INTO " + quoted + " VALUES (" +
-                           ",".join("?" for _ in columns) + ")",
-                           [tuple(row[col] for col in columns) for row in rows])
     return count, size
 
 
