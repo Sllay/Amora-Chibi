@@ -176,7 +176,7 @@ async def test_pcs2_native_full_schema_and_shadow_reads(tmp_path, monkeypatch, c
                 privacy_scope=PrivacyScope.PRIVATE, owner_entity_id="PERSON_BK",
                 remote_processing_allowed=True)).memory
             assert pub and private
-            core.avatar.store.put_asset("pcs2-synthetic", "image/png", b"fixture-pcs2")
+            asset = core.avatar.store.put_asset("pcs2-synthetic", "image/png", b"fixture-pcs2")
             provider = CountingStructuredProvider(name="pcs2-offline")
             core.cognition.register_provider(provider)
             message = _message(core, message_id="pcs2-message", actor_id="111111111111111111",
@@ -198,7 +198,7 @@ async def test_pcs2_native_full_schema_and_shadow_reads(tmp_path, monkeypatch, c
             primary = core.database._conn
             tables = assert_full_schema(primary, raw)
             assert raw.execute("SELECT body FROM avatar_asset_blobs WHERE file_name=?",
-                               ("pcs2-synthetic",)).fetchone()[0] == b"fixture-pcs2"
+                               (asset.file_name,)).fetchone()[0] == b"fixture-pcs2"
             query = MemoryQuery(text="desenho aurora", entity_ids={"PERSON_BK"},
                                 projection_recipient_id="PERSON_BK", projection_remote_only=True)
             started = time.perf_counter()
