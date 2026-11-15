@@ -6,7 +6,6 @@ No HTTP route returns backup bytes, credentials, paths, hashes or memory text.
 from __future__ import annotations
 
 from contextlib import closing
-from datetime import datetime, timezone
 import fcntl
 import hashlib
 import hmac
@@ -18,10 +17,11 @@ import threading
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 
 from .pcs4_recovery import (
-    certify_restore, destination_from_environment, verify_snapshot,
+    certify_restore, destination_from_environment, verify_snapshot, _origin_host,
 )
 from .pcs4_restart import certify_restart
 from .remote import LibSQLBackend
@@ -68,14 +68,18 @@ def _origin_digest(backend):
 
 
 def _mounted(path):
-    # ismount can miss bind mounts. Linux mountinfo identifies exact mountpoints.
-    if os.path.ismount(path):
-        return True
-    try:
-        return any(line.split()[4].replace("\\040", " ").replace("\\134", "\\") == str(path)
-                   for line in Path("/proc/self/mountinfo").read_text().splitlines())
-    except (OSError, IndexError):
+    # Check an actual Linux mountpoint; reject ephemeral pseudo-filesystems.
+    if path == Path("/"):
         return False
+    try:
+        for line in Path("/proc/self/mountinfo").read_text().splitlines():
+            before, after = line.split(" - ", 1)
+            mount = before.split()[4].replace("\\040", " ").replace("\\134", "\\")
+            if mount == str(path):
+                return after.split()[0] not in {"tmpfs", "ramfs", "overlay", "rootfs", "proc", "sysfs"}
+    except (OSError, IndexError, ValueError):
+        pass
+    return False
 
 
 def export_backup(source, snapshot):
@@ -183,7 +187,7 @@ class RecoveryPanel:
                 try:
                     target = self.destination()
                     # Recheck independently even for an injected backend.
-                    if target.url == self.source.url or target._token == self.source._token:
+                    if _origin_host(target.url) == _origin_host(self.source.url) or target._token == self.source._token:
                         raise ValueError("unsafe destination")
                     if action == "restart" and state.get("destination_id") != _origin_digest(target):
                         raise ValueError("destination changed")
@@ -243,11 +247,22 @@ class RecoveryPanel:
                     report = certify_restart(self.snapshot, target)
                     if report["rank_equal"] is not True or report["memory_tables_equal"] != 4:
                         raise ValueError("restart mismatch")
-            state["reports"][action] = {key: report[key] for key in _REPORT_KEYS if key in report}
+            state["reports"][action] = {"status": "ok", **{key: report[key] for key in _REPORT_KEYS if key in report}}
             state["completed"].append(action)
             state.update(status="ok", running=None, reason=None)
-        except Exception:
-            state.update(status="error", running=None, reason="OPERATION_FAILED_REVIEW_REQUIRED")
+        except Exception as exc:
+            reason = "OPERATION_FAILED_REVIEW_REQUIRED"
+            if isinstance(exc, ValueError) and exc.args and exc.args[0] in {
+                "PCS4C_INTEGRITY", "PCS4C_FOREIGN_KEYS", "PCS4C_SCHEMA",
+                "PCS4C_ASSET_MANIFEST", "PCS4C_ASSET_MEMBERS", "PCS4C_ASSET_SIZE",
+                "PCS4C_ASSET_HASH", "PCS4C_SQL_ASSET_HASH", "PCS4C_SCHEMA_MISMATCH",
+                "PCS4C_DATA_MISMATCH", "PCS4C_SOURCE_CHANGED", "PCS4C_RESTART_TABLES",
+                "PCS4C_RESTART_RANK_MISMATCH", "PCS4C_RESTART_EMPTY_RECALL",
+                "PCS4C_RESTART_MEMORY_CHANGED",
+            }:
+                reason = exc.args[0]
+            state.update(status="error", running=None, reason=reason)
+            state["reports"][action] = {"status": "error", "reason": reason}
         finally:
             try:
                 self._write(state)
@@ -276,6 +291,10 @@ def create_app(panel=None, token=None):
                  os.getenv("AMORA_SECRET_LOCAL_API_TOKEN")):
         raise RuntimeError("PCS4C operator token must be distinct")
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request, exc):
+        return JSONResponse({"detail": "invalid request"}, status_code=422)
 
     @app.middleware("http")
     async def secure_headers(request, call_next):
