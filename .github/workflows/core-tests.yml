@@ -68,7 +68,9 @@ jobs:
           test -f "$AMORA_HOME/backups/ci.db.avatar.zip"
       - name: Install pinned native SDK (laboratory only)
         if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
-        run: python -m pip install --only-binary=:all: libsql==0.1.11
+        run: |
+          printf '%s\n' 'libsql==0.1.11 --hash=sha256:74fde15d0cdc930da3b88a0cfcf9d7c9cafea945974d48d09394e574939f77b1' > /tmp/pcs1-libsql.txt
+          python -m pip install --only-binary=:all: --require-hashes -r /tmp/pcs1-libsql.txt
       - name: Start disposable loopback primary
         if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'lab/pcs')
         run: |
