@@ -20,6 +20,10 @@ from .replica_read import ReplicaReadBackend
 
 T = TypeVar("T")
 STAMP_SQL = "SELECT epoch_id, revision FROM amora_projection_epoch WHERE singleton=1"
+_STAMP_SQL_BY_SCOPE = {
+    "combined": STAMP_SQL,
+    "memory": "SELECT epoch_id, revision FROM amora_memory_projection_epoch WHERE singleton=1",
+}
 
 
 class ReplicaCoherenceError(sqlite3.OperationalError):
@@ -30,18 +34,22 @@ class ReplicaCoherenceError(sqlite3.OperationalError):
 class ProjectionStamp:
     epoch_id: str
     revision: int
+    scope: str = "combined"
 
     def __post_init__(self):
         if (not isinstance(self.epoch_id, str) or not self.epoch_id
-                or type(self.revision) is not int or self.revision < 0):
+                or type(self.revision) is not int or self.revision < 0
+                or self.scope not in _STAMP_SQL_BY_SCOPE):
             raise ReplicaCoherenceError("REPLICA_INVALID_STAMP")
 
 
-def read_projection_stamp(connection) -> ProjectionStamp:
-    rows = connection.execute(STAMP_SQL).fetchall()
+def read_projection_stamp(connection, scope: str = "combined") -> ProjectionStamp:
+    if scope not in _STAMP_SQL_BY_SCOPE:
+        raise ReplicaCoherenceError("REPLICA_INVALID_SCOPE")
+    rows = connection.execute(_STAMP_SQL_BY_SCOPE[scope]).fetchall()
     if len(rows) != 1:
         raise ReplicaCoherenceError("REPLICA_STAMP_MISSING")
-    return ProjectionStamp(rows[0]["epoch_id"], rows[0]["revision"])
+    return ProjectionStamp(rows[0]["epoch_id"], rows[0]["revision"], scope)
 
 
 @dataclass(frozen=True)
@@ -60,7 +68,11 @@ class VersionedReplicaReadGroup:
     This is an optimistic read snapshot, not a write transaction or privacy lease.
     """
 
-    def __init__(self, backend: ReplicaReadBackend, primary_stamp: Callable[[], ProjectionStamp]):
+    def __init__(self, backend: ReplicaReadBackend, primary_stamp: Callable[[], ProjectionStamp],
+                 *, scope: str = "combined"):
+        if scope not in _STAMP_SQL_BY_SCOPE:
+            raise ReplicaCoherenceError("REPLICA_INVALID_SCOPE")
+        self.scope = scope
         self.backend = backend
         self._primary_stamp = primary_stamp
         self._stamp: ProjectionStamp | None = None
@@ -77,7 +89,7 @@ class VersionedReplicaReadGroup:
 
     def _primary(self):
         stamp = self._primary_stamp()
-        if not isinstance(stamp, ProjectionStamp):
+        if not isinstance(stamp, ProjectionStamp) or stamp.scope != self.scope:
             raise ReplicaCoherenceError("REPLICA_INVALID_PRIMARY_STAMP")
         return stamp
 
@@ -98,7 +110,7 @@ class VersionedReplicaReadGroup:
                     self.backend._resume_all()
                 else:
                     self.backend.sync_all()
-                if any(read_projection_stamp(view) != start for view in members):
+                if any(read_projection_stamp(view, self.scope) != start for view in members):
                     raise ReplicaCoherenceError("REPLICA_REVISION_MISMATCH")
                 result = operation()
                 if inspect.isawaitable(result):
@@ -108,7 +120,7 @@ class VersionedReplicaReadGroup:
                 if tuple(self.backend.connections) != members or self._primary() != start:
                     raise ReplicaCoherenceError("REPLICA_CHANGED_DURING_READ")
                 # Check the local versions once more before releasing the value.
-                if any(read_projection_stamp(view) != start for view in members):
+                if any(read_projection_stamp(view, self.scope) != start for view in members):
                     raise ReplicaCoherenceError("REPLICA_CHANGED_DURING_READ")
                 self._stamp, self._members = start, members
                 self.backend._suspend_all()
