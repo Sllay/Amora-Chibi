@@ -21,7 +21,7 @@ import tempfile
 
 from .backend import backend_from_environment
 from .pcs4_recovery import (
-    compare_snapshots, destination_from_environment, verify_snapshot, _open,
+    compare_snapshots, destination_from_environment, verify_snapshot, _open, _row_hashes, _sha,
 )
 
 
@@ -138,9 +138,20 @@ def certify_restart(snapshot, backend):
             raise ValueError("PCS4C_RESTART_RANK_MISMATCH")
         if not any(expected["hit_counts"]):
             raise ValueError("PCS4C_RESTART_EMPTY_RECALL")
+        after = root / "after.db"
+        with closing(backend.connect(after)) as connection:
+            backend.backup(connection, after)
+        memory_tables = ("memory_records", "memory_entities", "memory_tags", "memory_fts")
+        with closing(_open(snapshot)) as original, closing(_open(after)) as restarted:
+            if any(_row_hashes(original, table) != _row_hashes(restarted, table)
+                   for table in memory_tables):
+                raise ValueError("PCS4C_RESTART_MEMORY_CHANGED")
+        if (_sha(snapshot) != verified["database_sha256"] or
+                _sha(Path(str(snapshot) + ".avatar.zip")) != verified["archive_sha256"]):
+            raise ValueError("PCS4C_SOURCE_CHANGED")
         return {"schema_version": verified["schema_version"], "equal_tables": equal_tables,
                 "tables": verified["tables"], "boots": 2, "query_count": 5,
-                "rank_equal": True, **{k: v for k, v in expected.items() if k != "fingerprints"}}
+                "rank_equal": True, "memory_tables_equal": len(memory_tables), **{k: v for k, v in expected.items() if k != "fingerprints"}}
 
 
 def main(argv=None):
@@ -163,7 +174,8 @@ def main(argv=None):
                   "runtime_projection_enabled": False}
         if type(exc) is ValueError and exc.args and exc.args[0] in {
             "PCS4C_RESTART_TABLES", "PCS4C_RESTART_RANK_MISMATCH",
-            "PCS4C_RESTART_EMPTY_RECALL", "PCS4C_DESTINATION_IS_SOURCE",
+            "PCS4C_RESTART_EMPTY_RECALL", "PCS4C_RESTART_MEMORY_CHANGED", "PCS4C_SOURCE_CHANGED",
+            "PCS4C_DESTINATION_IS_SOURCE",
             "PCS4C_DESTINATION_TOKEN_REUSED", "PCS4C_MISSING_CONFIG",
         }:
             report["reason"] = exc.args[0]
