@@ -20,6 +20,7 @@ class FakeNorthflank:
         self.calls = []
         self.report = None
         self.logs = None
+        self.expected_window = ("2026-11-15T00:58:00+00:00", "2026-11-15T01:03:00+00:00")
         self.fail_submission = False
 
     def __call__(self, request):
@@ -43,8 +44,7 @@ class FakeNorthflank:
             assert request.url.params["runId"] == "run-1"
             assert "textIncludes" not in request.url.params
             assert request.url.params["lineLimit"] == "100"
-            assert request.url.params["startTime"] == "2026-11-15T00:58:00+00:00"
-            assert request.url.params["endTime"] == "2026-11-15T01:03:00+00:00"
+            assert (request.url.params["startTime"], request.url.params["endTime"]) == self.expected_window
             rows = self.logs if self.logs is not None else ([{"log": "stdout F " + MARKER + json.dumps(self.report)}] if self.report else [])
             return httpx.Response(200, json={"data": rows})
         return httpx.Response(404)
@@ -135,8 +135,10 @@ def test_job_online_backup_reuses_audited_export_without_writer_reservation(back
 def test_real_northflank_log_format_recovers_existing_backup():
     """Reproduce the observed CRI line, including nanosecond timestamp."""
     fake = FakeNorthflank()
+    # Simulate provider timestamps rounded down to seconds at the run boundary.
     fake.runs = [{"id": "run-1", "status": "SUCCESS", "active": 0, "concluded": True,
-                  "startedAt": "2026-11-15T01:00:00Z", "concludedAt": "2026-11-15T01:01:00Z"}]
+                  "startedAt": "2026-11-15T14:32:51Z", "concludedAt": "2026-11-15T14:33:23Z"}]
+    fake.expected_window = ("2026-11-15T14:30:51+00:00", "2026-11-15T14:35:23+00:00")
     report = {"status": "ok", "running": None, "completed": ["backup"],
               "reports": {"backup": {"status": "ok", "rows": 48059, "schema_version": 18,
                                      "assets": 0, "tables": 51}}, "reason": None,
