@@ -15,8 +15,7 @@ import httpx
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
-from .pcs4_job import CONFIRMATIONS, MARKER
-from .pcs4_web import _STEPS, _REPORT_KEYS
+from .pcs4_contract import CONFIRMATIONS, MARKER, STEPS as _STEPS, REPORT_KEYS as _REPORT_KEYS
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
