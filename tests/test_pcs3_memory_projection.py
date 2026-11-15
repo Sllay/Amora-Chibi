@@ -53,7 +53,8 @@ def lab(tmp_path, monkeypatch):
         install_lab_epoch(core.database._conn)
         backend = ReplicaReadBackend(lambda _: NativeSnapshot(core.database.path))
         view = ReplicaMemoryReadView(Path("unused"), core.clock, core.identities, backend=backend)
-        group = VersionedReplicaReadGroup(backend, lambda: read_projection_stamp(core.database._conn))
+        group = VersionedReplicaReadGroup(backend, lambda: read_projection_stamp(core.database._conn, 'memory'),
+                                          scope='memory')
         projection = VerifiedMemoryRecall(core.memory.store, view, group)
         query = MemoryQuery(text="desenho aurora", entity_ids={"PERSON_BK"},
                             projection_recipient_id="PERSON_BK", projection_remote_only=True)
@@ -140,18 +141,18 @@ def test_pcs3b_access_only_writes_keep_semantic_snapshot_warm(lab):
     core, memory, projection, query = lab
     primary = core.memory.store
     native = projection.view._conn._connection
-    stamp = read_projection_stamp(core.database._conn)
+    stamp = read_projection_stamp(core.database._conn, 'memory')
     initial = primary.get(memory.id).access_count
     for offset in range(1, 5):
         hits = projection.recall(query)
         assert hits[0].memory.access_count == initial + offset
         assert primary.get(memory.id).access_count == initial + offset
         assert hits[0].memory.last_accessed_at == core.clock.now()
-        assert read_projection_stamp(core.database._conn) == stamp
+        assert read_projection_stamp(core.database._conn, 'memory') == stamp
     assert native.syncs == 1
     # Replica's access fields are stale, but are never returned as canonical.
     assert core.memory.forget_softly(memory.id, .9) is not None
-    assert read_projection_stamp(core.database._conn) != stamp
+    assert read_projection_stamp(core.database._conn, 'memory') != stamp
     hits = projection.recall(query)
     assert native.syncs == 2
     assert hits[0].memory.access_count == initial + 5
@@ -163,12 +164,33 @@ def test_pcs3b_independent_access_writer_is_reflected_without_resync(lab):
     primary = core.memory.store
     native = projection.view._conn._connection
     first = projection.recall(query)[0].memory.access_count
-    stamp = read_projection_stamp(core.database._conn)
+    stamp = read_projection_stamp(core.database._conn, 'memory')
     with sqlite3.connect(core.database.path) as writer:
         writer.execute("UPDATE memory_records SET access_count=access_count+7 WHERE id=?",
                        (str(memory.id),))
-    assert read_projection_stamp(core.database._conn) == stamp
+    assert read_projection_stamp(core.database._conn, 'memory') == stamp
     result = projection.recall(query)[0].memory
     assert result.access_count == first + 8
     assert result.access_count == primary.get(memory.id).access_count
     assert native.syncs == 1
+
+def test_pcs3c_conversation_writes_do_not_invalidate_memory(lab):
+    core, memory, projection, query = lab
+    primary = core.database._conn
+    memory_stamp = read_projection_stamp(primary, "memory")
+    combined_stamp = read_projection_stamp(primary)
+    native = projection.view._conn._connection
+    projection.recall(query)
+    req = request("O que acha do desenho aurora?", 999)
+    core.cognition.observe_input(req)
+    assert read_projection_stamp(primary) != combined_stamp
+    assert read_projection_stamp(primary, "memory") == memory_stamp
+    assert projection.recall(query)[0].memory.id == memory.id
+    assert native.syncs == 1
+    # Explicit invalidation must still bump the memory domain.
+    with primary:
+        primary.execute("UPDATE memory_records SET remote_processing_allowed=0 WHERE id=?",
+                        (str(memory.id),))
+    assert read_projection_stamp(primary, "memory") != memory_stamp
+    assert projection.recall(query) == []
+    assert native.syncs == 2
