@@ -26,6 +26,14 @@ def backup(remote, tmp_path, monkeypatch):
             content="Synthetic private recovery evidence", privacy_scope=PrivacyScope.PRIVATE,
             owner_entity_id="PERSON_BK",
         )).memory
+        assert core.memory.remember(important_candidate(
+            content="Synthetic public project evidence", privacy_scope=PrivacyScope.PUBLIC,
+            remote_processing_allowed=True,
+        )).memory
+        archived = core.memory.remember(important_candidate(
+            content="Synthetic archived recovery evidence", privacy_scope=PrivacyScope.PUBLIC,
+        )).memory
+        assert archived and core.memory.archive(archived.id)
         core.avatar.store.put_asset("pcs4c-asset", "image/png", b"fixture")
         path = core.create_backup("pcs4c.db")
     finally:

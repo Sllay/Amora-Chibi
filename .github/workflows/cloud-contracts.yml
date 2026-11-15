@@ -31,4 +31,5 @@ jobs:
             tests/test_platform_messaging_remote.py \
             tests/test_storage.py \
             tests/test_conversation_runtime_v15.py \
-            tests/test_pcs4_recovery.py
+            tests/test_pcs4_recovery.py \
+            tests/test_pcs4_restart.py
