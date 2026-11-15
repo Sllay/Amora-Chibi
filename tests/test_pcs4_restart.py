@@ -36,6 +36,8 @@ def test_restored_core_reopens_and_ranks_exactly(backup, tmp_path, monkeypatch):
     assert report["boots"] == 2 and report["query_count"] == 5
     assert report["private_hits"] > 0
     assert report["nonremote_hits"] > 0
+    assert report["public_hits"] > 0
+    assert report["archived_hits"] > 0
     assert "fingerprints" not in report
     assert not server.streams
 
