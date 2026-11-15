@@ -119,6 +119,10 @@ def test_job_online_backup_reuses_audited_export_without_writer_reservation(back
     commands = [sql.strip().upper() for sql in server.calls[begin:]]
     assert "BEGIN" in commands and "ROLLBACK" in commands
     assert "BEGIN IMMEDIATE" not in commands
-    assert all(sql.startswith("SELECT ") or sql in {"BEGIN", "ROLLBACK"} for sql in commands)
+    # Hrana initializes each stream with a connection-local foreign-key setting.
+    # This does not write database contents or reserve a writer.
+    allowed = {"BEGIN", "ROLLBACK", "PRAGMA FOREIGN_KEYS=ON"}
+    unexpected = [sql for sql in commands if not sql.startswith("SELECT ") and sql not in allowed]
+    assert not unexpected, unexpected
     assert run(panel, "verify")["completed"] == ["backup", "verify"]
     assert not server.streams
