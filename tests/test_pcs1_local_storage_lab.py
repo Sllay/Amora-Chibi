@@ -103,7 +103,7 @@ async def test_pcs1_same_snapshot_context_payload_and_turn_latency(tmp_path, mon
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / "local"))
     AmoraDatabase.restore_backup(snapshot, RuntimePaths.from_environment().database)
     prompts = (
-        "Amora, lembra do desenho aurora?",
+        "Amora, o que você acha do desenho aurora?",
         "Minha amiga falou com a sua mãe. Quem falou com quem?",
         "O que você acha da programação do projeto aurora?",
     )
