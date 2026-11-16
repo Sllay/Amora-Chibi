@@ -27,6 +27,7 @@ CONFIRMATIONS.update({
 SCHEMA19_REPORT_KEYS = REPORT_KEYS | frozenset({
     "source_schema_version", "old_tables", "preserved_tables", "new_tables",
     "migration_history_preserved", "episode_work_tables_equal", "relationship_sequence_delta",
+    "baseline_rows", "historical_rows", "historical_memory_tables_equal",
 })
 
 SCHEMA19_ERROR_CODES = frozenset({
