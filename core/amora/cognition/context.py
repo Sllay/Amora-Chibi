@@ -365,6 +365,7 @@ class ContextCompiler:
                                "source": message.source.value, "status": message.status.value,
                                "observed_at": observed_at.isoformat() if observed_at else None,
                                "timestamp_source": timestamp_source})
+        timeline_recent = recent
         recent = recent[-48:]
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
@@ -402,7 +403,7 @@ class ContextCompiler:
 
         now = self.clock.now()
         temporal = time_projection(now, speaker_id=request.speaker_id, session_id=request.session_id,
-                                   recent=recent, current_sent_at=request.metadata.get("platform_sent_at")
+                                   recent=timeline_recent, current_sent_at=request.metadata.get("platform_sent_at")
                                    if request.metadata.get("surface") == "platform_messaging" else None)
         context = CognitiveContext(
             turn_id=request.turn_id, created_at=now, speaker_id=request.speaker_id, expression_profile=profile,
