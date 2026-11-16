@@ -108,7 +108,7 @@ def read_anchor(conn, *, exclude_pending_id=None, now=None):
     source = conn.execute(
         """SELECT * FROM conversation_messages WHERE dedupe_key=? AND turn_id=?
            AND session_id=? AND speaker_id=? AND addressee_id='ENTITY_AMORA'
-           AND status='received' AND privacy_scope='personal' AND remote_processing_allowed=1""",
+           AND status='received' AND privacy_scope='PERSONAL' AND remote_processing_allowed=1""",
         ("cognitive-input:" + turn_id, turn_id, session, OWNER),
     ).fetchone()
     if source is None:
