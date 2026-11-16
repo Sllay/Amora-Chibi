@@ -551,6 +551,12 @@ class CognitiveEngine(ProductionCognitiveEngine):
         usage: dict[str, Any],
         context: CognitiveContext | None = None,
     ) -> CognitiveResponsePlan:
+        if context is not None and context.temporal_opportunity and "TEMPORAL_SILENCE_CHOSEN" in validated.reason_codes:
+            await self._journal_async(request, JournalStage.TURN_FINISHED,
+                summary="temporal initiative chose silence", reason_codes=reason_codes,
+                provider=provider, model=model, dedupe_key=f"journal:temporal-silence:{request.turn_id}")
+            return CognitiveResponsePlan(turn_id=request.turn_id, display_text="", speech_text="",
+                                         provider=provider, model=model, reason_codes=reason_codes)
         # Check the complete realization before segments, journals or self
         # choices can persist a rejected group response.
         if (request.metadata.get("surface") == "platform_messaging"
