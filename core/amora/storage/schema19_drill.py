@@ -97,3 +97,59 @@ def prepare_schema19_copy(source: Path, output_directory: Path) -> tuple[Path, d
     except BaseException:
         shutil.rmtree(output_directory)
         raise
+
+
+def main(argv=None):
+    """Explicit operator path, separate from the certified PCS.4C v18 panel."""
+    import argparse
+    import json
+
+    from .pcs4_recovery import certify_restore, destination_from_environment
+    from .pcs4_restart import certify_restart
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="action", required=True)
+    prepare = commands.add_parser("prepare")
+    prepare.add_argument("snapshot", type=Path)
+    prepare.add_argument("output_directory", type=Path)
+    verify = commands.add_parser("verify")
+    verify.add_argument("snapshot", type=Path)
+    for action in ("restore", "restart"):
+        command = commands.add_parser(action)
+        command.add_argument("snapshot", type=Path)
+        command.add_argument("--isolated-destination", action="store_true", required=True)
+    args = parser.parse_args(argv)
+    try:
+        if args.action == "prepare":
+            _, report = prepare_schema19_copy(args.snapshot, args.output_directory)
+        elif args.action == "verify":
+            report = verify_snapshot(args.snapshot, expected_schema=19)
+        elif args.action == "restore":
+            report = certify_restore(args.snapshot, destination_from_environment(), expected_schema=19)
+        else:
+            report = certify_restart(args.snapshot, destination_from_environment(), expected_schema=19)
+        # Keep hashes in the private snapshot verification routines, not logs.
+        report = {key: value for key, value in report.items()
+                  if key not in {"database_sha256", "archive_sha256"}}
+        report.update(status="ok", action=args.action, runtime_schema=18)
+    except Exception as exc:
+        report = {"status": "error", "action": args.action, "exception_type": type(exc).__name__,
+                  "runtime_schema": 18}
+        reason = str(exc)
+        if type(exc) is ValueError and reason in {
+            "SCHEMA19_ADDITIVE_MISMATCH", "SCHEMA19_DDL_MISMATCH", "SCHEMA19_DATA_MISMATCH",
+            "SCHEMA19_HISTORY_MISMATCH", "SCHEMA19_NEW_TABLE_NOT_EMPTY", "SCHEMA19_SOURCE_CHANGED",
+            "SCHEMA19_FOREIGN_KEYS", "PCS4C_SCHEMA", "PCS4C_INTEGRITY", "PCS4C_FOREIGN_KEYS",
+            "PCS4C_ASSET_MANIFEST", "PCS4C_ASSET_MEMBERS", "PCS4C_ASSET_SIZE", "PCS4C_ASSET_HASH",
+            "PCS4C_SQL_ASSET_HASH", "PCS4C_DESTINATION_IS_SOURCE", "PCS4C_DESTINATION_TOKEN_REUSED",
+            "PCS4C_MISSING_CONFIG", "PCS4C_SCHEMA_MISMATCH", "PCS4C_DATA_MISMATCH",
+            "PCS4C_RESTART_TABLES", "PCS4C_RESTART_RANK_MISMATCH", "PCS4C_RESTART_EMPTY_RECALL",
+            "PCS4C_RESTART_MEMORY_CHANGED", "PCS4C_RESTART_EPISODE_WORK_CHANGED", "PCS4C_SOURCE_CHANGED",
+        }:
+            report["reason"] = reason
+    print("SCHEMA19_DRILL " + json.dumps(report, separators=(",", ":")))
+    return 0 if report["status"] == "ok" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
