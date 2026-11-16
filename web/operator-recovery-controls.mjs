@@ -237,6 +237,7 @@ function installPCS4Recovery(operatorApi) {
       <button type="button" data-pcs4="backup" disabled>Criar backup</button>
       <button type="button" data-pcs4="verify" disabled>Verificar backup</button>
       <button type="button" data-pcs4="restore" disabled>Restaurar banco de teste</button>
+      <button type="button" data-pcs4="review_restore" disabled>Revisar restauração interrompida</button>
       <button type="button" data-pcs4="restart" disabled>Certificar reinicialização</button>
       <button type="button" id="pcs4RecoveryCopy" class="ghost" disabled>Copiar resultados</button>
     </div>
@@ -247,7 +248,7 @@ function installPCS4Recovery(operatorApi) {
   const report = card.querySelector('#pcs4RecoveryReport');
   const copy = card.querySelector('#pcs4RecoveryCopy');
   const buttons = [...card.querySelectorAll('[data-pcs4]')];
-  const confirms = {backup:'SNAPSHOT CONSISTENTE', verify:'VOLUME PRIVADO', restore:'DESTINO VAZIO E INDEPENDENTE', restart:'DESTINO ISOLADO'};
+  const confirms = {backup:'SNAPSHOT CONSISTENTE', verify:'VOLUME PRIVADO', restore:'DESTINO VAZIO E INDEPENDENTE', restart:'DESTINO ISOLADO', review_restore:'REVISAR DESTINO ISOLADO'};
   const labels = {idle:'Pronto', ok:'Etapa concluída', running:'Executando', disabled:'Não configurado', blocked:'Bloqueado', error:'Falha'};
   let busy = false;
   let reading = false;
