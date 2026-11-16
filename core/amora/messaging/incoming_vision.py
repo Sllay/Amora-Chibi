@@ -199,9 +199,10 @@ class GroqIncomingImageVision:
         ).as_context()
 
 
-def unavailable_visual_observation() -> dict:
+def unavailable_visual_observation(reason: str = "") -> dict:
     return IncomingVisualObservation(
-        status="unavailable", source="core_unavailable"
+        status="unavailable", source="core_unavailable",
+        failure_reason=reason,
     ).as_context()
 
 
