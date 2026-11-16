@@ -71,6 +71,13 @@ hashes, texto ou tokens. O Core usa o histórico do Job e seu marcador de
 relatório sanitizado, nunca expõe logs brutos. Status SUCCESS sem relatório
 válido não libera a próxima etapa. Se logs demorarem, atualize o Console.
 Falha/interrupção exige revisão; não apague state.json nem repita restore.
+
+### Restore interrompido (PCS.4C-R4)
+Atualize o **mesmo Job** e o Core existente para a imagem integrada, preservando todas as configurações e o volume. Confirme que não há execução ativa e que o banco Turso de teste configurado é o mesmo destino independente, sem outros escritores. No Console, escolha **Revisar restauração interrompida** e confirme `REVISAR DESTINO ISOLADO`. A ação só aceita estado durável com backup e verify concluídos; revalida ambos os hashes e consulta o destino em transações de leitura. Não importa, exclui ou altera dados do banco.
+- `empty`: libera um Restore explícito com a mesma cópia. O importador revalida que o destino está vazio dentro da transação.
+- `exact`: reexporta e compara schema e todas as linhas lógicas; registra Restore concluído, libera restart.
+- Divergência, backup alterado, destino trocado ou falha de transporte: mantém o estado anterior e não libera Restore. Não apague nem troque o destino automaticamente. Uma nova base após divergência requer procedimento separado e revisado.
+A revisão não certifica que a origem atual permaneceu idêntica ao snapshot; a cópia é point-in-time. Os novos Restores emitem `PCS4C_RESTORE_PROGRESS` com contagens e fase, sem conteúdo pessoal. O relatório final continua obrigatório.
 O lock e estado no volume são autoridade e sobrevivem a restart do Core.
 Se a submissão API tiver resultado ambíguo, bloqueia novas submissões na
 instância atual; confira os runs no dashboard antes de reiniciar Core.
