@@ -140,7 +140,7 @@ def test_screen_and_image_evidence_are_not_user_assertions():
     assert event.payload["evidence_kind"] == "inferred"
     assert event.source == "perception:screen"
     with pytest.raises(ValueError, match="screen stream"):
-        build_observation_event(ctx, observation())
+        build_observation_event(context(source=ObservationSource.SCREEN), observation())
     with pytest.raises(ValidationError):
         observation(modality=SensoryModality.IMAGE)
     image = observation(modality=SensoryModality.IMAGE, evidence_kind=EvidenceKind.OBSERVED)
