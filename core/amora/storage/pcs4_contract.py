@@ -28,3 +28,10 @@ SCHEMA19_REPORT_KEYS = REPORT_KEYS | frozenset({
     "source_schema_version", "old_tables", "preserved_tables", "new_tables",
     "migration_history_preserved", "episode_work_tables_equal",
 })
+
+SCHEMA19_ERROR_CODES = frozenset({
+    "SCHEMA19_V18_NOT_CERTIFIED", "SCHEMA19_V18_DESTINATION_CHANGED",
+    "SCHEMA19_DESTINATION_NOT_INDEPENDENT", "SCHEMA19_PIN_CHANGED",
+    "SCHEMA19_CANDIDATE_CHANGED", "SCHEMA19_STEP_BLOCKED",
+    "SCHEMA19_CONFIGURATION_REQUIRED", "SCHEMA19_REVIEW_REQUIRED",
+})
