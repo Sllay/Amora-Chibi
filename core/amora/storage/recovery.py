@@ -56,8 +56,11 @@ def restore_empty_remote(backend, snapshot: Path, *, target_schema=LATEST_SCHEMA
         ):
             raise ValueError("source snapshot integrity failed")
         source_version = source.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
-        if target_schema == 19 and source_version != 19:
-            raise ValueError("PCS4C_SCHEMA")
+        if target_schema == 19:
+            if source_version != 19:
+                raise ValueError("PCS4C_SCHEMA")
+            from .sensory_episode_schema import verify_candidate_ddl
+            verify_candidate_ddl(source)
         if target_schema == LATEST_SCHEMA_VERSION and source_version == 19:
             raise ValueError("PCS4C_SCHEMA")
         schema = source.execute(
