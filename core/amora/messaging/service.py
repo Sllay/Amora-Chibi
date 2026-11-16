@@ -377,6 +377,7 @@ class PlatformMessagingService:
                 "channel_type": message.channel_type.value,
                 "conversation_ref": self._conversation_ref(message),
                 "platform_message_id_hash": self._hash(message.message_id),
+                "platform_sent_at": message.timestamp.isoformat(),
                 "native_message_id_hash": self._hash(message.native_source_message_id),
                 "transport_revision": message.transport_revision,
                 "social_attention_score": decision.score,
