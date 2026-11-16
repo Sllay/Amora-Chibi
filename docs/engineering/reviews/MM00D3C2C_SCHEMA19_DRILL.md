@@ -17,7 +17,7 @@ A versão 19 é preparada offline primeiro. Alterar LATEST_SCHEMA_VERSION agora 
 - `86fad9dc` / `a7eeda19` / `0e455813`: validação do DDL candidato exato, rejeita snapshot falsamente rotulado ou com tabela/índice faltante.
 - `d9e388fc` / `9ccf7ef2`: testes de upgrade/restore, dados/manifest/asset, rollback, colisão de diretório, v19 opt-in, novo destino não vazio, boot/rank e estado de jobs, retomada de lease e CLI sanitizada. CI aprovado no HEAD `e8e9b0c2321d1dfb05fa9e54212a7ac4d1e8c345` (4 workflows/8 jobs); merge `59c3b4bef582592bfc90a8d72b6af02fd7fbff6b`.
 
-## Runbook C.2C.2 — execução ainda não autorizada
+## Runbook de restore em destino novo — alternativa histórica de laboratório
 Usar imagem de validação que contenha este checkpoint **e o backup v18 original** (DB + .avatar.zip), preservado no volume privado do Job. Não usar caminho de banco ativo. Criar um diretório de saída novo e um **novo destino Turso independente e vazio**, diferente tanto da origem quanto do destino do drill PCS.4C anterior. Credenciais via secrets; sem registrar URL/token. Verificar o commit da imagem, confirmar exclusividade de acesso ao destino, sem outros writers.
 
 ```sh
@@ -32,4 +32,4 @@ Limite: o Core atual ainda exige schema 18 em readiness. Os boots do drill verif
 
 
 ## Atualização de operador
-O caminho preferido C.2C.2 será o Console Dev e o mesmo Job, sem shell: [runbook e evidência](MM00D3C2C2_OPERATOR_DRILL.md). Integração implementada, CI pendente. O CLI acima permanece alternativa de laboratório; não executar ambos em paralelo. C.2C.3 permanece bloqueado pelo gate real.
+O caminho vigente C.2C.2 é a migração aditiva do destino de teste PCS.4C existente via Console Dev e mesmo Job, sem novo banco ou secrets: [runbook e evidência](MM00D3C2C2_OPERATOR_DRILL.md). A revisão para reuso está implementada, novo CI pendente. O CLI acima permanece alternativa de laboratório em outro destino vazio; NÃO usar no destino PCS.4C existente. C.2C.3 permanece bloqueado pelo gate real.
