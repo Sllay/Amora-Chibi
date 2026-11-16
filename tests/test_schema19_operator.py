@@ -55,14 +55,6 @@ def test_full_operator_drill_preserves_old_state_and_both_databases(operator, mo
     previous = panel.state_path.read_bytes()
     old_report = recovery.verify_snapshot(panel.snapshot)
     source_calls = len(source_server.calls)
-    with pytest.raises(ValueError, match="STEP_BLOCKED"):
-        action(panel, target, "schema19_migrate")
-    prepared = action(panel, target, "schema19_prepare")
-    assert _safe_report(prepared)["next"] == "schema19_migrate"
-    assert prepared["schema19"]["reports"]["schema19_prepare"]["tables"] == old_report["tables"] + 3
-    restored = action(panel, target, "schema19_migrate")
-    migration_calls = list(server.calls)
-    assert _safe_report(restored)["next"] == "schema19_restart"
     boots = []
 
     def boot(home, timestamp, backend=None):
@@ -74,6 +66,20 @@ def test_full_operator_drill_preserves_old_state_and_both_databases(operator, mo
             return restart._boot(backend or SQLiteBackend(), timestamp)
 
     monkeypatch.setattr(restart, "_run_boot", boot)
+    # Replicate the already completed PCS.4C restart, not just an empty restore.
+    prior = restart.certify_restart(panel.snapshot, target, expected_schema=18)
+    assert prior["rank_equal"] is True
+    assert boots == [False, True, True]
+    boots.clear()
+    server.calls.clear()
+    with pytest.raises(ValueError, match="STEP_BLOCKED"):
+        action(panel, target, "schema19_migrate")
+    prepared = action(panel, target, "schema19_prepare")
+    assert _safe_report(prepared)["next"] == "schema19_migrate"
+    assert prepared["schema19"]["reports"]["schema19_prepare"]["tables"] == old_report["tables"] + 3
+    restored = action(panel, target, "schema19_migrate")
+    migration_calls = list(server.calls)
+    assert _safe_report(restored)["next"] == "schema19_restart"
     certified = action(panel, target, "schema19_restart")
     safe = _safe_report(certified)
     assert safe["next"] is None
