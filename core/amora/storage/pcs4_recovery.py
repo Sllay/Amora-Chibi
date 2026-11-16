@@ -64,6 +64,9 @@ def verify_snapshot(snapshot, *, expected_schema=LATEST_SCHEMA_VERSION):
         version = db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
         if version != expected_schema:
             raise ValueError("PCS4C_SCHEMA")
+        if expected_schema == 19:
+            from .sensory_episode_schema import verify_candidate_ddl
+            verify_candidate_ddl(db)
         assets = [
             dict(zip(("id", "file_name", "size_bytes", "sha256"), row))
             for row in db.execute("SELECT id,file_name,size_bytes,sha256 FROM avatar_assets")
