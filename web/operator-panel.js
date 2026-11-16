@@ -1,10 +1,30 @@
 import { OperatorState } from "./operator-state.mjs?v=20261115-1";
-import { installAgenda } from "./agenda.mjs?v=20261116-1";
 
 const $ = (id) => document.getElementById(id);
 const operatorState = new OperatorState(globalThis.localStorage);
 
-const agendaUI = installAgenda({ operatorApi: (...args) => operatorApi(...args), humanError: (error) => humanError(error) });
+let agendaUI = null;
+let agendaLoading = null;
+
+// An optional administrative surface must never prevent Chat, Pessoas or Console from loading.
+function getAgendaUI() {
+  if (agendaUI) return Promise.resolve(agendaUI);
+  if (!agendaLoading) {
+    agendaLoading = import("./agenda.mjs?v=20261116-2")
+      .then(({ installAgenda }) => {
+        agendaUI = installAgenda({
+          operatorApi: (...args) => operatorApi(...args),
+          humanError: (error) => humanError(error),
+        });
+        return agendaUI;
+      })
+      .catch((error) => {
+        agendaLoading = null;
+        throw error;
+      });
+  }
+  return agendaLoading;
+}
 
 const RELATION_LABELS = {
   father_of: "pai de",
@@ -109,19 +129,25 @@ async function showSurface(surface) {
     });
   }
   if (surface === "agendaView" && hasOperator) {
-    await agendaUI.refresh().catch((error) => {
+    try {
+      const ui = await getAgendaUI();
+      if (state.surface !== surface) return;
+      await ui.refresh();
+    } catch (error) {
       if (error.status === 401) return showSurface("agendaView");
-      $("agendaNotice").textContent = humanError(error);
-    });
+      $("agendaNotice").textContent = "Não foi possível carregar a Agenda: " + humanError(error);
+    }
   }
   if (surface === "consoleView" && hasOperator) {
     await loadConsole().catch((error) => {
       if (error.status === 401) return showSurface("consoleView");
       $("consoleSummary").textContent = humanError(error);
     });
-    state.consoleTimer = setInterval(() => {
-      if (state.surface === "consoleView" && operatorState.get()) loadConsole().catch(() => {});
-    }, 10000);
+    if (state.surface === surface && operatorState.get()) {
+      state.consoleTimer = setInterval(() => {
+        if (state.surface === "consoleView" && operatorState.get()) loadConsole().catch(() => {});
+      }, 10000);
+    }
   }
 }
 

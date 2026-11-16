@@ -1,4 +1,4 @@
-"""Agenda tab for the already authenticated operator console."""
+// Agenda tab for the authenticated operator console.
 export function installAgenda({ operatorApi, humanError }) {
   const $ = (id) => document.getElementById(id);
   const list = $("agendaList");
