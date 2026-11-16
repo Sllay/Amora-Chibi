@@ -7,6 +7,7 @@ anchor/phase; uncertain generation is never automatically replayed.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -55,7 +56,7 @@ def _json(row, key):
     return value if isinstance(value, dict) else {}
 
 
-def read_anchor(conn, *, exclude_pending_id=None):
+def read_anchor(conn, *, exclude_pending_id=None, now=None):
     """Read one latest verified owner DM; do not select an older eligible DM.
 
     Called under the canonical database lock, also inside the claim
@@ -67,6 +68,9 @@ def read_anchor(conn, *, exclude_pending_id=None):
            ORDER BY julianday(timestamp) DESC,id DESC LIMIT 1""", (OWNER,),
     ).fetchone()
     if audit is None or not audit["responded"] or audit["routing_action"] != "respond":
+        return None
+    user_at = aware_time(audit["timestamp"])
+    if user_at is None or (now is not None and not 120 <= (now - user_at).total_seconds() <= 7 * 86400):
         return None
     account, conversation = audit["account_scope"], audit["conversation_id"]
     latest = conn.execute(
@@ -128,10 +132,10 @@ def read_anchor(conn, *, exclude_pending_id=None):
     # them with a stale DM. Compare recorded receipt, not a user-supplied date.
     if conn.execute(
         """SELECT 1 FROM conversation_messages WHERE speaker_id=? AND status='received'
-           AND started_at>? AND COALESCE(session_id,'')<>?
+           AND julianday(started_at)>julianday(?) AND COALESCE(dedupe_key,'')<>?
            AND COALESCE(json_extract(metadata_json,'$.test_mode'),0)=0
            AND COALESCE(json_extract(metadata_json,'$.cognitive_mode'),'reply')<>'autonomous_initiation'
-           LIMIT 1""", (OWNER, source["started_at"], session),
+           LIMIT 1""", (OWNER, source["started_at"], "cognitive-input:" + turn_id),
     ).fetchone() is not None:
         return None
     reply = conn.execute(
@@ -139,7 +143,8 @@ def read_anchor(conn, *, exclude_pending_id=None):
            AND account_scope=? AND conversation_id=? AND target_entity_id=? AND status='sent'""",
         (outbound_id, account, conversation, OWNER),
     ).fetchone()
-    if reply is None or not reply["text"].strip() or not reply["source_message_id"]:
+    if (reply is None or not reply["text"].strip() or not reply["source_message_id"]
+            or hashlib.sha256(reply["source_message_id"].encode()).hexdigest()[:20] != native_hash):
         return None
     reply_meta = _json(reply, "metadata_json")
     if (reply_meta.get("fallback_used") or reply_meta.get("memory_disclosure")
@@ -187,7 +192,7 @@ class TemporalInitiative:
 
     def start(self):
         if initiative_enabled():
-            self.core.scheduler.schedule_idle_interval(JOB_ID, 30, self._schedule)
+            self.core.scheduler.schedule_idle_interval(JOB_ID, 60, self._schedule)
 
     def _schedule(self):
         if self.task is None or self.task.done():
@@ -219,7 +224,14 @@ class TemporalInitiative:
         db = self.core.database
         now = self.core.clock.now()
         with trace_lock(db._lock):
-            anchor = read_anchor(db._conn)
+            if not 8 <= now.astimezone(conversation_zone()).hour < 22:
+                return None
+            if db._conn.execute(
+                "SELECT 1 FROM events WHERE event_type=? AND target=? AND timestamp>=? LIMIT 1",
+                (ATTEMPT_TYPE, OWNER, (now - timedelta(hours=1)).isoformat()),
+            ).fetchone():
+                return None
+            anchor = read_anchor(db._conn, now=now)
             if anchor is None:
                 return None
             opportunity = opportunity_state(now, anchor.user_at, anchor.reply_at, anchor.reply_text)
@@ -230,11 +242,6 @@ class TemporalInitiative:
             key = f"amora:temporal-initiative:v1:{anchor.audit_id}:{phase}"
             event_id = uuid5(NAMESPACE_URL, key)
             if db._conn.execute("SELECT 1 FROM events WHERE dedupe_key=?", (key,)).fetchone():
-                return None
-            if db._conn.execute(
-                """SELECT 1 FROM events WHERE event_type=? AND target=? AND timestamp>=? LIMIT 1""",
-                (ATTEMPT_TYPE, OWNER, (now - timedelta(hours=1)).isoformat()),
-            ).fetchone():
                 return None
         if not db.append_event(AmoraEvent(
             id=event_id, event_type=ATTEMPT_TYPE, timestamp=now, source="conversation_temporal_core",
