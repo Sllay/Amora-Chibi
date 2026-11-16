@@ -56,7 +56,15 @@ def _safe_report(raw):
     completed = raw.get("completed")
     if not isinstance(completed, list) or completed != list(_STEPS[:len(completed)]) or not completed:
         raise ValueError("invalid progression")
-    if raw.get("action") != completed[-1] or raw.get("running") is not None:
+    action = raw.get("action")
+    outcome = raw.get("review_outcome")
+    if action == "review_restore":
+        if (outcome, completed) not in (("empty", ["backup", "verify"]),
+                                         ("exact", ["backup", "verify", "restore"])):
+            raise ValueError("invalid review outcome")
+    elif action != completed[-1] or outcome is not None:
+        raise ValueError("invalid action")
+    if raw.get("running") is not None:
         raise ValueError("invalid action")
     reports = {}
     for step in completed:
@@ -83,8 +91,11 @@ def _safe_report(raw):
                                   or "hit_counts" not in filtered or not any(filtered["hit_counts"])):
             raise ValueError("restart mismatch")
         reports[step] = filtered
-    return {"status": "ok", "completed": completed, "reports": reports,
-            "next": _STEPS[len(completed)] if len(completed) < len(_STEPS) else None}
+    state = {"status": "ok", "completed": completed, "reports": reports,
+             "next": _STEPS[len(completed)] if len(completed) < len(_STEPS) else None}
+    if action == "review_restore":
+        state["review_outcome"] = outcome
+    return state
 
 
 def _state(status, *, reason=None, next_step=None):
@@ -145,7 +156,7 @@ class NorthflankRecovery:
             raise HTTPException(503, "RECOVERY_JOB_STATUS_INVALID")
         detail = self._request("GET", "/runs/" + quote(run_id, safe=""))
         if detail.get("status") != "SUCCESS" or detail.get("concluded") is not True:
-            return _state("error", reason="JOB_FAILED_REVIEW_REQUIRED")
+            return _state("error", reason="JOB_FAILED_REVIEW_REQUIRED", next_step="review_restore")
         if not detail.get("startedAt") or not detail.get("concludedAt"):
             return _state("blocked", reason="JOB_REPORT_UNAVAILABLE")
         try:

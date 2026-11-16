@@ -237,6 +237,7 @@ function installPCS4Recovery(operatorApi) {
       <button type="button" data-pcs4="backup" disabled>Criar backup</button>
       <button type="button" data-pcs4="verify" disabled>Verificar backup</button>
       <button type="button" data-pcs4="restore" disabled>Restaurar banco de teste</button>
+      <button type="button" data-pcs4="review_restore" disabled>Revisar restauração interrompida</button>
       <button type="button" data-pcs4="restart" disabled>Certificar reinicialização</button>
       <button type="button" id="pcs4RecoveryCopy" class="ghost" disabled>Copiar resultados</button>
     </div>
@@ -247,7 +248,7 @@ function installPCS4Recovery(operatorApi) {
   const report = card.querySelector('#pcs4RecoveryReport');
   const copy = card.querySelector('#pcs4RecoveryCopy');
   const buttons = [...card.querySelectorAll('[data-pcs4]')];
-  const confirms = {backup:'SNAPSHOT CONSISTENTE', verify:'VOLUME PRIVADO', restore:'DESTINO VAZIO E INDEPENDENTE', restart:'DESTINO ISOLADO'};
+  const confirms = {backup:'SNAPSHOT CONSISTENTE', verify:'VOLUME PRIVADO', restore:'DESTINO VAZIO E INDEPENDENTE', restart:'DESTINO ISOLADO', review_restore:'REVISAR DESTINO ISOLADO'};
   const labels = {idle:'Pronto', ok:'Etapa concluída', running:'Executando', disabled:'Não configurado', blocked:'Bloqueado', error:'Falha'};
   let busy = false;
   let reading = false;
@@ -257,6 +258,8 @@ function installPCS4Recovery(operatorApi) {
     detail.textContent = state.status === 'disabled'
       ? 'Configure um Job dedicado e o token de API no Northflank. Não é necessário outro serviço web.'
       : state.status === 'running' ? 'O Job está executando. Pode fechar a página; consulte novamente depois.'
+      : state.review_outcome === 'empty' ? 'Destino vazio verificado. Pode restaurar o backup existente.'
+      : state.review_outcome === 'exact' ? 'Destino idêntico ao backup. Pode certificar a reinicialização.'
       : state.reason || (state.next ? 'Próxima etapa: ' + state.next : 'Certificação concluída.');
     buttons.forEach(button => { button.disabled = busy || state.next !== button.dataset.pcs4; });
     latest = state.reports || {};
@@ -274,7 +277,8 @@ function installPCS4Recovery(operatorApi) {
   }
   buttons.forEach(button => button.addEventListener('click', async () => {
     const action = button.dataset.pcs4;
-    const confirmation = window.prompt('Confirme esta etapa digitando: ' + confirms[action]);
+    const explanation = action === 'review_restore' ? 'Confirme no Turso que o destino configurado é o mesmo banco de teste independente, sem outros escritores. A revisão só lê o destino; não apaga nem importa dados.\n\n' : '';
+    const confirmation = window.prompt(explanation + 'Confirme esta etapa digitando: ' + confirms[action]);
     if (confirmation !== confirms[action]) return;
     busy = true;
     buttons.forEach(item => { item.disabled = true; });

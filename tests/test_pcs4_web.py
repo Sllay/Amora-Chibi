@@ -126,3 +126,79 @@ def test_unauthorized_token_and_parallel_action(remote, tmp_path):
     finally:
         import os
         os.close(fd)
+
+
+@pytest.mark.parametrize("outcome", ["empty", "exact", "mismatch"])
+def test_review_interrupted_restore_is_read_only_and_preserves_backup(
+    backup, remote, tmp_path, outcome
+):
+    from amora.storage.pcs4_job import run
+    from amora.storage.recovery import restore_empty_remote
+    from amora.storage.pcs4_recovery import verify_snapshot
+
+    source, source_server = remote
+    target_server = HranaSQLite(tmp_path / "review-target.db")
+    target = LibSQLBackend("https://restore.example", "target-only",
+                           transport=httpx.MockTransport(target_server))
+    panel = web.RecoveryPanel(tmp_path / "review-private", source, lambda: target,
+                              online_snapshot=True)
+    assert run(panel, "backup")["status"] == "ok"
+    assert run(panel, "verify")["status"] == "ok"
+    before = verify_snapshot(panel.snapshot)
+    state = panel._read()
+    reports = json.loads(json.dumps(state["reports"]))
+    # Reproduce process death before the final report or state update.
+    state.update(status="running", running="restore")
+    panel._write(state)
+    if outcome in ("exact", "mismatch"):
+        restore_empty_remote(target, panel.snapshot)
+    if outcome == "mismatch":
+        import sqlite3
+        with sqlite3.connect(target_server.path) as db:
+            db.execute("CREATE TABLE unexpected (id INTEGER)")
+    start = len(target_server.calls)
+    source_start = len(source_server.calls)
+    if outcome == "mismatch":
+        with pytest.raises(ValueError, match="PCS4C_SCHEMA_MISMATCH"):
+            run(panel, "review_restore")
+        assert panel._read() == state
+    else:
+        result = run(panel, "review_restore")
+        assert result["review_outcome"] == outcome
+        assert result["next"] == ("restore" if outcome == "empty" else "restart")
+        assert result["reports"]["backup"] == reports["backup"]
+        assert result["reports"]["verify"] == reports["verify"]
+        assert panel._read()["restore_review"]["previous_status"] == "running"
+        if outcome == "exact":
+            assert result["reports"]["restore"]["equal_tables"] == before["tables"]
+    commands = [sql.strip().upper() for sql in target_server.calls[start:]]
+    assert all(sql.startswith("SELECT ") or sql in
+               {"BEGIN", "ROLLBACK", "PRAGMA FOREIGN_KEYS=ON"} for sql in commands)
+    if outcome == "empty":
+        # A lost review report can be recovered without resetting anything.
+        assert run(panel, "review_restore")["review_outcome"] == "empty"
+        assert run(panel, "restore")["completed"] == ["backup", "verify", "restore"]
+    if outcome in ("empty", "exact"):
+        # A committed Restore with a lost Job report is also recoverable.
+        after = run(panel, "review_restore")
+        assert after["review_outcome"] == "exact"
+        assert after["completed"] == ["backup", "verify", "restore"]
+        assert panel._read()["restore_review"]["previous_status"] == "running"
+    assert len(source_server.calls) == source_start
+    assert verify_snapshot(panel.snapshot) == before
+    assert not source_server.streams and not target_server.streams
+
+
+def test_review_rejects_unverified_or_wrong_target(remote, tmp_path):
+    from amora.storage.pcs4_job import run
+    source, _ = remote
+    panel = web.RecoveryPanel(tmp_path / "unverified", source, lambda: source)
+    with pytest.raises(ValueError, match="PCS4C_REVIEW_STATE"):
+        run(panel, "review_restore")
+    state = panel._read()
+    state.update(status="running", running="restore", completed=["backup", "verify"],
+                 reports={"backup": {"status": "ok"}, "verify": {"status": "ok"}})
+    panel._write(state)
+    with pytest.raises(ValueError, match="PCS4C_DESTINATION_IS_SOURCE"):
+        run(panel, "review_restore")
+    assert panel._read() == state

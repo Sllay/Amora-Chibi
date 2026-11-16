@@ -13,6 +13,8 @@ from .remote import LibSQLBackend
 
 
 def run(panel, action):
+    if action == "review_restore":
+        return panel.review_restore()
     if action not in _STEPS:
         raise ValueError("INVALID_ACTION")
     panel.start(action, CONFIRMATIONS[action])
@@ -26,7 +28,7 @@ def run(panel, action):
 def main():
     try:
         action = os.getenv("AMORA_PCS4_JOB_ACTION", "")
-        if action not in _STEPS or os.getenv("AMORA_PCS4_JOB_ENABLED") != "1":
+        if action not in CONFIRMATIONS or os.getenv("AMORA_PCS4_JOB_ENABLED") != "1":
             raise ValueError("JOB_DISABLED")
         mount = Path(os.getenv("AMORA_PCS4_WEB_VOLUME", "/private")).resolve()
         if os.getenv("AMORA_PCS4_WEB_DURABLE") != "1" or not _mounted(mount):
@@ -37,9 +39,16 @@ def main():
         result = run(panel, action)
         result["action"] = action
         print(MARKER + json.dumps(result, separators=(",", ":")), flush=True)
-        return 0 if result["status"] == "ok" and action in result["completed"] else 1
-    except Exception:
-        print(MARKER + json.dumps({"status": "error", "reason": "JOB_FAILED_REVIEW_REQUIRED"},
+        return 0 if result["status"] == "ok" and (action in result["completed"] or action == "review_restore") else 1
+    except Exception as exc:
+        reason = "JOB_FAILED_REVIEW_REQUIRED"
+        if action == "review_restore" and isinstance(exc, ValueError) and exc.args and exc.args[0] in {
+            "PCS4C_REVIEW_STATE", "PCS4C_REVIEW_DESTINATION_CHANGED",
+            "PCS4C_DESTINATION_IS_SOURCE", "PCS4C_SCHEMA_MISMATCH",
+            "PCS4C_DATA_MISMATCH", "PCS4C_SOURCE_CHANGED",
+        }:
+            reason = exc.args[0]
+        print(MARKER + json.dumps({"status": "error", "reason": reason},
                                   separators=(",", ":")), flush=True)
         return 1
 

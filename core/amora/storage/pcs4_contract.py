@@ -5,6 +5,7 @@ CONFIRMATIONS = {
     "verify": "VOLUME PRIVADO",
     "restore": "DESTINO VAZIO E INDEPENDENTE",
     "restart": "DESTINO ISOLADO",
+    "review_restore": "REVISAR DESTINO ISOLADO",
 }
 MARKER = "PCS4C_JOB_REPORT "
 REPORT_KEYS = frozenset({
