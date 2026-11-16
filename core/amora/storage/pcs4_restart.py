@@ -20,6 +20,7 @@ import sys
 import tempfile
 
 from .backend import backend_from_environment
+from .schema import LATEST_SCHEMA_VERSION
 from .pcs4_recovery import (
     compare_snapshots, destination_from_environment, verify_snapshot, _open, _row_hashes, _sha,
 )
@@ -118,9 +119,9 @@ def _run_boot(home, timestamp, backend=None):
     return json.loads(result.read_text())
 
 
-def certify_restart(snapshot, backend):
+def certify_restart(snapshot, backend, *, expected_schema=LATEST_SCHEMA_VERSION):
     snapshot = Path(snapshot)
-    verified = verify_snapshot(snapshot)
+    verified = verify_snapshot(snapshot, expected_schema=expected_schema)
     with tempfile.TemporaryDirectory(prefix="pcs4c-restart-") as directory:
         root = Path(directory)
         # Confirm destination still matches the exact verified backup before
@@ -150,6 +151,14 @@ def certify_restart(snapshot, backend):
             if any(_row_hashes(original, table) != _row_hashes(restarted, table)
                    for table in memory_tables):
                 raise ValueError("PCS4C_RESTART_MEMORY_CHANGED")
+        if expected_schema == 19:
+            # No runtime worker is enabled during the drill. Job state and
+            # evidence links must also survive both boots unchanged.
+            with closing(_open(snapshot)) as original, closing(_open(after)) as restarted:
+                if any(_row_hashes(original, table) != _row_hashes(restarted, table)
+                       for table in ("sensory_episode_jobs", "sensory_episode_job_evidence",
+                                     "sensory_episode_invalidations")):
+                    raise ValueError("PCS4C_RESTART_EPISODE_WORK_CHANGED")
         if (_sha(snapshot) != verified["database_sha256"] or
                 _sha(Path(str(snapshot) + ".avatar.zip")) != verified["archive_sha256"]):
             raise ValueError("PCS4C_SOURCE_CHANGED")
