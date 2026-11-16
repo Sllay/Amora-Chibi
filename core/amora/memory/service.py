@@ -6,6 +6,7 @@ from uuid import UUID
 from amora.events import PrivacyScope
 from amora.time import Clock
 
+from .episode_fence import EpisodeWriteLease
 from .gate import MemoryWriteGate
 from .models import MemoryCandidate, MemoryHit, MemoryQuery, MemoryRecord, MemoryWriteDecision
 from .store import MemoryStore
@@ -27,7 +28,10 @@ class MemoryService:
                  reflection_lease: tuple[str, str] | None = None,
                  explicit_owner_request: bool = False,
                  generation_lease: tuple[str, str] | None = None,
-                 insert_only: bool = False) -> RememberResult:
+                 insert_only: bool = False,
+                 episode_lease: EpisodeWriteLease | None = None) -> RememberResult:
+        if episode_lease is not None and (not insert_only or record_id != episode_lease.job_id):
+            raise ValueError("EPISODE_WRITE_REQUIRES_CREATE_ONLY")
         if insert_only and (record_id is None or reflection_lease is not None
                             or generation_lease is not None or explicit_owner_request):
             raise ValueError("INSERT_ONLY_REQUIRES_STABLE_ID_WITHOUT_LEASE")
@@ -125,7 +129,8 @@ class MemoryService:
             metadata=candidate.metadata,
         )
         if insert_only:
-            inserted = self.store.put(record, insert_only=True)
+            inserted = (self.store.put(record, insert_only=True, episode_lease=episode_lease)
+                        if episode_lease is not None else self.store.put(record, insert_only=True))
             if not inserted:
                 return RememberResult(decision=MemoryWriteDecision(
                     store=False, score=decision.score, threshold=decision.threshold,
