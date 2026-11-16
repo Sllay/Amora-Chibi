@@ -233,6 +233,10 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "remote_processing_allowed": context.remote_processing_allowed,
         },
     }
+    if context.temporal_context is not None:
+        frame["temporal_context"] = context.temporal_context
+    if context.temporal_opportunity is not None:
+        frame["temporal_opportunity"] = context.temporal_opportunity
     if context.specialist_support:
         # Specialist material is useful evidence, never canonical state. Keeping
         # it outside canonical_state prevents a language model from silently
@@ -327,10 +331,10 @@ def render_conversation_turn(
 def render_current_turn(context: CognitiveContext) -> str:
     return render_conversation_turn(
         turn_id=context.turn_id,
-        speaker_id=context.speaker_id,
-        addressee_id=context.target_id,
+        speaker_id="ENTITY_AMORA" if context.temporal_opportunity else context.speaker_id,
+        addressee_id=context.speaker_id if context.temporal_opportunity else context.target_id,
         text=context.user_text,
-        source="current_turn",
+        source="core_temporal_initiative" if context.temporal_opportunity else "current_turn",
     )
 
 

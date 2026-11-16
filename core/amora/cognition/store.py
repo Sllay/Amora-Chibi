@@ -117,6 +117,11 @@ class CognitiveStore:
             clauses.append("session_id = ?")
             args.append(session_id)
         if exclude_invalidated:
+            # Autonomous drafts are not dialogue until a real transport ACK.
+            clauses.append("""(COALESCE(json_extract(conversation_messages.metadata_json,'$.temporal_initiative'),0) != 1
+                OR (conversation_messages.speaker_id='ENTITY_AMORA' AND EXISTS (
+                    SELECT 1 FROM messaging_outbound_queue sent WHERE sent.id=conversation_messages.turn_id
+                    AND sent.status='sent')))""")
             clauses.append("""NOT EXISTS (
                 SELECT 1 FROM conversation_messages original
                 JOIN memory_reflection_invalidations x ON x.session_id=original.session_id

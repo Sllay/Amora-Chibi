@@ -22,6 +22,7 @@ from amora.world.service import RelationshipEvolutionService
 from .dialogue import DialogueOrchestrator
 from .models import CognitiveContext, CognitiveRequest, ContextMemory
 from .store import CognitiveStore
+from .temporal import aware_time, observed_timestamp, time_projection, trusted_opportunity
 
 
 def resolve_scene_visibility(request: CognitiveRequest) -> str:
@@ -253,7 +254,9 @@ class ContextCompiler:
         # Generic recollection requests contain no event-specific retrieval terms.
         # Use entity/recency ranking rather than letting conversational filler
         # accidentally match arbitrary memories via full-text search.
-        recall_text = request.text
+        opportunity = (trusted_opportunity(request.metadata.get("temporal_opportunity"))
+                       if mode == "autonomous_initiation" and not shared and request.session_id else None)
+        recall_text = "" if opportunity else request.text
         from unicodedata import combining, normalize
         normalized_recall = "".join(
             char for char in normalize("NFKD", request.text.casefold())
@@ -309,7 +312,11 @@ class ContextCompiler:
             if shared and item.privacy_scope != PrivacyScope.PUBLIC:
                 continue
             if self.privacy_gate.memory_allowed(item, remote=remote, recipient_id=request.speaker_id):
+                source_at = aware_time((getattr(item, "metadata", None) or {}).get("source_observed_at"))
+                recorded_at = aware_time(getattr(item, "created_at", None))
                 memories.append(ContextMemory(id=str(item.id), kind=item.kind.value, content=item.summary or item.content,
+                                              recorded_at=recorded_at.isoformat() if recorded_at else None,
+                                              source_observed_at=source_at.isoformat() if source_at else None,
                                               score=hit.score, confidence=item.provenance.confidence,
                                               privacy_scope=item.privacy_scope.value, reason_codes=hit.reason_codes))
 
@@ -352,11 +359,17 @@ class ContextCompiler:
                 message, remote=remote, recipient_id=request.speaker_id
             ):
                 continue
+            if message.metadata.get("cognitive_mode") == "autonomous_initiation" and message.speaker_id != "ENTITY_AMORA":
+                continue
             text = message.spoken_text or message.normalized_text or message.raw_text
             if text:
+                observed_at, timestamp_source = observed_timestamp(message)
                 recent.append({"turn_id": str(message.turn_id), "speaker_id": message.speaker_id,
                                "addressee_id": message.addressee_id, "text": text[:800],
-                               "source": message.source.value, "status": message.status.value})
+                               "source": message.source.value, "status": message.status.value,
+                               "observed_at": observed_at.isoformat() if observed_at else None,
+                               "timestamp_source": timestamp_source})
+        timeline_recent = recent
         recent = recent[-48:]
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
@@ -392,13 +405,19 @@ class ContextCompiler:
                 self_snapshot = {key: value for key, value in self_snapshot.items() if key in allowed_layers}
                 reasons.append("SELF_MODEL_REMOTE_LAYER_ALLOWLIST")
 
+        now = self.clock.now()
+        temporal = time_projection(now, speaker_id=request.speaker_id, session_id=request.session_id,
+                                   recent=timeline_recent, current_sent_at=request.metadata.get("platform_sent_at")
+                                   if request.metadata.get("surface") == "platform_messaging" else None)
         context = CognitiveContext(
-            turn_id=request.turn_id, created_at=self.clock.now(), speaker_id=request.speaker_id, expression_profile=profile,
+            turn_id=request.turn_id, created_at=now, speaker_id=request.speaker_id, expression_profile=profile,
             target_id=request.target_id, user_text=request.text, acir=acir, self_model=self_snapshot,
             relationships=relationships, mood={"valence": round(mood.valence, 6), "arousal": round(mood.arousal, 6),
                                                "dominance": round(mood.dominance, 6)},
             directed_affect=affect, drives=drives, active_intention=intention, memories=memories,
-            world_claims=claims, recent_messages=recent, privacy_scope=request.privacy_scope,
+            world_claims=claims, recent_messages=recent, temporal_context=temporal,
+            temporal_opportunity=opportunity,
+            privacy_scope=request.privacy_scope,
             remote_processing_allowed=remote, token_budget=token_budget, reason_codes=reasons,
             scene_visibility=visibility,
         )

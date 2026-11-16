@@ -79,6 +79,15 @@ class RealizationValidator:
             frame = RealizationFrame.model_validate(raw)
         except ValidationError as exc:
             raise RealizationError("REALIZATION_SCHEMA_INVALID", str(exc)) from exc
+        if context.temporal_opportunity:
+            silent = any(move.kind == "stay_silent" for move in frame.moves)
+            if silent:
+                if (len(frame.moves) != 1 or frame.moves[0].text != "SILENCE"
+                        or frame.closing != RealizationClosing.NONE or frame.self_choices
+                        or "stay_silent" not in context.dialogue_plan.get("response_moves", [])):
+                    raise RealizationError("TEMPORAL_SILENCE_INVALID", "silence must be a single nonverbal decision")
+                return ValidatedRealization(frame, "", ("TEMPORAL_SILENCE_CHOSEN",))
+            return cls.validate(context, frame)
         if not enforce_dialogue_plan:
             return cls.accept_without_semantic_filter(context, frame)
         return cls.validate(context, frame)
@@ -355,6 +364,13 @@ def realization_instruction(context: CognitiveContext) -> str:
             "Não altere o objetivo, a pergunta, o fechamento nem as permissões do plano."
             if context.scene_visibility != "private" else ""
         )
+        + ("\nEste turno é iniciativa temporal interna, não uma fala nova do usuário. "
+           "Escolha se vale conversar. Para não enviar nada, retorne exatamente "
+           '{"moves":[{"kind":"stay_silent","text":"SILENCE"}],"closing":"none"}. '
+           "Não combine silêncio com fala. Se falar, use somente ações autorizadas, "
+           "um contato curto e contextual; não invente que a pessoa ignorou você, "
+           "não cobre resposta como obrigação. Use memória apenas se estiver presente no contexto."
+           if context.temporal_opportunity else "")
         + specialist
     )
 

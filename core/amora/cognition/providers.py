@@ -111,6 +111,8 @@ class GroqCognitiveProvider:
             "memories": [item.model_dump(mode="json") for item in context.memories],
             "world_claims": context.world_claims,
             "recent_messages": context.recent_messages,
+            "temporal_context": context.temporal_context,
+            "temporal_opportunity": context.temporal_opportunity,
             "capabilities": [item.model_dump(mode="json") for item in context.capabilities],
             "reason_codes": context.reason_codes,
         }
