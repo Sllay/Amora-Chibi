@@ -1,6 +1,6 @@
 # MM.00D.3C.2 — ADR proposto: trabalho episódico durável
 
-Status: decisão proposta, C.2A em implementação isolada; depende #245 aprovado. Issue #238.
+Status: C.2A implementado isoladamente, CI pendente; #245 aprovado e integrado. Issue #238.
 Não alterar schema de produção nem LATEST_SCHEMA_VERSION neste recorte.
 
 ## Contexto
@@ -19,3 +19,11 @@ C.3: produtor real CH2/call usa seleção efêmera antes de persistir; transaç�
 
 ## Gate
 C.2A é contrato/repository em draft, não fila operacional nem mudança de schema. Testes sintéticos não certificam Turso real. Documentar commits, resultados e limites no #238.
+
+## Evidência C.2A
+- #245 HEAD `925c3fa6bf6a0f13f55026277350ac0cc54d1731`, 3/3 workflows, 7/7 jobs; merge `f81094b08d5d1e9fe44405094c06a5612be98d66`.
+- `689243a3`: DDL candidato com jobs e referências de evidências, não registrado em database.migrate/schema.py/recovery.py.
+- `31877416`: ID de episódio compartilhado com consolidator, mesma identidade determinística já certificada no #240.
+- `45cf1461`: EpisodeWorkRepository, gate existente, enqueue transacional, capacidade ativa global/sessão, links, claim/lease, retry com backoff e tentativas limitadas, cancelamento e ACK por CAS. Nenhum conteúdo duplicado; sem provider/worker/memory writer.
+- `5bfca418`: testes isolados SQLite/Hrana, schema oficial 18, reinício e recuperação de lease, ACK antigo rejeitado, capacidade, retry, cancel, corrupt link e dois claimers concorrentes. CI pendente.
+- Limites: ACK protegido não equivale a gravação de memória protegida; C.2B precisa fence no MemoryStore e invalidação de fontes, incluindo tombstone e crash antes/depois de commit. C.2C registra migração somente após revisão/certificação PCS. C.3 fecha produtor e reconciliação. Não aplicar DDL à produção, não alterar schema oficial, não ativar worker.
