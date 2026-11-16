@@ -17,7 +17,7 @@ from .pcs4_restart import certify_restart
 from .pcs4_web import _atomic_json, _origin_digest, _sync_dir
 from .schema19_migration import migrate_certified_destination, review_certified_destination
 from .schema19_drill import prepare_schema19_copy, compare_upgrade
-from .pcs4_contract import STEPS, SCHEMA19_STEPS, SCHEMA19_ACTIONS, SCHEMA19_REPORT_KEYS
+from .pcs4_contract import STEPS, SCHEMA19_STEPS, SCHEMA19_ACTIONS, SCHEMA19_REPORT_KEYS, SCHEMA19_ERROR_CODES
 
 
 
@@ -34,6 +34,7 @@ def _state_report(old, state, action):
                 "status": state["status"], "completed": state["completed"],
                 "reports": state["reports"], "failed_action": state.get("failed_action"),
                 "review_outcome": state.get("review_outcome"),
+                "reason": state.get("reason"),
             }}
 
 
@@ -85,7 +86,7 @@ def run_schema19(panel, action):
                 or state["destination_id"] != _origin_digest(target)):
             raise ValueError("SCHEMA19_PIN_CHANGED")
         if state["status"] == "running":
-            state.update(status="error")
+            state.update(status="error", reason="SCHEMA19_REVIEW_REQUIRED")
             _atomic_json(state_path, state)
 
         def pinned():
@@ -111,7 +112,7 @@ def run_schema19(panel, action):
         )
         if not allowed:
             raise ValueError("SCHEMA19_STEP_BLOCKED")
-        state.update(status="running", failed_action=action, review_outcome=None)
+        state.update(status="running", failed_action=action, review_outcome=None, reason=None)
         _atomic_json(state_path, state)
         try:
             if action == "schema19_prepare":
@@ -157,11 +158,13 @@ def run_schema19(panel, action):
             else:
                 state["reports"][action] = _public_report(report)
                 completed.append(action)
-            state.update(status="ok", failed_action=None)
-        except Exception:
+            state.update(status="ok", failed_action=None, reason=None)
+        except Exception as exc:
             # Keep the previous certified prefix; never implicitly rerun a
             # potentially committed migration or restart.
-            state.update(status="error")
+            reason = (str(exc) if type(exc) is ValueError and str(exc) in SCHEMA19_ERROR_CODES
+                      else "SCHEMA19_REVIEW_REQUIRED")
+            state.update(status="error", reason=reason)
         _atomic_json(state_path, state)
         return _state_report(old, state, action)
     finally:
