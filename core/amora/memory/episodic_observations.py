@@ -45,6 +45,12 @@ class EpisodeSelection(BaseModel):
     goal_relevance: _Score = 0.0
 
 
+def episode_record_id(evidence_ids: tuple[UUID, ...]) -> UUID:
+    """Stable identity of a selected evidence set; independent of ordering."""
+    keys = sorted(str(event_id) for event_id in evidence_ids)
+    return uuid5(NAMESPACE_URL, "amora:episode:v1:" + json.dumps(keys, separators=(",", ":")))
+
+
 def _effective_audience(context):
     allowed = set(context.audience)
     if context.owner_entity_id:
@@ -137,7 +143,7 @@ class EpisodicObservationConsolidator:
             raise ValueError("EPISODE_CONTENT_LIMIT")
 
         event_ids = sorted(str(event.id) for event, _, _ in evidence)
-        record_id = uuid5(NAMESPACE_URL, "amora:episode:v1:" + json.dumps(event_ids, separators=(",", ":")))
+        record_id = episode_record_id(tuple(event.id for event, _, _ in evidence))
         candidate = MemoryCandidate(
             kind=MemoryKind.EPISODIC, content=content,
             provenance=MemoryProvenance(
