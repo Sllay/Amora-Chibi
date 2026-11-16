@@ -16,7 +16,7 @@ from .multimodal import ObservationContext, ObservationSource, SensoryModality
 
 
 def _number(value: float) -> bool:
-    return type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1e12
+    return type(value) in (int, float) and 0 <= value <= 1e12 and math.isfinite(value)
 
 
 @dataclass(frozen=True, slots=True)
