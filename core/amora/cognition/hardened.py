@@ -25,6 +25,7 @@ from amora.world import (
 
 from .models import CognitiveJournalEntry, CognitiveRequest, CognitiveResponsePlan, JournalStage, MessageStatus, SpeechSegment
 from .proposals import CognitiveProposalBundle
+from .temporal import observed_timestamp
 from .service import CognitiveEngine as BaseCognitiveEngine, SegmentSink
 
 
@@ -210,6 +211,13 @@ class CognitiveEngine(BaseCognitiveEngine):
             and bool(request.session_id)
             and owner_known
         )
+        source_time_metadata = {}
+        if request.metadata.get("durable_memory_reflection"):
+            observed = self.store.get_message_by_dedupe(f"cognitive-input:{request.turn_id}")
+            if observed is not None and observed.speaker_id == request.speaker_id and observed.session_id == request.session_id:
+                stamp, origin = observed_timestamp(observed)
+                if stamp is not None:
+                    source_time_metadata = {"source_observed_at": stamp.isoformat(), "source_timestamp_kind": origin}
         for ordinal, proposal in enumerate(bundle.memory_candidates):
             safe_refs = {
                 entity_id: confidence
@@ -245,7 +253,7 @@ class CognitiveEngine(BaseCognitiveEngine):
                     rarity=proposal.rarity,
                     repetition=0.0 if request.metadata.get("durable_memory_reflection") else proposal.repetition,
                     metadata={"provider": descriptor.name, "model": descriptor.model, "turn_id": str(request.turn_id),
-                              "reflection_remote_reuse": remote_reuse},
+                              "reflection_remote_reuse": remote_reuse, **source_time_metadata},
                 ),
                 **({"record_id": uuid5(NAMESPACE_URL, f"amora:reflection:{request.turn_id}:{ordinal}"),
                     "reflection_lease": (str(request.turn_id), lease_token)}
