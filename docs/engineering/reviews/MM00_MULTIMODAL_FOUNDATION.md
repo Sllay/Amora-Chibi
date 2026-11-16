@@ -56,7 +56,7 @@ MM.06/07: consolidação temporal/episódica, fusão entre fala e visão, ACIR p
 
 ## 5. Próximo checkpoint
 
-MM.00D: D.1 aprovado (#239); D.2 aprovado (#240); D.3A.1/A.2 aprovados e integrados (#241/#242); D.3B.1 aprovado (#243); B.2A implementado, CI pendente. Acompanhar subcheckpoints no ledger D. Não integrar um pipeline paralelo; a recuperação PCS.4C está aprovada, e a promoção de projeção/storage permanece independente.
+MM.00D: D.1 aprovado (#239); D.2 aprovado (#240); D.3A.1/A.2 aprovados e integrados (#241/#242); D.3B.1 aprovado (#243); B.2A aprovado (#244); C.1 implementado, CI pendente. Acompanhar subcheckpoints no ledger D. Não integrar um pipeline paralelo; a recuperação PCS.4C está aprovada, e a promoção de projeção/storage permanece independente.
 
 ## 6. Checkpoint ledger — obrigatório antes de qualquer implementação
 
@@ -70,7 +70,7 @@ Issue de acompanhamento persistente: [#238](https://github.com/Sllay/Amora-Chibi
 | MM.00C.2 | Concluído — CI/merge | `8c2e7cde`: validações negativas, identidade, dedupe em SQLite após restart e publicação efêmera |
 | MM.00D.1 | Concluído — CI/merge | [Ledger D.1](MM00D_DURABLE_OBSERVATIONS.md): event store, replay, leitura interna e proteção de ingress |
 | MM.00D.2 | Concluído — CI/merge | [Ledger D.2](MM00D_DURABLE_OBSERVATIONS.md): episódio, gate, recall pós-restart, isolamento, rollback e concorrência |
-| MM.00D.3 | A.1/A.2/B.1 aprovados; B.2A implementado — CI pendente | [Ledger D.3](MM00D3_ADMISSION_AND_RECOVERY.md): autoridade de sessão/device e plataforma; B.2/C/D pendentes |
+| MM.00D.3 | A.1/A.2/B.1/B.2A aprovados; C.1 implementado — CI pendente | [Ledger D.3](MM00D3_ADMISSION_AND_RECOVERY.md): autoridade de sessão/device e plataforma; B.2/C/D pendentes |
 | MM.01 | Pendente | Certificação real CH2, primeiro ciclo completo |
 
 Escopo C.1/C.2: contrato interno, sem endpoint, migration, provider, listener ativo ou mudança de comportamento. Contexto resolvido e autorizado pelo Core separado da observação; timestamp de captura/recepção, sequência/epoch, identidade e escopo, evidência/proveniência, rejeição de mídia bruta/metadata arbitrária, limites; não publicar automaticamente. D.1/D.2: integração no bus/store e gate de memória, não confundir replay de evento com retry de handler. O bus atual deduplica a entrega persistida antes de chamar handlers; execução durável da consolidação precisa de checkpoint/lease próprios existentes ou explicitamente integrados, não apenas republicação do mesmo evento.
