@@ -10,3 +10,16 @@ Usar `AmoraDatabase.events` existente (índice event_type/time e dedupe_key), `T
 
 ## Condições sociais dinâmicas
 Agenda é um **tipo de oportunidade**, não uma lista fixa de “estados emocionais”. O executor recebe `kind`, horário agendado, assunto, preferência e origem verificada. Entrega determinística para compromissos explícitos (não permitir LLM alterar a hora). Iniciativa livre já tem seus estados de conversa; expansão futura poderá construir novos rótulos sem permitir que o modelo crie ações recorrentes por sugestão não confirmada. Limites: 64 tarefas ativas por pessoa, min 10 min por ocorrência, um destino DM verificado por agenda, máximo 5 min após a ocorrência, sem catch-up em massa depois de meses offline. Não implementar mensagens em grupos.
+
+
+## Implementação (primeira revisão)
+- `b9d6a4c` contrato strict de horários aware, até 30 anos, intervalo mínimo 10 min.
+- `c0f3e58`/`a772ddc` ledger de criação/cancelamento, dedupe UUID5, owner DM real, janela de entrega 5 min, status.
+- `0a97ff1` claim-time fence no worker, estado `AGENDA_DELIVERY_UNCERTAIN` em claim expirado, sem reenvio cego.
+- `621034b`/`79d8772` ciclo do Scheduler de 30s (não idle-only), retomada sem cache de processo.
+- `16dbf3f`/`946b8aa` API operator-only; payload privado sem IDs de transporte.
+- `59bec3e`/`75119f7` comandos diretos verificados PT-BR para hoje/amanhã/ano e repetição de 10 min, intenção de cancelar por pesquisa/ano e ambiguidade.
+- `8373ea9`/`dac6881`/`a36a08d` Web: aba Agenda, calendário, filtro ano, criar/cancelar e recorrência.
+- `195bc8c` testes de fluxo real, identidade, restart, 2030, repetição, dedupe, autorização e parser.
+- `fe9cb7e` tratamento de repetição pendente expirada, status entregue/incerto e comparação de pedido idempotente com fuso UTC.
+**Ainda não aprovado:** aguarda CI e testes; nenhuma mudança de produção ou Turso. Agenda atual envia a frase explícita do usuário, sem alucinar horário; a linguagem social não tem autoridade de alterar automaticamente compromissos.
