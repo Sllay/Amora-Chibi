@@ -56,7 +56,7 @@ MM.06/07: consolidação temporal/episódica, fusão entre fala e visão, ACIR p
 
 ## 5. Próximo checkpoint
 
-MM.00C: ler contratos de eventos e persistência do bus, schema de memória e inbound privacy/identity antes de escolher campos finais; implementar primeiro um contrato pequeno e testes de rejeição. Não integrar um pipeline paralelo; a recuperação PCS.4C está aprovada, e a promoção de projeção/storage permanece independente.
+MM.00D: consolidar admissão/persistência de observações e integrar candidatos episódicos com o MemoryService existente. C já aprovado; acompanhar subcheckpoints no ledger D. Não integrar um pipeline paralelo; a recuperação PCS.4C está aprovada, e a promoção de projeção/storage permanece independente.
 
 ## 6. Checkpoint ledger — obrigatório antes de qualquer implementação
 
@@ -66,9 +66,9 @@ Issue de acompanhamento persistente: [#238](https://github.com/Sllay/Amora-Chibi
 |---|---|---|
 | MM.00A | Concluído — auditoria | Seção 1 |
 | MM.00B | Concluído — plano | Seções 2–4; #238 |
-| MM.00C.1 | Implementado — CI pendente | `404838ff`, `183b6638`: contrato e fábrica interna de AmoraEvent |
-| MM.00C.2 | Testes implementados — CI pendente | `8c2e7cde`: validações negativas, identidade, dedupe em SQLite após restart e publicação efêmera |
-| MM.00D.1 | Pendente | Publicação no bus existente e persistência seletiva |
+| MM.00C.1 | Concluído — CI/merge | `404838ff`, `183b6638`: contrato e fábrica interna de AmoraEvent |
+| MM.00C.2 | Concluído — CI/merge | `8c2e7cde`: validações negativas, identidade, dedupe em SQLite após restart e publicação efêmera |
+| MM.00D.1 | Implementado — CI pendente | [Ledger D.1](MM00D_DURABLE_OBSERVATIONS.md): event store, replay, leitura interna e proteção de ingress |
 | MM.00D.2 | Pendente | Recall pós-restart, isolamento, falhas e limites |
 | MM.01 | Pendente | Certificação real CH2, primeiro ciclo completo |
 
@@ -80,4 +80,4 @@ Ao finalizar cada subcheckpoint: atualizar este ledger e #238 com SHA, CI do SHA
 
 - `core/amora/events/multimodal.py`: modelos fechados e frozen, contexto autorizado separado da observação, IDs de sessão/scope/stream/correlation independentes, epoch/sequence, captura e recepção com timezone, evidência observada/relatada/inferida/desconhecida. Texto semântico limitado, sem campos de mídia bruta/metadata arbitrária; SHA opcional e referência opaca. Chave UUID5 estável pelas coordenadas de entrega; resultado é AmoraEvent existente. Nenhuma publicação automática ou rota externa. Contexto interno é fronteira de confiança, não substitui resolução real de identidade/consentimento.
 - `tests/test_multimodal_contract_mm00.py`: roundtrip do envelope, separação de streams e sessões, rejeições de tipos/privacidade, desconhecido sem fala inventada, persistência explícita e dedupe após reabrir SQLite usando AsyncEventBus existente. IDs iguais com conteúdo diferente são conflito a tratar em D, não autorização de sobrescrita. Ordem/consentimento efetivos e recuperação de consolidação após crash são D, ainda não implementados.
-- Estado: aguardando CI do PR #237; não habilitado em runtime. Nenhuma mudança de schema/driver/provider/V3.
+- Estado: aprovado no CI do HEAD `090ee90c46eb6545c1bad2f74c27b87e165c3451`, 3/3 workflows e 7/7 jobs (Python 3.11–3.14, cloud, security). PR #237 integrado em `414584f2981ca227f64e4d737fe277563cea2ff8`. Sem runtime ativo, schema/driver/provider/V3 inalterados. Primeira rodada falhou por fixture com duas causas de rejeição; corrigido em `090ee90c`. Runs: [Core](https://github.com/Sllay/Amora-Chibi/actions/runs/43804549969), [Cloud](https://github.com/Sllay/Amora-Chibi/actions/runs/43804549974), [Security](https://github.com/Sllay/Amora-Chibi/actions/runs/43804549956).
