@@ -99,3 +99,76 @@ def test_cli_errors_do_not_print_secret_or_path(tmp_path, monkeypatch, capsys):
     assert json.loads(output.split(" ", 1)[1])["status"] == "error"
     assert recovery.main(["restore", str(tmp_path / "private-path.db")]) == 1
     assert "PCS4C_CONFIRM_ISOLATION" in capsys.readouterr().out
+
+
+def test_restore_batch_size_limits_and_large_single_row():
+    from amora.storage.recovery import _restore_batches
+
+    sql = "INSERT INTO sample VALUES (?)"
+    batches = list(_restore_batches(sql, ((i,) for i in range(251))))
+    assert [len(batch) for batch in batches] == [100, 100, 51]
+    payload = b"x" * (300 * 1024)
+    batches = list(_restore_batches(sql, [(payload,), (payload,), (1,)]))
+    assert [len(batch) for batch in batches] == [1, 2]
+    oversized = b"x" * (600 * 1024)
+    assert list(_restore_batches(sql, [(oversized,), (1,)])) == [[(oversized,)], [(1,)]]
+
+
+def test_restore_48059_rows_batches_and_preserves_exact_data(backup, tmp_path, capsys):
+    from amora.storage.recovery import restore_empty_remote
+
+    with sqlite3.connect(backup) as db:
+        db.execute("CREATE TABLE restore_scale_probe (id INTEGER PRIMARY KEY, body TEXT, payload BLOB)")
+        db.executemany("INSERT INTO restore_scale_probe VALUES (?, ?, ?)",
+                       ((i, "registro-" + str(i), bytes([i % 256])) for i in range(48059)))
+    server = HranaSQLite(tmp_path / "scale-target.db")
+    insert_requests = []
+
+    def transport(request):
+        body = json.loads(request.content)
+        operations = [op for op in body["requests"] if op.get("type") == "execute"
+                      and op["stmt"]["sql"].startswith('INSERT INTO "restore_scale_probe"')]
+        if operations:
+            insert_requests.append(len(operations))
+        return server(request)
+
+    backend = LibSQLBackend("https://restore.example", "test-only",
+                            transport=httpx.MockTransport(transport))
+    restore_empty_remote(backend, backup)
+    assert sum(insert_requests) == 48059
+    assert len(insert_requests) == 481
+    assert max(insert_requests) == 100
+    with sqlite3.connect(backup) as source, sqlite3.connect(server.path) as dest:
+        assert source.execute("SELECT * FROM restore_scale_probe ORDER BY id").fetchall() == dest.execute(
+            "SELECT * FROM restore_scale_probe ORDER BY id").fetchall()
+        assert dest.execute("PRAGMA foreign_key_check").fetchone() is None
+    assert not server.streams
+    assert "phase=committed" in capsys.readouterr().err
+
+
+def test_restore_batch_failure_rolls_back(backup, tmp_path):
+    from amora.storage.recovery import restore_empty_remote
+
+    with sqlite3.connect(backup) as db:
+        db.execute("CREATE TABLE restore_rollback_probe (id INTEGER PRIMARY KEY)")
+        db.executemany("INSERT INTO restore_rollback_probe VALUES (?)", ((i,) for i in range(250)))
+    server = HranaSQLite(tmp_path / "rollback-target.db")
+
+    def transport(request):
+        body = json.loads(request.content)
+        operations = [op for op in body["requests"] if op.get("type") == "execute"
+                      and op["stmt"]["sql"].startswith('INSERT INTO "restore_rollback_probe"')]
+        if operations and operations[0]["stmt"]["args"][0]["value"] == "100":
+            # An SQL constraint error inside a pipeline must abort the whole import.
+            operations[1]["stmt"]["args"] = operations[0]["stmt"]["args"]
+            request = httpx.Request(request.method, request.url, headers=request.headers,
+                                    content=json.dumps(body).encode())
+        return server(request)
+
+    backend = LibSQLBackend("https://restore.example", "test-only",
+                            transport=httpx.MockTransport(transport))
+    with pytest.raises(sqlite3.DatabaseError):
+        restore_empty_remote(backend, backup)
+    with sqlite3.connect(server.path) as dest:
+        assert dest.execute("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchone()[0] == 0
+    assert not server.streams

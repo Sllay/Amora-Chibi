@@ -5,9 +5,40 @@ must stop the source runtime while moving the final snapshot/asset archive.
 """
 
 import hashlib
+import json
+import sys
 import sqlite3
 import zipfile
 from pathlib import Path
+
+from .remote import _encode
+
+
+_RESTORE_BATCH_ROWS = 100
+_RESTORE_BATCH_BYTES = 512 * 1024
+
+
+def _restore_batches(sql, rows):
+    """Bound Hrana pipeline size; retain the existing single-row path for large blobs."""
+    batch, size = [], 0
+    for row in rows:
+        values = tuple(row)
+        request = {"type": "execute", "stmt": {"sql": sql,
+                   "args": [_encode(value) for value in values], "want_rows": True}}
+        # ASCII JSON is conservative for non-ASCII strings; reserve envelope overhead.
+        weight = len(json.dumps(request, ensure_ascii=True).encode("utf-8")) + 16
+        if batch and (len(batch) >= _RESTORE_BATCH_ROWS or size + weight > _RESTORE_BATCH_BYTES):
+            yield batch
+            batch, size = [], 0
+        batch.append(values)
+        size += weight
+    if batch:
+        yield batch
+
+
+def _restore_progress(phase, tables, rows):
+    print(f"PCS4C_RESTORE_PROGRESS phase={phase} tables={tables} rows={rows}",
+          file=sys.stderr, flush=True)
 
 
 def restore_empty_remote(backend, snapshot: Path) -> None:
@@ -29,6 +60,8 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
             ).fetchone()[0]:
                 raise ValueError("destination is not empty; refusing restore")
             target.execute("PRAGMA defer_foreign_keys=ON")
+            tables_done = rows_done = 0
+            _restore_progress("import", tables_done, rows_done)
             for row in schema:
                 name, sql = row["name"], row["sql"]
                 if (
@@ -41,15 +74,18 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
                     raise ValueError("unsupported virtual table")
                 target.execute(sql)
                 quoted = '"' + name.replace('"', '""') + '"'
-                for values in source.execute("SELECT * FROM " + quoted):
-                    target.execute(
-                        "INSERT INTO "
-                        + quoted
-                        + " VALUES ("
-                        + ",".join("?" for _ in values)
-                        + ")",
-                        tuple(values),
-                    )
+                cursor = source.execute("SELECT * FROM " + quoted)
+                insert = "INSERT INTO " + quoted + " VALUES (" + ",".join(
+                    "?" for _ in cursor.description
+                ) + ")"
+                for batch in _restore_batches(insert, cursor):
+                    target.executemany(insert, batch)
+                    previous = rows_done
+                    rows_done += len(batch)
+                    if rows_done // 1000 != previous // 1000:
+                        _restore_progress("import", tables_done, rows_done)
+                tables_done += 1
+                _restore_progress("table_complete", tables_done, rows_done)
             if any(row["name"] == "sqlite_sequence" for row in schema):
                 target.execute("DELETE FROM sqlite_sequence")
                 for row in source.execute("SELECT name,seq FROM sqlite_sequence"):
@@ -150,8 +186,10 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
                     or hashlib.sha256(existing[0]).hexdigest() != info["sha256"]
                 ):
                     raise ValueError("snapshot blob integrity failed")
+            _restore_progress("validate", tables_done, rows_done)
             if target.execute("PRAGMA foreign_key_check").fetchone() is not None:
                 raise ValueError("restored constraints failed")
+        _restore_progress("committed", tables_done, rows_done)
     finally:
         source.close()
         target.close()
