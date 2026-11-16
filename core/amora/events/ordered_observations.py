@@ -15,7 +15,9 @@ from typing import Literal
 from amora.time import Clock
 
 from .models import AmoraEvent
-from .multimodal import ObservationContext, SensoryObservation, build_observation_event
+from .multimodal import (
+    ObservationContext, SensoryObservation, build_observation_event, parse_observation_event,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +100,7 @@ class OrderedObservationBuffer:
 
     def open(self, context: ObservationContext, *, first_sequence: int = 0) -> None:
         self._check_sequence(first_sequence)
+        context = ObservationContext.model_validate(context.model_dump(mode="python"))
         with self._lock:
             key = self._key(context)
             if key in self._streams:
@@ -136,6 +139,7 @@ class OrderedObservationBuffer:
         with self._lock:
             state = self._state(context)
             event = build_observation_event(context, observation)
+            parse_observation_event(event)
             fingerprint, size = _fingerprint(event)
             sequence = observation.sequence
             if sequence < state.expected:
@@ -191,6 +195,7 @@ class OrderedObservationBuffer:
                   *, first_sequence: int = 0) -> int:
         """Trusted authority must issue the next epoch; old events are rejected."""
         self._check_sequence(first_sequence)
+        current = ObservationContext.model_validate(current.model_dump(mode="python"))
         with self._lock:
             state = self._state(previous)
             if (current.epoch != previous.epoch + 1
