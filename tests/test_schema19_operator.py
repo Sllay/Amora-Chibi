@@ -12,7 +12,7 @@ from amora.storage.pcs4_dev import _safe_report
 from amora.storage.pcs4_web import RecoveryPanel, _origin_digest, _atomic_json
 from amora.storage.remote import LibSQLBackend
 from amora.storage.schema19_operator import run_schema19
-from amora.storage.schema19_migration import migrate_certified_destination, review_certified_destination
+from amora.storage.schema19_migration import BASELINE_NAME, migrate_certified_destination
 from remote_storage_contracts_v13_source import HranaSQLite, remote
 from test_pcs4_recovery import backup
 from test_pcs4_dev import FakeNorthflank, controller
@@ -77,6 +77,7 @@ def test_full_operator_drill_preserves_old_state_and_both_databases(operator, mo
     prepared = action(panel, target, "schema19_prepare")
     assert _safe_report(prepared)["next"] == "schema19_migrate"
     assert prepared["schema19"]["reports"]["schema19_prepare"]["tables"] == old_report["tables"] + 3
+    assert prepared["schema19"]["reports"]["schema19_prepare"]["relationship_sequence_delta"] > 0
     restored = action(panel, target, "schema19_migrate")
     migration_calls = list(server.calls)
     assert _safe_report(restored)["next"] == "schema19_restart"
@@ -106,7 +107,7 @@ def test_interrupted_migration_review_v18_then_exact(operator):
     assert reviewed['schema19']['review_outcome'] == 'v18_exact'
     # Simulate committed migration with lost state update.
     candidate = panel.root / "schema19" / "candidate" / "schema19.db"
-    migrate_certified_destination(panel.snapshot, candidate, target)
+    migrate_certified_destination(candidate.parent / BASELINE_NAME, candidate, target)
     state = json.loads(path.read_text())
     state.update(status="running", failed_action="schema19_migrate", review_outcome=None)
     _atomic_json(path, state)
@@ -131,20 +132,21 @@ def test_wrong_target_incomplete_original_and_changed_pin_are_blocked(operator):
         action(panel, target, "schema19_prepare")
     panel._write(old)
     action(panel, target, "schema19_prepare")
+    calls = len(server.calls)
     other = LibSQLBackend("https://different.example", "other-token",
                          transport=httpx.MockTransport(server))
     panel.destination = lambda: other
     with pytest.raises(ValueError, match="V18_DESTINATION_CHANGED"):
         run_schema19(panel, "schema19_migrate")
     panel.destination = lambda: target
-    assert not server.calls
+    assert len(server.calls) == calls
     # Migration is refused if the candidate bytes have changed.
     candidate = panel.root / "schema19" / "candidate" / "schema19.db"
     with candidate.open("ab") as file:
         file.write(b"changed")
     failed = action(panel, target, "schema19_migrate")
     assert _safe_report(failed)["next"] == "schema19_review_migration"
-    assert not server.calls
+    assert len(server.calls) == calls
 
 
 def test_controller_recovers_v19_error_and_filters_report(operator):
@@ -281,3 +283,23 @@ def test_migration_refuses_empty_target(operator):
     with sqlite3.connect(server.path) as db:
         assert db.execute("SELECT COUNT(*) FROM sqlite_schema").fetchone()[0] == 0
     assert action(panel, target, "schema19_review_migration")["schema19"]["status"] == "error"
+
+
+@pytest.mark.parametrize("change", ["sequence_decrease", "data_change", "other_sequence"])
+def test_prepare_rejects_unrecognized_drift_without_remote_writes(operator, change):
+    import sqlite3
+    panel, target, server, _ = operator
+    with sqlite3.connect(server.path) as db:
+        if change == "sequence_decrease":
+            db.execute("UPDATE sqlite_sequence SET seq=seq-1 WHERE name='relationships'")
+        elif change == "data_change":
+            db.execute("UPDATE memory_records SET access_count=access_count+1")
+        else:
+            db.execute("INSERT INTO sqlite_sequence(name,seq) VALUES ('unknown',1)")
+    result = action(panel, target, "schema19_prepare")
+    assert result["schema19"]["status"] == "error"
+    assert result["schema19"]["reason"] == "SCHEMA19_DESTINATION_DIVERGED"
+    assert not (panel.root / "schema19" / "candidate").exists()
+    assert all(sql.strip().upper().startswith(("SELECT ", "BEGIN", "ROLLBACK", "COMMIT"))
+               for sql in server.calls)
+    assert not server.streams
