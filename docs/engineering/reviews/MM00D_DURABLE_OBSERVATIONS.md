@@ -1,6 +1,6 @@
 # MM.00D — Admissão durável e memória multimodal
 
-Status: D.1 aprovado e integrado (#239); D.2 implementado, aguardando CI, sem ativação operacional.
+Status: D.1 aprovado e integrado (#239); D.2 aprovado e integrado (#240); D.3A.1 implementado, CI pendente.
 Issue de acompanhamento: [#238](https://github.com/Sllay/Amora-Chibi/issues/238).
 Base: contrato de observação sobre AmoraEvent, sem mudança de schema ou driver.
 
@@ -10,9 +10,9 @@ Base: contrato de observação sobre AmoraEvent, sem mudança de schema ou drive
 |---|---|---|---|
 | D.1A | Identidade imutável no event store existente | retry igual = dedupe; conteúdo/identidade/escopo divergente = conflito; primeira recepção preservada; SQLite e Hrana | Aprovado; integrado #239 |
 | D.1B | Leitura interna da observação durável | recuperar AmoraEvent validado por ID, sem criar API pública; casos ausente/outro tipo/linha inválida | Aprovado; integrado #239 |
-| D.2A | Candidato de episódio autorizado | fontes duráveis lidas pelo Core, mesma sessão/correlação, interseção de audiência/escopo, evidência explícita, conteúdo bounded; nunca promover inferência a fato | Implementado; CI pendente |
-| D.2B | Gate, replay e recuperação | MemoryWriteGate existente; ID determinístico de episódio; evitar sobrescrever memória existente ou reviver memória arquivada; testar recall, restart e falhas | Implementado; CI pendente |
-| D.3 | Admissão dos transportes/ordenamento e consolidação durável | resolução real de identidade, consentimento, monotonicidade/epoch, gap e backpressure; usar fila/reconciliação existentes quando elegível; não fingir que visão é fala | Planejado |
+| D.2A | Candidato de episódio autorizado | fontes duráveis lidas pelo Core, mesma sessão/correlação, interseção de audiência/escopo, evidência explícita, conteúdo bounded; nunca promover inferência a fato | Aprovado; integrado #240 |
+| D.2B | Gate, replay e recuperação | MemoryWriteGate existente; ID determinístico de episódio; evitar sobrescrever memória existente ou reviver memória arquivada; testar recall, restart e falhas | Aprovado; integrado #240 |
+| D.3 | Admissão dos transportes/ordenamento e consolidação durável | resolução real de identidade, consentimento, monotonicidade/epoch, gap e backpressure; usar fila/reconciliação existentes quando elegível; não fingir que visão é fala | [D.3A.1 em validação](MM00D3_ADMISSION_AND_RECOVERY.md) |
 
 ## Decisões e limites
 
@@ -45,5 +45,5 @@ Limites: a janela e o máximo de fontes são parâmetros conservadores iniciais,
 - `9cd0a726`: MemoryStore create-only atômico por ID, preserva registro/índices/arquivo no conflito e rollback integral; comportamento legado permanece.
 - `295b0519`: MemoryService usa o gate normal e create-only apenas com ID estável, sem misturar leases ou pedido explícito do proprietário.
 - `240bd147`: consolidator interno recebe IDs duráveis e destinatário conhecido; interseção de audiência, escopo máximo, remote AND, janela e limite; conteúdo determinístico com texto original e evidência rotulada, proveniência derivada sem forjar fatos.
-- `53fbc68f` / `2692b38f`: testes SQLite/Hrana, recall após restart, replay, arquivamento, rejeições, rollback, dois escritores independentes, audiência de grupo e limite de conteúdo. CI ainda pendente.
+- `53fbc68f` / `2692b38f`: testes SQLite/Hrana, recall após restart, replay, arquivamento, rejeições, rollback, dois escritores independentes, audiência de grupo e limite de conteúdo. CI aprovado no HEAD `e10a235918a7566fcaff6ef4f6e9bf45f74c0f56` (3 workflows/7 jobs), merge `fbb2284b664c0a71de09084e1bdbe93bc9f8d83b`.
 - Sem consumidor ativo, API, provider, schema ou configuração de produção. D.3 deverá autorizar as sessões reais, ordenar streams, selecionar eventos, tratar invalidação/revogação e recuperar jobs automaticamente; D.2 só recupera via chamada explícita/replay do conjunto de IDs, não promete fila durável.
