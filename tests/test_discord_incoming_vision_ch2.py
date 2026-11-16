@@ -114,6 +114,7 @@ async def test_malformed_or_unavailable_visual_never_fakes_a_perception(tmp_path
 
 
 def test_image_model_rejects_mismatched_attachment_and_group(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "amora"))
     core = AmoraCore.bootstrap(clock=SimulatedClock())
     try:
         image = payload()
