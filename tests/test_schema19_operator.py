@@ -296,10 +296,17 @@ def test_prepare_rejects_unrecognized_drift_without_remote_writes(operator, chan
             db.execute("UPDATE memory_records SET access_count=access_count+1")
         else:
             db.execute("INSERT INTO sqlite_sequence(name,seq) VALUES ('unknown',1)")
+    # The driver enables connection-local foreign-key enforcement before BEGIN.
+    # It is not a database mutation. Assert the exact permitted transaction
+    # controls plus SELECT and verify the database file itself is unchanged.
+    before = server.path.read_bytes()
     result = action(panel, target, "schema19_prepare")
     assert result["schema19"]["status"] == "error"
     assert result["schema19"]["reason"] == "SCHEMA19_DESTINATION_DIVERGED"
     assert not (panel.root / "schema19" / "candidate").exists()
-    assert all(sql.strip().upper().startswith(("SELECT ", "BEGIN", "ROLLBACK", "COMMIT"))
-               for sql in server.calls)
+    statements = [sql.strip().upper() for sql in server.calls]
+    allowed = {"PRAGMA FOREIGN_KEYS=ON", "BEGIN", "ROLLBACK"}
+    unexpected = [sql for sql in statements if sql not in allowed and not sql.startswith("SELECT ")]
+    assert unexpected == []
+    assert server.path.read_bytes() == before
     assert not server.streams
