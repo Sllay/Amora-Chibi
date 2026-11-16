@@ -79,7 +79,11 @@ class MemoryStore:
         return int(row[0]) if row else 0
 
     def put(self, record: MemoryRecord, *, reflection_lease: tuple[str, str] | None = None,
-            generation_lease: tuple[str, str] | None = None) -> None:
+            generation_lease: tuple[str, str] | None = None,
+            insert_only: bool = False) -> bool | None:
+        """Create-only mode never overwrites an existing record or its indexes."""
+        if insert_only and (reflection_lease is not None or generation_lease is not None):
+            raise ValueError("INSERT_ONLY_LEASE_UNSUPPORTED")
         provenance = record.provenance
         values = (
             str(record.id), record.kind.value, record.content, record.summary,
@@ -132,8 +136,7 @@ class MemoryStore:
                 ).fetchone()
                 if lease is None:
                     raise RuntimeError("REFLECTION_LEASE_LOST")
-            self._conn.execute(
-                """
+            statement = """
                 INSERT INTO memory_records(
                     id, kind, content, summary, provenance_kind, provenance_source,
                     provenance_confidence, source_event_id, actor_id, session_id,
@@ -157,9 +160,14 @@ class MemoryStore:
                     gate_score=excluded.gate_score, retrievability=excluded.retrievability,
                     access_count=excluded.access_count, last_accessed_at=excluded.last_accessed_at,
                     archived_at=excluded.archived_at, metadata_json=excluded.metadata_json
-                """,
-                values,
-            )
+                """
+            if insert_only:
+                statement = statement.split("ON CONFLICT(id)", 1)[0] + "ON CONFLICT(id) DO NOTHING"
+            cursor = self._conn.execute(statement, values)
+            if insert_only and cursor.rowcount != 1:
+                if cursor.rowcount != 0:
+                    raise RuntimeError("MEMORY_INSERT_OUTCOME_UNKNOWN")
+                return False
             self._conn.execute("DELETE FROM memory_entities WHERE memory_id = ?", (str(record.id),))
             self._conn.executemany(
                 "INSERT INTO memory_entities(memory_id, entity_id, confidence) VALUES (?, ?, ?)",
@@ -176,6 +184,8 @@ class MemoryStore:
                     "INSERT INTO memory_fts(memory_id, content, tags) VALUES (?, ?, ?)",
                     (str(record.id), " ".join(filter(None, (record.content, record.summary or ""))), " ".join(sorted(record.tags))),
                 )
+
+        return True if insert_only else None
 
     def get(self, memory_id: UUID | str) -> MemoryRecord | None:
         with trace_lock(self._lock):
