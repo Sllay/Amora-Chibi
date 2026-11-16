@@ -85,6 +85,16 @@ class AttachmentRef(BaseModel):
     size_bytes: int | None = Field(default=None, ge=0, le=128 * 1024 * 1024)
 
 
+class InboundImageContent(BaseModel):
+    """Ephemeral transport bytes. Never persist or project to a text provider."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attachment_id: str = Field(min_length=1, max_length=256)
+    content_mime: str = Field(min_length=6, max_length=64)
+    content_base64: str = Field(min_length=4, max_length=5_592_408)
+
+
 class ExpressionSemanticProfile(BaseModel):
     """Local perceptual/social meaning attached to a transport expression.
 
@@ -155,6 +165,8 @@ class InboundMessage(BaseModel):
     reply_to_amora: bool = False
     reply_to_author_identifiers: list[ExternalActorRef] = Field(default_factory=list, max_length=6)
     attachments: list[AttachmentRef] = Field(default_factory=list, max_length=16)
+    incoming_image: InboundImageContent | None = None
+    incoming_image_status: str | None = Field(default=None, max_length=96)
     expressions: list[ExpressionRef] = Field(default_factory=list, max_length=8)
     available_expressions: list[ExpressionRef] = Field(default_factory=list, max_length=64)
     timestamp: datetime
@@ -165,6 +177,13 @@ class InboundMessage(BaseModel):
 
     @model_validator(mode="after")
     def require_content(self) -> "InboundMessage":
+        if self.incoming_image is not None:
+            if (self.platform != MessagingPlatform.DISCORD or self.channel_type != ChannelType.DM
+                    or not any(a.attachment_id == self.incoming_image.attachment_id
+                               and a.media_type and a.media_type.lower().split(";", 1)[0]
+                               == self.incoming_image.content_mime
+                               for a in self.attachments)):
+                raise ValueError("incoming image must match native Discord DM attachment")
         if not self.text.strip() and not self.attachments and not self.expressions:
             raise ValueError("inbound message requires text, attachment metadata, or expression metadata")
         return self
