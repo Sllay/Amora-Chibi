@@ -22,6 +22,7 @@ from amora.world.service import RelationshipEvolutionService
 from .dialogue import DialogueOrchestrator
 from .models import CognitiveContext, CognitiveRequest, ContextMemory
 from .store import CognitiveStore
+from .temporal import observed_timestamp, time_projection
 
 
 def resolve_scene_visibility(request: CognitiveRequest) -> str:
@@ -352,11 +353,16 @@ class ContextCompiler:
                 message, remote=remote, recipient_id=request.speaker_id
             ):
                 continue
+            if message.metadata.get("cognitive_mode") == "autonomous_initiation" and message.speaker_id != "ENTITY_AMORA":
+                continue
             text = message.spoken_text or message.normalized_text or message.raw_text
             if text:
+                observed_at, timestamp_source = observed_timestamp(message)
                 recent.append({"turn_id": str(message.turn_id), "speaker_id": message.speaker_id,
                                "addressee_id": message.addressee_id, "text": text[:800],
-                               "source": message.source.value, "status": message.status.value})
+                               "source": message.source.value, "status": message.status.value,
+                               "observed_at": observed_at.isoformat() if observed_at else None,
+                               "timestamp_source": timestamp_source})
         recent = recent[-48:]
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
@@ -392,13 +398,18 @@ class ContextCompiler:
                 self_snapshot = {key: value for key, value in self_snapshot.items() if key in allowed_layers}
                 reasons.append("SELF_MODEL_REMOTE_LAYER_ALLOWLIST")
 
+        now = self.clock.now()
+        temporal = time_projection(now, speaker_id=request.speaker_id, session_id=request.session_id,
+                                   recent=recent, current_sent_at=request.metadata.get("platform_sent_at")
+                                   if request.metadata.get("surface") == "platform_messaging" else None)
         context = CognitiveContext(
-            turn_id=request.turn_id, created_at=self.clock.now(), speaker_id=request.speaker_id, expression_profile=profile,
+            turn_id=request.turn_id, created_at=now, speaker_id=request.speaker_id, expression_profile=profile,
             target_id=request.target_id, user_text=request.text, acir=acir, self_model=self_snapshot,
             relationships=relationships, mood={"valence": round(mood.valence, 6), "arousal": round(mood.arousal, 6),
                                                "dominance": round(mood.dominance, 6)},
             directed_affect=affect, drives=drives, active_intention=intention, memories=memories,
-            world_claims=claims, recent_messages=recent, privacy_scope=request.privacy_scope,
+            world_claims=claims, recent_messages=recent, temporal_context=temporal,
+            privacy_scope=request.privacy_scope,
             remote_processing_allowed=remote, token_budget=token_budget, reason_codes=reasons,
             scene_visibility=visibility,
         )
