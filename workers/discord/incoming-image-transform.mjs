@@ -85,7 +85,7 @@ export async function transcodeOversizedImage(bytes, mime, {
         // itself is written at target, with no brackets in its actual path.
         await run([
           source, '--size', String(preset.size),
-          '--output', target + '[Q=' + preset.quality + ',strip]',
+          '--path', target + '[Q=' + preset.quality + ',strip]',
         ], Math.min(4000, left));
         const info = await stat(target);
         if (!info.isFile() || !info.size) {
