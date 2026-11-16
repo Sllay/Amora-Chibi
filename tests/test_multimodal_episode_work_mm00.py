@@ -68,9 +68,9 @@ def test_durable_claim_recovery_and_ack_after_restart(remote, tmp_path, mode):
         second = work.claim()
         assert second.job_id == job_id and second.attempts == 2
         assert second.lease_token != first.lease_token
-        assert not work.finish(first, JobOutcome.STORED)
-        assert work.finish(second, JobOutcome.STORED)
-        assert work.state(job_id) == {"status": "done", "attempts": 2, "last_reason": "EPISODE_STORED"}
+        assert not work.finish(first, JobOutcome.REJECTED)
+        assert work.finish(second, JobOutcome.REJECTED)
+        assert work.state(job_id) == {"status": "done", "attempts": 2, "last_reason": "EPISODE_REJECTED"}
         assert work.claim() is None
         assert work.enqueue(selection) == EnqueueResult.DUPLICATE
         assert memory.store.count() == 0  # repository is not a memory writer
@@ -104,7 +104,7 @@ def test_capacity_gate_retry_cancel_and_final_expiration(tmp_path):
         assert work.enqueue(selected(b)) == EnqueueResult.ACCEPTED
         claim = work.claim()
         assert work.cancel(claim.job_id)
-        assert not work.finish(claim, JobOutcome.STORED)
+        assert not work.finish(claim, JobOutcome.REJECTED)
         assert not work.cancel(claim.job_id)
         assert work.state(claim.job_id)["status"] == "cancelled"
         assert work.enqueue(selected(b)) == EnqueueResult.DUPLICATE
