@@ -16,9 +16,9 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstrai
 from .models import AmoraEvent, PrivacyScope
 
 
-Identifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)]
-ShortLabel = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
-SemanticText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4096)]
+Identifier = Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=256)]
+ShortLabel = Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=128)]
+SemanticText = Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=4096)]
 
 
 class ObservationSource(StrEnum):
@@ -60,6 +60,7 @@ class ObservationContext(BaseModel):
     source: ObservationSource
     session_id: Identifier
     scope_id: UUID
+    correlation_id: UUID
     stream_id: UUID
     epoch: int = Field(ge=0, le=2**31 - 1, strict=True)
     actor_id: Identifier | None = None
@@ -164,6 +165,6 @@ def build_observation_event(
         timestamp=observation.capture_ended_at, source=f"perception:{context.source.value}",
         actor=context.actor_id, confidence=observation.confidence,
         payload=payload, privacy_scope=context.privacy_scope,
-        session_id=context.session_id, correlation_id=context.scope_id,
+        session_id=context.session_id, correlation_id=context.correlation_id,
         sequence=observation.sequence, dedupe_key=f"perception:v1:{event_id}",
     )
