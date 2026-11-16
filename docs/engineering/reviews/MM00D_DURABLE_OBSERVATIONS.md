@@ -1,6 +1,6 @@
 # MM.00D — Admissão durável e memória multimodal
 
-Status: D.1 implementado na branch; CI/merge pendentes. Dependência MM.00C (#237) mantida.
+Status: D.1 aprovado e integrado (#239); D.2 em implementação, sem ativação operacional.
 Issue de acompanhamento: [#238](https://github.com/Sllay/Amora-Chibi/issues/238).
 Base: contrato de observação sobre AmoraEvent, sem mudança de schema ou driver.
 
@@ -8,10 +8,10 @@ Base: contrato de observação sobre AmoraEvent, sem mudança de schema ou drive
 
 | ID | Escopo | Critério de saída | Estado |
 |---|---|---|---|
-| D.1A | Identidade imutável no event store existente | retry igual = dedupe; conteúdo/identidade/escopo divergente = conflito; primeira recepção preservada; SQLite e Hrana | Implementado; CI pendente |
-| D.1B | Leitura interna da observação durável | recuperar AmoraEvent validado por ID, sem criar API pública; casos ausente/outro tipo/linha inválida | Implementado; CI pendente |
-| D.2A | Candidato de episódio autorizado | fontes duráveis lidas pelo Core, mesma sessão/correlação, interseção de audiência/escopo, evidência explícita, conteúdo bounded; nunca promover inferência a fato | Planejado |
-| D.2B | Gate, replay e recuperação | MemoryWriteGate existente; ID determinístico de episódio; evitar sobrescrever memória existente ou reviver memória arquivada; testar recall, restart e falhas | Planejado |
+| D.1A | Identidade imutável no event store existente | retry igual = dedupe; conteúdo/identidade/escopo divergente = conflito; primeira recepção preservada; SQLite e Hrana | Aprovado; integrado #239 |
+| D.1B | Leitura interna da observação durável | recuperar AmoraEvent validado por ID, sem criar API pública; casos ausente/outro tipo/linha inválida | Aprovado; integrado #239 |
+| D.2A | Candidato de episódio autorizado | fontes duráveis lidas pelo Core, mesma sessão/correlação, interseção de audiência/escopo, evidência explícita, conteúdo bounded; nunca promover inferência a fato | Em implementação |
+| D.2B | Gate, replay e recuperação | MemoryWriteGate existente; ID determinístico de episódio; evitar sobrescrever memória existente ou reviver memória arquivada; testar recall, restart e falhas | Em implementação |
 | D.3 | Admissão dos transportes/ordenamento e consolidação durável | resolução real de identidade, consentimento, monotonicidade/epoch, gap e backpressure; usar fila/reconciliação existentes quando elegível; não fingir que visão é fala | Planejado |
 
 ## Decisões e limites
@@ -29,5 +29,13 @@ Base: contrato de observação sobre AmoraEvent, sem mudança de schema ou drive
 - `a9b5758c`: builder normaliza horários UTC; parser reconstrói envelope canônico e rejeita alterações de IDs/sequência/política/campos não autorizados; replay permite apenas alteração de chegada. Erro de validação sanitizado.
 - `1cb15982`: event store valida observações antes de inserir; verifica replay semântico apenas no tipo reservado, mantém dedupe legado; leitura interna por ID com validação. Sem tabela nova.
 - `f755c709`: rota genérica /v1/events rejeita tipo reservado com 403, inclusive cliente autenticado; admissão futura ainda precisa resolver sessão e identidade no Core.
-- `d0d233d6`: testes SQLite e Hrana com reabertura do banco, primeira chegada preservada, conflitos em conteúdo/ator/escopo/modelo/confiança, envelope forjado/corrompido, rota externa e ausência/other type. Testes ainda não certificados no CI deste SHA.
-- D.2/D.3 permanecem abertos: não há consolidação multimodal, ordering gate ou adaptador real ativo. A alteração de D.1 não grava frames/áudio nem habilita percepções no runtime; o evento só chega ao store mediante chamada interna explícita.
+- `d0d233d6`: testes SQLite e Hrana com reabertura do banco, primeira chegada preservada, conflitos em conteúdo/ator/escopo/modelo/confiança, envelope forjado/corrompido, rota externa e ausência/other type. CI final do #239: 4/4 workflows, 8/8 jobs, HEAD `54c4ed423713d4768c2cfb3bc5a788b9263c13e4`, merge `210b50cc6fce0e6256b76f7bc3e171cfe0f48c76`.
+- D.2/D.3 permanecem abertos: não há ordering gate ou adaptador real ativo. A alteração de D.1 não grava frames/áudio nem habilita percepções no runtime; o evento só chega ao store mediante chamada interna explícita.
+
+## Plano D.2 — registrado antes do código
+
+1. D.2A: serviço interno recebe somente 1–4 IDs de observações duráveis e identidade de destinatário resolvida pelo Core; valida existência, sessão/correlação comum, janela temporal de até 120s, audiência efetiva de cada fonte e identidade conhecida no registry. Seleção de relevância é explícita, não automática. Desconhecido não vira fato; inferências ficam rotuladas. Conteúdo determinístico com detalhes textuais originais e timestamps, sem resumo inventado; limite total 12k, rejeitar excesso em vez de truncar silenciosamente. Não expor mídias ou URLs. Proveniência com IDs de eventos em metadata e source_event_id, sem misturar IDs de memórias.
+2. D.2B: MemoryService/MemoryWriteGate existentes, tipo episódico, ID determinístico pelo conjunto de evidências ordenadas. Inserção create-only atômica na mesma transação dos índices; conflito não sobrescreve memória nem revive arquivo. Replay retorna estado sem revelar conteúdo; falha antes de commit é reexecutável por IDs, após commit não duplica. Não alterar comportamento de outros escritores.
+3. Testes: SQLite/Hrana, duas modalidades, recall após restart, escopo/audiência/remote, identidade desconhecida, fontes faltantes/fora da sessão, baixa relevância, desconhecido/inferência, IDs repetidos, rollback, concorrência, memória arquivada/alterada. Nenhuma alteração de schema ou provider; não conectar ao bus automaticamente. D.3 permanece responsável pela autorização real da sessão, seleção automática, fila/reconciliação durável e ordenação.
+
+Limites: a janela e o máximo de fontes são parâmetros conservadores iniciais, não medição de produção. O serviço só recebe seleção interna autorizada; não oferece endpoint de gravação nem prova que a captura já funciona. Deduplicação por conjunto exato não resolve ainda episódios semanticamente semelhantes/overlap, tarefa de consolidação avançada.
