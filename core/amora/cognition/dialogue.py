@@ -208,6 +208,17 @@ class DialogueOrchestrator:
             )
 
         if "AUTONOMOUS_INITIATION" in context.reason_codes:
+            if context.temporal_opportunity:
+                return DialoguePlan(
+                    act=DialogueAct.AUTONOMOUS_INITIATION,
+                    objective="decide whether to initiate brief natural contact from the temporal opportunity; silence is valid",
+                    depth=DialogueDepth.SHORT,
+                    response_moves=list(context.temporal_opportunity["allowed_actions"]),
+                    ask_followup=True, offer_help=False, closing_mode="natural",
+                    style_register=style, tone_tags=tone, stance="self_directed",
+                    relational_attitude=attitude,
+                    reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "TEMPORAL_INITIATIVE"],
+                )
             ask = self._curiosity_high(context)
             objective = (
                 "initiate contact from missing him, not from curiosity"
