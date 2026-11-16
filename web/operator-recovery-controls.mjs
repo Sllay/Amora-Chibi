@@ -275,7 +275,7 @@ function installPCS4Recovery(operatorApi) {
       : state.reason || (state.next ? 'Próxima etapa: ' + state.next : 'Certificação concluída.');
     buttons.forEach(button => {
       const statusQuery = button.dataset.pcs4 === 'schema19_status'
-        && ['ok', 'error', 'blocked'].includes(state.status)
+        && (['error', 'blocked'].includes(state.status) || (state.status === 'ok' && state.completed?.length === 4))
         && state.reason !== 'SUBMISSION_UNCERTAIN_REVIEW_REQUIRED';
       button.disabled = busy || (state.next !== button.dataset.pcs4 && !statusQuery);
     });
