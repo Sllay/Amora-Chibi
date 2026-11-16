@@ -84,7 +84,7 @@ export async function transcodeOversizedImage(bytes, mime, {
         // libvips supports bracket options on the output filename; the file
         // itself is written at target, with no brackets in its actual path.
         await run([
-          source, '--size', String(preset.size),
+          source, '--size', String(preset.size) + '>',
           '--path', target + '[Q=' + preset.quality + ',strip]',
         ], Math.min(4000, left));
         const info = await stat(target);
