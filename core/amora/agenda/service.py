@@ -6,6 +6,7 @@ promise. Every due occurrence has one deterministic outbound id.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from uuid import UUID, NAMESPACE_URL, uuid5
@@ -19,6 +20,10 @@ CREATE_TYPE = "agenda.created"
 CANCEL_TYPE = "agenda.cancelled"
 MAX_ITEMS = 2500
 MAX_ACTIVE = 64
+
+
+def agenda_enabled():
+    return os.getenv("AMORA_AGENDA_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
 
 
 def _valid_target(conn, account: str, conversation: str, external_id: str, *, connected: bool = False):
@@ -195,6 +200,8 @@ class AgendaService:
 
     def tick(self):
         """Scan bounded active agenda, queue only the due current occurrence."""
+        if not agenda_enabled():
+            return []
         now = utc(self.clock.now())
         with trace_lock(self.db._lock):
             items = _ledger(self.db._conn)
@@ -273,6 +280,8 @@ class AgendaService:
 
 def agenda_claim_allowed(conn, message: OutboundMessage, now: datetime, *, require_connected=True):
     """Fail closed if cancelled, modified, expired, misrouted or unverified."""
+    if not agenda_enabled():
+        return False
     meta = message.metadata
     try:
         ident = UUID(meta["agenda_id"])
