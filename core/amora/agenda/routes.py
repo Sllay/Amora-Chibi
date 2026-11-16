@@ -6,7 +6,7 @@ from .service import AgendaService
 
 
 def register_agenda_routes(app: FastAPI, core, require_auth):
-    service = AgendaService(core)
+    service = AgendaService(core.database, core.clock, core.messaging_store)
 
     def require_operator(request: Request):
         if getattr(request.state, "security_role", None) not in {"admin", "operator"}:
