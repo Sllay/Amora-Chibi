@@ -1,6 +1,6 @@
 # MM.00D.3 — Admissão autorizada, ordenação e recuperação
 
-Status: D.2 aprovado e integrado (#240); D.3A.1 implementado, CI pendente. Acompanhamento #238.
+Status: D.2 aprovado e integrado (#240); D.3A.1 aprovado e integrado (#241); D.3A.2 implementado, CI pendente. Acompanhamento #238.
 Não ativar captura, provider ou storage novo neste checkpoint sem contrato e testes.
 
 ## Contratos existentes inspecionados
@@ -15,8 +15,8 @@ Não ativar captura, provider ou storage novo neste checkpoint sem contrato e te
 
 | ID | Entrega | Gate | Estado |
 |---|---|---|---|
-| D.3A.1 | Autoridade interna Web/device e screen | grant explícito, sessão autenticada ativa, device/owner revalidados, expiração/revogação, escopo e audiência emitidos pelo Core | Implementado; CI pendente |
-| D.3A.2 | Autoridade de plataforma e participantes | binding nativo por conta e conversa, consentimento de cada participante, revalidação e isolamento | Planejado |
+| D.3A.1 | Autoridade interna Web/device e screen | grant explícito, sessão autenticada ativa, device/owner revalidados, expiração/revogação, escopo e audiência emitidos pelo Core | Aprovado; integrado #241 |
+| D.3A.2 | Autoridade de plataforma e participantes | binding nativo por conta e conversa, consentimento de cada participante, revalidação e isolamento | Implementado; CI pendente |
 | D.3B | Buffer temporal limitado | epoch/sequence, reorder, gap, backpressure, limites por bytes/idade/contagem; eventos tardios não substituem presente | Planejado |
 | D.3C | Seleção e recuperação durável | somente evidências relevantes; plano de trabalho por IDs, dedupe, lease/reconcile; replay antes/depois de falha; sem mídia bruta | Planejado |
 | D.3D | Primeiro adaptador interno CH2 e teste do ciclo | validação de identidade e mídia, memória, recall, reinício, falhas, privacidade, métricas; gate real Discord/Groq em MM.01 | Planejado |
@@ -43,5 +43,8 @@ Antes de cada subcheckpoint atualizar este ledger e #238. Após implementação:
 ## D.3A.1 — implementação
 
 - `fc42d4a4`: `core/amora/events/sensory_authority.py`, autoridade interna process-local, grants explícitos bounded, TTL limitado pela sessão, revogação, revalidação de SessionService/device/owner/trust/scope. IDs aleatórios por grant; mesma correlação para modalidades de uma experiência, streams separados. Sessão PRIVATE nunca permite provider remoto; TRUSTED pode autorizar explicitamente. Restart perde grants. Nenhum actor externo aceito como autoridade: o chamador interno deve autenticar o principal, e o grant confere o principal com a sessão persistida.
-- `e87787a3`: testes com AmoraDatabase SQLite real e SimulatedClock; consentimento, identidade, escopo, capacidade, expiração, revogação, mudança de trust/owner/session, modalidades e isolamento/restart. CI pendente.
+- `e87787a3`: testes com AmoraDatabase SQLite real e SimulatedClock; consentimento, identidade, escopo, capacidade, expiração, revogação, mudança de trust/owner/session, modalidades e isolamento/restart. CI aprovado no HEAD `ac1f8282b446f9f6fc908120a61899bdb4848bc9` (3/3 workflows, 7/7 jobs); merge `f39f182cfe46776cf2189e04b10a951e204a270c`.
 - Limites deliberados: não existe endpoint, captura, provider, publicação, renovação automática ou autorização de terceiros. D.3A.2 integra bindings de plataforma; D.3D integra a fronteira autenticada. Revogação afeta verificações futuras; coordenação entre autorização e trabalho concorrente/externo ainda requer integração. O grant não é persistido e não substitui a política de armazenamento/remoção.
+
+## D.3A.2
+[Plano e evidência](MM00D3A2_PLATFORM_CONSENT.md). Código e testes submetidos; ainda sem validação final. D.3B/C/D permanecem pendentes.
