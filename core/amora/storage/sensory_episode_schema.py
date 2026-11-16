@@ -36,3 +36,26 @@ CREATE TABLE IF NOT EXISTS sensory_episode_invalidations (
     invalidated_at TEXT NOT NULL
 );
 """
+
+
+CANDIDATE_TABLES = frozenset({
+    "sensory_episode_jobs", "sensory_episode_job_evidence", "sensory_episode_invalidations",
+})
+CANDIDATE_INDEXES = frozenset({
+    "idx_sensory_episode_due", "idx_sensory_episode_session_status", "idx_sensory_episode_evidence",
+})
+
+
+def verify_candidate_ddl(connection):
+    """Validate reviewed table/index definitions on a SQLite snapshot."""
+    import sqlite3
+    from contextlib import closing
+
+    names = CANDIDATE_TABLES | CANDIDATE_INDEXES
+    with closing(sqlite3.connect(":memory:")) as model:
+        model.execute("CREATE TABLE events (id TEXT PRIMARY KEY)")
+        model.executescript(SENSORY_EPISODE_QUEUE_CANDIDATE_SQL)
+        expected = dict(model.execute("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL"))
+    actual = dict(connection.execute("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL"))
+    if any(actual.get(name) != expected[name] for name in names):
+        raise ValueError("SCHEMA19_DDL_MISMATCH")

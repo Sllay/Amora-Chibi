@@ -1,6 +1,6 @@
 # MM.00D.3C.2B — Fence de gravação e invalidação
 
-Status: implementado; CI pendente. #246 aprovado (4 workflows/8 jobs, HEAD f20ff0438b2803333ce3550165f5b0aeb0cddfa5, merge e03cf326be80a3d0af97162838d49b180a8ce900). Issue #238.
+Status: C.2B aprovado e integrado (#247); #246 aprovado (4 workflows/8 jobs, HEAD f20ff0438b2803333ce3550165f5b0aeb0cddfa5, merge e03cf326be80a3d0af97162838d49b180a8ce900). Issue #238.
 Schema oficial 18, DDL candidato somente em testes isolados.
 
 ## Plano antes do código
@@ -17,3 +17,6 @@ Decisão: ACK atômico é preferível a recuperar uma janela de duas transaçõe
 - `48ca50ca`, `e971a57c`: process explícito reconstrói candidato via D.2 e MemoryWriteGate; sucesso não pode ser confirmado manualmente; invalidação cria tombstone, cancela jobs e arquiva episódios diretos atomicamente. Rejeita fanout >128 jobs ou memórias (transação inteira revertida, requer revisão); não é deleção física, nem invalidação transitiva. O scan JSON de episódios diretos é necessário para registros pré-fila; medir custo e migrar índice em C.2C antes de escala real.
 - `9b25bfca`, `31ee537d`: testes SQLite/Hrana, perda de resposta pós-commit e reopen, rollback de ACK/índices, lease expirado/reclamado/cancelado, claim adulterado, tombstone antes/depois, memória arquivada e replay. CI pendente.
 - Limites: autoridade de revogação real, fence de admissão/publicação, exclusão de fonte e retenção/tombstones, recuperação de worker e política de invalidation transitiva continuam C.2C/3. DDL candidato não registrado, schema 18 oficial, sem deploy.
+
+## Atualização C.2C
+C.2B aprovado #247 (4 workflows, 8 jobs), merge `483e35071be555226c6f0c99c7b61ba95207259c`. [C.2C.1](MM00D3C2C_SCHEMA19_DRILL.md) implementado em laboratório: cópia offline v18→v19 e opt-in de restore/restart. CI pendente; certificação real e promoção runtime separadas. Schema 18 permanece oficial.

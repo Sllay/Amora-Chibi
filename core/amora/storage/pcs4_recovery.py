@@ -50,8 +50,10 @@ def _tables(db):
     )]
 
 
-def verify_snapshot(snapshot):
+def verify_snapshot(snapshot, *, expected_schema=LATEST_SCHEMA_VERSION):
     """Verify both files, including sidecar even when SQL blobs are present."""
+    if type(expected_schema) is not int or expected_schema not in {LATEST_SCHEMA_VERSION, 19}:
+        raise ValueError("PCS4C_SCHEMA")
     snapshot = Path(snapshot)
     archive_path = Path(str(snapshot) + ".avatar.zip")
     with closing(_open(snapshot)) as db, zipfile.ZipFile(archive_path) as archive:
@@ -60,8 +62,11 @@ def verify_snapshot(snapshot):
         if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise ValueError("PCS4C_FOREIGN_KEYS")
         version = db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
-        if version != LATEST_SCHEMA_VERSION:
+        if version != expected_schema:
             raise ValueError("PCS4C_SCHEMA")
+        if expected_schema == 19:
+            from .sensory_episode_schema import verify_candidate_ddl
+            verify_candidate_ddl(db)
         assets = [
             dict(zip(("id", "file_name", "size_bytes", "sha256"), row))
             for row in db.execute("SELECT id,file_name,size_bytes,sha256 FROM avatar_assets")
@@ -130,15 +135,15 @@ def destination_from_environment():
     return LibSQLBackend(destination, token)
 
 
-def certify_restore(snapshot, backend):
+def certify_restore(snapshot, backend, *, expected_schema=LATEST_SCHEMA_VERSION):
     """Import into empty isolated destination, re-export and compare.
 
     A failed comparison leaves the isolated database intact for diagnosis;
     the operator must provision a fresh empty destination before retrying.
     """
     snapshot = Path(snapshot)
-    report = verify_snapshot(snapshot)
-    restore_empty_remote(backend, snapshot)
+    report = verify_snapshot(snapshot, expected_schema=expected_schema)
+    restore_empty_remote(backend, snapshot, target_schema=expected_schema)
     with tempfile.TemporaryDirectory(prefix="pcs4c-") as directory:
         recovered = Path(directory) / "recovered.db"
         with closing(backend.connect(recovered)) as connection:

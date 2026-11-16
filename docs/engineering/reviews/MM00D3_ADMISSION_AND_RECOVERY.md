@@ -1,6 +1,6 @@
 # MM.00D.3 — Admissão autorizada, ordenação e recuperação
 
-Status: D.2 aprovado e integrado (#240); D.3A.1/A.2 aprovados e integrados (#241/#242); D.3B.1 aprovado (#243); B.2A aprovado (#244); C.1 aprovado (#245); C.2A aprovado (#246); C.2B implementado, CI pendente. Acompanhamento #238.
+Status: D.2 aprovado e integrado (#240); D.3A.1/A.2 aprovados e integrados (#241/#242); D.3B.1 aprovado (#243); B.2A aprovado (#244); C.1 aprovado (#245); C.2A aprovado (#246); C.2B aprovado (#247); C.2C.1 implementado, CI pendente. Acompanhamento #238.
 Não ativar captura, provider ou storage novo neste checkpoint sem contrato e testes.
 
 ## Contratos existentes inspecionados
@@ -22,8 +22,9 @@ Não ativar captura, provider ou storage novo neste checkpoint sem contrato e te
 | D.3B.2B | Buffer raw e sincronização real | formatos, relógios, limites e métricas no transporte | Planejado nos adaptadores MM.02–05 |
 | D.3C.1 | Seleção bounded de episódios | gate existente, prioridade, overlap e orçamento | Aprovado; integrado #245 |
 | D.3C.2A | Repository durável candidato | enqueue, claim, lease, retry, cancel; DDL isolado | Aprovado; integrado #246 |
-| D.3C.2B | Fence e invalidação | gravação/ACK atômicos, tombstone, cancelamento e archive | Implementado; CI pendente |
-| D.3C.2C | Migração e certificação PCS | upgrade isolado, backup/restore/restart | Planejado |
+| D.3C.2B | Fence e invalidação | gravação/ACK atômicos, tombstone, cancelamento e archive | Aprovado; integrado #247 |
+| D.3C.2C.1 | Cópia v19 offline e certificação em laboratório | upgrade aditivo, restore/restart exatos | Implementado; CI pendente |
+| D.3C.2C.2/3 | Certificação real e promoção runtime | Turso isolado e readiness após gate | Planejado |
 | D.3C.3 | Produtor real | seleção efêmera e persistência/queue reconciliadas | Planejado |
 | D.3D | Primeiro adaptador interno CH2 e teste do ciclo | validação de identidade e mídia, memória, recall, reinício, falhas, privacidade, métricas; gate real Discord/Groq em MM.01 | Planejado |
 
@@ -66,3 +67,6 @@ C.1 aprovado #245 (7/7 jobs), merge `f81094b08d5d1e9fe44405094c06a5612be98d66`. 
 
 ## Atualização C.2B
 C.2A aprovado #246 (4 workflows, 8 jobs), merge `e03cf326be80a3d0af97162838d49b180a8ce900`. [Plano/evidência C.2B](MM00D3C2B_EPISODE_FENCE.md): fence e ACK na transação de memória, invalidação direta e testes implementados. CI pendente; schema oficial 18, candidato não registrado. C.2C, C.3 e D permanecem abertos.
+
+## Atualização C.2C
+C.2B aprovado #247 (4 workflows, 8 jobs), merge `483e35071be555226c6f0c99c7b61ba95207259c`. [C.2C.1](MM00D3C2C_SCHEMA19_DRILL.md) implementado em laboratório: cópia offline v18→v19 e opt-in de restore/restart. CI pendente; certificação real e promoção runtime separadas. Schema 18 permanece oficial.

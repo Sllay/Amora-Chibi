@@ -56,7 +56,7 @@ MM.06/07: consolidação temporal/episódica, fusão entre fala e visão, ACIR p
 
 ## 5. Próximo checkpoint
 
-MM.00D: D.1 aprovado (#239); D.2 aprovado (#240); D.3A.1/A.2 aprovados e integrados (#241/#242); D.3B.1 aprovado (#243); B.2A aprovado (#244); C.1 aprovado (#245); C.2A aprovado (#246); C.2B implementado, CI pendente. Acompanhar subcheckpoints no ledger D. Não integrar um pipeline paralelo; a recuperação PCS.4C está aprovada, e a promoção de projeção/storage permanece independente.
+MM.00D: D.1 aprovado (#239); D.2 aprovado (#240); D.3A.1/A.2 aprovados e integrados (#241/#242); D.3B.1 aprovado (#243); B.2A aprovado (#244); C.1 aprovado (#245); C.2A aprovado (#246); C.2B aprovado (#247); C.2C.1 implementado, CI pendente. Acompanhar subcheckpoints no ledger D. Não integrar um pipeline paralelo; a recuperação PCS.4C está aprovada, e a promoção de projeção/storage permanece independente.
 
 ## 6. Checkpoint ledger — obrigatório antes de qualquer implementação
 
@@ -70,7 +70,7 @@ Issue de acompanhamento persistente: [#238](https://github.com/Sllay/Amora-Chibi
 | MM.00C.2 | Concluído — CI/merge | `8c2e7cde`: validações negativas, identidade, dedupe em SQLite após restart e publicação efêmera |
 | MM.00D.1 | Concluído — CI/merge | [Ledger D.1](MM00D_DURABLE_OBSERVATIONS.md): event store, replay, leitura interna e proteção de ingress |
 | MM.00D.2 | Concluído — CI/merge | [Ledger D.2](MM00D_DURABLE_OBSERVATIONS.md): episódio, gate, recall pós-restart, isolamento, rollback e concorrência |
-| MM.00D.3 | A.1/A.2/B.1/B.2A/C.1/C.2A aprovados; C.2B implementado — CI pendente | [Ledger D.3](MM00D3_ADMISSION_AND_RECOVERY.md): autoridade de sessão/device e plataforma; B.2/C/D pendentes |
+| MM.00D.3 | A.1/A.2/B.1/B.2A/C.1/C.2A/C.2B aprovados; C.2C.1 implementado — CI pendente | [Ledger D.3](MM00D3_ADMISSION_AND_RECOVERY.md): autoridade de sessão/device e plataforma; B.2/C/D pendentes |
 | MM.01 | Pendente | Certificação real CH2, primeiro ciclo completo |
 
 Escopo C.1/C.2: contrato interno, sem endpoint, migration, provider, listener ativo ou mudança de comportamento. Contexto resolvido e autorizado pelo Core separado da observação; timestamp de captura/recepção, sequência/epoch, identidade e escopo, evidência/proveniência, rejeição de mídia bruta/metadata arbitrária, limites; não publicar automaticamente. D.1/D.2: integração no bus/store e gate de memória, não confundir replay de evento com retry de handler. O bus atual deduplica a entrega persistida antes de chamar handlers; execução durável da consolidação precisa de checkpoint/lease próprios existentes ou explicitamente integrados, não apenas republicação do mesmo evento.
@@ -85,3 +85,6 @@ Ao finalizar cada subcheckpoint: atualizar este ledger e #238 com SHA, CI do SHA
 
 ## Atualização C.2B
 C.2A aprovado #246 (4 workflows, 8 jobs), merge `e03cf326be80a3d0af97162838d49b180a8ce900`. [Plano/evidência C.2B](MM00D3C2B_EPISODE_FENCE.md): fence e ACK na transação de memória, invalidação direta e testes implementados. CI pendente; schema oficial 18, candidato não registrado. C.2C, C.3 e D permanecem abertos.
+
+## Atualização C.2C
+C.2B aprovado #247 (4 workflows, 8 jobs), merge `483e35071be555226c6f0c99c7b61ba95207259c`. [C.2C.1](MM00D3C2C_SCHEMA19_DRILL.md) implementado em laboratório: cópia offline v18→v19 e opt-in de restore/restart. CI pendente; certificação real e promoção runtime separadas. Schema 18 permanece oficial.
