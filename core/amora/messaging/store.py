@@ -373,6 +373,13 @@ class MessagingStore:
             ).fetchall()
             for row in rows:
                 candidate = self._outbound_from_row(row)
+                if candidate.metadata.get("temporal_initiative"):
+                    from .temporal_initiative import initiative_claim_allowed
+                    if not initiative_claim_allowed(self.database._conn, candidate, now):
+                        self.database._conn.execute(
+                            "UPDATE messaging_outbound_queue SET status='cancelled',error_code='TEMPORAL_INITIATIVE_STALE',claim_expires_at=NULL WHERE id=? AND status IN ('queued','claimed')",
+                            (row["id"],))
+                        continue
                 if candidate.metadata.get("memory_disclosure"):
                     from .disclosure import public_text_allowed, audience_text_allowed
                     if (not self.disclosure_is_current(candidate)
@@ -416,9 +423,10 @@ class MessagingStore:
                 self.database.backend,
                 self.database._conn,
                 """UPDATE messaging_outbound_queue
-                   SET status=?, external_message_id=?, error_code=?, claim_expires_at=NULL
+                   SET status=?, external_message_id=?, error_code=?, claim_expires_at=NULL,
+                       metadata_json=CASE WHEN ?='sent' THEN json_set(metadata_json,'$.delivery_confirmed_at',?) ELSE metadata_json END
                    WHERE id=? AND status IN ('queued','claimed')""",
-                (status.value, external_message_id, error_code, str(message_id)),
+                (status.value, external_message_id, error_code, status.value, self.clock.now().isoformat(), str(message_id)),
             )
         return getattr(cursor, "rowcount", 1) > 0
 
