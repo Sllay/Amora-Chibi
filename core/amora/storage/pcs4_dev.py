@@ -134,14 +134,14 @@ def _safe_schema19(raw):
             or (status != "error" and failed is not None)):
         raise ValueError("invalid v19 progression")
     action = raw["action"]
-    if action not in {"schema19_status", "schema19_review_restore"}:
+    if action not in {"schema19_status", "schema19_review_migration"}:
         if status == "ok" and (not completed or action != completed[-1]):
             raise ValueError("invalid v19 action")
-    if outcome not in {None, "empty", "exact"}:
+    if outcome not in {None, "v18_exact", "exact"}:
         raise ValueError("invalid v19 review")
-    if outcome == "empty" and completed != ["schema19_prepare"]:
+    if outcome == "v18_exact" and completed != ["schema19_prepare"]:
         raise ValueError("invalid v19 review")
-    if outcome == "exact" and completed != ["schema19_prepare", "schema19_restore"]:
+    if outcome == "exact" and completed != ["schema19_prepare", "schema19_migrate"]:
         raise ValueError("invalid v19 review")
     reports = {}
     for step in completed:
@@ -182,8 +182,8 @@ def _safe_schema19(raw):
     if status == "error":
         if failed == "schema19_prepare" and not completed:
             next_step = "schema19_prepare"
-        elif failed in {"schema19_restore", "schema19_review_restore"} and completed == ["schema19_prepare"]:
-            next_step = "schema19_review_restore"
+        elif failed in {"schema19_migrate", "schema19_review_migration"} and completed == ["schema19_prepare"]:
+            next_step = "schema19_review_migration"
         else:
             next_step = None
     return {"status": "error" if status == "error" else "ok",
