@@ -9,6 +9,9 @@ from datetime import datetime
 from pathlib import Path
 
 from amora.events import AmoraEvent
+from amora.events.multimodal import (
+    OBSERVATION_EVENT_TYPE, equivalent_observation_replay, parse_observation_event,
+)
 from amora.identity.models import Entity, EntityRegistry, EntityType, Relationship, normalize_alias
 from amora.identity.profiles import PersonProfileSeed, PlatformIdentityBinding
 from amora.identity.session import DeviceIdentity, DeviceTrust, PrivacyContext, SessionIdentity
@@ -77,6 +80,8 @@ class AmoraDatabase:
 
     @trace_stage("event_persist")
     def append_event(self, event: AmoraEvent) -> bool:
+        if event.event_type == OBSERVATION_EVENT_TYPE:
+            parse_observation_event(event)
         values = (str(event.id), event.schema_version, event.event_type, event.timestamp.isoformat(), event.source, event.actor, event.target, event.confidence, event.importance, int(event.priority), json.dumps(event.payload, ensure_ascii=False, separators=(",", ":")), event.privacy_scope.value, event.session_id, str(event.correlation_id) if event.correlation_id else None, str(event.causation_id) if event.causation_id else None, str(event.causal_parent) if event.causal_parent else None, event.sequence, event.dedupe_key)
         with trace_lock(self._lock):
             try:
@@ -91,11 +96,7 @@ class AmoraDatabase:
                 # idempotent. Never suppress unrelated PK or constraint failures.
                 if not is_duplicate_error(exc) or not event.dedupe_key:
                     raise
-                existing = self._conn.execute(
-                    "SELECT event_type FROM events WHERE dedupe_key = ?",
-                    (event.dedupe_key,),
-                ).fetchone()
-                if existing is not None and existing["event_type"] == event.event_type:
+                if self._event_replay_matches(event):
                     return False
                 raise
             if result.rowcount > 0:
@@ -103,13 +104,52 @@ class AmoraDatabase:
             # SQL ON CONFLICT(dedupe_key) handles libSQL's generic
             # SQLITE_CONSTRAINT without depending on extended exception codes.
             # Distinguish an idempotent replay from a key collision across types.
-            existing = self._conn.execute(
-                "SELECT event_type FROM events WHERE dedupe_key = ?",
-                (event.dedupe_key,),
-            ).fetchone() if event.dedupe_key else None
-            if existing is not None and existing["event_type"] == event.event_type:
+            if self._event_replay_matches(event):
                 return False
             raise sqlite3.IntegrityError("EVENT_DEDUPE_CONFLICT")
+
+    @staticmethod
+    def _decode_stored_event(row) -> AmoraEvent:
+        values = dict(row)
+        values["payload"] = json.loads(values.pop("payload_json"))
+        return AmoraEvent.model_validate(values)
+
+    def _event_replay_matches(self, event: AmoraEvent) -> bool:
+        # Called only under the existing database lock on a duplicate path.
+        if not event.dedupe_key:
+            return False
+        if event.event_type != OBSERVATION_EVENT_TYPE:
+            row = self._conn.execute(
+                "SELECT event_type FROM events WHERE dedupe_key = ?",
+                (event.dedupe_key,),
+            ).fetchone()
+            return row is not None and row["event_type"] == event.event_type
+        row = self._conn.execute(
+            "SELECT * FROM events WHERE dedupe_key = ?",
+            (event.dedupe_key,),
+        ).fetchone()
+        if row is None or row["event_type"] != OBSERVATION_EVENT_TYPE:
+            return False
+        try:
+            return equivalent_observation_replay(self._decode_stored_event(row), event)
+        except (ValueError, TypeError, KeyError):
+            return False
+
+    def get_observation_event(self, event_id) -> AmoraEvent | None:
+        """Internal durable observation read; caller must authorize disclosure."""
+        with trace_lock(self._lock):
+            row = self._conn.execute(
+                "SELECT * FROM events WHERE id=? AND event_type=?",
+                (str(event_id), OBSERVATION_EVENT_TYPE),
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                event = self._decode_stored_event(row)
+                parse_observation_event(event)
+                return event
+            except (ValueError, TypeError, KeyError):
+                raise ValueError("PERCEPTION_EVENT_INVALID") from None
 
     def event_count(self) -> int:
         with trace_lock(self._lock):
