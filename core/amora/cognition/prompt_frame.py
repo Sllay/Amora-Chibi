@@ -233,6 +233,10 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "remote_processing_allowed": context.remote_processing_allowed,
         },
     }
+    if context.temporal_context is not None:
+        frame["temporal_context"] = context.temporal_context
+    if context.temporal_opportunity is not None:
+        frame["temporal_opportunity"] = context.temporal_opportunity
     if context.specialist_support:
         # Specialist material is useful evidence, never canonical state. Keeping
         # it outside canonical_state prevents a language model from silently
