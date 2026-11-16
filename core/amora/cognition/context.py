@@ -22,7 +22,7 @@ from amora.world.service import RelationshipEvolutionService
 from .dialogue import DialogueOrchestrator
 from .models import CognitiveContext, CognitiveRequest, ContextMemory
 from .store import CognitiveStore
-from .temporal import observed_timestamp, time_projection
+from .temporal import observed_timestamp, time_projection, trusted_opportunity
 
 
 def resolve_scene_visibility(request: CognitiveRequest) -> str:
@@ -254,7 +254,9 @@ class ContextCompiler:
         # Generic recollection requests contain no event-specific retrieval terms.
         # Use entity/recency ranking rather than letting conversational filler
         # accidentally match arbitrary memories via full-text search.
-        recall_text = request.text
+        opportunity = (trusted_opportunity(request.metadata.get("temporal_opportunity"))
+                       if mode == "autonomous_initiation" and not shared and request.session_id else None)
+        recall_text = "" if opportunity else request.text
         from unicodedata import combining, normalize
         normalized_recall = "".join(
             char for char in normalize("NFKD", request.text.casefold())
@@ -409,6 +411,7 @@ class ContextCompiler:
                                                "dominance": round(mood.dominance, 6)},
             directed_affect=affect, drives=drives, active_intention=intention, memories=memories,
             world_claims=claims, recent_messages=recent, temporal_context=temporal,
+            temporal_opportunity=opportunity,
             privacy_scope=request.privacy_scope,
             remote_processing_allowed=remote, token_budget=token_budget, reason_codes=reasons,
             scene_visibility=visibility,
