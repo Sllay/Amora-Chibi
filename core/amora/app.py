@@ -447,7 +447,7 @@ class AmoraCore:
         try:
             if not self.secrets.get("LOCAL_API_TOKEN"):
                 return {"status": "not_ready", "error_code": "AUTH_NOT_CONFIGURED"}
-            if self.database.schema_version() != LATEST_SCHEMA_VERSION:
+            if self.database.schema_version() != self.database.expected_schema_version:
                 return {"status": "not_ready", "error_code": "SCHEMA_NOT_CURRENT"}
             with self.database._lock, self.database._conn:
                 self.database._conn.execute("UPDATE schema_migrations SET version=version WHERE version=(SELECT MAX(version) FROM schema_migrations)")
