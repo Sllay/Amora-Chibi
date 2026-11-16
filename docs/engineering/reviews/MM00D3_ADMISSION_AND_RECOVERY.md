@@ -1,6 +1,6 @@
 # MM.00D.3 — Admissão autorizada, ordenação e recuperação
 
-Status: D.2 aprovado e integrado (#240); D.3A.1 em implementação. Acompanhamento #238.
+Status: D.2 aprovado e integrado (#240); D.3A.1 implementado, CI pendente. Acompanhamento #238.
 Não ativar captura, provider ou storage novo neste checkpoint sem contrato e testes.
 
 ## Contratos existentes inspecionados
@@ -15,7 +15,7 @@ Não ativar captura, provider ou storage novo neste checkpoint sem contrato e te
 
 | ID | Entrega | Gate | Estado |
 |---|---|---|---|
-| D.3A.1 | Autoridade interna Web/device e screen | grant explícito, sessão autenticada ativa, device/owner revalidados, expiração/revogação, escopo e audiência emitidos pelo Core | Em implementação |
+| D.3A.1 | Autoridade interna Web/device e screen | grant explícito, sessão autenticada ativa, device/owner revalidados, expiração/revogação, escopo e audiência emitidos pelo Core | Implementado; CI pendente |
 | D.3A.2 | Autoridade de plataforma e participantes | binding nativo por conta e conversa, consentimento de cada participante, revalidação e isolamento | Planejado |
 | D.3B | Buffer temporal limitado | epoch/sequence, reorder, gap, backpressure, limites por bytes/idade/contagem; eventos tardios não substituem presente | Planejado |
 | D.3C | Seleção e recuperação durável | somente evidências relevantes; plano de trabalho por IDs, dedupe, lease/reconcile; replay antes/depois de falha; sem mídia bruta | Planejado |
@@ -30,7 +30,7 @@ Não ativar captura, provider ou storage novo neste checkpoint sem contrato e te
 5. Testes físicos (iPhone, EveryCord + call, Discord DAVE, providers) continuam em MM.01–05. O contrato base não comprova capacidade real de captura.
 
 ## Registro de evidência
-Antes de cada subcheckpoint atualizar este ledger e #238. Após implementação: SHA, PR, CI exato, resultado e limites. #240 ainda em validação quando este plano foi escrito. Sem alterações de runtime nesta branch até o gate.
+Antes de cada subcheckpoint atualizar este ledger e #238. Após implementação: SHA, PR, CI exato, resultado e limites. #240 aprovado e integrado; o plano original foi registrado antes do código. Nenhum consumidor de produção ativo.
 
 ## D.3A.1 — plano pré-código
 
@@ -39,3 +39,9 @@ Antes de cada subcheckpoint atualizar este ledger e #238. Após implementação:
 - MVP estrito: sessão Web privada ou trusted, captura screen/speech/image apenas do titular; sem audiência de terceiros, sem PUBLIC/SOCIAL, sem ampliar remote permission. IDs opacos Core-issued; nova autorização não reaproveita stream. Limite de grants ativos e TTL; restart perde grants (fail closed). Revogação, expiração e mudança de device/session invalidam imediatamente na próxima validação. Consentimento não é persistência automática.
 - Validação antes do provider e na admissão final; publicação futura deve consumir autorização sob fronteira apropriada. Não prometer atomicidade distribuída entre revogação e escrita nesta etapa. D.3B/C precisam especificar isso. Sem mídia, provider, tabela nova ou mudança no runtime de produção.
 - Testes: login ausente/inativo/expirado, ownership alterado, device trust revogado, modalidade divergente, permissão remota negada, limite de grants, revogação, restart fail-closed, isolamento de sessão e identidade. D.3A.2 fica separada para bindings e grupos.
+
+## D.3A.1 — implementação
+
+- `fc42d4a4`: `core/amora/events/sensory_authority.py`, autoridade interna process-local, grants explícitos bounded, TTL limitado pela sessão, revogação, revalidação de SessionService/device/owner/trust/scope. IDs aleatórios por grant; mesma correlação para modalidades de uma experiência, streams separados. Sessão PRIVATE nunca permite provider remoto; TRUSTED pode autorizar explicitamente. Restart perde grants. Nenhum actor externo aceito como autoridade: o chamador interno deve autenticar o principal, e o grant confere o principal com a sessão persistida.
+- `e87787a3`: testes com AmoraDatabase SQLite real e SimulatedClock; consentimento, identidade, escopo, capacidade, expiração, revogação, mudança de trust/owner/session, modalidades e isolamento/restart. CI pendente.
+- Limites deliberados: não existe endpoint, captura, provider, publicação, renovação automática ou autorização de terceiros. D.3A.2 integra bindings de plataforma; D.3D integra a fronteira autenticada. Revogação afeta verificações futuras; coordenação entre autorização e trabalho concorrente/externo ainda requer integração. O grant não é persistido e não substitui a política de armazenamento/remoção.
