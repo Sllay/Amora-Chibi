@@ -102,10 +102,10 @@ def _ledger(conn):
 
 
 class AgendaService:
-    def __init__(self, core):
-        self.core = core
-        self.db = core.database
-        self.clock = core.clock
+    def __init__(self, database, clock, messaging_store):
+        self.db = database
+        self.clock = clock
+        self.messaging_store = messaging_store
 
     def list(self, *, year: int | None = None, include_cancelled: bool = True):
         with trace_lock(self.db._lock):
@@ -213,7 +213,7 @@ class AgendaService:
             with trace_lock(self.db._lock):
                 if not agenda_claim_allowed(self.db._conn, msg, now, require_connected=True):
                     continue
-                if self.core.messaging_store.put_outbound(msg):
+                if self.messaging_store.put_outbound(msg):
                     queued.append(msg)
         return queued
 
