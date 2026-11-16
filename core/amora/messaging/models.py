@@ -178,12 +178,17 @@ class InboundMessage(BaseModel):
     @model_validator(mode="after")
     def require_content(self) -> "InboundMessage":
         if self.incoming_image is not None:
+            image_mimes = {"image/png", "image/jpeg", "image/webp"}
+            # The trusted Discord worker may optimize an original PNG/JPEG to
+            # WebP. The native attachment ID and original raster MIME remain
+            # mandatory; Core independently checks the converted byte signature.
             if (self.platform != MessagingPlatform.DISCORD or self.channel_type != ChannelType.DM
+                    or self.incoming_image.content_mime not in image_mimes
                     or not any(a.attachment_id == self.incoming_image.attachment_id
-                               and a.media_type and a.media_type.lower().split(";", 1)[0]
-                               == self.incoming_image.content_mime
+                               and a.media_type
+                               and a.media_type.lower().split(";", 1)[0] in image_mimes
                                for a in self.attachments)):
-                raise ValueError("incoming image must match native Discord DM attachment")
+                raise ValueError("incoming image must match a native Discord DM raster attachment")
         if not self.text.strip() and not self.attachments and not self.expressions:
             raise ValueError("inbound message requires text, attachment metadata, or expression metadata")
         return self
