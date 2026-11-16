@@ -114,11 +114,14 @@ def test_v19_restore_preserves_work_and_core_rank_on_two_boots(backup, tmp_path,
     assert recovery.certify_restore(target, backend, expected_schema=19)["equal_tables"] == verified["tables"]
     boots = []
 
-    def boot(home, timestamp, backend=None):
+    def boot(home, timestamp, backend=None, *, schema_version=18):
         with monkeypatch.context() as env:
             env.setenv("AMORA_HOME", str(home))
             env.setenv("AMORA_MODE", "local")
             env.setenv("AMORA_ASSET_STORAGE", "database")
+            if schema_version == 19:
+                env.setenv("AMORA_RUNTIME_SCHEMA_TARGET", "19")
+                env.setenv("AMORA_RUNTIME_SCHEMA_CONFIRMATION", "CERTIFIED_V19_BACKUP_AND_ROLLBACK")
             boots.append(backend is not None)
             return restart._boot(backend or SQLiteBackend(), timestamp)
 
