@@ -164,7 +164,9 @@ def certify_restart(snapshot, backend, *, expected_schema=LATEST_SCHEMA_VERSION)
             raise ValueError("PCS4C_SOURCE_CHANGED")
         return {"schema_version": verified["schema_version"], "equal_tables": equal_tables,
                 "tables": verified["tables"], "boots": 2, "query_count": 5,
-                "rank_equal": True, "memory_tables_equal": len(memory_tables), **{k: v for k, v in expected.items() if k != "fingerprints"}}
+                "rank_equal": True, "memory_tables_equal": len(memory_tables),
+                **({"episode_work_tables_equal": 3} if expected_schema == 19 else {}),
+                **{k: v for k, v in expected.items() if k != "fingerprints"}}
 
 
 def main(argv=None):
