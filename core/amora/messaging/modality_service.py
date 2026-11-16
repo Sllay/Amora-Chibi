@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import deque
+import asyncio
+import logging
 from contextvars import ContextVar
 from typing import Any
 
@@ -11,6 +13,10 @@ from .models import ExpressionKind, InboundMessage, MessagingPlatform, OutboundM
 from .perceptual_response_modality import PerceptualResponseModalitySelector
 from .response_modality import ResponseModalitySelector
 from .service import PlatformMessagingService as BasePlatformMessagingService
+from .explicit_memory import is_verified_owner
+from .models import ChannelType, RoutingAction
+from amora.events import PrivacyScope
+from .incoming_vision import unavailable_visual_observation
 from .visual_enrichment import VisualExpressionEnrichmentService
 
 
@@ -85,10 +91,12 @@ class PlatformMessagingService(BasePlatformMessagingService):
     _MAX_RECENT_CONVERSATIONS = 512
     _RECENT_EXPRESSIONS_PER_CONVERSATION = 8
 
-    def __init__(self, *args: Any, response_modality: ResponseModalitySelector | None = None, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, response_modality: ResponseModalitySelector | None = None,
+                 incoming_vision=None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.expression_memory = PerceptualExpressionMemory(self.store, self.clock)
         self.visual_enrichment = VisualExpressionEnrichmentService(self.expression_memory)
+        self.incoming_vision = incoming_vision
         self.response_modality = response_modality or PerceptualResponseModalitySelector()
         self.cognition = _CapabilityAwareCognitionProxy(self.cognition)
         self._recent_expressions: dict[str, deque[str]] = {}
@@ -100,6 +108,34 @@ class PlatformMessagingService(BasePlatformMessagingService):
             return await super().receive(hydrated)
         finally:
             _CURRENT_MESSAGE.reset(token)
+
+    async def _incoming_visual_observation(self, message, decision):
+        if not (message.platform == MessagingPlatform.DISCORD
+                and message.channel_type == ChannelType.DM
+                and message.privacy_scope == PrivacyScope.PERSONAL
+                and message.remote_processing_allowed
+                and decision.action == RoutingAction.RESPOND
+                and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)):
+            return None
+        has_image = any(a.media_type and a.media_type.lower().split(";", 1)[0]
+                        in {"image/png", "image/jpeg", "image/webp"} for a in message.attachments)
+        if not has_image:
+            return None
+        if self.incoming_vision is None or not self.incoming_vision.available or message.incoming_image is None:
+            return unavailable_visual_observation()
+        try:
+            # Inbound timeout includes this analysis; avoid blocking social reply
+            # for a model outage. Never fall back to imagined pixels.
+            return await asyncio.wait_for(
+                self.incoming_vision.analyze(message.incoming_image, message.text),
+                timeout=27,
+            )
+        except Exception as exc:
+            logging.getLogger("amora.incoming_vision").warning(
+                "incoming_image_analysis_failed code=%s",
+                str(getattr(exc, "code", type(exc).__name__))[:80],
+            )
+            return unavailable_visual_observation()
 
     def _queue_outbound(
         self,

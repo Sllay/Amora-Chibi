@@ -15,6 +15,7 @@ import {
   splitDiscordText,
 } from './normalize.mjs';
 import { DiscordSocialRuntime } from './social-runtime.mjs';
+import { collectDiscordIncomingImage, IncomingImageError } from './incoming-image.mjs';
 import { messagingTurnId, startTypingProgress } from './typing-progress.mjs';
 
 const TRUE = new Set(['1', 'true', 'yes', 'on']);
@@ -571,6 +572,18 @@ export class DiscordWorker {
       syntheticMessageId,
     });
     if (!normalized) return null;
+    // Only DMs that allow remote processing carry ephemeral image bytes.
+    // Core still checks the verified owner and response permission before Groq.
+    if (this.remoteProcessingAllowed && normalized.channel_type === 'dm'
+        && enabled('AMORA_DISCORD_IMAGE_VISION', true)) {
+      try {
+        normalized.incoming_image = await collectDiscordIncomingImage(message);
+      } catch (error) {
+        normalized.incoming_image_status = error instanceof IncomingImageError
+          ? error.code : 'IMAGE_FETCH_FAILED';
+        safeLog('IMAGE_INGEST_SKIPPED', normalized.incoming_image_status);
+      }
+    }
     const normalizationMs = performance.now() - normalizedStarted;
     const inboundStarted = performance.now();
 

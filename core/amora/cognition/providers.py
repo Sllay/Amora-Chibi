@@ -113,6 +113,7 @@ class GroqCognitiveProvider:
             "recent_messages": context.recent_messages,
             "temporal_context": context.temporal_context,
             "temporal_opportunity": context.temporal_opportunity,
+            "visual_observation": context.visual_observation,
             "capabilities": [item.model_dump(mode="json") for item in context.capabilities],
             "reason_codes": context.reason_codes,
         }

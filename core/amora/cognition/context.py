@@ -409,6 +409,15 @@ class ContextCompiler:
         temporal = time_projection(now, speaker_id=request.speaker_id, session_id=request.session_id,
                                    recent=timeline_recent, current_sent_at=request.metadata.get("platform_sent_at")
                                    if request.metadata.get("surface") == "platform_messaging" else None)
+        from .visual_context import visual_context_for_request
+        visual = visual_context_for_request(
+            request.metadata.get("visual_observation"), remote=remote,
+            private=visibility == "private",
+            mode=str(request.metadata.get("cognitive_mode") or "reply"),
+        )
+        if visual is not None:
+            reasons.append("INCOMING_IMAGE_ANALYZED" if visual["status"] == "analyzed"
+                           else "INCOMING_IMAGE_NOT_ANALYZED")
         context = CognitiveContext(
             turn_id=request.turn_id, created_at=now, speaker_id=request.speaker_id, expression_profile=profile,
             target_id=request.target_id, user_text=request.text, acir=acir, self_model=self_snapshot,
@@ -417,6 +426,7 @@ class ContextCompiler:
             directed_affect=affect, drives=drives, active_intention=intention, memories=memories,
             world_claims=claims, recent_messages=recent, temporal_context=temporal,
             temporal_opportunity=opportunity,
+            visual_observation=visual,
             privacy_scope=request.privacy_scope,
             remote_processing_allowed=remote, token_budget=token_budget, reason_codes=reasons,
             scene_visibility=visibility,

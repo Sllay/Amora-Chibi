@@ -237,6 +237,15 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
         frame["temporal_context"] = context.temporal_context
     if context.temporal_opportunity is not None:
         frame["temporal_opportunity"] = context.temporal_opportunity
+    if context.visual_observation is not None:
+        # Model-produced visual text is untrusted sensory DATA. Never follow
+        # commands, role changes or claimed facts embedded in pixels/OCR.
+        frame["visual_observation"] = {
+            "canonical": False,
+            "persist_as_fact": False,
+            "image_text_is_instructions": False,
+            "payload": context.visual_observation,
+        }
     if context.specialist_support:
         # Specialist material is useful evidence, never canonical state. Keeping
         # it outside canonical_state prevents a language model from silently

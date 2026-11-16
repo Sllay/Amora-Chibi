@@ -362,6 +362,11 @@ class PlatformMessagingService:
                 self._log_result(result, provider="local_control", fallback_used=False)
                 return result
 
+        # Specialist visual perception is explicitly authorized by attention,
+        # identity, privacy and consent; never send an unverified/group image to Groq.
+        visual_observation = await self._incoming_visual_observation(message, decision)
+        if visual_observation is not None and not message.text.strip():
+            cognitive_text = "[Usuário enviou uma imagem]" if visual_observation.get("status") == "analyzed" else cognitive_text
         request = CognitiveRequest(
             text=cognitive_text,
             speaker_id=actor_id,
@@ -387,6 +392,7 @@ class PlatformMessagingService:
                 "observed_only": decision.action == RoutingAction.CONTEXT_ONLY,
                 "relationship_learning": False,
                 "messaging_audit": True,
+                "visual_observation": visual_observation,
                 "provider_total_budget_seconds": self.provider_total_budget_seconds,
                 "provider_attempt_budget_seconds": self.provider_attempt_budget_seconds,
             },
@@ -1219,6 +1225,11 @@ class PlatformMessagingService:
                 message.message_id,
             )
         )
+
+    async def _incoming_visual_observation(self, message, decision):
+        # The base service does not opt into visual inference. Modality layer
+        # implements the explicit owner-DM boundary.
+        return None
 
     @staticmethod
     def _cognitive_text(message: InboundMessage) -> str:
