@@ -85,3 +85,65 @@ def time_projection(now, *, speaker_id, session_id, recent, current_sent_at=None
     if candidates:
         result["seconds_since_previous_user_message"] = int((current - candidates[-1][0]).total_seconds())
     return result
+
+
+# Small semantic states. These are opportunities, not inferred emotions.
+OPPORTUNITY_ACTIONS = {
+    "question_pending": ("follow_up_question", "light_reaction", "stay_silent"),
+    "quick_answer_pending": ("follow_up_question", "light_reaction", "stay_silent"),
+    "conversation_quiet": ("continue_topic", "open_contact", "stay_silent"),
+    "long_absence": ("check_in", "open_contact", "continue_topic", "stay_silent"),
+}
+
+
+def opportunity_state(now, user_at, reply_at, reply_text):
+    """Choose a bounded opportunity from observable time and the last sent text."""
+    now, user_at, reply_at = map(aware_time, (now, user_at, reply_at))
+    if not now or not user_at or not reply_at or not user_at <= reply_at <= now:
+        return None
+    since_reply = int((now - reply_at).total_seconds())
+    since_user = int((now - user_at).total_seconds())
+    # Never revive arbitrarily old contact, or send while the user is likely asleep.
+    if since_user > 7 * 86400 or not 8 <= now.astimezone(conversation_zone()).hour < 22:
+        return None
+    text = reply_text.strip().casefold()
+    if since_user >= 6 * 3600 and since_reply >= 3600:
+        state = "long_absence"
+    elif text.endswith("?") and any(x in text for x in ("me responde logo", "responde agora", "me diz logo")) and since_reply >= 120:
+        state = "quick_answer_pending"
+    elif text.endswith("?") and since_reply >= 5 * 60:
+        state = "question_pending"
+    elif since_reply >= 45 * 60:
+        state = "conversation_quiet"
+    else:
+        return None
+    zone = conversation_zone()
+    return {
+        "state": state, "last_user_at": user_at.astimezone(zone).isoformat(timespec="seconds"),
+        "last_amora_at": reply_at.astimezone(zone).isoformat(timespec="seconds"),
+        "seconds_since_user": since_user, "seconds_since_amora": since_reply,
+        "allowed_actions": list(OPPORTUNITY_ACTIONS[state]),
+        "note": "Não houve nova mensagem neste DM desde o último turno. Não presuma motivo, rejeição ou obrigação de responder.",
+    }
+
+
+def trusted_opportunity(raw):
+    """Rebuild a small allowlisted Core projection, not literal user content."""
+    if not isinstance(raw, dict) or raw.get("state") not in OPPORTUNITY_ACTIONS:
+        return None
+    stamps = {key: aware_time(raw.get(key)) for key in ("last_user_at", "last_amora_at")}
+    counts = {key: raw.get(key) for key in ("seconds_since_user", "seconds_since_amora")}
+    if any(value is None for value in stamps.values()) or any(
+        type(value) is not int or not 0 <= value <= 7 * 86400 for value in counts.values()
+    ):
+        return None
+    if stamps["last_user_at"] > stamps["last_amora_at"] or counts["seconds_since_user"] < counts["seconds_since_amora"]:
+        return None
+    state = raw["state"]
+    zone = conversation_zone()
+    return {
+        "state": state,
+        **{key: value.astimezone(zone).isoformat(timespec="seconds") for key, value in stamps.items()},
+        **counts, "allowed_actions": list(OPPORTUNITY_ACTIONS[state]),
+        "note": "Não houve nova mensagem neste DM desde o último turno. Não presuma motivo, rejeição ou obrigação de responder.",
+    }
