@@ -175,7 +175,15 @@ def test_review_interrupted_restore_is_read_only_and_preserves_backup(
     assert all(sql.startswith("SELECT ") or sql in
                {"BEGIN", "ROLLBACK", "PRAGMA FOREIGN_KEYS=ON"} for sql in commands)
     if outcome == "empty":
+        # A lost review report can be recovered without resetting anything.
+        assert run(panel, "review_restore")["review_outcome"] == "empty"
         assert run(panel, "restore")["completed"] == ["backup", "verify", "restore"]
+    if outcome in ("empty", "exact"):
+        # A committed Restore with a lost Job report is also recoverable.
+        after = run(panel, "review_restore")
+        assert after["review_outcome"] == "exact"
+        assert after["completed"] == ["backup", "verify", "restore"]
+        assert panel._read()["restore_review"]["previous_status"] == "running"
     assert len(source_server.calls) == source_start
     assert verify_snapshot(panel.snapshot) == before
     assert not source_server.streams and not target_server.streams
