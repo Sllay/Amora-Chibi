@@ -127,6 +127,9 @@ def _safe_schema19(raw):
     status = drill.get("status")
     failed = drill.get("failed_action")
     outcome = drill.get("review_outcome")
+    reason = drill.get("reason")
+    if reason is not None and (status != "error" or reason not in SCHEMA19_ERROR_CODES):
+        raise ValueError("invalid v19 reason")
     if (not isinstance(completed, list) or completed != list(SCHEMA19_STEPS[:len(completed)])
             or status not in {"idle", "ok", "error"}
             or (status == "idle" and completed)
@@ -187,7 +190,7 @@ def _safe_schema19(raw):
         else:
             next_step = None
     return {"status": "error" if status == "error" else "ok",
-            "reason": "SCHEMA19_REVIEW_REQUIRED" if status == "error" else None,
+            "reason": (reason or "SCHEMA19_REVIEW_REQUIRED") if status == "error" else None,
             "completed": list(_STEPS), "reports": {**base["reports"], **reports},
             "next": next_step, "schema19": {"status": status, "completed": completed},
             "review_outcome": outcome}
