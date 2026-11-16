@@ -240,3 +240,40 @@ def test_invalid_unaware_and_ambiguous_date(core):
         AgendaCreate(text="Errado", due_at=datetime(2030,11,11,12,0))
     assert parse_agenda_text("Amora em 11/11/2030 ver se estou vivo", START).kind == "need_time"
     assert parse_agenda_text("Amora, a cada 1 minuto fala 'oi' o dia todo", START).kind == "invalid_interval"
+
+
+@pytest.mark.asyncio
+async def test_hrana_remote_agenda_persists_and_delivers(remote, tmp_path, monkeypatch):
+    backend, server = remote
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "agenda-remote"))
+    clock = SimulatedClock(START)
+    core = AmoraCore.bootstrap(storage=backend, clock=clock)
+    try:
+        _bind_bk(core)
+        connected(core)
+        await seed(core)
+        service = agenda(core)
+        item = service.create(AgendaCreate(text="Lembrete remoto seguro",
+                                          due_at=clock.now() + timedelta(minutes=10)),
+                              target=target())
+        assert service.list()[0].id == item.id
+        clock.advance(timedelta(minutes=10))
+        [message] = service.tick()
+        assert message.text == "Lembrete remoto seguro"
+        claims = core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD, account_scope="primary")
+        assert [x.id for x in claims] == [message.id]
+        assert core.messaging_store.ack_outbound(message.id, sent=True, external_message_id="remote-ack")
+        assert service.cancel(item.id).status == "cancelled"
+        assert service.list()[0].status == "cancelled"
+    finally:
+        core.close()
+    assert not server.streams
+
+
+def test_operator_viewer_role_cannot_read_private_agendas(core):
+    from amora.security import issue_browser_token
+    token = issue_browser_token(core.secrets.get("LOCAL_API_TOKEN"), core.clock, "web")
+    with TestClient(create_api(core)) as client:
+        response = client.get("/v1/operator/agenda",
+                              headers={"Authorization": "Bearer " + token})
+        assert response.status_code == 403
