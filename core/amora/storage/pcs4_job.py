@@ -7,12 +7,15 @@ from pathlib import Path
 import time
 
 from .pcs4_web import RecoveryPanel, _mounted
-from .pcs4_contract import CONFIRMATIONS, MARKER, STEPS as _STEPS
+from .pcs4_contract import CONFIRMATIONS, MARKER, STEPS as _STEPS, SCHEMA19_ACTIONS
+from .schema19_operator import run_schema19
 from .remote import LibSQLBackend
 
 
 
 def run(panel, action):
+    if action in SCHEMA19_ACTIONS:
+        return run_schema19(panel, action)
     if action == "review_restore":
         return panel.review_restore()
     if action not in _STEPS:
@@ -39,9 +42,17 @@ def main():
         result = run(panel, action)
         result["action"] = action
         print(MARKER + json.dumps(result, separators=(",", ":")), flush=True)
+        if action in SCHEMA19_ACTIONS:
+            return 0 if result["schema19"]["status"] in {"ok", "idle"} else 1
         return 0 if result["status"] == "ok" and (action in result["completed"] or action == "review_restore") else 1
     except Exception as exc:
         reason = "JOB_FAILED_REVIEW_REQUIRED"
+        if action in SCHEMA19_ACTIONS and type(exc) is ValueError and str(exc) in {
+            "SCHEMA19_V18_NOT_CERTIFIED", "SCHEMA19_V18_DESTINATION_CHANGED",
+            "SCHEMA19_DESTINATION_NOT_INDEPENDENT", "SCHEMA19_PIN_CHANGED",
+            "SCHEMA19_CANDIDATE_CHANGED", "SCHEMA19_STEP_BLOCKED",
+        }:
+            reason = str(exc)
         if action == "review_restore" and isinstance(exc, ValueError) and exc.args and exc.args[0] in {
             "PCS4C_REVIEW_STATE", "PCS4C_REVIEW_DESTINATION_CHANGED",
             "PCS4C_DESTINATION_IS_SOURCE", "PCS4C_SCHEMA_MISMATCH",
