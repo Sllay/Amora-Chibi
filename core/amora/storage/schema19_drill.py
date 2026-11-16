@@ -12,14 +12,10 @@ import sqlite3
 
 from .pcs4_recovery import _open, _row_hashes, _schema, _sha, _tables, verify_snapshot
 from .remote import statements
-from .sensory_episode_schema import SENSORY_EPISODE_QUEUE_CANDIDATE_SQL
-
-_CANDIDATE_TABLES = frozenset({
-    "sensory_episode_jobs", "sensory_episode_job_evidence", "sensory_episode_invalidations",
-})
-_CANDIDATE_INDEXES = frozenset({
-    "idx_sensory_episode_due", "idx_sensory_episode_session_status", "idx_sensory_episode_evidence",
-})
+from .sensory_episode_schema import (
+    SENSORY_EPISODE_QUEUE_CANDIDATE_SQL, CANDIDATE_TABLES as _CANDIDATE_TABLES,
+    CANDIDATE_INDEXES as _CANDIDATE_INDEXES, verify_candidate_ddl,
+)
 
 
 def compare_upgrade(source: Path, upgraded: Path) -> dict:
@@ -33,12 +29,7 @@ def compare_upgrade(source: Path, upgraded: Path) -> dict:
                 or not old_tables.issubset(new_tables)):
             raise ValueError("SCHEMA19_ADDITIVE_MISMATCH")
         # Check the new objects against the reviewed DDL, not just their names.
-        with closing(sqlite3.connect(":memory:")) as model:
-            model.execute("CREATE TABLE events (id TEXT PRIMARY KEY)")
-            model.executescript(SENSORY_EPISODE_QUEUE_CANDIDATE_SQL)
-            expected = _schema(model)
-        if any(new_schema[name] != expected[name] for name in _CANDIDATE_TABLES | _CANDIDATE_INDEXES):
-            raise ValueError("SCHEMA19_DDL_MISMATCH")
+        verify_candidate_ddl(after)
         for name in sorted(old_tables - {"schema_migrations"}):
             if _row_hashes(before, name) != _row_hashes(after, name):
                 raise ValueError("SCHEMA19_DATA_MISMATCH")
