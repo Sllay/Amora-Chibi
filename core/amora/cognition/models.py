@@ -110,6 +110,8 @@ class SpeechSegment(BaseModel):
 
 
 class ContextMemory(BaseModel):
+    recorded_at: str | None = None
+    source_observed_at: str | None = None
     id: str
     kind: str
     content: str
