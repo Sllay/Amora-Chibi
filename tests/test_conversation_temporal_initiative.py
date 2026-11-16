@@ -34,7 +34,7 @@ class TemporalProvider(CountingStructuredProvider):
         else:
             moves = [{"kind": context.dialogue_plan["response_moves"][0],
                       "text": "E o seu projeto, como ficou?"}]
-        return {"moves": moves, "closing": "statement",
+        return {"moves": moves, "closing": "none" if context.temporal_opportunity and self.silent else "statement",
                 "_usage": {"input_tokens": 12, "output_tokens": 8, "status_code": 200}}
 
 
@@ -43,7 +43,7 @@ def core(tmp_path, monkeypatch):
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
     monkeypatch.setenv("AMORA_CONVERSATION_TIMEZONE", "America/Recife")
     monkeypatch.setenv("AMORA_TEMPORAL_INITIATIVE", "1")
-    monkeypatch.setenv("AMORA_RESPONSE_SEMANTIC_FILTER", "0")
+    monkeypatch.setenv("AMORA_RESPONSE_SEMANTIC_FILTER_ENABLED", "0")
     core = AmoraCore.bootstrap(clock=SimulatedClock(datetime(2026, 11, 16, 16, 53, tzinfo=timezone.utc)))
     yield core
     core.close()
