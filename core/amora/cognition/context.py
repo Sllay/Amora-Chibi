@@ -22,7 +22,7 @@ from amora.world.service import RelationshipEvolutionService
 from .dialogue import DialogueOrchestrator
 from .models import CognitiveContext, CognitiveRequest, ContextMemory
 from .store import CognitiveStore
-from .temporal import observed_timestamp, time_projection, trusted_opportunity
+from .temporal import aware_time, observed_timestamp, time_projection, trusted_opportunity
 
 
 def resolve_scene_visibility(request: CognitiveRequest) -> str:
@@ -312,7 +312,10 @@ class ContextCompiler:
             if shared and item.privacy_scope != PrivacyScope.PUBLIC:
                 continue
             if self.privacy_gate.memory_allowed(item, remote=remote, recipient_id=request.speaker_id):
+                source_at = aware_time(item.metadata.get("source_observed_at"))
                 memories.append(ContextMemory(id=str(item.id), kind=item.kind.value, content=item.summary or item.content,
+                                              recorded_at=item.created_at.isoformat(),
+                                              source_observed_at=source_at.isoformat() if source_at else None,
                                               score=hit.score, confidence=item.provenance.confidence,
                                               privacy_scope=item.privacy_scope.value, reason_codes=hit.reason_codes))
 
