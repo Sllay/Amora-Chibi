@@ -1,7 +1,7 @@
 """Operator-only v19 drill on the existing PCS.4C job and private volume.
 
-Never updates the v18 state, backup, original destination or serving schema.
-A separate private state pins the new destination and both candidate hashes.
+Never updates the v18 state, backup or serving schema.
+A separate private state pins the previously certified test destination.
 """
 from __future__ import annotations
 
@@ -11,18 +11,14 @@ from pathlib import Path
 import tempfile
 
 from .pcs4_recovery import (
-    _origin_host, verify_snapshot, certify_restore, review_restore_destination,
+    _origin_host, verify_snapshot,
 )
 from .pcs4_restart import certify_restart
 from .pcs4_web import _atomic_json, _origin_digest, _sync_dir
-from .remote import LibSQLBackend
+from .schema19_migration import migrate_certified_destination, review_certified_destination
 from .schema19_drill import prepare_schema19_copy, compare_upgrade
 from .pcs4_contract import STEPS, SCHEMA19_STEPS, SCHEMA19_ACTIONS, SCHEMA19_REPORT_KEYS
 
-
-def destination19_from_environment():
-    return LibSQLBackend(os.environ["AMORA_SCHEMA19_DESTINATION_URL"],
-                         os.environ["AMORA_SCHEMA19_DESTINATION_TOKEN"])
 
 
 def _public_report(report):
@@ -41,7 +37,7 @@ def _state_report(old, state, action):
             }}
 
 
-def run_schema19(panel, action, *, destination=destination19_from_environment):
+def run_schema19(panel, action):
     if action not in SCHEMA19_ACTIONS:
         raise ValueError("SCHEMA19_ACTION_INVALID")
     fd = panel._lock()
@@ -66,14 +62,12 @@ def run_schema19(panel, action, *, destination=destination19_from_environment):
                 or restart_report.get("rank_equal") is not True
                 or restart_report.get("memory_tables_equal") != 4):
             raise ValueError("SCHEMA19_V18_NOT_CERTIFIED")
-        # Require the original certified destination configuration to remain
-        # pinned. New secrets must never replace its existing configuration.
-        former = panel.destination()
-        target = destination()
-        if old["destination_id"] != _origin_digest(former):
+        # Reuse only the certified v18 test database; production is forbidden.
+        target = panel.destination()
+        if old["destination_id"] != _origin_digest(target):
             raise ValueError("SCHEMA19_V18_DESTINATION_CHANGED")
-        if (len({_origin_host(panel.source.url), _origin_host(former.url), _origin_host(target.url)}) != 3
-                or target._token in {panel.source._token, former._token}):
+        if (_origin_host(panel.source.url) == _origin_host(target.url)
+                or target._token == panel.source._token):
             raise ValueError("SCHEMA19_DESTINATION_NOT_INDEPENDENT")
 
         root = panel.root / "schema19"
@@ -112,8 +106,8 @@ def run_schema19(panel, action, *, destination=destination19_from_environment):
             (state["status"] in {"idle", "ok"} and action == expected)
             or (state["status"] == "error" and failed == "schema19_prepare"
                 and not completed and action == "schema19_prepare")
-            or (state["status"] == "error" and failed in {"schema19_restore", "schema19_review_restore"}
-                and completed == ["schema19_prepare"] and action == "schema19_review_restore")
+            or (state["status"] == "error" and failed in {"schema19_migrate", "schema19_review_migration"}
+                and completed == ["schema19_prepare"] and action == "schema19_review_migration")
         )
         if not allowed:
             raise ValueError("SCHEMA19_STEP_BLOCKED")
@@ -140,33 +134,33 @@ def run_schema19(panel, action, *, destination=destination19_from_environment):
                 state["database_sha256"] = report["database_sha256"]
                 state["archive_sha256"] = report["archive_sha256"]
                 report["source_schema_version"] = 18
-            elif action == "schema19_restore":
+            elif action == "schema19_migrate":
                 pinned()
-                report = certify_restore(snapshot, target, expected_schema=19)
+                report = migrate_certified_destination(panel.snapshot, snapshot, target)
                 pinned()
-            elif action == "schema19_review_restore":
+            elif action == "schema19_review_migration":
                 pinned()
-                outcome, report = review_restore_destination(snapshot, target, expected_schema=19)
+                outcome, report = review_certified_destination(panel.snapshot, snapshot, target)
                 pinned()
-                if outcome not in {"empty", "exact"}:
+                if outcome not in {"v18_exact", "exact"}:
                     raise ValueError("SCHEMA19_REVIEW_INVALID")
             else:
                 pinned()
                 report = certify_restart(snapshot, target, expected_schema=19)
                 pinned()
             panel._pin(old, verify_snapshot(panel.snapshot))
-            if action == "schema19_review_restore":
+            if action == "schema19_review_migration":
                 state["review_outcome"] = outcome
                 if outcome == "exact":
-                    state["reports"]["schema19_restore"] = _public_report(report)
-                    completed.append("schema19_restore")
+                    state["reports"]["schema19_migrate"] = _public_report(report)
+                    completed.append("schema19_migrate")
             else:
                 state["reports"][action] = _public_report(report)
                 completed.append(action)
             state.update(status="ok", failed_action=None)
         except Exception:
             # Keep the previous certified prefix; never implicitly rerun a
-            # potentially committed restore or restart.
+            # potentially committed migration or restart.
             state.update(status="error")
         _atomic_json(state_path, state)
         return _state_report(old, state, action)
