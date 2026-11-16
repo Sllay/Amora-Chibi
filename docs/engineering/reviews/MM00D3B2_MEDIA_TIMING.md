@@ -1,0 +1,16 @@
+# MM.00D.3B.2 — Sincronização sensorial
+
+Status: B.2A implementado, CI pendente; B.1 aprovado #243 (7/7 jobs, HEAD 0f8d3b6c901d695859ca2d45108caf0b7e8fb839, merge 705608575a757e70ed1107bef63715afc2be2de9). Issue #238.
+
+## Checkpoints
+- B.2A: contrato interno de estimativa de tempo para observações semânticas de streams autorizados. Usar coordenadas monotônicas locais do receptor, não confiar em relógio de dispositivo ou timestamp de chegada como captura. Calibração explícita via intervalo de referência local que contém o instante remoto; offset intervalar, drift conservador, expiração; nenhuma alegação de sincronização precisa sem fonte calibrada. Aceitar apenas domínio/epoch/stream autorizado; não transportar timestamps brutos em memória. Correlacionar fala/visão somente quando mesma sessão/correlação, audiência comum autorizada, intervalos com incerteza dentro do orçamento, distância garantida dentro de janela. Diferenciar possível de confirmado; sem afirmar relação causal. Testes offsets, drift, stale, atraso de chegada, intervalos, conflito de escopo e limites. Sem provider/DB/rota/runtime.
+- B.2B: captura raw real, RTP/RTMP timestamps, clock mapping, jitter e filas por bytes/duração, decodificação e medição de latência. Depende do transporte específico, portanto fica para MM.02–05; não bloquear CH2 imagem pontual por inexistência de vídeo contínuo. Cada adaptador terá gate próprio e não pode declarar sincronização sem calibração real.
+- C: seleção e recuperação durável continuam independentes de B.2B; CH2 pontual não necessita clock entre dispositivos.
+
+## Decisão
+Não implementar sincronização fictícia por comparação de timestamps UTC fornecidos por clientes. A autoridade de sessão existente não compartilha automaticamente correlação entre DeviceSensoryAuthority e PlatformSensoryAuthority; integração futura deve emitir vínculo explícito com consentimento e audiência intersecada. B.2A só compara contextos já legitimamente correlacionados. Estimativa temporal não concede consentimento. Valores iniciais de tolerância são limites de engenharia, não latência medida. Sem alteração de schema/produção.
+
+## Evidência B.2A
+- `521a2906` / `6015f1c1` / `3fcd4537`: TimeInterval, ClockCalibration, CaptureEstimate e correlate_capture. Calibração vinculada à sessão/stream/epoch, modalidade e relógio monotônico receptor; intervalo de offset, drift bounded, expiração/extrapolação; distância mínima/máxima entre capturas, estados within_window/possible/outside_window/uncertain. Nunca usa chegada como tempo de captura. Permissões verificadas para o destinatário de ambas as fontes. Sem inferência causal.
+- `1f29f9cb`: testes de drift, chegada atrasada, calibração inválida/expirada, janela e incerteza, modalidade, escopo/clock e audiência. CI pendente.
+- Defaults: janela de 2 s e orçamento de incerteza de 0,5 s. Não são medições reais; relógio receptor e referência intervalar precisam vir de adapter confiável. B.2B exige timestamps/calibração reais por transporte e vínculo entre sessões explicitamente autorizado. Nenhuma captura ou sincronização real demonstrada.
