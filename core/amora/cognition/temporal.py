@@ -129,7 +129,7 @@ def opportunity_state(now, user_at, reply_at, reply_text):
 
 def trusted_opportunity(raw):
     """Rebuild a small allowlisted Core projection, not literal user content."""
-    if not isinstance(raw, dict) or raw.get("state") not in OPPORTUNITY_ACTIONS:
+    if not isinstance(raw, dict) or not isinstance(raw.get("state"), str) or raw["state"] not in OPPORTUNITY_ACTIONS:
         return None
     stamps = {key: aware_time(raw.get(key)) for key in ("last_user_at", "last_amora_at")}
     counts = {key: raw.get(key) for key in ("seconds_since_user", "seconds_since_amora")}
