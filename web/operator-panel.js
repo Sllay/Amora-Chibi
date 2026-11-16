@@ -1,7 +1,10 @@
 import { OperatorState } from "./operator-state.mjs?v=20261115-1";
+import { installAgenda } from "./agenda.mjs?v=20261116-1";
 
 const $ = (id) => document.getElementById(id);
 const operatorState = new OperatorState(globalThis.localStorage);
+
+const agendaUI = installAgenda({ operatorApi: (...args) => operatorApi(...args), humanError: (error) => humanError(error) });
 
 const RELATION_LABELS = {
   father_of: "pai de",
@@ -88,11 +91,11 @@ async function showSurface(surface) {
   setActiveTab(surface);
   stopConsoleRefresh();
 
-  const adminSurface = surface === "peopleView" || surface === "consoleView";
+  const adminSurface = ["peopleView", "agendaView", "consoleView"].includes(surface);
   const hasOperator = Boolean(state.token = operatorState.get());
   $("operatorGate").classList.toggle("hidden", !adminSurface || hasOperator);
 
-  for (const id of ["chatView", "peopleView", "consoleView"]) {
+  for (const id of ["chatView", "peopleView", "agendaView", "consoleView"]) {
     $(id).classList.add("hidden");
   }
   if (!adminSurface || hasOperator) $(surface).classList.remove("hidden");
@@ -103,6 +106,12 @@ async function showSurface(surface) {
       if (!$("peopleList").textContent.startsWith("Não foi possível carregar fichas:")) {
         $("peopleList").textContent = humanError(error);
       }
+    });
+  }
+  if (surface === "agendaView" && hasOperator) {
+    await agendaUI.refresh().catch((error) => {
+      if (error.status === 401) return showSurface("agendaView");
+      $("agendaNotice").textContent = humanError(error);
     });
   }
   if (surface === "consoleView" && hasOperator) {
