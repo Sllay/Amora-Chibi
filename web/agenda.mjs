@@ -37,7 +37,7 @@ export function installAgenda({ operatorApi, humanError }) {
       const status = {
         scheduled: "Agendada", cancelled: "Cancelada",
         finished: "Repetição concluída", past_due: "Data passada",
-        delivered: "Entregue",
+        delivered: "Entregue", uncertain: "Envio incerto", queued: "Na fila", missed: "Não entregue",
       }[item.status] || item.status;
       const details = span(
         "Início: " + niceDate(item.due_at) + " · " + status +
