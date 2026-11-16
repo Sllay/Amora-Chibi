@@ -241,6 +241,15 @@ function installPCS4Recovery(operatorApi) {
       <button type="button" data-pcs4="restart" disabled>Certificar reinicialização</button>
       <button type="button" id="pcs4RecoveryCopy" class="ghost" disabled>Copiar resultados</button>
     </div>
+    <div class="section-title-row"><h3>Certificação isolada · Schema 19</h3></div>
+    <p class="subtle">Preserva o backup v18 e usa outro banco Turso vazio. Configure AMORA_SCHEMA19_DESTINATION_URL/TOKEN somente no Job existente; não troque o destino anterior.</p>
+    <div class="form-actions">
+      <button type="button" data-pcs4="schema19_prepare" disabled>Preparar schema 19</button>
+      <button type="button" data-pcs4="schema19_restore" disabled>Restaurar schema 19</button>
+      <button type="button" data-pcs4="schema19_review_restore" disabled>Revisar restauração v19</button>
+      <button type="button" data-pcs4="schema19_restart" disabled>Certificar reinicialização v19</button>
+      <button type="button" data-pcs4="schema19_status" class="ghost" disabled>Consultar estado v19</button>
+    </div>
     <pre id="pcs4RecoveryReport" class="subtle" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>`;
   summary.insertAdjacentElement('afterend', card);
   const stateNode = card.querySelector('#pcs4RecoveryState');
@@ -248,7 +257,10 @@ function installPCS4Recovery(operatorApi) {
   const report = card.querySelector('#pcs4RecoveryReport');
   const copy = card.querySelector('#pcs4RecoveryCopy');
   const buttons = [...card.querySelectorAll('[data-pcs4]')];
-  const confirms = {backup:'SNAPSHOT CONSISTENTE', verify:'VOLUME PRIVADO', restore:'DESTINO VAZIO E INDEPENDENTE', restart:'DESTINO ISOLADO', review_restore:'REVISAR DESTINO ISOLADO'};
+  const confirms = {backup:'SNAPSHOT CONSISTENTE', verify:'VOLUME PRIVADO', restore:'DESTINO VAZIO E INDEPENDENTE', restart:'DESTINO ISOLADO', review_restore:'REVISAR DESTINO ISOLADO',
+    schema19_prepare:'PRESERVAR BACKUP V18', schema19_restore:'NOVO DESTINO V19 VAZIO',
+    schema19_review_restore:'REVISAR DESTINO V19', schema19_restart:'DESTINO V19 ISOLADO',
+    schema19_status:'CONSULTAR ESTADO V19'};
   const labels = {idle:'Pronto', ok:'Etapa concluída', running:'Executando', disabled:'Não configurado', blocked:'Bloqueado', error:'Falha'};
   let busy = false;
   let reading = false;
@@ -261,7 +273,12 @@ function installPCS4Recovery(operatorApi) {
       : state.review_outcome === 'empty' ? 'Destino vazio verificado. Pode restaurar o backup existente.'
       : state.review_outcome === 'exact' ? 'Destino idêntico ao backup. Pode certificar a reinicialização.'
       : state.reason || (state.next ? 'Próxima etapa: ' + state.next : 'Certificação concluída.');
-    buttons.forEach(button => { button.disabled = busy || state.next !== button.dataset.pcs4; });
+    buttons.forEach(button => {
+      const statusQuery = button.dataset.pcs4 === 'schema19_status'
+        && ['ok', 'error', 'blocked'].includes(state.status)
+        && state.reason !== 'SUBMISSION_UNCERTAIN_REVIEW_REQUIRED';
+      button.disabled = busy || (state.next !== button.dataset.pcs4 && !statusQuery);
+    });
     latest = state.reports || {};
     report.textContent = JSON.stringify(latest, null, 2);
     copy.disabled = !Object.keys(latest).length;
@@ -277,7 +294,9 @@ function installPCS4Recovery(operatorApi) {
   }
   buttons.forEach(button => button.addEventListener('click', async () => {
     const action = button.dataset.pcs4;
-    const explanation = action === 'review_restore' ? 'Confirme no Turso que o destino configurado é o mesmo banco de teste independente, sem outros escritores. A revisão só lê o destino; não apaga nem importa dados.\n\n' : '';
+    const explanation = action.startsWith('schema19_')
+      ? 'Use o mesmo Job e volume privado. Preserve o backup v18 e seu destino anterior. Confirme que o novo Turso v19 é independente da origem e do destino v18, sem outros escritores. A restauração exige destino vazio; revisão/consulta não importam dados.\\n\\n'.replaceAll('\\n', '\n')
+      : action === 'review_restore' ? 'Confirme no Turso que o destino configurado é o mesmo banco de teste independente, sem outros escritores. A revisão só lê o destino; não apaga nem importa dados.\n\n' : '';
     const confirmation = window.prompt(explanation + 'Confirme esta etapa digitando: ' + confirms[action]);
     if (confirmation !== confirms[action]) return;
     busy = true;
