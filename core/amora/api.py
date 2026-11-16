@@ -98,6 +98,9 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         core.cognition.store.start_async_lane()
         core.messaging.start_storage_lane()
         core.autonomy.schedule_idle(core.scheduler)
+        from amora.messaging.temporal_initiative import TemporalInitiative
+        temporal_initiative = TemporalInitiative(core)
+        temporal_initiative.start()
         scheduler_runtime.start()
         core.messaging.reflections.start()
         app.state.scheduler_runtime = scheduler_runtime
@@ -111,6 +114,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             yield
         finally:
             app.state.accepting = False
+            await temporal_initiative.stop()
             try:
                 await core.messaging.stop_inflight()
             finally:
