@@ -95,7 +95,7 @@ class AmoraDatabase:
                         self._conn.execute("INSERT INTO schema_migrations(version) VALUES (?)", (version,))
                     count += 1
                     continue
-                script = f"BEGIN IMMEDIATE;\\n{sql}\\nINSERT INTO schema_migrations(version) VALUES ({int(version)});\\nCOMMIT;"
+                script = f"BEGIN IMMEDIATE;\n{sql}\nINSERT INTO schema_migrations(version) VALUES ({int(version)});\nCOMMIT;"
                 try:
                     self._conn.executescript(script)
                 except Exception:
