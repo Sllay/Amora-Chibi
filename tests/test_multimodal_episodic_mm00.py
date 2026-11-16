@@ -242,3 +242,48 @@ def test_two_independent_writers_cannot_overwrite_episode(tmp_path):
     finally:
         memory.close()
         db.close()
+
+
+def test_group_intersection_preserves_both_people_and_public_is_not_escalated(tmp_path):
+    db, memory = open_stores(tmp_path / "episode.db")
+    try:
+        speech, screen = pair(db, screen_owner="PERSON_TEST", screen_audience=("PERSON_BK",),
+                              screen_remote=True)
+        engine = EpisodicObservationConsolidator(db, memory)
+        first = engine.build_candidate(selected(speech.id, screen.id))
+        second = engine.build_candidate(selected(screen.id, speech.id, recipient_id="PERSON_TEST"))
+        assert first == second
+        _, candidate = first
+        assert candidate.owner_entity_id is None
+        assert candidate.audience == {"PERSON_BK", "PERSON_TEST"}
+        assert candidate.remote_processing_allowed
+        public = build_observation_event(
+            context(privacy_scope=PrivacyScope.PUBLIC, owner_entity_id=None, actor_id=None,
+                    remote_processing_allowed=True, stream_id=UUID(int=88)),
+            observation(modality=SensoryModality.IMAGE, evidence_kind=EvidenceKind.OBSERVED,
+                        text="Imagem pública do rio.", provider="vision", model="test"),
+        )
+        assert db.append_event(public)
+        _, combined = engine.build_candidate(selected(public.id, speech.id))
+        assert combined.privacy_scope == PrivacyScope.PERSONAL
+        assert combined.audience == {"PERSON_BK", "PERSON_TEST"}
+    finally:
+        memory.close()
+        db.close()
+
+
+def test_content_budget_rejects_instead_of_truncating_evidence(tmp_path):
+    db, memory = open_stores(tmp_path / "episode.db")
+    try:
+        ids = []
+        for seq in range(4):
+            event = build_observation_event(context(), observation(sequence=seq, text="x" * 4096))
+            assert db.append_event(event)
+            ids.append(event.id)
+        engine = EpisodicObservationConsolidator(db, memory)
+        with pytest.raises(ValueError, match="EPISODE_CONTENT_LIMIT"):
+            engine.consolidate(selected(*ids))
+        assert memory.store.count() == 0
+    finally:
+        memory.close()
+        db.close()
