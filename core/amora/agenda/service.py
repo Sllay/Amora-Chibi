@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from uuid import UUID, NAMESPACE_URL, uuid5
 
 from amora.events import AmoraEvent, PrivacyScope
@@ -107,11 +108,21 @@ class AgendaService:
         self.clock = clock
         self.messaging_store = messaging_store
 
+    @staticmethod
+    def _same_request(previous, request):
+        return (previous.request_id == request.request_id
+                and previous.text == request.text.strip()
+                and utc(previous.due_at) == utc(request.due_at)
+                and previous.timezone == request.timezone
+                and previous.interval_minutes == request.interval_minutes
+                and (utc(previous.until_at) if previous.until_at else None)
+                    == (utc(request.until_at) if request.until_at else None))
+
     def list(self, *, year: int | None = None, include_cancelled: bool = True):
         with trace_lock(self.db._lock):
             items = _ledger(self.db._conn)
         if year is not None:
-            items = [i for i in items if i.due_at.astimezone(timezone(timedelta(hours=-3))).year == year]
+            items = [i for i in items if i.due_at.astimezone(ZoneInfo(i.timezone)).year == year]
         if not include_cancelled:
             items = [i for i in items if i.status == "active"]
         return sorted(items, key=lambda x: (x.due_at, str(x.id)))
@@ -130,11 +141,8 @@ class AgendaService:
             previous = next((x for x in items if x.id == event_id), None)
             if previous is not None:
                 # Don't let a replay with a changed body claim successful creation.
-                stable = previous.model_dump(mode="json", exclude={"id","created_at","status"})
-                expected = request.model_dump(mode="json", exclude={"request_id"})
-                for field in ("text","due_at","timezone","interval_minutes","until_at"):
-                    if stable.get(field) != expected.get(field):
-                        raise ValueError("AGENDA_REQUEST_CONFLICT")
+                if not self._same_request(previous, request):
+                    raise ValueError("AGENDA_REQUEST_CONFLICT")
                 return previous
             if sum(i.status == "active" for i in items) >= MAX_ACTIVE:
                 raise ValueError("AGENDA_ACTIVE_LIMIT")
@@ -155,7 +163,7 @@ class AgendaService:
         if not self.db.append_event(event):
             with trace_lock(self.db._lock):
                 found = next((x for x in _ledger(self.db._conn) if x.id == event_id), None)
-            if found is None or found.model_dump(exclude={"status"}) != item.model_dump(exclude={"status"}):
+            if found is None or not self._same_request(found, request):
                 raise ValueError("AGENDA_REQUEST_CONFLICT")
             return found
         return item
@@ -211,7 +219,27 @@ class AgendaService:
                           "agenda_state": "recurring_prompt" if item.interval_minutes else "scheduled_reminder"},
             )
             with trace_lock(self.db._lock):
-                if not agenda_claim_allowed(self.db._conn, msg, now, require_connected=True):
+                # Do not accumulate dozens of expired queued reminders while
+                # a connected Discord worker is not polling.
+                old = self.db._conn.execute(
+                    """SELECT id FROM messaging_outbound_queue WHERE status='queued'
+                       AND json_extract(metadata_json,'$.agenda_id')=?
+                       AND json_extract(metadata_json,'$.agenda_expires_at') <= ?""",
+                    (str(item.id), now.isoformat()),
+                ).fetchall()
+                if old:
+                    with self.db._conn:
+                        for entry in old[:200]:
+                            self.db._conn.execute(
+                                "UPDATE messaging_outbound_queue SET status='cancelled',error_code='AGENDA_EXPIRED' WHERE id=? AND status='queued'",
+                                (entry["id"],),
+                            )
+                pending = self.db._conn.execute(
+                    """SELECT 1 FROM messaging_outbound_queue WHERE status IN ('queued','claimed')
+                       AND json_extract(metadata_json,'$.agenda_id')=? LIMIT 1""",
+                    (str(item.id),),
+                ).fetchone()
+                if pending or not agenda_claim_allowed(self.db._conn, msg, now, require_connected=True):
                     continue
                 if self.messaging_store.put_outbound(msg):
                     queued.append(msg)
@@ -224,6 +252,17 @@ class AgendaService:
             due = next_occurrence(item, now) if item.status == "active" else None
             status = ("cancelled" if item.status == "cancelled" else
                       "scheduled" if due is not None else "finished" if item.interval_minutes else "past_due")
+            if item.interval_minutes is None and status == "past_due":
+                oid = uuid5(NAMESPACE_URL, f"amora:agenda:occurrence:{item.id}:{utc(item.due_at).isoformat()}")
+                with trace_lock(self.db._lock):
+                    row = self.db._conn.execute(
+                        "SELECT status,error_code FROM messaging_outbound_queue WHERE id=?",
+                        (str(oid),),
+                    ).fetchone()
+                if row is not None:
+                    status = ("delivered" if row["status"] == "sent" else
+                              "uncertain" if row["error_code"] == "AGENDA_DELIVERY_UNCERTAIN" else
+                              "queued" if row["status"] in {"queued", "claimed"} else "missed")
             out.append({"id": str(item.id), "text": item.text, "due_at": utc(item.due_at).isoformat(),
                         "timezone": item.timezone, "interval_minutes": item.interval_minutes,
                         "until_at": utc(item.until_at).isoformat() if item.until_at else None,
