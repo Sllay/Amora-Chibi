@@ -37,22 +37,29 @@ class _TransactionSnapshot:
 
 
 BASELINE_NAME = "baseline-v18.db"
+HISTORICAL_MEMORY_TABLES = frozenset({
+    "memory_records", "memory_entities", "memory_tags", "memory_fts", "memory_links",
+    "memory_reflection_jobs", "memory_reflection_invalidations",
+})
 
 
 def compare_certified_baseline(original, baseline):
-    """Compare historical v18 and current test v18 without lowering sequences.
+    """Check historical critical data; preserve the actual test baseline.
 
-    The previous Core boots can advance the relationships AUTOINCREMENT
-    counter through an INSERT ... ON CONFLICT UPDATE. Every other schema
-    object, logical row and sequence counter must match the certified backup.
+    The historical certification did not guarantee all non-memory tables
+    after boot. Schema, memory, bindings and history must match; other
+    differences are reported and preserved, not assumed to be boot changes.
     """
     original, baseline = Path(original), Path(baseline)
     with closing(_open(original)) as old, closing(_open(baseline)) as current:
         tables = _tables(old)
         if _schema(old) != _schema(current) or tables != _tables(current):
             raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
-        for table in tables:
-            if table != "sqlite_sequence" and _row_hashes(old, table) != _row_hashes(current, table):
+        critical = HISTORICAL_MEMORY_TABLES | {"schema_migrations", "platform_identity_bindings"}
+        if not critical.issubset(tables):
+            raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+        for table in sorted(critical):
+            if _row_hashes(old, table) != _row_hashes(current, table):
                 raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
         if "sqlite_sequence" not in tables:
             return 0
@@ -83,8 +90,8 @@ def prepare_certified_destination(original, output_directory, backend):
     """Read the existing test v18 database; create a local v18/v19 pair.
 
     The baseline is a real logical export from the pinned destination, not a
-    modified copy of the production backup. The only admissible drift is the
-    audited monotonic relationships sequence. All remote operations are reads.
+    modified copy of the production backup. Historical critical tables are
+    checked; all current rows are preserved. All remote operations are reads.
     """
     original, output_directory = Path(original), Path(output_directory)
     certified = verify_snapshot(original, expected_schema=18)
@@ -115,7 +122,10 @@ def prepare_certified_destination(original, output_directory, backend):
             saved.chmod(0o600)
             saved_archive.chmod(0o600)
             _pin_pair(original, saved, certified, current)
-            report["relationship_sequence_delta"] = delta
+            report.update(relationship_sequence_delta=delta,
+                          baseline_rows=current["rows"], historical_rows=certified["rows"],
+                          historical_memory_tables_equal=len(HISTORICAL_MEMORY_TABLES),
+                          historical_diagnostic=baseline_diagnostic(original, saved))
             return candidate, report
         except BaseException:
             shutil.rmtree(output_directory)

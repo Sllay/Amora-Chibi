@@ -296,7 +296,7 @@ function installPCS4Recovery(operatorApi) {
   buttons.forEach(button => button.addEventListener('click', async () => {
     const action = button.dataset.pcs4;
     const explanation = action.startsWith('schema19_')
-      ? 'Use o mesmo Job e volume privado. Preserve o backup v18. Confirme que o destino PCS.4C existente é o banco de teste certificado, independente da produção, sem outros escritores. A migração preserva todos os dados e contadores atuais do teste; se houver divergência não reconhecida em relação ao backup v18, bloqueia. Revisão e consulta não escrevem no Turso.\\n\\n'.replaceAll('\\n', '\n')
+      ? 'Use o mesmo Job e volume privado. Preserve o backup v18. Confirme que o destino PCS.4C existente é o banco de teste certificado, independente da produção, sem outros escritores. A preparação preserva o backup histórico e captura o estado atual do teste. Exige memória, vínculos de identidade, schema e histórico de migração compatíveis; outras diferenças são registradas, nunca descartadas. A migração preserva todas as linhas atuais. Revisão e consulta não escrevem no Turso.\\n\\n'.replaceAll('\\n', '\n')
       : action === 'review_restore' ? 'Confirme no Turso que o destino configurado é o mesmo banco de teste independente, sem outros escritores. A revisão só lê o destino; não apaga nem importa dados.\n\n' : '';
     const confirmation = window.prompt(explanation + 'Confirme esta etapa digitando: ' + confirms[action]);
     if (confirmation !== confirms[action]) return;

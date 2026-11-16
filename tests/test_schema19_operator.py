@@ -71,6 +71,15 @@ def test_full_operator_drill_preserves_old_state_and_both_databases(operator, mo
     assert prior["rank_equal"] is True
     assert boots == [False, True, True]
     boots.clear()
+    # Simulate non-memory state changes after the historical certification.
+    import sqlite3
+    with sqlite3.connect(server.path) as db:
+        db.execute("UPDATE entities SET payload_json=? WHERE id=?", ('{"preserved":true}', "ENTITY_AMORA"))
+        db.execute("INSERT INTO entities(id,canonical_name,entity_type) VALUES (?,?,?)",
+                   ("ENTITY_DRIFT_TEST", "Drift Test", "other"))
+        db.execute("INSERT INTO aliases(normalized_alias,entity_id) VALUES (?,?)",
+                   ("drift test", "ENTITY_DRIFT_TEST"))
+    before = server.path.read_bytes()
     server.calls.clear()
     with pytest.raises(ValueError, match="STEP_BLOCKED"):
         action(panel, target, "schema19_migrate")
@@ -78,9 +87,18 @@ def test_full_operator_drill_preserves_old_state_and_both_databases(operator, mo
     assert _safe_report(prepared)["next"] == "schema19_migrate"
     assert prepared["schema19"]["reports"]["schema19_prepare"]["tables"] == old_report["tables"] + 3
     assert prepared["schema19"]["reports"]["schema19_prepare"]["relationship_sequence_delta"] > 0
+    proof = _safe_report(prepared)["reports"]
+    assert proof["schema19_prepare"]["historical_rows"] == old_report["rows"]
+    assert proof["schema19_prepare"]["baseline_rows"] == old_report["rows"] + 2
+    assert proof["schema19_prepare"]["historical_memory_tables_equal"] == 7
+    assert {x["table"] for x in proof["schema19_historical_diagnostic"]["differences"]} >= {"entities", "aliases", "sqlite_sequence"}
+    assert server.path.read_bytes() == before
     restored = action(panel, target, "schema19_migrate")
     migration_calls = list(server.calls)
     assert _safe_report(restored)["next"] == "schema19_restart"
+    with sqlite3.connect(server.path) as db:
+        assert db.execute("SELECT payload_json FROM entities WHERE id=?", ("ENTITY_AMORA",)).fetchone()[0] == '{"preserved":true}'
+        assert db.execute("SELECT COUNT(*) FROM entities WHERE id=?", ("ENTITY_DRIFT_TEST",)).fetchone()[0] == 1
     certified = action(panel, target, "schema19_restart")
     safe = _safe_report(certified)
     assert safe["next"] is None
@@ -358,3 +376,50 @@ def test_diagnostic_reports_schema_drift_without_unknown_names(operator):
     assert diagnostic["unknown_tables"] == 1
     assert "private_secret_table" not in json.dumps(result)
     assert server.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("change", ["memory_link", "identity_binding", "migration_history"])
+def test_critical_historical_drift_still_blocks(operator, change):
+    import sqlite3
+    panel, target, server, _ = operator
+    with sqlite3.connect(server.path) as db:
+        if change == "memory_link":
+            ids = [r[0] for r in db.execute("SELECT id FROM memory_records LIMIT 2")]
+            db.execute("INSERT INTO memory_links(source_memory_id,target_memory_id,link_type,confidence) VALUES (?,?,?,?)",
+                       (*ids, "related", 1.0))
+        elif change == "identity_binding":
+            db.execute("INSERT INTO platform_identity_bindings(platform,identifier_type,external_actor_id,entity_id,"
+                       "trust,confidence,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                       ("discord","user_id","synthetic","PERSON_BK","verified",1.0,"2026-01-01","2026-01-01"))
+        else:
+            db.execute("UPDATE schema_migrations SET applied_at='changed' WHERE version=18")
+    before = server.path.read_bytes()
+    result = action(panel, target, "schema19_prepare")
+    assert result["schema19"]["reason"] == "SCHEMA19_DESTINATION_DIVERGED"
+    assert _safe_report(result)["next"] == "schema19_prepare"
+    assert server.path.read_bytes() == before
+    assert not (panel.root / "schema19" / "candidate").exists()
+
+
+def test_current_baseline_report_rejects_forged_counts_or_memory_drift(operator):
+    import copy
+    panel, target, _, _ = operator
+    prepared = action(panel, target, "schema19_prepare")
+    assert _safe_report(prepared)["next"] == "schema19_migrate"
+    forged = copy.deepcopy(prepared)
+    forged["schema19"]["reports"]["schema19_prepare"]["historical_memory_tables_equal"] = 6
+    with pytest.raises(ValueError, match="baseline evidence"):
+        _safe_report(forged)
+    forged = copy.deepcopy(prepared)
+    forged["schema19"]["reports"]["schema19_prepare"]["baseline_rows"] += 1
+    forged["schema19"]["reports"]["schema19_prepare"]["rows"] += 1
+    with pytest.raises(ValueError, match="baseline count mismatch"):
+        _safe_report(forged)
+    forged = copy.deepcopy(prepared)
+    forged["schema19"]["historical_diagnostic"]["differences"].append({
+        "table":"memory_records", "status":"rows", "schema_changed":False,
+        "backup_rows":3, "destination_rows":3, "backup_only_rows":1,
+        "destination_only_rows":1, "changed_columns":["content"], "other_changed_columns":0,
+    })
+    with pytest.raises(ValueError, match="critical drift"):
+        _safe_report(forged)
