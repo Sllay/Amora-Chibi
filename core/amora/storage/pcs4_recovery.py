@@ -154,10 +154,10 @@ def certify_restore(snapshot, backend, *, expected_schema=LATEST_SCHEMA_VERSION)
     return report
 
 
-def review_restore_destination(snapshot, backend):
+def review_restore_destination(snapshot, backend, *, expected_schema=LATEST_SCHEMA_VERSION):
     """Read-only reconciliation: empty, exactly restored, or fail closed."""
     snapshot = Path(snapshot)
-    report = verify_snapshot(snapshot)
+    report = verify_snapshot(snapshot, expected_schema=expected_schema)
     with tempfile.TemporaryDirectory(prefix="pcs4c-review-") as directory:
         recovered = Path(directory) / "recovered.db"
         with closing(backend.connect(recovered)) as connection:
