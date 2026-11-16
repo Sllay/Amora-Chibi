@@ -186,3 +186,57 @@ def test_past_date_and_missing_end_denied(core):
         service.create(AgendaCreate(text="muito tarde", due_at=START - timedelta(hours=1)))
     with pytest.raises(ValueError, match="AGENDA_INTERVAL_END_REQUIRED"):
         AgendaCreate(text="intervalo", due_at=START+timedelta(minutes=10), interval_minutes=10)
+
+
+@pytest.mark.asyncio
+async def test_2030_occurrence_fires_after_core_restart(tmp_path, monkeypatch):
+    home = tmp_path / "agenda-restart"
+    monkeypatch.setenv("AMORA_HOME", str(home))
+    clock = SimulatedClock(START)
+    first = AmoraCore.bootstrap(clock=clock)
+    try:
+        _bind_bk(first)
+        await seed(first)
+        item = AgendaService(first.database, clock, first.messaging_store).create(
+            AgendaCreate(text="Ver se estou vivo em 2030",
+                         due_at=datetime(2030, 11, 11, 18, 30, tzinfo=timezone.utc)),
+            target=target(),
+        )
+    finally:
+        first.close()
+    second = AmoraCore.bootstrap(clock=clock)
+    try:
+        assert AgendaService(second.database, clock, second.messaging_store).list(year=2030)[0].id == item.id
+        connected(second)
+        deadline = item.due_at
+        clock.advance(deadline - clock.now())
+        service = AgendaService(second.database, clock, second.messaging_store)
+        [scheduled] = service.tick()
+        assert scheduled.text == "Ver se estou vivo em 2030"
+        assert service.tick() == []
+        [claim] = second.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD, account_scope="primary")
+        assert claim.id == scheduled.id
+    finally:
+        second.close()
+
+
+@pytest.mark.asyncio
+async def test_emergency_disable_leaves_schedule_intact(core, monkeypatch):
+    connected(core)
+    await seed(core)
+    service = agenda(core)
+    service.create(AgendaCreate(text="Não esquecer", due_at=core.clock.now()+timedelta(minutes=10)),
+                   target=target())
+    core.clock.advance(timedelta(minutes=10))
+    monkeypatch.setenv("AMORA_AGENDA_ENABLED", "0")
+    assert service.tick() == []
+    assert len(service.list()) == 1
+    monkeypatch.setenv("AMORA_AGENDA_ENABLED", "1")
+    assert len(service.tick()) == 1
+
+
+def test_invalid_unaware_and_ambiguous_date(core):
+    with pytest.raises(ValueError, match="AGENDA_TIMEZONE_REQUIRED"):
+        AgendaCreate(text="Errado", due_at=datetime(2030,11,11,12,0))
+    assert parse_agenda_text("Amora em 11/11/2030 ver se estou vivo", START).kind == "need_time"
+    assert parse_agenda_text("Amora, a cada 1 minuto fala 'oi' o dia todo", START).kind == "invalid_interval"
