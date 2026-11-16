@@ -160,6 +160,8 @@ class CognitiveContext(BaseModel):
     memories: list[ContextMemory] = Field(default_factory=list)
     world_claims: list[dict[str, Any]] = Field(default_factory=list)
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
+    temporal_context: dict[str, Any] | None = None
+    temporal_opportunity: dict[str, Any] | None = None
     dialogue_plan: dict[str, Any] = Field(default_factory=dict)
     # Only the small contextually relevant subset is projected. These entries
     # describe what Amora knows she can potentially do; they grant no authority.
