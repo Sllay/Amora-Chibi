@@ -15,13 +15,13 @@ REPORT_KEYS = frozenset({
 })
 
 
-SCHEMA19_STEPS = ("schema19_prepare", "schema19_restore", "schema19_restart")
-SCHEMA19_ACTIONS = frozenset((*SCHEMA19_STEPS, "schema19_review_restore", "schema19_status"))
+SCHEMA19_STEPS = ("schema19_prepare", "schema19_migrate", "schema19_restart")
+SCHEMA19_ACTIONS = frozenset((*SCHEMA19_STEPS, "schema19_review_migration", "schema19_status"))
 CONFIRMATIONS.update({
     "schema19_prepare": "PRESERVAR BACKUP V18",
-    "schema19_restore": "NOVO DESTINO V19 VAZIO",
+    "schema19_migrate": "MIGRAR TESTE V18 PARA V19",
     "schema19_restart": "DESTINO V19 ISOLADO",
-    "schema19_review_restore": "REVISAR DESTINO V19",
+    "schema19_review_migration": "REVISAR MIGRACAO V19",
     "schema19_status": "CONSULTAR ESTADO V19",
 })
 SCHEMA19_REPORT_KEYS = REPORT_KEYS | frozenset({
