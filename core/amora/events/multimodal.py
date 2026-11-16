@@ -7,6 +7,7 @@ This module never publishes, persists, fetches media or calls a provider.
 from __future__ import annotations
 
 import json
+from datetime import timezone
 from enum import StrEnum
 from typing import Annotated
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -14,6 +15,9 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from .models import AmoraEvent, PrivacyScope
+
+
+OBSERVATION_EVENT_TYPE = "perception.observation"
 
 
 Identifier = Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=256)]
@@ -151,7 +155,12 @@ def build_observation_event(
         separators=(",", ":"), ensure_ascii=True,
     )
     event_id = uuid5(NAMESPACE_URL, "amora:perception:v1:" + identity)
-    payload = observation.model_dump(mode="json", exclude_none=True)
+    # Canonical UTC representation keeps equivalent source timestamps stable.
+    normalized = observation.model_copy(update={
+        name: getattr(observation, name).astimezone(timezone.utc)
+        for name in ("capture_started_at", "capture_ended_at", "received_at")
+    })
+    payload = normalized.model_dump(mode="json", exclude_none=True)
     # Source/session/actor are the canonical envelope fields; scope and policy
     # travel with the payload so downstream consumers can preserve provenance.
     payload.update(
@@ -161,10 +170,52 @@ def build_observation_event(
         remote_processing_allowed=context.remote_processing_allowed,
     )
     return AmoraEvent(
-        id=event_id, event_type="perception.observation",
-        timestamp=observation.capture_ended_at, source=f"perception:{context.source.value}",
+        id=event_id, event_type=OBSERVATION_EVENT_TYPE,
+        timestamp=normalized.capture_ended_at, source=f"perception:{context.source.value}",
         actor=context.actor_id, confidence=observation.confidence,
         payload=payload, privacy_scope=context.privacy_scope,
         session_id=context.session_id, correlation_id=context.correlation_id,
         sequence=observation.sequence, dedupe_key=f"perception:v1:{event_id}",
     )
+
+
+def parse_observation_event(event: AmoraEvent) -> tuple[ObservationContext, SensoryObservation]:
+    """Validate the canonical envelope, including derived identity and policy.
+
+    This checks structural integrity, not caller authorization. The public
+    generic event route must not accept this reserved event type.
+    """
+    try:
+        if event.event_type != OBSERVATION_EVENT_TYPE or not event.source.startswith("perception:"):
+            raise ValueError("wrong event type")
+        payload = dict(event.payload)
+        version = payload.pop("version")
+        if type(version) is not int or version != 1:
+            raise ValueError("unsupported version")
+        context = ObservationContext(
+            source=event.source.removeprefix("perception:"),
+            session_id=event.session_id, correlation_id=event.correlation_id,
+            scope_id=payload.pop("scope_id"), stream_id=payload.pop("stream_id"),
+            epoch=payload.pop("epoch"), actor_id=event.actor,
+            owner_entity_id=payload.pop("owner_entity_id"),
+            audience=payload.pop("audience"), privacy_scope=event.privacy_scope,
+            remote_processing_allowed=payload.pop("remote_processing_allowed"),
+        )
+        observation = SensoryObservation.model_validate(payload)
+        canonical = build_observation_event(context, observation)
+        if canonical.model_dump(mode="json") != event.model_dump(mode="json"):
+            raise ValueError("noncanonical envelope")
+        return context, observation
+    except (ValueError, TypeError, KeyError, AttributeError):
+        # No untrusted semantic text or identifiers in the error message.
+        raise ValueError("PERCEPTION_EVENT_INVALID") from None
+
+
+def equivalent_observation_replay(first: AmoraEvent, incoming: AmoraEvent) -> bool:
+    """The same delivery may arrive later; all other canonical fields are fixed."""
+    parse_observation_event(first)
+    parse_observation_event(incoming)
+    a, b = first.model_dump(mode="json"), incoming.model_dump(mode="json")
+    a["payload"].pop("received_at")
+    b["payload"].pop("received_at")
+    return a == b
