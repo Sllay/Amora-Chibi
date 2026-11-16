@@ -54,6 +54,18 @@ def run_schema19(panel, action, *, destination=destination19_from_environment):
             raise ValueError("SCHEMA19_V18_NOT_CERTIFIED")
         original = verify_snapshot(panel.snapshot)
         panel._pin(old, original)
+        for step in ("backup", "verify", "restore"):
+            if any(old["reports"][step].get(key) != original[key]
+                   for key in ("schema_version", "tables", "rows", "assets")):
+                raise ValueError("SCHEMA19_V18_NOT_CERTIFIED")
+        restart_report = old["reports"]["restart"]
+        if (old["reports"]["restore"].get("equal_tables") != original["tables"]
+                or restart_report.get("schema_version") != 18
+                or restart_report.get("equal_tables") != original["tables"]
+                or restart_report.get("boots") != 2 or restart_report.get("query_count") != 5
+                or restart_report.get("rank_equal") is not True
+                or restart_report.get("memory_tables_equal") != 4):
+            raise ValueError("SCHEMA19_V18_NOT_CERTIFIED")
         # Require the original certified destination configuration to remain
         # pinned. New secrets must never replace its existing configuration.
         former = panel.destination()
