@@ -136,16 +136,19 @@ def run_schema19(panel, action, *, destination=destination19_from_environment):
                 pinned()
                 outcome, report = review_restore_destination(snapshot, target, expected_schema=19)
                 pinned()
-                state["review_outcome"] = outcome
-                if outcome == "exact":
-                    state["reports"]["schema19_restore"] = _public_report(report)
-                    completed.append("schema19_restore")
+                if outcome not in {"empty", "exact"}:
+                    raise ValueError("SCHEMA19_REVIEW_INVALID")
             else:
                 pinned()
                 report = certify_restart(snapshot, target, expected_schema=19)
                 pinned()
             panel._pin(old, verify_snapshot(panel.snapshot))
-            if action != "schema19_review_restore":
+            if action == "schema19_review_restore":
+                state["review_outcome"] = outcome
+                if outcome == "exact":
+                    state["reports"]["schema19_restore"] = _public_report(report)
+                    completed.append("schema19_restore")
+            else:
                 state["reports"][action] = _public_report(report)
                 completed.append(action)
             state.update(status="ok", failed_action=None)
