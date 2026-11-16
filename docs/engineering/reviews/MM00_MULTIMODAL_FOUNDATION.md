@@ -2,7 +2,7 @@
 
 Status: auditoria inicial e plano de contratos; não constitui certificação operacional nem altera versões canônicas.
 Base auditada: ac8857bde8d52b0d90dd0ab002154ace7394d657 (PCS.4C R1/R2/R3).
-Dependência de integração: concluir a recuperação PCS.4C, certificar Restore/restart reais e manter a política vigente de projeção.
+Dependência PCS.4C: recuperação real aprovada em 2026-11-16, conforme relatório operacional registrado em [#221](https://github.com/Sllay/Amora-Chibi/issues/221#issuecomment-6907256721). Backup/verify/restore: 48.059 linhas, 51/51 tabelas, schema 18; restart: dois boots remotos, cinco consultas com ranking equivalente, quatro tabelas de memória preservadas. Projeção local permanece desativada; os gates de promoção de storage são independentes do MM.00.
 
 ## 1. Reutilização obrigatória
 
@@ -52,8 +52,8 @@ MM.06/07: consolidação temporal/episódica, fusão entre fala e visão, ACIR p
 - Software: CI verde, contratos, integração, reinício, dedupe, ordenação, backpressure, erro de provider/timeout e isolamento de identidade.
 - Memória: caso sintético compartilhado entre fala/visão, detalhes específicos recuperáveis após restart, sem multiplicar registros por replay; desconhecido permanece desconhecido. Grupo: nenhum vazamento cruzado de memória privada. Teste de conversa de duas horas com limites de RAM, fila, crescimento persistente e número de chamadas mensurados; metas calibradas com baseline real, não declaradas como resultados.
 - Operacional: credencial Groq real, Discord real, iPhone real, call + EveryCord e autorização de captura. Nenhuma gravação permanente de mídia por padrão; encerrar sessão revoga ingest, expira buffer, conserva somente memórias permitidas.
-- PCS.4C: preservar backup verificado, revisar destino interrompido, Restore/restart reais; não ativar projeção nem encerrar #221 sem evidência.
+- PCS.4C: backup verificado e Restore/restart reais aprovados; preservar evidência e volume. Não ativar projeção nem encerrar #221 sem revisar os gates restantes de promoção.
 
 ## 5. Próximo checkpoint
 
-MM.00C: ler contratos de eventos e persistência do bus, schema de memória e inbound privacy/identity antes de escolher campos finais; implementar primeiro um contrato pequeno e testes de rejeição. Não integrar um pipeline paralelo enquanto os gates da PCS.4C estiverem pendentes.
+MM.00C: ler contratos de eventos e persistência do bus, schema de memória e inbound privacy/identity antes de escolher campos finais; implementar primeiro um contrato pequeno e testes de rejeição. Não integrar um pipeline paralelo; a recuperação PCS.4C está aprovada, e a promoção de projeção/storage permanece independente.
