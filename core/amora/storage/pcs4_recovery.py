@@ -149,6 +149,40 @@ def certify_restore(snapshot, backend):
     return report
 
 
+def review_restore_destination(snapshot, backend):
+    """Read-only reconciliation: empty, exactly restored, or fail closed."""
+    snapshot = Path(snapshot)
+    report = verify_snapshot(snapshot)
+    with tempfile.TemporaryDirectory(prefix="pcs4c-review-") as directory:
+        recovered = Path(directory) / "recovered.db"
+        with closing(backend.connect(recovered)) as connection:
+            with connection.read_transaction():
+                count = connection.execute(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'"
+                ).fetchone()[0]
+            if count:
+                class ReadSnapshot:
+                    def __enter__(self):
+                        self.transaction = connection.read_transaction()
+                        self.transaction.__enter__()
+                        return self
+
+                    def __exit__(self, *args):
+                        return self.transaction.__exit__(*args)
+
+                    def execute(self, sql, parameters=()):
+                        if not sql.lstrip().upper().startswith("SELECT "):
+                            raise ValueError("PCS4C_REVIEW_READ_ONLY")
+                        return connection.execute(sql, parameters)
+
+                backend.backup(ReadSnapshot(), recovered)
+                report["equal_tables"] = compare_snapshots(snapshot, recovered)
+    if (_sha(snapshot) != report["database_sha256"]
+            or _sha(Path(str(snapshot) + ".avatar.zip")) != report["archive_sha256"]):
+        raise ValueError("PCS4C_SOURCE_CHANGED")
+    return ("exact" if count else "empty"), report
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("verify", "restore"))
