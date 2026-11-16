@@ -117,9 +117,11 @@ class GroqIncomingImageVision:
                 {"type": "image_url", "image_url": {"url": data_url}},
             ]}],
             "temperature": 0.1,
-            "max_completion_tokens": 700,
+            # Structured visual extraction does not need chain-of-thought. Reserve
+            # the full output budget for the JSON rather than hidden reasoning.
+            "max_completion_tokens": 1400,
             "stream": False,
-            "reasoning_effort": "low",
+            "reasoning_effort": "none",
             "reasoning_format": "hidden",
             "response_format": {
                 "type": "json_schema",
@@ -146,16 +148,50 @@ class GroqIncomingImageVision:
                 "image analysis rejected by model provider",
                 status_code=response.status_code,
             )
+        # Keep the envelope, JSON syntax and schema validation separate:
+        # all operator logs are safe codes only, never model text/OCR/pixels.
         try:
             envelope = response.json()
-            message = envelope["choices"][0]["message"]
-            if message.get("refusal"):
-                raise GroqVisionError("INCOMING_VISION_REFUSAL", "image analysis refused")
-            result = VisionResponse.model_validate(json.loads(message["content"]))
-        except GroqVisionError:
-            raise
-        except (ValueError, TypeError, KeyError, IndexError, ValidationError) as exc:
-            raise GroqVisionError("INCOMING_VISION_INVALID_RESULT", "invalid image observation") from exc
+            choices = envelope["choices"]
+            choice = choices[0]
+            message = choice["message"]
+            if not isinstance(message, dict):
+                raise TypeError("message")
+            finish_reason = choice.get("finish_reason")
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise GroqVisionError(
+                "INCOMING_VISION_ENVELOPE_INVALID",
+                "visual provider response envelope invalid",
+            ) from exc
+        if message.get("refusal"):
+            raise GroqVisionError("INCOMING_VISION_REFUSAL", "image analysis refused")
+        # The provider may return HTTP 200 and no content when output tokens
+        # are exhausted. Don't confuse this with valid JSON or hallucinate.
+        if finish_reason == "length":
+            raise GroqVisionError(
+                "INCOMING_VISION_TRUNCATED", "visual provider output limit reached"
+            )
+        if finish_reason not in {None, "stop"}:
+            raise GroqVisionError(
+                "INCOMING_VISION_FINISH_UNEXPECTED", "visual provider did not finish normally"
+            )
+        content_text = message.get("content")
+        if not isinstance(content_text, str) or not content_text.strip():
+            raise GroqVisionError(
+                "INCOMING_VISION_EMPTY_RESPONSE", "visual provider returned no usable content"
+            )
+        try:
+            decoded = json.loads(content_text)
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            raise GroqVisionError(
+                "INCOMING_VISION_JSON_INVALID", "visual provider did not return valid JSON"
+            ) from exc
+        try:
+            result = VisionResponse.model_validate(decoded)
+        except ValidationError as exc:
+            raise GroqVisionError(
+                "INCOMING_VISION_SCHEMA_INVALID", "visual provider did not match observation schema"
+            ) from exc
         return IncomingVisualObservation(
             status="analyzed", source="vision_model", **result.model_dump()
         ).as_context()
