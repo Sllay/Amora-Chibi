@@ -171,12 +171,11 @@ def test_review_interrupted_restore_is_read_only_and_preserves_backup(
         assert panel._read()["restore_review"]["previous_status"] == "running"
         if outcome == "exact":
             assert result["reports"]["restore"]["equal_tables"] == before["tables"]
-        else:
-            assert run(panel, "restore")["completed"] == ["backup", "verify", "restore"]
     commands = [sql.strip().upper() for sql in target_server.calls[start:]]
-    if outcome != "empty":
-        assert all(sql.startswith("SELECT ") or sql in
-                   {"BEGIN", "ROLLBACK", "PRAGMA FOREIGN_KEYS=ON"} for sql in commands)
+    assert all(sql.startswith("SELECT ") or sql in
+               {"BEGIN", "ROLLBACK", "PRAGMA FOREIGN_KEYS=ON"} for sql in commands)
+    if outcome == "empty":
+        assert run(panel, "restore")["completed"] == ["backup", "verify", "restore"]
     assert len(source_server.calls) == source_start
     assert verify_snapshot(panel.snapshot) == before
     assert not source_server.streams and not target_server.streams
