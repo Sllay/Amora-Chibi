@@ -1,6 +1,6 @@
 # MM.00D.3 — Admissão autorizada, ordenação e recuperação
 
-Status: D.2 aprovado e integrado (#240); D.3A.1 aprovado e integrado (#241); D.3A.2 implementado, CI pendente. Acompanhamento #238.
+Status: D.2 aprovado e integrado (#240); D.3A.1/A.2 aprovados e integrados (#241/#242); D.3B.1 implementado, CI pendente. Acompanhamento #238.
 Não ativar captura, provider ou storage novo neste checkpoint sem contrato e testes.
 
 ## Contratos existentes inspecionados
@@ -16,8 +16,9 @@ Não ativar captura, provider ou storage novo neste checkpoint sem contrato e te
 | ID | Entrega | Gate | Estado |
 |---|---|---|---|
 | D.3A.1 | Autoridade interna Web/device e screen | grant explícito, sessão autenticada ativa, device/owner revalidados, expiração/revogação, escopo e audiência emitidos pelo Core | Aprovado; integrado #241 |
-| D.3A.2 | Autoridade de plataforma e participantes | binding nativo por conta e conversa, consentimento de cada participante, revalidação e isolamento | Implementado; CI pendente |
-| D.3B | Buffer temporal limitado | epoch/sequence, reorder, gap, backpressure, limites por bytes/idade/contagem; eventos tardios não substituem presente | Planejado |
+| D.3A.2 | Autoridade de plataforma e participantes | binding nativo por conta e conversa, consentimento de cada participante, revalidação e isolamento | Aprovado; integrado #242 |
+| D.3B.1 | Buffer semântico temporal limitado | sequence/epoch, reorder, gap, backpressure, limites por bytes/idade/contagem | Implementado; CI pendente |
+| D.3B.2 | Buffer de mídia e sincronização real | formatos, relógios, limites e métricas no transporte | Planejado |
 | D.3C | Seleção e recuperação durável | somente evidências relevantes; plano de trabalho por IDs, dedupe, lease/reconcile; replay antes/depois de falha; sem mídia bruta | Planejado |
 | D.3D | Primeiro adaptador interno CH2 e teste do ciclo | validação de identidade e mídia, memória, recall, reinício, falhas, privacidade, métricas; gate real Discord/Groq em MM.01 | Planejado |
 
@@ -47,4 +48,7 @@ Antes de cada subcheckpoint atualizar este ledger e #238. Após implementação:
 - Limites deliberados: não existe endpoint, captura, provider, publicação, renovação automática ou autorização de terceiros. D.3A.2 integra bindings de plataforma; D.3D integra a fronteira autenticada. Revogação afeta verificações futuras; coordenação entre autorização e trabalho concorrente/externo ainda requer integração. O grant não é persistido e não substitui a política de armazenamento/remoção.
 
 ## D.3A.2
-[Plano e evidência](MM00D3A2_PLATFORM_CONSENT.md). Código e testes submetidos; ainda sem validação final. D.3B/C/D permanecem pendentes.
+[Plano e evidência](MM00D3A2_PLATFORM_CONSENT.md). #242 aprovado e integrado: 3/3 workflows, 7/7 jobs; merge `296bd61dd0466c531741c4fae23a2ac38aea6d10`. B.1 implementado; B.2/C/D pendentes.
+
+## D.3B.1
+[Plano e evidência](MM00D3B_ORDERED_OBSERVATIONS.md). Buffer semântico bounded, testes de pressão/ordenação implementados; CI pendente. Não confundir com buffer raw de transporte ou fila durável.
