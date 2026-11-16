@@ -301,9 +301,10 @@ async def test_owner_image_only_failure_is_conveyed_without_fake_observation(tmp
         monkeypatch.setattr(core.cognition, "respond_observed", respond)
         original = _message(
             core, message_id="large-art-overlimit", actor_id="111111111111111111",
-            channel_type=ChannelType.DM, text="",
+            channel_type=ChannelType.DM, text="placeholder",
         )
         message = original.model_copy(update={
+            "text": "",
             "remote_processing_allowed": True,
             "attachments": [
                 AttachmentRef(attachment_id=ATTACHMENT, media_type="image/png",
