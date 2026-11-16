@@ -42,6 +42,7 @@
       <nav class="surface-tabs" aria-label="Áreas da Amora">
         <button type="button" class="surface-tab active" data-surface="chatView">Chat</button>
         <button type="button" class="surface-tab" data-surface="peopleView">Pessoas</button>
+        <button type="button" class="surface-tab" data-surface="agendaView">Agenda</button>
         <button type="button" class="surface-tab" data-surface="consoleView">Console</button>
       </nav>
 
@@ -187,6 +188,31 @@
         </div>
         <input id="peopleImportFile" class="hidden" type="file" accept="application/json,.json" />
         <input id="bindingsImportFile" class="hidden" type="file" accept="application/json,.json" />
+      </section>
+
+      <section id="agendaView" class="surface-view hidden">
+        <div class="admin-toolbar">
+          <div><div class="eyebrow">AGENDA DA AMORA</div><h2>Compromissos e lembretes</h2>
+            <p class="subtle">Agendas persistentes, únicas ou repetidas. Avisos em DM privado verificado no Discord; a entrega depende do Core e do Discord conectados.</p>
+          </div><div class="toolbar-actions"><button id="agendaRefresh" type="button" class="ghost">Atualizar agenda</button></div>
+        </div>
+        <section class="card admin-card">
+          <form id="agendaCreateForm" class="form-grid">
+            <label class="wide">O que a Amora deve dizer?<textarea id="agendaText" rows="3" maxlength="500" required placeholder="Me lembra de cobrar meu amigo sobre a camisa"></textarea></label>
+            <label>Data e hora<input id="agendaDue" type="datetime-local" required /></label>
+            <label>Repetição<select id="agendaRepeat"><option value="">Uma única vez</option><option value="10">A cada 10 minutos</option><option value="15">A cada 15 minutos</option><option value="30">A cada 30 minutos</option><option value="60">A cada hora</option><option value="1440">Diariamente</option><option value="10080">Semanalmente</option></select></label>
+            <label>Repetir até (se recorrente)<input id="agendaUntil" type="datetime-local" /></label>
+            <div class="wide form-actions"><button type="submit" id="agendaSave">Criar agenda</button></div>
+          </form>
+          <p class="subtle" id="agendaTimezone"></p>
+          <p id="agendaNotice" class="subtle" role="status"></p>
+        </section>
+        <section class="card admin-card">
+          <div class="section-title-row"><h3>Minhas agendas</h3>
+            <label>Ano <input id="agendaYear" type="number" min="2000" max="9999" placeholder="Todos" inputmode="numeric" /></label>
+          </div>
+          <div id="agendaList" class="console-list" aria-live="polite"></div>
+        </section>
       </section>
 
       <section id="consoleView" class="surface-view hidden">
