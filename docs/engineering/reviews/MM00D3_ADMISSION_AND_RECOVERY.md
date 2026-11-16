@@ -1,6 +1,6 @@
 # MM.00D.3 — Admissão autorizada, ordenação e recuperação
 
-Status: D.2 aprovado e integrado (#240); D.3A.1/A.2 aprovados e integrados (#241/#242); D.3B.1 aprovado (#243); B.2A aprovado (#244); C.1 implementado, CI pendente. Acompanhamento #238.
+Status: D.2 aprovado e integrado (#240); D.3A.1/A.2 aprovados e integrados (#241/#242); D.3B.1 aprovado (#243); B.2A aprovado (#244); C.1 aprovado (#245); C.2A implementado, CI pendente. Acompanhamento #238.
 Não ativar captura, provider ou storage novo neste checkpoint sem contrato e testes.
 
 ## Contratos existentes inspecionados
@@ -20,8 +20,10 @@ Não ativar captura, provider ou storage novo neste checkpoint sem contrato e te
 | D.3B.1 | Buffer semântico temporal limitado | sequence/epoch, reorder, gap, backpressure, limites por bytes/idade/contagem | Aprovado; integrado #243 |
 | D.3B.2A | Contrato de sincronização conservadora | intervalos, relógio receptor, incerteza e correlação autorizada | Aprovado; integrado #244 |
 | D.3B.2B | Buffer raw e sincronização real | formatos, relógios, limites e métricas no transporte | Planejado nos adaptadores MM.02–05 |
-| D.3C.1 | Seleção bounded de episódios | gate existente, prioridade, overlap e orçamento | Implementado; CI pendente |
-| D.3C.2/3 | Recuperação durável e produtor real | trabalho por IDs, lease/reconcile, invalidação, persistência seletiva | Planejado |
+| D.3C.1 | Seleção bounded de episódios | gate existente, prioridade, overlap e orçamento | Aprovado; integrado #245 |
+| D.3C.2A | Repository durável candidato | enqueue, claim, lease, retry, cancel; DDL isolado | Implementado; CI pendente |
+| D.3C.2B/C | Fence, invalidação e migração | gravação cercada por lease, recuperação e certificação PCS | Planejado |
+| D.3C.3 | Produtor real | seleção efêmera e persistência/queue reconciliadas | Planejado |
 | D.3D | Primeiro adaptador interno CH2 e teste do ciclo | validação de identidade e mídia, memória, recall, reinício, falhas, privacidade, métricas; gate real Discord/Groq em MM.01 | Planejado |
 
 ## Decisões de segurança e desempenho
@@ -57,3 +59,6 @@ Antes de cada subcheckpoint atualizar este ledger e #238. Após implementação:
 
 ## D.3C.1
 [Plano e evidência](MM00D3C_SELECTION_AND_RECOVERY.md). Seleção bounded pelo gate existente; #244 aprovado (7/7 jobs), merge `e9852e257907611448c98eadd545d0f2e6f3c14f`. C.2/3 e D pendentes.
+
+## D.3C.2A
+C.1 aprovado #245 (7/7 jobs), merge `f81094b08d5d1e9fe44405094c06a5612be98d66`. [ADR de trabalho durável](MM00D3C2_DURABLE_WORK_ADR.md): repository e DDL candidato não registrado, testes implementados; CI pendente. C.2B/C/C.3 e D ainda pendentes.
