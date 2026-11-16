@@ -81,6 +81,8 @@ async def test_incoming_adapter_sends_bounded_image_and_validates_closed_json(tm
     )
     got = await vision.analyze(payload(), "O que tem na foto?")
     assert got == observation()
+    assert requests[0]["reasoning_effort"] == "none"
+    assert requests[0]["max_completion_tokens"] == 1400
     assert len(requests) == 1
     assert "test-visual-api-token" not in json.dumps(requests[0])
 
@@ -105,7 +107,7 @@ async def test_malformed_or_unavailable_visual_never_fakes_a_perception(tmp_path
     assert calls[0] == 0
     with pytest.raises(GroqVisionError) as exc:
         await vision.analyze(payload())
-    assert exc.value.code == "INCOMING_VISION_INVALID_RESULT"
+    assert exc.value.code == "INCOMING_VISION_SCHEMA_INVALID"
     monkeypatch.setenv("AMORA_DISCORD_IMAGE_VISION", "0")
     with pytest.raises(GroqVisionError) as exc:
         await vision.analyze(payload())
@@ -212,3 +214,23 @@ async def test_unknown_dm_image_cannot_trigger_vision_or_provider(tmp_path, monk
         assert not result.outbound
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("envelope,expected", [
+    ({"choices":[{"finish_reason":"length","message":{"content":""}}]}, "INCOMING_VISION_TRUNCATED"),
+    ({"choices":[{"finish_reason":"stop","message":{"content":None}}]}, "INCOMING_VISION_EMPTY_RESPONSE"),
+    ({"choices":[{"finish_reason":"stop","message":{"content":"not-json"}}]}, "INCOMING_VISION_JSON_INVALID"),
+    ({"choices":[{"finish_reason":"tool_calls","message":{"content":"{}"}}]}, "INCOMING_VISION_FINISH_UNEXPECTED"),
+    ({"choices":[]}, "INCOMING_VISION_ENVELOPE_INVALID"),
+])
+async def test_provider_failure_codes_do_not_echo_private_response(tmp_path, envelope, expected):
+    private = "secret-face-name-must-never-leak"
+    def handler(_request):
+        return httpx.Response(200, json=envelope)
+    vision = GroqIncomingImageVision(secrets(tmp_path), transport=httpx.MockTransport(handler))
+    with pytest.raises(GroqVisionError) as error:
+        await vision.analyze(payload(), "olha " + private)
+    assert error.value.code == expected
+    assert private not in str(error.value)
+    assert private not in error.value.code

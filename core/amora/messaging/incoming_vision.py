@@ -5,9 +5,11 @@ No raw bytes/URLs reach the conversation provider, memory, logs or event ledger.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
+import logging
 import os
 
 import httpx
@@ -117,9 +119,11 @@ class GroqIncomingImageVision:
                 {"type": "image_url", "image_url": {"url": data_url}},
             ]}],
             "temperature": 0.1,
-            "max_completion_tokens": 700,
+            # Structured visual extraction does not need chain-of-thought. Reserve
+            # the full output budget for the JSON rather than hidden reasoning.
+            "max_completion_tokens": 1400,
             "stream": False,
-            "reasoning_effort": "low",
+            "reasoning_effort": "none",
             "reasoning_format": "hidden",
             "response_format": {
                 "type": "json_schema",
@@ -146,16 +150,50 @@ class GroqIncomingImageVision:
                 "image analysis rejected by model provider",
                 status_code=response.status_code,
             )
+        # Keep the envelope, JSON syntax and schema validation separate:
+        # all operator logs are safe codes only, never model text/OCR/pixels.
         try:
             envelope = response.json()
-            message = envelope["choices"][0]["message"]
-            if message.get("refusal"):
-                raise GroqVisionError("INCOMING_VISION_REFUSAL", "image analysis refused")
-            result = VisionResponse.model_validate(json.loads(message["content"]))
-        except GroqVisionError:
-            raise
-        except (ValueError, TypeError, KeyError, IndexError, ValidationError) as exc:
-            raise GroqVisionError("INCOMING_VISION_INVALID_RESULT", "invalid image observation") from exc
+            choices = envelope["choices"]
+            choice = choices[0]
+            message = choice["message"]
+            if not isinstance(message, dict):
+                raise TypeError("message")
+            finish_reason = choice.get("finish_reason")
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise GroqVisionError(
+                "INCOMING_VISION_ENVELOPE_INVALID",
+                "visual provider response envelope invalid",
+            ) from exc
+        if message.get("refusal"):
+            raise GroqVisionError("INCOMING_VISION_REFUSAL", "image analysis refused")
+        # The provider may return HTTP 200 and no content when output tokens
+        # are exhausted. Don't confuse this with valid JSON or hallucinate.
+        if finish_reason == "length":
+            raise GroqVisionError(
+                "INCOMING_VISION_TRUNCATED", "visual provider output limit reached"
+            )
+        if finish_reason not in {None, "stop"}:
+            raise GroqVisionError(
+                "INCOMING_VISION_FINISH_UNEXPECTED", "visual provider did not finish normally"
+            )
+        content_text = message.get("content")
+        if not isinstance(content_text, str) or not content_text.strip():
+            raise GroqVisionError(
+                "INCOMING_VISION_EMPTY_RESPONSE", "visual provider returned no usable content"
+            )
+        try:
+            decoded = json.loads(content_text)
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            raise GroqVisionError(
+                "INCOMING_VISION_JSON_INVALID", "visual provider did not return valid JSON"
+            ) from exc
+        try:
+            result = VisionResponse.model_validate(decoded)
+        except ValidationError as exc:
+            raise GroqVisionError(
+                "INCOMING_VISION_SCHEMA_INVALID", "visual provider did not match observation schema"
+            ) from exc
         return IncomingVisualObservation(
             status="analyzed", source="vision_model", **result.model_dump()
         ).as_context()
@@ -165,3 +203,97 @@ def unavailable_visual_observation() -> dict:
     return IncomingVisualObservation(
         status="unavailable", source="core_unavailable"
     ).as_context()
+
+
+class IncomingVisionCascade:
+    """Bounded visual-only fallback, never the conversation provider mesh.
+
+    Mistral is opt-in because it receives a private image at a *second*
+    provider and may consume trial quota. The existing Core owner/privacy
+    gate must pass before this class can be invoked.
+    """
+
+    _TRUE = frozenset({"1", "true", "yes", "on"})
+    _FALLBACK_ELIGIBLE = frozenset({
+        "INCOMING_VISION_TRANSPORT_FAILED",
+        "INCOMING_VISION_TRUNCATED",
+        "INCOMING_VISION_EMPTY_RESPONSE",
+        "INCOMING_VISION_JSON_INVALID",
+        "INCOMING_VISION_SCHEMA_INVALID",
+        "INCOMING_VISION_ENVELOPE_INVALID",
+        "INCOMING_VISION_FINISH_UNEXPECTED",
+    })
+
+    def __init__(self, primary: GroqIncomingImageVision, fallback=None, *,
+                 primary_timeout_seconds=16.0, total_timeout_seconds=26.0):
+        self.primary = primary
+        self.fallback = fallback
+        self.primary_timeout_seconds = primary_timeout_seconds
+        self.total_timeout_seconds = total_timeout_seconds
+
+    @property
+    def _fallback_enabled(self) -> bool:
+        return os.getenv("AMORA_VISION_NVIDIA_FALLBACK", "false").strip().lower() in self._TRUE
+
+    @property
+    def _fallback_available(self) -> bool:
+        return self._fallback_enabled and self.fallback is not None and self.fallback.available
+
+    @property
+    def available(self) -> bool:
+        return bool(self.primary.available or self._fallback_available)
+
+    @classmethod
+    def _fallback_eligible(cls, exc: GroqVisionError) -> bool:
+        code = exc.code
+        return (
+            code in cls._FALLBACK_ELIGIBLE or
+            code.startswith("INCOMING_VISION_HTTP_5") or
+            code == "INCOMING_VISION_HTTP_429"
+        )
+
+    async def analyze(self, image: InboundImageContent, user_text: str = "") -> dict:
+        # Never skip local image identity/signature checks when the primary is
+        # temporarily unavailable or NVIDIA is chosen directly.
+        valid_image_bytes(image)
+        enabled = self._fallback_available
+        if not enabled:
+            return await self.primary.analyze(image, user_text)
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.total_timeout_seconds
+        primary_error = "INCOMING_VISION_NOT_CONFIGURED"
+        if self.primary.available:
+            try:
+                return await asyncio.wait_for(
+                    self.primary.analyze(image, user_text),
+                    timeout=min(self.primary_timeout_seconds, self.total_timeout_seconds),
+                )
+            except asyncio.TimeoutError:
+                primary_error = "INCOMING_VISION_TIMEOUT"
+            except GroqVisionError as exc:
+                if not self._fallback_eligible(exc):
+                    raise
+                primary_error = exc.code
+        remaining = deadline - loop.time()
+        if remaining <= 0.1:
+            raise GroqVisionError(
+                "INCOMING_VISION_FALLBACK_BUDGET_EXHAUSTED",
+                "no time remaining for visual fallback",
+            )
+        logging.getLogger("amora.incoming_vision").info(
+            "incoming_visual_fallback_attempt provider=nvidia_mistral primary_code=%s",
+            primary_error,
+        )
+        try:
+            result = await asyncio.wait_for(
+                self.fallback.analyze(image, user_text), timeout=remaining
+            )
+        except asyncio.TimeoutError as exc:
+            raise GroqVisionError(
+                "NVIDIA_VISION_FALLBACK_TIMEOUT", "NVIDIA visual fallback timed out"
+            ) from exc
+        logging.getLogger("amora.incoming_vision").info(
+            "incoming_visual_fallback_succeeded provider=nvidia_mistral"
+        )
+        return result
