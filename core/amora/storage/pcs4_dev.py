@@ -299,7 +299,8 @@ class NorthflankRecovery:
         with self.lock:
             state = self._status()
             if state["next"] != action and not (
-                action == "schema19_status" and state["status"] in {"ok", "error", "blocked"}
+                action == "schema19_status" and (state["status"] in {"error", "blocked"}
+                    or (state["status"] == "ok" and state["completed"] == list(_STEPS)))
                 and not self.uncertain
             ):
                 raise HTTPException(409, "RECOVERY_STEP_BLOCKED")
