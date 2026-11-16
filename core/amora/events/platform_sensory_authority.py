@@ -69,7 +69,8 @@ class PlatformSensoryAuthority:
 
     @staticmethod
     def _native_valid(platform, member):
-        if not isinstance(member, NativeMember) or not isinstance(member.external_actor_id, str):
+        if (not isinstance(member, NativeMember) or not isinstance(member.external_actor_id, str)
+                or not isinstance(member.identifier_type, str)):
             return False
         if platform == MessagingPlatform.DISCORD:
             return member.identifier_type == "discord_user_id" and bool(
@@ -119,7 +120,8 @@ class PlatformSensoryAuthority:
                 or not isinstance(privacy_scope, PrivacyScope)
                 or not isinstance(account_scope, str) or not 1 <= len(account_scope) <= 96
                 or not isinstance(conversation_id, str) or not 1 <= len(conversation_id) <= 512
-                or "|" in account_scope or "|" in conversation_id):
+                or "|" in account_scope or "|" in conversation_id
+                or not isinstance(members, tuple)):
             raise ValueError("PLATFORM_SENSORY_SCOPE_INVALID")
         # Only a human peer in a bot DM, or the complete human roster of a group.
         if channel_type == ChannelType.DM:
@@ -146,6 +148,8 @@ class PlatformSensoryAuthority:
             return session
 
     def _active(self, session_id, *, platform, account_scope, conversation_id, current_members):
+        if not isinstance(platform, MessagingPlatform):
+            raise ValueError("PLATFORM_SENSORY_SCOPE_MISMATCH")
         self._prune(self.clock.now())
         active = self._sessions.get(session_id)
         if active is None:
@@ -163,6 +167,8 @@ class PlatformSensoryAuthority:
 
     @staticmethod
     def _participant(active, member):
+        if not PlatformSensoryAuthority._native_valid(active.session.platform, member):
+            raise ValueError("PLATFORM_SENSORY_NATIVE_INVALID")
         person = dict(active.session.members).get(member)
         if person is None:
             raise ValueError("PLATFORM_SENSORY_PARTICIPANT_UNAUTHORIZED")
