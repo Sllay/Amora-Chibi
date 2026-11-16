@@ -66,8 +66,8 @@ Issue de acompanhamento persistente: [#238](https://github.com/Sllay/Amora-Chibi
 |---|---|---|
 | MM.00A | Concluído — auditoria | Seção 1 |
 | MM.00B | Concluído — plano | Seções 2–4; #238 |
-| MM.00C.1 | Em implementação | Contrato de observação tipado e fábrica interna de AmoraEvent |
-| MM.00C.2 | Pendente | Testes negativos, escopo/identidade, sequência e dedupe estável |
+| MM.00C.1 | Implementado — CI pendente | `404838ff`, `183b6638`: contrato e fábrica interna de AmoraEvent |
+| MM.00C.2 | Testes implementados — CI pendente | `8c2e7cde`: validações negativas, identidade, dedupe em SQLite após restart e publicação efêmera |
 | MM.00D.1 | Pendente | Publicação no bus existente e persistência seletiva |
 | MM.00D.2 | Pendente | Recall pós-restart, isolamento, falhas e limites |
 | MM.01 | Pendente | Certificação real CH2, primeiro ciclo completo |
@@ -75,3 +75,9 @@ Issue de acompanhamento persistente: [#238](https://github.com/Sllay/Amora-Chibi
 Escopo C.1/C.2: contrato interno, sem endpoint, migration, provider, listener ativo ou mudança de comportamento. Contexto resolvido e autorizado pelo Core separado da observação; timestamp de captura/recepção, sequência/epoch, identidade e escopo, evidência/proveniência, rejeição de mídia bruta/metadata arbitrária, limites; não publicar automaticamente. D.1/D.2: integração no bus/store e gate de memória, não confundir replay de evento com retry de handler. O bus atual deduplica a entrega persistida antes de chamar handlers; execução durável da consolidação precisa de checkpoint/lease próprios existentes ou explicitamente integrados, não apenas republicação do mesmo evento.
 
 Ao finalizar cada subcheckpoint: atualizar este ledger e #238 com SHA, CI do SHA exato, resultados, limites e próximo passo. Não marcar gates reais como pass por testes sintéticos. Nenhuma credencial ou conteúdo privado nos registros de engenharia.
+
+### MM.00C — implementação registrada
+
+- `core/amora/events/multimodal.py`: modelos fechados e frozen, contexto autorizado separado da observação, IDs de sessão/scope/stream/correlation independentes, epoch/sequence, captura e recepção com timezone, evidência observada/relatada/inferida/desconhecida. Texto semântico limitado, sem campos de mídia bruta/metadata arbitrária; SHA opcional e referência opaca. Chave UUID5 estável pelas coordenadas de entrega; resultado é AmoraEvent existente. Nenhuma publicação automática ou rota externa. Contexto interno é fronteira de confiança, não substitui resolução real de identidade/consentimento.
+- `tests/test_multimodal_contract_mm00.py`: roundtrip do envelope, separação de streams e sessões, rejeições de tipos/privacidade, desconhecido sem fala inventada, persistência explícita e dedupe após reabrir SQLite usando AsyncEventBus existente. IDs iguais com conteúdo diferente são conflito a tratar em D, não autorização de sobrescrita. Ordem/consentimento efetivos e recuperação de consolidação após crash são D, ainda não implementados.
+- Estado: aguardando CI do PR #237; não habilitado em runtime. Nenhuma mudança de schema/driver/provider/V3.
