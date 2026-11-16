@@ -13,3 +13,18 @@ REPORT_KEYS = frozenset({
     "boots", "query_count", "rank_equal", "memory_tables_equal", "hit_counts",
     "private_hits", "archived_hits", "public_hits", "nonremote_hits",
 })
+
+
+SCHEMA19_STEPS = ("schema19_prepare", "schema19_restore", "schema19_restart")
+SCHEMA19_ACTIONS = frozenset((*SCHEMA19_STEPS, "schema19_review_restore", "schema19_status"))
+CONFIRMATIONS.update({
+    "schema19_prepare": "PRESERVAR BACKUP V18",
+    "schema19_restore": "NOVO DESTINO V19 VAZIO",
+    "schema19_restart": "DESTINO V19 ISOLADO",
+    "schema19_review_restore": "REVISAR DESTINO V19",
+    "schema19_status": "CONSULTAR ESTADO V19",
+})
+SCHEMA19_REPORT_KEYS = REPORT_KEYS | frozenset({
+    "source_schema_version", "old_tables", "preserved_tables", "new_tables",
+    "migration_history_preserved", "episode_work_tables_equal",
+})
