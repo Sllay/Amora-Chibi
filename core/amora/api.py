@@ -27,6 +27,7 @@ from amora.cognition.routes import register_cognition_routes
 from amora.conversation.routes import register_conversation_routes
 from amora.emotion.routes import register_emotion_routes
 from amora.events import AmoraEvent, PrivacyScope
+from amora.events.multimodal import OBSERVATION_EVENT_TYPE
 from amora.identity import PrivacyContext
 from amora.identity.admin_routes import register_people_admin_routes
 from amora.language import PerspectiveFrame, PerspectiveStack
@@ -288,6 +289,9 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
 
     @app.post("/v1/events", dependencies=[Depends(require_auth)])
     async def publish_event(event: AmoraEvent) -> dict[str, object]:
+        # Sensory context is issued by trusted Core admission, not a generic client.
+        if event.event_type == OBSERVATION_EVENT_TYPE:
+            raise HTTPException(status_code=403, detail="PERCEPTION_EVENT_INTERNAL_ONLY")
         result = await core.events.publish(event)
         return asdict(result)
 
