@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from .pcs4_recovery import (
     certify_restore, destination_from_environment, verify_snapshot, _origin_host,
+    review_restore_destination,
 )
 from .pcs4_restart import certify_restart
 from .remote import LibSQLBackend
@@ -200,10 +201,14 @@ class RecoveryPanel:
                     # Recheck independently even for an injected backend.
                     if _origin_host(target.url) == _origin_host(self.source.url) or target._token == self.source._token:
                         raise ValueError("unsafe destination")
+                    if action == "restore" and state.get("attempted_destination_id", _origin_digest(target)) != _origin_digest(target):
+                        raise ValueError("destination changed")
                     if action == "restart" and state.get("destination_id") != _origin_digest(target):
                         raise ValueError("destination changed")
                 except Exception:
                     raise HTTPException(409, "independent destination not configured") from None
+            if action == "restore":
+                state["attempted_destination_id"] = _origin_digest(target)
             state.update(status="running", running=action)
             self._write(state)
             worker = threading.Thread(target=self._execute, args=(fd, state, action, target),
@@ -218,6 +223,51 @@ class RecoveryPanel:
             os.close(fd)
             raise
         return {"status": "running", "action": action}
+
+    def review_restore(self):
+        """Explicit operator-only reconciliation; never imports or deletes rows."""
+        fd = self._lock()
+        try:
+            state = self._read()
+            if (state["source_id"] != self.source_id
+                    or state["completed"] != ["backup", "verify"]
+                    or not ((state["status"] == "running" and state["running"] == "restore")
+                            or (state["status"] in ("error", "interrupted")
+                                and state["running"] is None))):
+                raise ValueError("PCS4C_REVIEW_STATE")
+            if any(state["reports"].get(step, {}).get("status") != "ok"
+                   for step in ("backup", "verify")):
+                raise ValueError("PCS4C_REVIEW_STATE")
+            target = self.destination()
+            if (_origin_host(target.url) == _origin_host(self.source.url)
+                    or target._token == self.source._token):
+                raise ValueError("PCS4C_DESTINATION_IS_SOURCE")
+            target_id = _origin_digest(target)
+            if state.get("attempted_destination_id", target_id) != target_id:
+                raise ValueError("PCS4C_REVIEW_DESTINATION_CHANGED")
+            self._pin(state, verify_snapshot(self.snapshot))
+            outcome, report = review_restore_destination(self.snapshot, target)
+            self._pin(state, report)
+            # Only the two proven outcomes unlock a subsequent operation.
+            # Preserve original failure evidence and the two original reports.
+            state["restore_review"] = {
+                "previous_status": state["status"], "previous_reason": state.get("reason"),
+                "previous_report": state["reports"].get("restore"),
+                "outcome": outcome,
+            }
+            state["attempted_destination_id"] = target_id
+            if outcome == "exact":
+                state["destination_id"] = target_id
+                state["reports"]["restore"] = {"status": "ok", **{
+                    key: report[key] for key in _REPORT_KEYS if key in report}}
+                state["completed"].append("restore")
+            else:
+                state["reports"].pop("restore", None)
+            state.update(status="ok", running=None, reason=None)
+            self._write(state)
+            return {**self.status(), "review_outcome": outcome}
+        finally:
+            os.close(fd)
 
     def _pin(self, state, report):
         if (report["database_sha256"] != state["database_sha256"]
