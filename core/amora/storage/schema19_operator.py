@@ -20,6 +20,7 @@ from .schema19_migration import (
     prepare_certified_destination, review_certified_destination,
 )
 from .schema19_drill import compare_upgrade
+from .schema19_diagnostic import BaselineDiverged
 from .pcs4_contract import STEPS, SCHEMA19_STEPS, SCHEMA19_ACTIONS, SCHEMA19_REPORT_KEYS, SCHEMA19_ERROR_CODES
 
 
@@ -38,6 +39,7 @@ def _state_report(old, state, action):
                 "reports": state["reports"], "failed_action": state.get("failed_action"),
                 "review_outcome": state.get("review_outcome"),
                 "reason": state.get("reason"),
+                "diagnostic": state.get("diagnostic"),
             }}
 
 
@@ -119,7 +121,7 @@ def run_schema19(panel, action):
         )
         if not allowed:
             raise ValueError("SCHEMA19_STEP_BLOCKED")
-        state.update(status="running", failed_action=action, review_outcome=None, reason=None)
+        state.update(status="running", failed_action=action, review_outcome=None, reason=None, diagnostic=None)
         _atomic_json(state_path, state)
         try:
             if action == "schema19_prepare":
@@ -178,9 +180,10 @@ def run_schema19(panel, action):
         except Exception as exc:
             # Keep the previous certified prefix; never implicitly rerun a
             # potentially committed migration or restart.
-            reason = (str(exc) if type(exc) is ValueError and str(exc) in SCHEMA19_ERROR_CODES
+            reason = (str(exc) if type(exc) in {ValueError, BaselineDiverged} and str(exc) in SCHEMA19_ERROR_CODES
                       else "SCHEMA19_REVIEW_REQUIRED")
-            state.update(status="error", reason=reason)
+            state.update(status="error", reason=reason,
+                         diagnostic=exc.diagnostic if isinstance(exc, BaselineDiverged) else None)
         _atomic_json(state_path, state)
         return _state_report(old, state, action)
     finally:

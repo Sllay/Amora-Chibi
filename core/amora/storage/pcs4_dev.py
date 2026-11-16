@@ -111,6 +111,7 @@ def _safe_report(raw):
 
 
 def _safe_schema19(raw):
+    from .schema19_diagnostic import safe_diagnostic
     if raw.get("status") != "ok" or raw.get("completed") != list(_STEPS):
         raise ValueError("invalid v18 prefix")
     base = _safe_report({**raw, "action": "restart"})
@@ -182,6 +183,11 @@ def _safe_schema19(raw):
         ):
             raise ValueError("v19 restart mismatch")
         reports[step] = safe
+    diagnostic = drill.get("diagnostic")
+    if diagnostic is not None:
+        if status != "error" or reason != "SCHEMA19_DESTINATION_DIVERGED":
+            raise ValueError("unexpected v19 diagnostic")
+        reports["schema19_diagnostic"] = safe_diagnostic(diagnostic)
     next_step = SCHEMA19_STEPS[len(completed)] if len(completed) < len(SCHEMA19_STEPS) else None
     if status == "error":
         if failed == "schema19_prepare" and not completed:

@@ -310,3 +310,51 @@ def test_prepare_rejects_unrecognized_drift_without_remote_writes(operator, chan
     assert unexpected == []
     assert server.path.read_bytes() == before
     assert not server.streams
+
+
+def test_failed_prepare_reports_table_and_columns_without_private_data(operator):
+    import sqlite3
+    panel, target, server, source = operator
+    old_state = panel.state_path.read_bytes()
+    source_calls = len(source.calls)
+    with sqlite3.connect(server.path) as db:
+        db.execute("UPDATE memory_records SET access_count=access_count+1")
+    before = server.path.read_bytes()
+    result = action(panel, target, "schema19_prepare")
+    assert result["schema19"]["reason"] == "SCHEMA19_DESTINATION_DIVERGED"
+    safe = _safe_report(result)
+    diagnostic = safe["reports"]["schema19_diagnostic"]
+    item = next(row for row in diagnostic["differences"] if row["table"] == "memory_records")
+    assert item["status"] == "rows"
+    assert item["backup_rows"] == item["destination_rows"] > 0
+    assert item["backup_only_rows"] == item["destination_only_rows"] > 0
+    assert "access_count" in item["changed_columns"]
+    assert diagnostic["schema_changed_objects"] == 0
+    assert safe["next"] == "schema19_prepare"
+    assert _safe_report(action(panel, target, "schema19_status")) == safe
+    assert server.path.read_bytes() == before
+    assert panel.state_path.read_bytes() == old_state
+    assert len(source.calls) == source_calls
+    assert not (panel.root / "schema19" / "candidate").exists()
+    # Untrusted report metadata cannot leak values or arbitrary schema names.
+    raw = result["schema19"]["diagnostic"]
+    raw["secret"] = "private-token"
+    raw["differences"][0]["row_values"] = ["private-content"]
+    assert "private-" not in json.dumps(_safe_report(result))
+    raw["differences"][0]["table"] = "private-table"
+    with pytest.raises(ValueError, match="invalid diagnostic table"):
+        _safe_report(result)
+
+
+def test_diagnostic_reports_schema_drift_without_unknown_names(operator):
+    import sqlite3
+    panel, target, server, _ = operator
+    with sqlite3.connect(server.path) as db:
+        db.execute("CREATE TABLE private_secret_table (id TEXT)")
+    before = server.path.read_bytes()
+    result = action(panel, target, "schema19_prepare")
+    diagnostic = _safe_report(result)["reports"]["schema19_diagnostic"]
+    assert diagnostic["schema_added_objects"] >= 1
+    assert diagnostic["unknown_tables"] == 1
+    assert "private_secret_table" not in json.dumps(result)
+    assert server.path.read_bytes() == before

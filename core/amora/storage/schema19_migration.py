@@ -13,6 +13,7 @@ from .pcs4_recovery import (
 )
 from .remote import statements
 from .schema19_drill import compare_upgrade, prepare_schema19_copy
+from .schema19_diagnostic import BaselineDiverged, baseline_diagnostic
 from .sensory_episode_schema import SENSORY_EPISODE_QUEUE_CANDIDATE_SQL
 
 
@@ -96,7 +97,12 @@ def prepare_certified_destination(original, output_directory, backend):
         shutil.copyfile(Path(str(original) + ".avatar.zip"), archive)
         archive.chmod(0o600)
         current = verify_snapshot(baseline, expected_schema=18)
-        delta = compare_certified_baseline(original, baseline)
+        try:
+            delta = compare_certified_baseline(original, baseline)
+        except ValueError as exc:
+            if str(exc) != "SCHEMA19_DESTINATION_DIVERGED":
+                raise
+            raise BaselineDiverged(baseline_diagnostic(original, baseline)) from None
         _pin_pair(original, baseline, certified, current)
         candidate, report = prepare_schema19_copy(baseline, output_directory)
         # Keep the real baseline alongside the candidate for the atomic
