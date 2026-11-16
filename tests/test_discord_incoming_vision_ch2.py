@@ -234,3 +234,97 @@ async def test_provider_failure_codes_do_not_echo_private_response(tmp_path, env
     assert error.value.code == expected
     assert private not in str(error.value)
     assert private not in error.value.code
+
+
+WEBP = b"RIFF" + (8).to_bytes(4, "little") + b"WEBP" + b"VP8 "
+
+
+def test_core_accepts_bound_transcoded_webp_for_native_png_only(tmp_path, monkeypatch):
+    from amora.messaging.models import InboundMessage
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        base = _message(
+            core, message_id="large-art-webp", actor_id="111111111111111111",
+            channel_type=ChannelType.DM, text="Olha a arte",
+        ).model_dump(mode="json")
+        base["attachments"] = [
+            {"attachment_id": ATTACHMENT, "media_type": "image/png", "size_bytes": 9_000_000}
+        ]
+        base["incoming_image"] = {
+            "attachment_id": ATTACHMENT,
+            "content_mime": "image/webp",
+            "content_base64": base64.b64encode(WEBP).decode("ascii"),
+        }
+        message = InboundMessage.model_validate(base)
+        assert message.incoming_image.content_mime == "image/webp"
+        assert valid_image_bytes(message.incoming_image) == WEBP
+
+        # Do not let nonimage attachment metadata or mismatched attachment
+        # identities authorize bytes with a valid raster header.
+        base["attachments"][0]["media_type"] = "application/zip"
+        with pytest.raises(ValidationError):
+            InboundMessage.model_validate(base)
+        base["attachments"][0]["media_type"] = "image/png"
+        base["incoming_image"]["attachment_id"] = "888888888888888888"
+        with pytest.raises(ValidationError):
+            InboundMessage.model_validate(base)
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_owner_image_only_failure_is_conveyed_without_fake_observation(tmp_path, monkeypatch):
+    from amora.cognition.visual_context import visual_context_for_request
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        seen = []
+
+        class PresentVision:
+            available = True
+
+            async def analyze(self, image, user_text):
+                raise AssertionError("image bytes were not fetched")
+
+        core.messaging.incoming_vision = PresentVision()
+
+        async def respond(request, *, on_segment=None, fallback_text=None):
+            seen.append(request)
+            return CognitiveResponsePlan(
+                turn_id=request.turn_id, display_text="Não consegui abrir essa imagem.",
+                speech_text="Não consegui abrir essa imagem.", provider="test", model="test",
+            )
+
+        monkeypatch.setattr(core.cognition, "respond_observed", respond)
+        original = _message(
+            core, message_id="large-art-overlimit", actor_id="111111111111111111",
+            channel_type=ChannelType.DM, text="placeholder",
+        )
+        message = original.model_copy(update={
+            "text": "",
+            "remote_processing_allowed": True,
+            "attachments": [
+                AttachmentRef(attachment_id=ATTACHMENT, media_type="image/png",
+                              size_bytes=30 * 1024 * 1024),
+            ],
+            "incoming_image": None,
+            "incoming_image_status": "IMAGE_NATIVE_TOO_LARGE",
+        })
+        response = await core.messaging.receive(message)
+        assert response.decision.action == RoutingAction.RESPOND
+        assert seen
+        request = seen[0]
+        assert "não conseguiu" in request.text
+        assert request.metadata["visual_observation"]["status"] == "unavailable"
+        assert request.metadata["visual_observation"]["failure_reason"] == "too_large"
+        frame = turn_frame(core.cognition.compiler.compile(request))
+        assert frame["visual_observation"]["canonical"] is False
+        assert frame["visual_observation"]["payload"]["failure_reason"] == "too_large"
+        assert visual_context_for_request(
+            request.metadata["visual_observation"], remote=True, private=True, mode="social"
+        ) == request.metadata["visual_observation"]
+    finally:
+        core.close()

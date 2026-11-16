@@ -38,3 +38,22 @@ Fallback visual (independente do fallback de diálogo):
 - **Sem promoção do Mistral para diálogo** e sem alterar `AMORA_SOCIAL_PRIMARY=numes`, o fallback social, o schema 18, o pipeline de stickers, ou a Agenda.
 
 Teste real após deploy do PR: a mesma foto na DM com consentimento ativo; verificar `INCOMING_IMAGE_ANALYZED` em `context_compiled`. Se houver falha, log seguro distingue as causas. Para testar o fallback, habilitar explicitamente a opção e confirmar o evento `incoming_visual_fallback_attempt provider=nvidia_mistral`.
+
+## CH2.2 — Imagens grandes, artes com transparência e falhas explícitas
+
+**Problema real:** o operador enviou artes de melhor qualidade pelo Discord e a Amora não conseguiu enxergar algumas. O antigo worker rejeitava todas as imagens acima de **4 MiB** antes de qualquer chamada ao Groq. Além disso, priorizava `proxy_url`, que pode transcodificar PNG para WebP enquanto o Core exigia que o MIME da imagem processada fosse exatamente igual ao `content_type` do anexo nativo.
+
+**Tratamento final de entrada (worker Discord):**
+1. Selecionar a primeira imagem PNG/JPEG/WebP entre os 16 anexos normalizados da DM. Manter os mesmos vínculos de canal e attachment ID, allowlist estrita de CDN HTTPS, sem redirect, cache, dump, ou URL externa.
+2. Preferir `url` original da CDN para preservar arte e pixels; recorrer ao `proxy_url` validado **apenas** se o download nativo falhar e não aceitar MIME diferente sem identificar o proxy. Se o proxy converter o formato, checar assinatura real do conteúdo e informar ao Core o MIME resultante.
+3. Baixar bytes nativos em streaming com limite de **25 MiB** (o velho 4 MiB era um limite interno, não o limite de entrada da Groq). Arquivos de até 4 MiB chegam ao Core sem alteração.
+4. Se o original exceder 4 MiB, processar **localmente no worker** via libvips 8.18 (`vipsthumbnail`) até WebP de no máximo 4 MiB. Preservar proporção e canal alfa, usar teto inicial 2560 px e depois 2048/1536/1280 com qualidade decrescente somente se necessário; nunca ampliar fotos menores. A prévia *é uma versão de percepção*, não substitui nem altera o original no Discord.
+5. Conversão em subprocesso sem shell, argumentos fixos, timeout de 8s por conversão completa, ambiente com concorrência libvips limitada, arquivos temporários 0600 em diretório randômico apagado após sucesso e erro. Sem persistir imagens no Turso, servidor, memória canônica ou logs.
+6. A saída para o Core permanece exatamente no limite anterior de **4 MiB** (até 5,6 MiB em Base64) para não ampliar a carga do HTTP síncrono, proxy e app de 512 MB. O Core aceita MIME convertido WebP *somente* se os metadados nativos autorizam um raster PNG/JPEG/WebP com attachment ID idêntico; revalida assinaturas em base64.
+7. Se o fetch ou a conversão falhar, registrar código sanitizado (`IMAGE_NATIVE_TOO_LARGE`, `IMAGE_TRANSFORM_FAILED`, etc.) em `incoming_image_status`; o Core transforma-o numa categoria `visual_observation.failure_reason` fechada (`too_large`, `download_failed`, `processing_failed`, `unsupported_format`) e **não** faz alegações sobre o que há na imagem. Em mensagens só de imagem, a Amora recebe aviso explícito de indisponibilidade para poder responder sem fingir que viu.
+
+**Fronteiras:** não há mudança em personalidade, provider social, runtime schema 18/19, Core privacy/identity, fallback visual opcional ou persistência. O Qwen continua como percepção primária; o Mistral como fallback somente com opt-in. O limite de 20 MB documentado na Groq é específico de URL de imagem; não é usado para justificar upload JSON arbitrário de Base64. A prévia compacta evita esse risco. A integração não tenta editar URL assinada para solicitar thumbnails do Discord, já que esses parâmetros não têm contrato estável para anexos.
+
+**Testes de liberação:** Node com assinatura, original/proxy, arquivo >4 MiB que chega convertido, falha de conversor, nativo >25 MiB e status explícito; Python com WebP convertido ligado ao mesmo anexo, recusa de arquivo não-imagem, visão indisponível sem alucinação; container Alpine com libvips instalado e smoke **real** de PNG→WebP pelo binário nativo. CI verde é necessário, mas teste físico com uma arte real de >4 MiB e exame da resposta ainda é o gate de qualidade visual.
+
+**Limitação conhecida:** somente a *primeira* imagem por mensagem é analisada nesta etapa; múltiplas fotos anexadas simultaneamente e capturas de vídeo não estão incluídas. Para próximas iterações, considerar percepção multi-imagem/crops específicos após medir custo, qualidade e latência.

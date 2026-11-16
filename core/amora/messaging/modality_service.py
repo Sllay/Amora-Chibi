@@ -117,12 +117,42 @@ class PlatformMessagingService(BasePlatformMessagingService):
                 and decision.action == RoutingAction.RESPOND
                 and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)):
             return None
-        has_image = any(a.media_type and a.media_type.lower().split(";", 1)[0]
-                        in {"image/png", "image/jpeg", "image/webp"} for a in message.attachments)
+        has_image = any(
+            a.media_type and a.media_type.lower().split(";", 1)[0].startswith("image/")
+            for a in message.attachments
+        )
         if not has_image:
             return None
-        if self.incoming_vision is None or not self.incoming_vision.available or message.incoming_image is None:
-            return unavailable_visual_observation()
+
+        # The transport status is a machine code, never a source of image
+        # observations or conversation instructions. Preserve only a fixed
+        # failure category so Amora can admit a failed image read naturally.
+        ingest_status = message.incoming_image_status or ""
+        if ingest_status in {
+            "IMAGE_NATIVE_TOO_LARGE", "IMAGE_TOO_LARGE",
+            "IMAGE_TRANSFORM_SIZE_EXCEEDED",
+        }:
+            failure_reason = "too_large"
+        elif ingest_status.startswith("IMAGE_TRANSFORM_"):
+            failure_reason = "processing_failed"
+        elif ingest_status.startswith(("IMAGE_CDN_", "IMAGE_FETCH_", "IMAGE_URL_")):
+            failure_reason = "download_failed"
+        elif message.incoming_image is None and all(
+            a.media_type and a.media_type.lower().split(";", 1)[0]
+            not in {"image/png", "image/jpeg", "image/webp"}
+            for a in message.attachments if a.media_type
+            and a.media_type.lower().split(";", 1)[0].startswith("image/")
+        ):
+            failure_reason = "unsupported_format"
+        else:
+            failure_reason = "processing_failed"
+        if self.incoming_vision is None or not self.incoming_vision.available:
+            return unavailable_visual_observation("unconfigured")
+        if message.incoming_image is None:
+            logging.getLogger("amora.incoming_vision").info(
+                "incoming_image_unavailable reason=%s", failure_reason,
+            )
+            return unavailable_visual_observation(failure_reason)
         try:
             # Inbound timeout includes this analysis; avoid blocking social reply
             # for a model outage. Never fall back to imagined pixels.
@@ -135,7 +165,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
                 "incoming_image_analysis_failed code=%s",
                 str(getattr(exc, "code", type(exc).__name__))[:80],
             )
-            return unavailable_visual_observation()
+            return unavailable_visual_observation("provider_failed")
 
     def _queue_outbound(
         self,

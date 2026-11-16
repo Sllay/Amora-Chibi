@@ -50,6 +50,7 @@ jobs:
           node --check workers/discord/expression-worker.mjs
           node --check workers/discord/http.mjs
           node --check workers/discord/incoming-image.mjs
+          node --check workers/discord/incoming-image-transform.mjs
           node --check workers/discord/normalize.mjs
           node --check workers/discord/social-runtime.mjs
           node --check workers/discord/sticker-media.mjs
@@ -62,7 +63,10 @@ jobs:
       - name: Build Discord worker container
         run: |
           docker build -f workers/discord/Dockerfile -t amora-discord:test .
-          docker run --rm --entrypoint sh amora-discord:test -c 'test "$(id -u)" = "10001" && node --check workers/discord/entrypoint.mjs && node --check workers/discord/expression-worker.mjs && node --check workers/discord/sticker-media.mjs && node --check workers/discord/incoming-image.mjs && node --check workers/discord/visual-worker.mjs && node --check workers/discord/worker.mjs'
+          docker run --rm --entrypoint sh amora-discord:test -c 'test "$(id -u)" = "10001" && command -v vipsthumbnail && node --check workers/discord/entrypoint.mjs && node --check workers/discord/expression-worker.mjs && node --check workers/discord/sticker-media.mjs && node --check workers/discord/incoming-image.mjs && node --check workers/discord/incoming-image-transform.mjs && node --check workers/discord/visual-worker.mjs && node --check workers/discord/worker.mjs'
+      - name: Smoke test real raster transcode in non-root Discord container
+        run: |
+          docker run --rm --entrypoint sh amora-discord:test -c 'vips black /tmp/source.png 64 64 && node --input-type=module -e "import {readFile} from \"node:fs/promises\"; import {transcodeOversizedImage} from \"./workers/discord/incoming-image-transform.mjs\"; const input=await readFile(\"/tmp/source.png\"); const result=await transcodeOversizedImage(input,\"image/png\"); if(result.mime!==\"image/webp\" || result.bytes.length<12 || result.bytes.length>4*1024*1024) process.exit(1); console.log(\"vision-native-transcode-ok\")"'
       - name: Resolve exact Baileys release, import worker and audit installed tree
         working-directory: workers/whatsapp
         run: |

@@ -366,7 +366,15 @@ class PlatformMessagingService:
         # identity, privacy and consent; never send an unverified/group image to Groq.
         visual_observation = await self._incoming_visual_observation(message, decision)
         if visual_observation is not None and not message.text.strip():
-            cognitive_text = "[Usuário enviou uma imagem]" if visual_observation.get("status") == "analyzed" else cognitive_text
+            if visual_observation.get("status") == "analyzed":
+                cognitive_text = "[Usuário enviou uma imagem]"
+            else:
+                # This is a Core-generated transport note, not claimed OCR or
+                # user text. Make image-only failures explicit to the model.
+                cognitive_text = (
+                    "[Usuário enviou uma imagem, porém a percepção visual não "
+                    "conseguiu acessá-la. Não descreva conteúdo não observado.]"
+                )
         request = CognitiveRequest(
             text=cognitive_text,
             speaker_id=actor_id,
