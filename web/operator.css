@@ -1,6 +1,6 @@
 .surface-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin: 0 0 14px;
   padding: 6px;
@@ -15,7 +15,7 @@
 
 .surface-tab {
   min-width: 0;
-  padding: 10px 12px;
+  padding: 10px 5px;
   background: transparent;
   color: var(--muted);
   border: 1px solid transparent;
@@ -217,4 +217,23 @@
   .relation-row, .binding-row { align-items: flex-start; flex-direction: column; }
   .row-actions { justify-content: flex-start; }
   .toolbar-actions button { flex: 1 1 calc(50% - 8px); }
+}
+
+/* Agenda operator surface: readable without a desktop-width viewport. */
+.agenda-entry {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  overflow-wrap: anywhere;
+  margin-block: 8px;
+}
+.agenda-entry .subtle { display: block; font-size: 12px; }
+.agenda-entry button { justify-self: start; margin-top: 6px; }
+@media (max-width: 420px) {
+  .surface-tabs { gap: 3px; padding: 4px; }
+  .surface-tab { padding: 10px 2px; font-size: 12px; }
+  #agendaCreateForm { grid-template-columns: 1fr; }
+  #agendaCreateForm label { grid-column: 1; }
 }

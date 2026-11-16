@@ -373,6 +373,20 @@ class MessagingStore:
             ).fetchall()
             for row in rows:
                 candidate = self._outbound_from_row(row)
+                if candidate.metadata.get("agenda_id"):
+                    from amora.agenda.service import agenda_claim_allowed
+                    # A previously claimed send is ambiguous after a lost ACK:
+                    # do not retry and risk sending an identical reminder twice.
+                    if row["status"] == "claimed":
+                        self.database._conn.execute(
+                            "UPDATE messaging_outbound_queue SET status='failed',error_code='AGENDA_DELIVERY_UNCERTAIN',claim_expires_at=NULL WHERE id=? AND status='claimed'",
+                            (row["id"],))
+                        continue
+                    if not agenda_claim_allowed(self.database._conn, candidate, now):
+                        self.database._conn.execute(
+                            "UPDATE messaging_outbound_queue SET status='cancelled',error_code='AGENDA_STALE_OR_UNAUTHORIZED',claim_expires_at=NULL WHERE id=? AND status='queued'",
+                            (row["id"],))
+                        continue
                 if candidate.metadata.get("temporal_initiative"):
                     from .temporal_initiative import initiative_claim_allowed
                     if not initiative_claim_allowed(self.database._conn, candidate, now):
