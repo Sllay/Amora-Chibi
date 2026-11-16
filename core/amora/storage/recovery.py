@@ -12,6 +12,7 @@ import zipfile
 from pathlib import Path
 
 from .remote import _encode
+from .schema import LATEST_SCHEMA_VERSION
 
 
 _RESTORE_BATCH_ROWS = 100
@@ -41,7 +42,10 @@ def _restore_progress(phase, tables, rows):
           file=sys.stderr, flush=True)
 
 
-def restore_empty_remote(backend, snapshot: Path) -> None:
+def restore_empty_remote(backend, snapshot: Path, *, target_schema=LATEST_SCHEMA_VERSION) -> None:
+    # v19 is an explicit exact-restore laboratory path, not a runtime migration.
+    if type(target_schema) is not int or target_schema not in {LATEST_SCHEMA_VERSION, 19}:
+        raise ValueError("PCS4C_SCHEMA")
     source = sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True)
     source.row_factory = sqlite3.Row
     target = backend.connect(Path("unused"))
@@ -51,6 +55,11 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
             or source.execute("PRAGMA foreign_key_check").fetchone() is not None
         ):
             raise ValueError("source snapshot integrity failed")
+        source_version = source.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+        if target_schema == 19 and source_version != 19:
+            raise ValueError("PCS4C_SCHEMA")
+        if target_schema == LATEST_SCHEMA_VERSION and source_version == 19:
+            raise ValueError("PCS4C_SCHEMA")
         schema = source.execute(
             "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY rowid"
         ).fetchall()
@@ -109,12 +118,12 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
             from .migrations_v107 import MIGRATION_V107
             from .migrations_v108 import MIGRATION_V108
             from .remote import statements
-            from .schema import AUDITED_REMOTE_IMPORT_SCHEMA_VERSIONS, LATEST_SCHEMA_VERSION
+            from .schema import AUDITED_REMOTE_IMPORT_SCHEMA_VERSIONS
 
             version = target.execute(
                 "SELECT MAX(version) FROM schema_migrations"
             ).fetchone()[0]
-            if version not in AUDITED_REMOTE_IMPORT_SCHEMA_VERSIONS:
+            if version not in AUDITED_REMOTE_IMPORT_SCHEMA_VERSIONS and not (version == target_schema == 19):
                 allowed = "/".join(str(item) for item in sorted(AUDITED_REMOTE_IMPORT_SCHEMA_VERSIONS))
                 raise ValueError(f"only audited schema {allowed} snapshots can be imported")
             if version == 10:
@@ -157,9 +166,9 @@ def restore_empty_remote(backend, snapshot: Path) -> None:
                     target.execute(sql)
                 target.execute("INSERT INTO schema_migrations(version) VALUES (18)")
                 version = 18
-            if version != LATEST_SCHEMA_VERSION:
+            if version != target_schema:
                 raise ValueError(
-                    f"snapshot upgrade stopped at schema {version}; expected {LATEST_SCHEMA_VERSION}"
+                    f"snapshot upgrade stopped at schema {version}; expected {target_schema}"
                 )
 
             assets = source.execute("SELECT * FROM avatar_assets").fetchall()
