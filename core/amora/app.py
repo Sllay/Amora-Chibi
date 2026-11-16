@@ -271,7 +271,9 @@ class AmoraCore:
         )
         messaging_store = MessagingStore(database, active_clock)
         platform_presence = PlatformPresenceController(messaging_store, active_clock)
+        from amora.messaging.incoming_vision import GroqIncomingImageVision
         messaging = PlatformMessagingService(
+            incoming_vision=GroqIncomingImageVision(secrets),
             store=messaging_store,
             attention=SocialAttentionRouter(profiles=profiles, clock=active_clock),
             cognition=cognition,
