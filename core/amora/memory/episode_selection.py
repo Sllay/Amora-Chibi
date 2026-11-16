@@ -64,6 +64,7 @@ class EpisodeBatchSelector:
                 continue
             try:
                 proposal = EpisodeSelection.model_validate(proposal.model_dump(mode="python"))
+                proposal = proposal.model_copy(update={"evidence_ids": tuple(sorted(proposal.evidence_ids))})
             except ValueError:
                 outcomes[index] = "EPISODE_PROPOSAL_INVALID"
                 continue
@@ -89,7 +90,7 @@ class EpisodeBatchSelector:
             # Highest existing gate score, then confidence and evidence richness.
             # Tie order is independent of transport arrival and proposal order.
             key = (-decision.score, -candidate.provenance.confidence,
-                   -len(proposal.evidence_ids), str(record_id))
+                   -len(proposal.evidence_ids), str(record_id), proposal.model_dump_json())
             eligible.append((key, index, record_id, proposal))
 
         selected, used, considered = [], set(), set()
