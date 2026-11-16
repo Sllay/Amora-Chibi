@@ -25,7 +25,7 @@ def register_agenda_routes(app: FastAPI, core, require_auth):
     def agenda_create(payload: AgendaCreate):
         try:
             item = service.create(payload)
-            return {"item": service.projection()[-1] if False else item.model_dump(mode="json", exclude={"external_actor_id","conversation_id","account_scope"})}
+            return {"item": item.model_dump(mode="json", exclude={"external_actor_id","conversation_id","account_scope"})}
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
 
