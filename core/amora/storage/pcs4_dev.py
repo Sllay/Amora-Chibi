@@ -170,6 +170,7 @@ def _safe_schema19(raw):
             safe.get("source_schema_version") != 18 or safe.get("old_tables") != original["tables"]
             or safe.get("preserved_tables") != original["tables"] - 1
             or safe.get("new_tables") != 3 or safe.get("migration_history_preserved") is not True
+            or "relationship_sequence_delta" not in safe
         ):
             raise ValueError("v19 upgrade mismatch")
         if step != "schema19_prepare" and safe.get("equal_tables") != safe["tables"]:
