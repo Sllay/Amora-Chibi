@@ -12,7 +12,7 @@ from typing import Literal
 from uuid import UUID
 
 from .models import PrivacyScope
-from .multimodal import ObservationContext, SensoryModality
+from .multimodal import ObservationContext, ObservationSource, SensoryModality
 
 
 def _number(value: float) -> bool:
@@ -37,6 +37,7 @@ class TimeInterval:
 class ClockCalibration:
     context: ObservationContext
     receiver_clock_id: UUID
+    modality: SensoryModality
     remote_reference: float
     local_reference: TimeInterval
     expires_at: float
@@ -44,6 +45,8 @@ class ClockCalibration:
 
     def __post_init__(self):
         if (not isinstance(self.receiver_clock_id, UUID)
+                or not isinstance(self.modality, SensoryModality)
+                or (self.context.source == ObservationSource.SCREEN) != (self.modality == SensoryModality.SCREEN)
                 or not _number(self.remote_reference) or not _number(self.expires_at)
                 or not _number(self.drift_ppm) or self.drift_ppm > 10000
                 or self.local_reference.width > 10
@@ -72,7 +75,7 @@ class ClockCalibration:
         end = self._map(remote_end)
         if end.earliest > received_at:
             raise ValueError("SENSORY_CAPTURE_AFTER_ARRIVAL")
-        return CaptureEstimate(context, self.receiver_clock_id, start, end, received_at)
+        return CaptureEstimate(context, self.receiver_clock_id, self.modality, start, end, received_at)
 
     def _map(self, remote: float) -> TimeInterval:
         delta = remote - self.remote_reference
@@ -85,12 +88,15 @@ class ClockCalibration:
 class CaptureEstimate:
     context: ObservationContext
     receiver_clock_id: UUID
+    modality: SensoryModality
     start: TimeInterval
     end: TimeInterval
     received_at: float
 
     def __post_init__(self):
         if (not isinstance(self.receiver_clock_id, UUID)
+                or not isinstance(self.modality, SensoryModality)
+                or (self.context.source == ObservationSource.SCREEN) != (self.modality == SensoryModality.SCREEN)
                 or not _number(self.received_at)
                 or self.start.earliest > self.end.earliest
                 or self.start.latest > self.end.latest
@@ -113,8 +119,7 @@ def _allowed(context: ObservationContext, recipient_id: str) -> bool:
 
 
 def correlate_capture(speech: CaptureEstimate, visual: CaptureEstimate, *,
-                      recipient_id: str, speech_modality: SensoryModality,
-                      visual_modality: SensoryModality, window: float = 2.0,
+                      recipient_id: str, window: float = 2.0,
                       uncertainty_budget: float = 0.5) -> TemporalMatch:
     """Compare capture intervals conservatively, never infer semantic causality.
 
@@ -122,8 +127,8 @@ def correlate_capture(speech: CaptureEstimate, visual: CaptureEstimate, *,
     interval pair is close enough, not that speech refers to the visual event.
     """
     if (not isinstance(recipient_id, str) or not recipient_id
-            or speech_modality != SensoryModality.SPEECH
-            or visual_modality not in {SensoryModality.IMAGE, SensoryModality.SCREEN}
+            or speech.modality != SensoryModality.SPEECH
+            or visual.modality not in {SensoryModality.IMAGE, SensoryModality.SCREEN}
             or not _number(window) or not 0 < window <= 30
             or not _number(uncertainty_budget) or not 0 < uncertainty_budget <= 10):
         raise ValueError("SENSORY_CORRELATION_POLICY_INVALID")
