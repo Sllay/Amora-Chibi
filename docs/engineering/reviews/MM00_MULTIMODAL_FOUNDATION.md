@@ -57,3 +57,21 @@ MM.06/07: consolidação temporal/episódica, fusão entre fala e visão, ACIR p
 ## 5. Próximo checkpoint
 
 MM.00C: ler contratos de eventos e persistência do bus, schema de memória e inbound privacy/identity antes de escolher campos finais; implementar primeiro um contrato pequeno e testes de rejeição. Não integrar um pipeline paralelo; a recuperação PCS.4C está aprovada, e a promoção de projeção/storage permanece independente.
+
+## 6. Checkpoint ledger — obrigatório antes de qualquer implementação
+
+Issue de acompanhamento persistente: [#238](https://github.com/Sllay/Amora-Chibi/issues/238). PR de fundação: #237.
+
+| Checkpoint | Estado | Evidência |
+|---|---|---|
+| MM.00A | Concluído — auditoria | Seção 1 |
+| MM.00B | Concluído — plano | Seções 2–4; #238 |
+| MM.00C.1 | Em implementação | Contrato de observação tipado e fábrica interna de AmoraEvent |
+| MM.00C.2 | Pendente | Testes negativos, escopo/identidade, sequência e dedupe estável |
+| MM.00D.1 | Pendente | Publicação no bus existente e persistência seletiva |
+| MM.00D.2 | Pendente | Recall pós-restart, isolamento, falhas e limites |
+| MM.01 | Pendente | Certificação real CH2, primeiro ciclo completo |
+
+Escopo C.1/C.2: contrato interno, sem endpoint, migration, provider, listener ativo ou mudança de comportamento. Contexto resolvido e autorizado pelo Core separado da observação; timestamp de captura/recepção, sequência/epoch, identidade e escopo, evidência/proveniência, rejeição de mídia bruta/metadata arbitrária, limites; não publicar automaticamente. D.1/D.2: integração no bus/store e gate de memória, não confundir replay de evento com retry de handler. O bus atual deduplica a entrega persistida antes de chamar handlers; execução durável da consolidação precisa de checkpoint/lease próprios existentes ou explicitamente integrados, não apenas republicação do mesmo evento.
+
+Ao finalizar cada subcheckpoint: atualizar este ledger e #238 com SHA, CI do SHA exato, resultados, limites e próximo passo. Não marcar gates reais como pass por testes sintéticos. Nenhuma credencial ou conteúdo privado nos registros de engenharia.
