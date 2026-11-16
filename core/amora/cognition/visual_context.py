@@ -17,6 +17,10 @@ class IncomingVisualObservation(BaseModel):
     visible_text: list[str] = Field(default_factory=list, max_length=8)
     uncertainties: list[str] = Field(default_factory=list, max_length=6)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    failure_reason: Literal[
+        "", "too_large", "download_failed", "unsupported_format",
+        "processing_failed", "provider_failed", "unconfigured",
+    ] = ""
 
     @field_validator("visible_text", "uncertainties")
     @classmethod
@@ -27,7 +31,11 @@ class IncomingVisualObservation(BaseModel):
         return values
 
     def as_context(self) -> dict[str, object]:
-        return self.model_dump(mode="json")
+        data = self.model_dump(mode="json")
+        # Keep successful visual-observation schema backward-compatible.
+        if not data["failure_reason"]:
+            data.pop("failure_reason")
+        return data
 
 
 def visual_context_for_request(value, *, remote: bool, private: bool, mode: str) -> dict | None:
@@ -38,7 +46,8 @@ def visual_context_for_request(value, *, remote: bool, private: bool, mode: str)
     except (ValueError, TypeError):
         return None
     if observation.status == "analyzed":
-        if observation.source != "vision_model" or not observation.description.strip():
+        if (observation.source != "vision_model"
+                or not observation.description.strip() or observation.failure_reason):
             return None
     elif observation.source != "core_unavailable" or observation.description or observation.visible_text:
         return None
