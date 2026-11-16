@@ -56,6 +56,10 @@ def verify_candidate_ddl(connection):
         model.execute("CREATE TABLE events (id TEXT PRIMARY KEY)")
         model.executescript(SENSORY_EPISODE_QUEUE_CANDIDATE_SQL)
         expected = dict(model.execute("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL"))
-    actual = dict(connection.execute("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL"))
+    # RemoteConnection rows iterate column NAMES, not positional values.
+    # Numeric indexing is supported by both sqlite3.Row and Hrana Row.
+    actual = {row[0]: row[1] for row in connection.execute(
+        "SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL"
+    )}
     if any(actual.get(name) != expected[name] for name in names):
         raise ValueError("SCHEMA19_DDL_MISMATCH")

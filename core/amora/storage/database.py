@@ -24,6 +24,8 @@ from .migrations_v105 import MIGRATION_V105
 from .migrations_v106 import MIGRATION_V106
 from .migrations_v107 import MIGRATION_V107
 from .migrations_v108 import MIGRATION_V108
+from .migrations_v109 import MIGRATION_V109
+from .schema import runtime_schema_target
 from .backend import SQLiteBackend, StorageBackend, execute_atomic_statement, is_duplicate_error
 from .migrations import MIGRATIONS
 from .migrations_v06 import MIGRATION_V06
@@ -38,6 +40,7 @@ class AmoraDatabase:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self.expected_schema_version = runtime_schema_target()
         self.backend = backend or SQLiteBackend()
         self._conn = self.backend.connect(self.path)
 
@@ -49,9 +52,40 @@ class AmoraDatabase:
         with trace_lock(self._lock):
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             applied = {row[0] for row in self._conn.execute("SELECT version FROM schema_migrations")}
+            # Fail before any bootstrap writes if an older runtime opens a v19 DB.
+            if any(type(version) is not int or version > self.expected_schema_version
+                   for version in applied):
+                raise ValueError("RUNTIME_SCHEMA_AHEAD_OF_ALLOWED_TARGET")
             count = 0
-            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07, MIGRATION_V08, MIGRATION_V09, MIGRATION_V10, MIGRATION_V101, MIGRATION_V102, MIGRATION_V103, MIGRATION_V104, MIGRATION_V105, MIGRATION_V106, MIGRATION_V107, MIGRATION_V108):
-                if version in applied:
+            for version, sql in (*MIGRATIONS, MIGRATION_V06, MIGRATION_V07,
+                                 MIGRATION_V08, MIGRATION_V09, MIGRATION_V10,
+                                 MIGRATION_V101, MIGRATION_V102, MIGRATION_V103,
+                                 MIGRATION_V104, MIGRATION_V105, MIGRATION_V106,
+                                 MIGRATION_V107, MIGRATION_V108, MIGRATION_V109):
+                if version > self.expected_schema_version or version in applied:
+                    continue
+                if version == 19:
+                    # No partial/unknown preexisting queue objects may be silently
+                    # accepted by the candidate's IF NOT EXISTS statements.
+                    from .remote import statements
+                    from .sensory_episode_schema import (
+                        CANDIDATE_INDEXES, CANDIDATE_TABLES, verify_candidate_ddl,
+                    )
+                    names = CANDIDATE_INDEXES | CANDIDATE_TABLES
+                    existing = {row[0] for row in self._conn.execute(
+                        "SELECT name FROM sqlite_schema WHERE name IN ("
+                        + ",".join("?" for _ in names) + ")", tuple(sorted(names))
+                    )}
+                    if existing:
+                        raise ValueError("SCHEMA19_PREEXISTING_CANDIDATE_OBJECTS")
+                    with self._conn:
+                        for statement in statements(sql):
+                            self._conn.execute(statement)
+                        verify_candidate_ddl(self._conn)
+                        self._conn.execute(
+                            "INSERT INTO schema_migrations(version) VALUES (19)"
+                        )
+                    count += 1
                     continue
                 if self.backend.capabilities.remote:
                     from .remote import statements
@@ -71,6 +105,9 @@ class AmoraDatabase:
                         pass
                     raise
                 count += 1
+            if self.expected_schema_version == 19:
+                from .sensory_episode_schema import verify_candidate_ddl
+                verify_candidate_ddl(self._conn)
             return count
 
     def schema_version(self) -> int:
