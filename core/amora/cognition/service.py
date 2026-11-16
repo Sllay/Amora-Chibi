@@ -359,7 +359,7 @@ class CognitiveEngine:
             turn_id=request.turn_id,
             speaker_id="ENTITY_AMORA",
             addressee_id=request.speaker_id,
-            source=source,
+            source=MessageSource.AUTONOMY if request.metadata.get("temporal_initiative") is True else source,
             raw_text=rendered.display_text,
             normalized_text=rendered.speech_text,
             privacy_scope=request.privacy_scope,
@@ -373,7 +373,7 @@ class CognitiveEngine:
             metadata={
                 "segment_id": str(segment.id), "ordinal": ordinal,
                 "nonverbal_cues": list(rendered.nonverbal_cues),
-                **{key: request.metadata[key] for key in ("surface", "channel_type")
+                **{key: request.metadata[key] for key in ("surface", "channel_type", "temporal_initiative")
                    if key in request.metadata},
             },
             dedupe_key=f"cognitive:{request.turn_id}:{ordinal}",
@@ -530,6 +530,8 @@ class CognitiveEngine:
 
     @trace_stage("record_input")
     def _record_input(self, request: CognitiveRequest) -> None:
+        if request.metadata.get("cognitive_mode") == "autonomous_initiation" and request.metadata.get("temporal_initiative") is True:
+            return  # Internal initiative is not a user utterance.
         dedupe = self._input_dedupe(request)
         existing = self.store.get_message_by_dedupe(dedupe)
         if existing is None:
@@ -538,6 +540,8 @@ class CognitiveEngine:
 
     @trace_stage("record_input")
     async def _record_input_async(self, request: CognitiveRequest) -> None:
+        if request.metadata.get("cognitive_mode") == "autonomous_initiation" and request.metadata.get("temporal_initiative") is True:
+            return
         if not self._async_storage_enabled(request):
             self._record_input(request)
             return
