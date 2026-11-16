@@ -391,6 +391,22 @@ class PlatformMessagingService:
                 "provider_attempt_budget_seconds": self.provider_attempt_budget_seconds,
             },
         )
+        if (decision.action == RoutingAction.RESPOND
+                and message.channel_type == ChannelType.DM
+                and message.platform.value == "discord"
+                and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)):
+            from amora.agenda.intent import parse_agenda_text
+            agenda_intent = parse_agenda_text(message.text, self.clock.now())
+            if agenda_intent is not None:
+                request.metadata["agenda_owner_command"] = True
+                request.metadata["reflection_enqueue_requested"] = False
+                request.metadata["memory_consolidation"] = False
+                await self.cognition.observe_input_async(request)
+                result = self._agenda_result(message, decision, request, agenda_intent)
+                result = result.model_copy(update={"duplicate": duplicate_recovery})
+                self._log_result(result, provider="local_agenda", fallback_used=False)
+                return result
+
         if explicit_memory is not None:
             # The direct request owns its own receipt, so neither the provider
             # nor the automatic reflection queue can claim/duplicate its write.
@@ -685,6 +701,70 @@ class PlatformMessagingService:
                 duplicate=True,
             )
         return None
+
+    def _agenda_result(self, message, decision, request, intent) -> InboundResult:
+        """Only a verified private owner request can create or cancel an agenda."""
+        from zoneinfo import ZoneInfo
+        from amora.agenda import AgendaCreate, AgendaService
+
+        service = AgendaService(self.store.database, self.clock, self.store)
+        reason = "AGENDA_OWNER_COMMAND"
+        if intent.kind == "create":
+            try:
+                created = service.create(
+                    AgendaCreate(request_id=request.turn_id, text=intent.content,
+                                 due_at=intent.due_at, interval_minutes=intent.interval_minutes,
+                                 until_at=intent.until_at),
+                    target={"account_scope": message.account_scope,
+                            "conversation_id": message.conversation_id,
+                            "external_actor_id": message.sender_identifiers[0].external_actor_id},
+                )
+                at = created.due_at.astimezone(ZoneInfo(created.timezone)).strftime("%d/%m/%Y às %H:%M")
+                if created.interval_minutes:
+                    text = f"Anotei: a cada {created.interval_minutes} minutos a partir de {at}, até o horário final definido."
+                else:
+                    text = f"Tá agendado para {at}. Vou te avisar no Discord."
+                reason = "AGENDA_CREATED"
+            except ValueError as exc:
+                reason = str(exc)
+                text = "Não consegui salvar esse horário. Confira a data e se seu Discord privado está vinculado."
+        elif intent.kind in {"cancel_search", "list"}:
+            items = service.list(year=intent.year, include_cancelled=False)
+            if intent.content and intent.kind == "cancel_search":
+                items = [item for item in items if intent.content.casefold() in item.text.casefold()]
+            if intent.kind == "list" or len(items) != 1:
+                shown = items[:8]
+                text = ("Tenho essas agendas:\n" + "\n".join(
+                    f"• {item.due_at.astimezone(ZoneInfo(item.timezone)):%d/%m/%Y %H:%M} — {item.text[:70]} (ID {str(item.id)[:8]})"
+                    for item in shown
+                ) if shown else "Não encontrei uma agenda ativa com essa descrição.")
+                if len(items) > 8:
+                    text += f"\nE mais {len(items)-8} agendas. Veja a lista na Web."
+                if intent.kind == "cancel_search" and len(items) > 1:
+                    text += "\nQual dessas você quer cancelar? Pode abrir a Agenda na Web."
+                reason = "AGENDA_SEARCH"
+            else:
+                service.cancel(items[0].id)
+                text = "Cancelei aquela agenda. Não vou enviar os próximos avisos dela."
+                reason = "AGENDA_CANCELLED"
+        else:
+            reason = "AGENDA_NEEDS_DETAIL"
+            text = {
+                "need_time": "Qual horário e minuto você quer que eu use? Ex.: 11/11/2030 às 15:30.",
+                "need_content": "O que exatamente você quer que eu te diga?",
+                "need_end": "Até quando devo repetir isso? Pode falar 'o dia todo'.",
+                "invalid_interval": "Para repetir mensagens, o intervalo mínimo é de 10 minutos.",
+                "need_valid_date": "Essa data não existe. Me diz uma data válida.",
+                "no_time_left_today": "Já não cabe outra repetição hoje. Quer agendar para amanhã?",
+            }.get(intent.kind, "Preciso de uma data e uma mensagem para agendar.")
+        outbound = self._queue_outbound(
+            message, decision, text,
+            metadata={"local_control": True, "agenda_command": intent.kind,
+                      "agenda_reason": reason, "transport_revision": message.transport_revision,
+                      "delivery_message_id": message.message_id},
+            reason_codes=[reason, "LOCAL_AGENDA_OWNER_COMMAND"],
+        )
+        return InboundResult(decision=decision, outbound=[outbound])
 
     def _presence_control_result(
         self,
