@@ -11,7 +11,7 @@ JOB_ID = "agenda.owner_occurrences"
 class AgendaRunner:
     def __init__(self, core):
         self.core = core
-        self.service = AgendaService(core)
+        self.service = AgendaService(core.database, core.clock, core.messaging_store)
         self.task = None
 
     def start(self):
