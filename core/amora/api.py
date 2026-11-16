@@ -101,6 +101,9 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         from amora.messaging.temporal_initiative import TemporalInitiative
         temporal_initiative = TemporalInitiative(core)
         temporal_initiative.start()
+        from amora.agenda import AgendaRunner
+        agenda_runner = AgendaRunner(core)
+        agenda_runner.start()
         scheduler_runtime.start()
         core.messaging.reflections.start()
         app.state.scheduler_runtime = scheduler_runtime
@@ -114,6 +117,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             yield
         finally:
             app.state.accepting = False
+            await agenda_runner.stop()
             await temporal_initiative.stop()
             try:
                 await core.messaging.stop_inflight()
@@ -244,6 +248,8 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
     register_avatar_routes(app, core, require_auth)
     register_people_admin_routes(app, core, require_auth)
     register_messaging_routes(app, core, require_auth)
+    from amora.agenda.routes import register_agenda_routes
+    register_agenda_routes(app, core, require_auth)
 
     @app.get("/health")
     def health() -> dict[str, object]:
