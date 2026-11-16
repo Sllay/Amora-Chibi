@@ -89,7 +89,7 @@ def _boot(backend, timestamp):
         core.close()
 
 
-def _child_env(home, backend=None):
+def _child_env(home, backend=None, *, schema_version=LATEST_SCHEMA_VERSION):
     # No inherited AMORA_*, model keys, identity binding files or source token.
     env = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE",
                                       "SSL_CERT_DIR") if k in os.environ}
@@ -100,13 +100,18 @@ def _child_env(home, backend=None):
                # interpreter. Resolve our own package root, never inherit an
                # arbitrary PYTHONPATH from the operator environment.
                PYTHONPATH=str(Path(__file__).resolve().parents[2]))
+    if schema_version == 19:
+        # This exact isolated certification process is explicitly allowed to
+        # boot v19. The serving runtime never inherits these credentials.
+        env.update(AMORA_RUNTIME_SCHEMA_TARGET="19",
+                   AMORA_RUNTIME_SCHEMA_CONFIRMATION="CERTIFIED_V19_BACKUP_AND_ROLLBACK")
     if backend is not None:
         env.update(AMORA_STORAGE_BACKEND="libsql", AMORA_LIBSQL_URL=backend.url,
                    AMORA_SECRET_LIBSQL_AUTH_TOKEN=backend._token)
     return env
 
 
-def _run_boot(home, timestamp, backend=None):
+def _run_boot(home, timestamp, backend=None, *, schema_version=LATEST_SCHEMA_VERSION):
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
     result = home / "pcs4c-result.json"
     # Child logs never enter the operator report; private temporary home is
@@ -114,7 +119,7 @@ def _run_boot(home, timestamp, backend=None):
     subprocess.run([sys.executable, "-m", __name__ if __name__ != "__main__"
                     else "amora.storage.pcs4_restart", "_boot",
                     timestamp.isoformat(), str(result)],
-                   env=_child_env(home, backend), stdout=subprocess.DEVNULL,
+                   env=_child_env(home, backend, schema_version=schema_version), stdout=subprocess.DEVNULL,
                    stderr=subprocess.DEVNULL, check=True, timeout=180)
     return json.loads(result.read_text())
 
@@ -136,9 +141,14 @@ def certify_restart(snapshot, backend, *, expected_schema=LATEST_SCHEMA_VERSION)
         baseline = root / "baseline"
         (baseline / "data").mkdir(parents=True, mode=0o700)
         shutil.copyfile(snapshot, baseline / "data" / "amora.db")
-        expected = _run_boot(baseline, timestamp)
-        first = _run_boot(root / "first", timestamp, backend)
-        second = _run_boot(root / "second", timestamp, backend)
+        if expected_schema == 19:
+            expected = _run_boot(baseline, timestamp, schema_version=19)
+            first = _run_boot(root / "first", timestamp, backend, schema_version=19)
+            second = _run_boot(root / "second", timestamp, backend, schema_version=19)
+        else:
+            expected = _run_boot(baseline, timestamp)
+            first = _run_boot(root / "first", timestamp, backend)
+            second = _run_boot(root / "second", timestamp, backend)
         if expected != first or first != second:
             raise ValueError("PCS4C_RESTART_RANK_MISMATCH")
         if not any(expected["hit_counts"]):
