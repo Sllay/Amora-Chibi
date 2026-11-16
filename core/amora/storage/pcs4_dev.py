@@ -148,6 +148,8 @@ def _safe_schema19(raw):
     if outcome == "exact" and completed != ["schema19_prepare", "schema19_migrate"]:
         raise ValueError("invalid v19 review")
     reports = {}
+    baseline_rows = original["rows"]
+    historical = drill.get("historical_diagnostic")
     for step in completed:
         item = drill.get("reports", {}).get(step)
         if not isinstance(item, dict) or item.get("status") != "ok":
@@ -165,7 +167,13 @@ def _safe_schema19(raw):
             safe["hit_counts"] = counts
         if safe.get("schema_version") != 19 or safe.get("tables") != original["tables"] + 3:
             raise ValueError("v19 schema mismatch")
-        if step != "schema19_restart" and (safe.get("rows") != original["rows"] + 1 or safe.get("assets") != original["assets"]):
+        if step == "schema19_prepare" and ("baseline_rows" in item or historical is not None):
+            if (safe.get("historical_rows") != original["rows"]
+                    or safe.get("historical_memory_tables_equal") != 7
+                    or "baseline_rows" not in safe or historical is None):
+                raise ValueError("v19 baseline evidence mismatch")
+            baseline_rows = safe["baseline_rows"]
+        if step != "schema19_restart" and (safe.get("rows") != baseline_rows + 1 or safe.get("assets") != original["assets"]):
             raise ValueError("v19 rows mismatch")
         if step == "schema19_prepare" and (
             safe.get("source_schema_version") != 18 or safe.get("old_tables") != original["tables"]
@@ -183,6 +191,21 @@ def _safe_schema19(raw):
         ):
             raise ValueError("v19 restart mismatch")
         reports[step] = safe
+    if historical is not None:
+        from .schema19_migration import HISTORICAL_MEMORY_TABLES
+        if "schema19_prepare" not in reports:
+            raise ValueError("unexpected baseline evidence")
+        checked = safe_diagnostic(historical)
+        if (any(checked[k] != 0 for k in ("schema_missing_objects", "schema_added_objects", "schema_changed_objects"))
+                or any(x["status"] != "rows" or x["schema_changed"]
+                       or x["table"] in HISTORICAL_MEMORY_TABLES | {"schema_migrations", "platform_identity_bindings"}
+                       for x in checked["differences"])):
+            raise ValueError("v19 historical critical drift")
+        if checked["unknown_tables"] == 0 and sum(
+            x["destination_rows"] - x["backup_rows"] for x in checked["differences"]
+        ) != baseline_rows - original["rows"]:
+            raise ValueError("v19 baseline count mismatch")
+        reports["schema19_historical_diagnostic"] = checked
     diagnostic = drill.get("diagnostic")
     if diagnostic is not None:
         if status != "error" or reason != "SCHEMA19_DESTINATION_DIVERGED":
