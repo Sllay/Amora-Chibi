@@ -229,11 +229,20 @@ class RecoveryPanel:
         fd = self._lock()
         try:
             state = self._read()
-            if (state["source_id"] != self.source_id
-                    or state["completed"] != ["backup", "verify"]
-                    or not ((state["status"] == "running" and state["running"] == "restore")
-                            or (state["status"] in ("error", "interrupted")
-                                and state["running"] is None))):
+            prefix = ["backup", "verify"]
+            already_restored = (state["completed"] == prefix + ["restore"]
+                                and state["status"] == "ok" and state["running"] is None
+                                and state.get("destination_id"))
+            interrupted = (state["completed"] == prefix
+                           and ((state["status"] == "running" and state["running"] == "restore")
+                                or (state["status"] in ("error", "interrupted")
+                                    and state["running"] is None)))
+            reviewed_empty = (state["completed"] == prefix and state["status"] == "ok"
+                              and state["running"] is None
+                              and state.get("restore_review", {}).get("outcome") == "empty"
+                              and state.get("attempted_destination_id"))
+            if state["source_id"] != self.source_id or not (
+                    already_restored or interrupted or reviewed_empty):
                 raise ValueError("PCS4C_REVIEW_STATE")
             if any(state["reports"].get(step, {}).get("status") != "ok"
                    for step in ("backup", "verify")):
@@ -243,24 +252,31 @@ class RecoveryPanel:
                     or target._token == self.source._token):
                 raise ValueError("PCS4C_DESTINATION_IS_SOURCE")
             target_id = _origin_digest(target)
-            if state.get("attempted_destination_id", target_id) != target_id:
+            if (state.get("attempted_destination_id", target_id) != target_id
+                    or (already_restored and state["destination_id"] != target_id)):
                 raise ValueError("PCS4C_REVIEW_DESTINATION_CHANGED")
             self._pin(state, verify_snapshot(self.snapshot))
             outcome, report = review_restore_destination(self.snapshot, target)
             self._pin(state, report)
-            # Only the two proven outcomes unlock a subsequent operation.
-            # Preserve original failure evidence and the two original reports.
-            state["restore_review"] = {
-                "previous_status": state["status"], "previous_reason": state.get("reason"),
-                "previous_report": state["reports"].get("restore"),
-                "outcome": outcome,
-            }
+            if already_restored and outcome != "exact":
+                raise ValueError("PCS4C_REVIEW_STATE")
+            # Repeated review after a lost final report must retain the original
+            # interruption evidence, not replace it with the later successful state.
+            if not (already_restored or reviewed_empty) or not state.get("restore_review"):
+                state["restore_review"] = {
+                    "previous_status": state["status"], "previous_reason": state.get("reason"),
+                    "previous_report": state["reports"].get("restore"),
+                    "outcome": outcome,
+                }
+            else:
+                state["restore_review"]["outcome"] = outcome
             state["attempted_destination_id"] = target_id
             if outcome == "exact":
                 state["destination_id"] = target_id
                 state["reports"]["restore"] = {"status": "ok", **{
                     key: report[key] for key in _REPORT_KEYS if key in report}}
-                state["completed"].append("restore")
+                if not already_restored:
+                    state["completed"].append("restore")
             else:
                 state["reports"].pop("restore", None)
             state.update(status="ok", running=None, reason=None)
