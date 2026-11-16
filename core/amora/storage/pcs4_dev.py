@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from .pcs4_contract import (
     CONFIRMATIONS, MARKER, STEPS as _STEPS, REPORT_KEYS as _REPORT_KEYS,
-    SCHEMA19_STEPS, SCHEMA19_ACTIONS, SCHEMA19_REPORT_KEYS,
+    SCHEMA19_STEPS, SCHEMA19_ACTIONS, SCHEMA19_REPORT_KEYS, SCHEMA19_ERROR_CODES,
 )
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
@@ -55,6 +55,10 @@ def _report_window(started, concluded):
 
 def _safe_report(raw):
     if isinstance(raw, dict) and raw.get("action") in SCHEMA19_ACTIONS:
+        if raw.get("status") == "error":
+            if raw.get("reason") not in SCHEMA19_ERROR_CODES:
+                raise ValueError("invalid v19 failure")
+            return _state("error", reason=raw["reason"], next_step="schema19_status")
         return _safe_schema19(raw)
     if not isinstance(raw, dict) or raw.get("status") != "ok":
         raise ValueError("invalid report")
