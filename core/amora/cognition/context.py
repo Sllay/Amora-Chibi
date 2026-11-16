@@ -312,9 +312,10 @@ class ContextCompiler:
             if shared and item.privacy_scope != PrivacyScope.PUBLIC:
                 continue
             if self.privacy_gate.memory_allowed(item, remote=remote, recipient_id=request.speaker_id):
-                source_at = aware_time(item.metadata.get("source_observed_at"))
+                source_at = aware_time((getattr(item, "metadata", None) or {}).get("source_observed_at"))
+                recorded_at = aware_time(getattr(item, "created_at", None))
                 memories.append(ContextMemory(id=str(item.id), kind=item.kind.value, content=item.summary or item.content,
-                                              recorded_at=item.created_at.isoformat(),
+                                              recorded_at=recorded_at.isoformat() if recorded_at else None,
                                               source_observed_at=source_at.isoformat() if source_at else None,
                                               score=hit.score, confidence=item.provenance.confidence,
                                               privacy_scope=item.privacy_scope.value, reason_codes=hit.reason_codes))
