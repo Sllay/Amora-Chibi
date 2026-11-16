@@ -16,11 +16,11 @@ from .pcs4_recovery import (
 from .pcs4_restart import certify_restart
 from .pcs4_web import _atomic_json, _origin_digest, _sync_dir
 from .schema19_migration import (
-    BASELINE_NAME, compare_certified_baseline, migrate_certified_destination,
+    BASELINE_NAME, HISTORICAL_MEMORY_TABLES, compare_certified_baseline, migrate_certified_destination,
     prepare_certified_destination, review_certified_destination,
 )
 from .schema19_drill import compare_upgrade
-from .schema19_diagnostic import BaselineDiverged
+from .schema19_diagnostic import BaselineDiverged, baseline_diagnostic
 from .pcs4_contract import STEPS, SCHEMA19_STEPS, SCHEMA19_ACTIONS, SCHEMA19_REPORT_KEYS, SCHEMA19_ERROR_CODES
 
 
@@ -40,6 +40,7 @@ def _state_report(old, state, action):
                 "review_outcome": state.get("review_outcome"),
                 "reason": state.get("reason"),
                 "diagnostic": state.get("diagnostic"),
+                "historical_diagnostic": state.get("historical_diagnostic"),
             }}
 
 
@@ -130,7 +131,13 @@ def run_schema19(panel, action):
                 if pair.exists():
                     report = verify_snapshot(snapshot, expected_schema=19)
                     report.update(compare_upgrade(baseline, snapshot))
-                    report["relationship_sequence_delta"] = compare_certified_baseline(panel.snapshot, baseline)
+                    try:
+                        report["relationship_sequence_delta"] = compare_certified_baseline(panel.snapshot, baseline)
+                    except ValueError as exc:
+                        if str(exc) != "SCHEMA19_DESTINATION_DIVERGED":
+                            raise
+                        raise BaselineDiverged(baseline_diagnostic(panel.snapshot, baseline)) from None
+                    report["historical_diagnostic"] = baseline_diagnostic(panel.snapshot, baseline)
                 else:
                     with tempfile.TemporaryDirectory(prefix="staging-", dir=root) as staging:
                         prepared, report = prepare_certified_destination(
@@ -152,7 +159,10 @@ def run_schema19(panel, action):
                 state["archive_sha256"] = report["archive_sha256"]
                 state["baseline_database_sha256"] = current["database_sha256"]
                 state["baseline_archive_sha256"] = current["archive_sha256"]
-                report["source_schema_version"] = 18
+                report.update(source_schema_version=18, baseline_rows=current["rows"],
+                              historical_rows=original["rows"],
+                              historical_memory_tables_equal=len(HISTORICAL_MEMORY_TABLES))
+                state["historical_diagnostic"] = report["historical_diagnostic"]
             elif action == "schema19_migrate":
                 pinned()
                 report = migrate_certified_destination(baseline, snapshot, target)
