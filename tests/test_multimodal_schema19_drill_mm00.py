@@ -143,3 +143,37 @@ def test_v19_restore_preserves_work_and_core_rank_on_two_boots(backup, tmp_path,
         db.close()
     assert not server.streams
     assert recovery.verify_snapshot(backup)["schema_version"] == 18
+
+
+def test_mislabeled_snapshot_and_missing_candidate_index_fail_closed(backup, tmp_path):
+    fake = tmp_path / "fake.db"
+    shutil.copyfile(backup, fake)
+    shutil.copyfile(str(backup) + ".avatar.zip", str(fake) + ".avatar.zip")
+    with closing(sqlite3.connect(fake)) as conn, conn:
+        conn.execute("INSERT INTO schema_migrations(version) VALUES (19)")
+    with pytest.raises(ValueError, match="SCHEMA19_DDL_MISMATCH"):
+        recovery.verify_snapshot(fake, expected_schema=19)
+    target, _ = drill.prepare_schema19_copy(backup, tmp_path / "candidate")
+    with closing(sqlite3.connect(target)) as conn, conn:
+        conn.execute("DROP INDEX idx_sensory_episode_due")
+    with pytest.raises(ValueError, match="SCHEMA19_DDL_MISMATCH"):
+        recovery.verify_snapshot(target, expected_schema=19)
+
+
+def test_cli_requires_isolation_and_sanitizes_failure(backup, tmp_path, monkeypatch, capsys):
+    import json
+
+    output = tmp_path / "cli-copy"
+    assert drill.main(["prepare", str(backup), str(output)]) == 0
+    report = json.loads(capsys.readouterr().out.split(" ", 1)[1])
+    assert report["schema_version"] == 19 and report["runtime_schema"] == 18
+    assert "database_sha256" not in report and "archive_sha256" not in report
+    with pytest.raises(SystemExit):
+        drill.main(["restore", str(output / "schema19.db")])
+    capsys.readouterr()
+    def fail(*args, **kwargs):
+        raise RuntimeError("private-token")
+    monkeypatch.setattr(drill, "verify_snapshot", fail)
+    assert drill.main(["verify", "/private-path.db"]) == 1
+    logs = capsys.readouterr().out
+    assert "private-token" not in logs and "private-path" not in logs
