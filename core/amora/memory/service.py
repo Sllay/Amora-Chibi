@@ -26,7 +26,11 @@ class MemoryService:
     def remember(self, candidate: MemoryCandidate, *, record_id: UUID | None = None,
                  reflection_lease: tuple[str, str] | None = None,
                  explicit_owner_request: bool = False,
-                 generation_lease: tuple[str, str] | None = None) -> RememberResult:
+                 generation_lease: tuple[str, str] | None = None,
+                 insert_only: bool = False) -> RememberResult:
+        if insert_only and (record_id is None or reflection_lease is not None
+                            or generation_lease is not None or explicit_owner_request):
+            raise ValueError("INSERT_ONLY_REQUIRES_STABLE_ID_WITHOUT_LEASE")
         # A direct owner request is only meaningful under a live platform
         # generation lease. Provider proposals never select this path.
         if explicit_owner_request and (
@@ -81,7 +85,7 @@ class MemoryService:
         if not decision.store or decision.recommended_kind is None:
             return RememberResult(decision=decision, memory=None)
 
-        if record_id is not None:
+        if record_id is not None and not insert_only:
             existing = self.get(record_id)
             if existing is not None:
                 if explicit_owner_request and (
@@ -120,7 +124,13 @@ class MemoryService:
             gate_score=decision.score,
             metadata=candidate.metadata,
         )
-        if generation_lease is not None:
+        if insert_only:
+            inserted = self.store.put(record, insert_only=True)
+            if not inserted:
+                return RememberResult(decision=MemoryWriteDecision(
+                    store=False, score=decision.score, threshold=decision.threshold,
+                    reason_codes=["MEMORY_CREATE_ALREADY_EXISTS"]), memory=None)
+        elif generation_lease is not None:
             self.store.put(record, generation_lease=generation_lease)
         elif reflection_lease is None:
             self.store.put(record)
