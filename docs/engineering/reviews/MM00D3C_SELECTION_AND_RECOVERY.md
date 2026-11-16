@@ -1,6 +1,6 @@
 # MM.00D.3C — Seleção relevante e recuperação durável
 
-Status: C.1 implementado, CI pendente; depende #244 CI/merge. Issue #238.
+Status: C.1 implementado, CI pendente; #244 aprovado e integrado. Issue #238.
 
 ## Auditoria e decisão
 MemoryWriteGate já possui pesos/thresholds e MemoryService protege proveniência; D.2 consolida evidências existentes e create-only atômico. ReflectionQueue referencia conversation_messages, platform_messaging e consentimento remoto; não reutilizar falsificando inputs. O event log tem índice (event_type,timestamp), mas não status/available_at/lease para job de episódio. Uma fila nova não deve transformar toda observação em trabalho durável. C.2 precisa de ADR comparando mecanismo existente, log de intents/receipts com scan bounded e tabela mínima de trabalho no mesmo banco (não outro banco). Qualquer migração tem gate PCS/backup/restore e revisão antes da ativação; nenhuma alteração de schema em C.1.
