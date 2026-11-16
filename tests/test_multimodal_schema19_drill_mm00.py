@@ -91,6 +91,9 @@ def test_compare_upgrade_rejects_changed_old_data_and_history(backup, tmp_path):
 
 
 def test_v19_restore_preserves_work_and_core_rank_on_two_boots(backup, tmp_path, monkeypatch):
+    # This is an explicitly authorized isolated v19 test, not serving production.
+    monkeypatch.setenv("AMORA_RUNTIME_SCHEMA_TARGET", "19")
+    monkeypatch.setenv("AMORA_RUNTIME_SCHEMA_CONFIRMATION", "CERTIFIED_V19_BACKUP_AND_ROLLBACK")
     target, _ = drill.prepare_schema19_copy(backup, tmp_path / "candidate")
     # Populate only the isolated candidate, after the additive comparison.
     db, memory = open_stores(target)
