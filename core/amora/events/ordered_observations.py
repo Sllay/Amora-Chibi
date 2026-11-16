@@ -138,8 +138,12 @@ class OrderedObservationBuffer:
     def push(self, context: ObservationContext, observation: SensoryObservation) -> OrderResult:
         with self._lock:
             state = self._state(context)
-            event = build_observation_event(context, observation)
-            parse_observation_event(event)
+            try:
+                observation = SensoryObservation.model_validate(observation.model_dump(mode="python"))
+                event = build_observation_event(context, observation)
+                parse_observation_event(event)
+            except (ValueError, TypeError, AttributeError):
+                raise ValueError("PERCEPTION_EVENT_INVALID") from None
             fingerprint, size = _fingerprint(event)
             sequence = observation.sequence
             if sequence < state.expected:
