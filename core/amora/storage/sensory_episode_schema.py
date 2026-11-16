@@ -31,4 +31,8 @@ CREATE TABLE IF NOT EXISTS sensory_episode_job_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_sensory_episode_evidence
     ON sensory_episode_job_evidence(event_id, job_id);
+CREATE TABLE IF NOT EXISTS sensory_episode_invalidations (
+    event_id TEXT PRIMARY KEY,
+    invalidated_at TEXT NOT NULL
+);
 """

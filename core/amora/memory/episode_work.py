@@ -1,7 +1,7 @@
 """D.3C.2A — durable episode work repository, not a live worker.
 
-Requires the isolated candidate DDL. No schema bootstrap, provider, scheduling
-or memory writes. C.2B must fence consolidation in the memory transaction.
+Requires the isolated candidate DDL. No schema bootstrap, provider or scheduling.
+Explicit process() uses the existing memory gate and atomic write fence.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 from amora.latency_trace import trace_lock
 from amora.storage.backend import execute_atomic_statement
 
+from .episode_fence import EpisodeWriteLease
 from .episodic_observations import (
     EpisodeSelection, EpisodicObservationConsolidator, episode_record_id,
 )
@@ -79,6 +80,10 @@ class EpisodeWorkRepository:
         encoded = selection.model_dump_json()
         db = self.database
         with trace_lock(db._lock), db._conn:
+            for event_id in selection.evidence_ids:
+                if db._conn.execute("SELECT 1 FROM sensory_episode_invalidations WHERE event_id=?",
+                                    (str(event_id),)).fetchone() is not None:
+                    raise ValueError("EPISODE_EVIDENCE_INVALIDATED")
             if db._conn.execute("SELECT 1 FROM sensory_episode_jobs WHERE job_id=?",
                                 (str(job_id),)).fetchone() is not None:
                 return EnqueueResult.DUPLICATE
@@ -160,13 +165,39 @@ class EpisodeWorkRepository:
             return EpisodeClaim(job_id, selection, row["session_id"], correlation_id,
                                 token, int(row["attempts"]) + 1)
 
+    def process(self, claim: EpisodeClaim):
+        """Reconstruct authorized evidence; memory write and success ACK are atomic.
+
+        Storage errors propagate. Caller may retry using a current lease; a
+        lost commit response is resolved by the durable job status.
+        """
+        if not isinstance(claim, EpisodeClaim):
+            raise ValueError("EPISODE_WORK_CLAIM_INVALID")
+        selection = EpisodeSelection.model_validate(claim.selection.model_dump(mode="python"))
+        record_id, candidate = self.consolidator.build_candidate(selection)
+        if (record_id != claim.job_id or candidate.provenance.session_id != claim.session_id
+                or candidate.metadata["correlation_id"] != str(claim.correlation_id)):
+            raise ValueError("EPISODE_WORK_CLAIM_INVALID")
+        lease = EpisodeWriteLease(claim.job_id, claim.lease_token, claim.attempts,
+                                  selection.model_dump_json())
+        result = self.consolidator.memory.remember(
+            candidate, record_id=record_id, insert_only=True, episode_lease=lease,
+        )
+        if result.memory is None and result.decision.reason_codes != ["MEMORY_CREATE_ALREADY_EXISTS"]:
+            # A gate rejection does not touch memory. ACK only the live claim.
+            if not self.finish(claim, JobOutcome.REJECTED):
+                raise RuntimeError("EPISODE_WRITE_LEASE_LOST")
+        return result
+
     def finish(self, claim: EpisodeClaim, outcome: JobOutcome) -> bool:
         """CAS completion; a stale lease cannot acknowledge another attempt.
 
-        This fences ACK only. C.2B must fence the actual memory write.
+        Success is reserved for the atomic MemoryStore transaction.
         """
         if not isinstance(claim, EpisodeClaim) or not isinstance(outcome, JobOutcome):
             raise ValueError("EPISODE_WORK_OUTCOME_INVALID")
+        if outcome in {JobOutcome.STORED, JobOutcome.DUPLICATE}:
+            raise ValueError("EPISODE_SUCCESS_REQUIRES_ATOMIC_WRITE")
         db = self.database
         now = self._now()
         retry = outcome == JobOutcome.TRANSIENT_FAILURE and claim.attempts < self.max_attempts
@@ -180,14 +211,15 @@ class EpisodeWorkRepository:
                 db.backend, db._conn,
                 "UPDATE sensory_episode_jobs SET status=?,available_at=?,lease_token=NULL,lease_until=NULL,"
                 "last_reason=? WHERE job_id=? AND status='claimed' AND lease_token=? "
-                "AND attempts=? AND lease_until>?",
+                "AND attempts=? AND lease_until>? AND selection_json=? AND session_id=? AND correlation_id=?",
                 (status, (now + timedelta(seconds=delay)).isoformat(), reason, str(claim.job_id),
-                 str(claim.lease_token), claim.attempts, now.isoformat()),
+                 str(claim.lease_token), claim.attempts, now.isoformat(), claim.selection.model_dump_json(),
+                 claim.session_id, str(claim.correlation_id)),
             )
             return result.rowcount == 1
 
     def cancel(self, job_id: UUID) -> bool:
-        """Cancel pending/claimed work; completed memory invalidation is C.2B."""
+        """Cancel pending/claimed work; use evidence invalidation for completed memory."""
         db = self.database
         with trace_lock(db._lock):
             result = execute_atomic_statement(
@@ -197,6 +229,47 @@ class EpisodeWorkRepository:
                 (str(job_id),),
             )
             return result.rowcount == 1
+
+    def invalidate_evidence(self, event_id: UUID) -> int:
+        """Tombstone, cancel associated jobs and archive direct episodes atomically.
+
+        Internal authorized invalidation only. Does not delete source content,
+        cascade to unrelated derived memories or revoke prior disclosures.
+        Refuse oversized fanout rather than silently leaving partial state.
+        """
+        if not isinstance(event_id, UUID):
+            raise ValueError("EPISODE_INVALIDATION_ID_INVALID")
+        key = str(event_id)
+        db = self.database
+        with trace_lock(db._lock), db._conn:
+            jobs = db._conn.execute(
+                "SELECT job_id FROM sensory_episode_job_evidence WHERE event_id=? LIMIT 129",
+                (key,),
+            ).fetchall()
+            # Also cover direct D.2 episodes created before the queue existed.
+            memories = db._conn.execute(
+                "SELECT id FROM memory_records WHERE provenance_source='perception:episode:v1' "
+                "AND archived_at IS NULL AND EXISTS (SELECT 1 FROM "
+                "json_each(memory_records.metadata_json,'$.evidence_event_ids') WHERE value=?) LIMIT 129",
+                (key,),
+            ).fetchall()
+            if len(jobs) > 128 or len(memories) > 128:
+                raise RuntimeError("EPISODE_INVALIDATION_FANOUT_REVIEW_REQUIRED")
+            now = self._now().isoformat()
+            db._conn.execute(
+                "INSERT INTO sensory_episode_invalidations(event_id,invalidated_at) VALUES (?,?) "
+                "ON CONFLICT(event_id) DO NOTHING", (key, now),
+            )
+            db._conn.executemany(
+                "UPDATE sensory_episode_jobs SET status='cancelled',lease_token=NULL,lease_until=NULL,"
+                "last_reason='EPISODE_EVIDENCE_INVALIDATED' WHERE job_id=?",
+                [(row[0],) for row in jobs],
+            )
+            db._conn.executemany(
+                "UPDATE memory_records SET archived_at=?,updated_at=? WHERE id=? AND archived_at IS NULL",
+                [(now, now, row[0]) for row in memories],
+            )
+            return len(memories)
 
     def state(self, job_id: UUID) -> dict | None:
         db = self.database

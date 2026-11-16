@@ -16,6 +16,7 @@ from amora.identity import EntityRegistry
 from amora.storage.backend import SQLiteBackend, StorageBackend, execute_atomic_statement
 from amora.time import Clock
 
+from .episode_fence import EpisodeWriteLease, check_episode_write, complete_episode_write
 from .models import MemoryHit, MemoryKind, MemoryProvenance, MemoryQuery, MemoryRecord, ProvenanceKind
 
 
@@ -80,10 +81,13 @@ class MemoryStore:
 
     def put(self, record: MemoryRecord, *, reflection_lease: tuple[str, str] | None = None,
             generation_lease: tuple[str, str] | None = None,
-            insert_only: bool = False) -> bool | None:
+            insert_only: bool = False, episode_lease: EpisodeWriteLease | None = None) -> bool | None:
         """Create-only mode never overwrites an existing record or its indexes."""
         if insert_only and (reflection_lease is not None or generation_lease is not None):
             raise ValueError("INSERT_ONLY_LEASE_UNSUPPORTED")
+        if episode_lease is not None and (not insert_only or reflection_lease is not None
+                                          or generation_lease is not None):
+            raise ValueError("EPISODE_WRITE_REQUIRES_CREATE_ONLY")
         provenance = record.provenance
         values = (
             str(record.id), record.kind.value, record.content, record.summary,
@@ -103,6 +107,12 @@ class MemoryStore:
             json.dumps(record.metadata, ensure_ascii=False, separators=(",", ":")),
         )
         with trace_lock(self._lock), self._conn:
+            if episode_lease is not None:
+                check_episode_write(self._conn, record, episode_lease, self.clock.now())
+            elif provenance.source == "perception:episode:v1" and self._conn.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='sensory_episode_jobs'"
+            ).fetchone() is not None:
+                raise RuntimeError("EPISODE_WRITE_LEASE_REQUIRED")
             if generation_lease is not None:
                 turn_id, token = generation_lease
                 # Verify the persisted source and active inbound lease in the
@@ -167,6 +177,8 @@ class MemoryStore:
             if insert_only and cursor.rowcount != 1:
                 if cursor.rowcount != 0:
                     raise RuntimeError("MEMORY_INSERT_OUTCOME_UNKNOWN")
+                if episode_lease is not None:
+                    complete_episode_write(self._conn, record, episode_lease, self.clock.now(), inserted=False)
                 return False
             self._conn.execute("DELETE FROM memory_entities WHERE memory_id = ?", (str(record.id),))
             self._conn.executemany(
@@ -184,6 +196,9 @@ class MemoryStore:
                     "INSERT INTO memory_fts(memory_id, content, tags) VALUES (?, ?, ?)",
                     (str(record.id), " ".join(filter(None, (record.content, record.summary or ""))), " ".join(sorted(record.tags))),
                 )
+
+            if episode_lease is not None:
+                complete_episode_write(self._conn, record, episode_lease, self.clock.now(), inserted=True)
 
         return True if insert_only else None
 

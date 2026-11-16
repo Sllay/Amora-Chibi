@@ -1,6 +1,6 @@
 # MM.00D.3C.2 — ADR proposto: trabalho episódico durável
 
-Status: C.2A implementado isoladamente, CI pendente; #245 aprovado e integrado. Issue #238.
+Status: C.2A aprovado e integrado (#246); C.2B implementado isoladamente, CI pendente. Issue #238.
 Não alterar schema de produção nem LATEST_SCHEMA_VERSION neste recorte.
 
 ## Contexto
@@ -27,3 +27,6 @@ C.2A é contrato/repository em draft, não fila operacional nem mudança de sche
 - `45cf1461`: EpisodeWorkRepository, gate existente, enqueue transacional, capacidade ativa global/sessão, links, claim/lease, retry com backoff e tentativas limitadas, cancelamento e ACK por CAS. Nenhum conteúdo duplicado; sem provider/worker/memory writer.
 - `5bfca418`: testes isolados SQLite/Hrana, schema oficial 18, reinício e recuperação de lease, ACK antigo rejeitado, capacidade, retry, cancel, corrupt link e dois claimers concorrentes. CI pendente.
 - Limites: ACK protegido não equivale a gravação de memória protegida; C.2B precisa fence no MemoryStore e invalidação de fontes, incluindo tombstone e crash antes/depois de commit. C.2C registra migração somente após revisão/certificação PCS. C.3 fecha produtor e reconciliação. Não aplicar DDL à produção, não alterar schema oficial, não ativar worker.
+
+## Atualização C.2B
+C.2A aprovado #246 (4 workflows, 8 jobs), merge `e03cf326be80a3d0af97162838d49b180a8ce900`. [Plano/evidência C.2B](MM00D3C2B_EPISODE_FENCE.md): fence e ACK na transação de memória, invalidação direta e testes implementados. CI pendente; schema oficial 18, candidato não registrado. C.2C, C.3 e D permanecem abertos.

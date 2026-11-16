@@ -1,6 +1,6 @@
 # MM.00D.3 — Admissão autorizada, ordenação e recuperação
 
-Status: D.2 aprovado e integrado (#240); D.3A.1/A.2 aprovados e integrados (#241/#242); D.3B.1 aprovado (#243); B.2A aprovado (#244); C.1 aprovado (#245); C.2A implementado, CI pendente. Acompanhamento #238.
+Status: D.2 aprovado e integrado (#240); D.3A.1/A.2 aprovados e integrados (#241/#242); D.3B.1 aprovado (#243); B.2A aprovado (#244); C.1 aprovado (#245); C.2A aprovado (#246); C.2B implementado, CI pendente. Acompanhamento #238.
 Não ativar captura, provider ou storage novo neste checkpoint sem contrato e testes.
 
 ## Contratos existentes inspecionados
@@ -21,8 +21,9 @@ Não ativar captura, provider ou storage novo neste checkpoint sem contrato e te
 | D.3B.2A | Contrato de sincronização conservadora | intervalos, relógio receptor, incerteza e correlação autorizada | Aprovado; integrado #244 |
 | D.3B.2B | Buffer raw e sincronização real | formatos, relógios, limites e métricas no transporte | Planejado nos adaptadores MM.02–05 |
 | D.3C.1 | Seleção bounded de episódios | gate existente, prioridade, overlap e orçamento | Aprovado; integrado #245 |
-| D.3C.2A | Repository durável candidato | enqueue, claim, lease, retry, cancel; DDL isolado | Implementado; CI pendente |
-| D.3C.2B/C | Fence, invalidação e migração | gravação cercada por lease, recuperação e certificação PCS | Planejado |
+| D.3C.2A | Repository durável candidato | enqueue, claim, lease, retry, cancel; DDL isolado | Aprovado; integrado #246 |
+| D.3C.2B | Fence e invalidação | gravação/ACK atômicos, tombstone, cancelamento e archive | Implementado; CI pendente |
+| D.3C.2C | Migração e certificação PCS | upgrade isolado, backup/restore/restart | Planejado |
 | D.3C.3 | Produtor real | seleção efêmera e persistência/queue reconciliadas | Planejado |
 | D.3D | Primeiro adaptador interno CH2 e teste do ciclo | validação de identidade e mídia, memória, recall, reinício, falhas, privacidade, métricas; gate real Discord/Groq em MM.01 | Planejado |
 
@@ -62,3 +63,6 @@ Antes de cada subcheckpoint atualizar este ledger e #238. Após implementação:
 
 ## D.3C.2A
 C.1 aprovado #245 (7/7 jobs), merge `f81094b08d5d1e9fe44405094c06a5612be98d66`. [ADR de trabalho durável](MM00D3C2_DURABLE_WORK_ADR.md): repository e DDL candidato não registrado, testes implementados; CI pendente. C.2B/C/C.3 e D ainda pendentes.
+
+## Atualização C.2B
+C.2A aprovado #246 (4 workflows, 8 jobs), merge `e03cf326be80a3d0af97162838d49b180a8ce900`. [Plano/evidência C.2B](MM00D3C2B_EPISODE_FENCE.md): fence e ACK na transação de memória, invalidação direta e testes implementados. CI pendente; schema oficial 18, candidato não registrado. C.2C, C.3 e D permanecem abertos.
