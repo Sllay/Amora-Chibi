@@ -5,11 +5,14 @@ The caller pins the destination and holds the operator lock.
 """
 from contextlib import closing
 from pathlib import Path
+import shutil
 import tempfile
 
-from .pcs4_recovery import _open, _sha, compare_snapshots, verify_snapshot
+from .pcs4_recovery import (
+    _open, _row_hashes, _schema, _sha, _tables, compare_snapshots, verify_snapshot,
+)
 from .remote import statements
-from .schema19_drill import compare_upgrade
+from .schema19_drill import compare_upgrade, prepare_schema19_copy
 from .sensory_episode_schema import SENSORY_EPISODE_QUEUE_CANDIDATE_SQL
 
 
@@ -29,6 +32,88 @@ class _TransactionSnapshot:
         if not sql.lstrip().upper().startswith("SELECT "):
             raise ValueError("SCHEMA19_SNAPSHOT_READ_ONLY")
         return self.connection.execute(sql, parameters)
+
+
+
+BASELINE_NAME = "baseline-v18.db"
+
+
+def compare_certified_baseline(original, baseline):
+    """Compare historical v18 and current test v18 without lowering sequences.
+
+    The previous Core boots can advance the relationships AUTOINCREMENT
+    counter through an INSERT ... ON CONFLICT UPDATE. Every other schema
+    object, logical row and sequence counter must match the certified backup.
+    """
+    original, baseline = Path(original), Path(baseline)
+    with closing(_open(original)) as old, closing(_open(baseline)) as current:
+        tables = _tables(old)
+        if _schema(old) != _schema(current) or tables != _tables(current):
+            raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+        for table in tables:
+            if table != "sqlite_sequence" and _row_hashes(old, table) != _row_hashes(current, table):
+                raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+        if "sqlite_sequence" not in tables:
+            return 0
+
+        def sequences(db):
+            rows = db.execute("SELECT name,seq FROM sqlite_sequence").fetchall()
+            if (len({row[0] for row in rows}) != len(rows)
+                    or any(type(name) is not str or type(seq) is not int or seq < 0
+                           for name, seq in rows)):
+                raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+            return dict(rows)
+
+        before, after = sequences(old), sequences(current)
+        if before.keys() != after.keys():
+            raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+        delta = 0
+        for name, seq in before.items():
+            if name == "relationships":
+                delta = after[name] - seq
+                if delta < 0:
+                    raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+            elif after[name] != seq:
+                raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+        return delta
+
+
+def prepare_certified_destination(original, output_directory, backend):
+    """Read the existing test v18 database; create a local v18/v19 pair.
+
+    The baseline is a real logical export from the pinned destination, not a
+    modified copy of the production backup. The only admissible drift is the
+    audited monotonic relationships sequence. All remote operations are reads.
+    """
+    original, output_directory = Path(original), Path(output_directory)
+    certified = verify_snapshot(original, expected_schema=18)
+    with tempfile.TemporaryDirectory(prefix="schema19-baseline-") as directory:
+        baseline = Path(directory) / BASELINE_NAME
+        with closing(backend.connect(baseline)) as conn, conn.read_transaction():
+            backend.backup(_TransactionSnapshot(conn), baseline)
+        baseline.chmod(0o600)
+        archive = Path(str(baseline) + ".avatar.zip")
+        shutil.copyfile(Path(str(original) + ".avatar.zip"), archive)
+        archive.chmod(0o600)
+        current = verify_snapshot(baseline, expected_schema=18)
+        delta = compare_certified_baseline(original, baseline)
+        _pin_pair(original, baseline, certified, current)
+        candidate, report = prepare_schema19_copy(baseline, output_directory)
+        # Keep the real baseline alongside the candidate for the atomic
+        # migration preflight and read-only crash reconciliation.
+        try:
+            saved = output_directory / BASELINE_NAME
+            saved_archive = Path(str(saved) + ".avatar.zip")
+            shutil.copyfile(baseline, saved)
+            shutil.copyfile(archive, saved_archive)
+            saved.chmod(0o600)
+            saved_archive.chmod(0o600)
+            _pin_pair(original, saved, certified, current)
+            report["relationship_sequence_delta"] = delta
+            return candidate, report
+        except BaseException:
+            shutil.rmtree(output_directory)
+            raise
 
 
 def _verify_pair(original, candidate):
@@ -59,8 +144,8 @@ def _compare_destination(expected, recovered):
 def migrate_certified_destination(original, candidate, backend):
     """One transaction: exact v18 preflight, additive DDL, exact v19 proof.
 
-    The existing v18 database must match the certified backup. Even a harmless
-    drift requires operator review rather than silently discarding differences.
+    The existing v18 database must match the pinned test baseline exactly.
+    Historical boot counter drift was already audited during preparation.
     """
     original, candidate = Path(original), Path(candidate)
     v18, report = _verify_pair(original, candidate)
