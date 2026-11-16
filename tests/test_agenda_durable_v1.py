@@ -13,6 +13,7 @@ from amora.app import AmoraCore
 from amora.messaging import ChannelType, MessagingPlatform, PresenceCommand, PresenceState
 from amora.time import SimulatedClock
 from test_platform_messaging_step2 import _bind_bk, _message
+from remote_storage_contracts_v13_source import remote
 
 START = datetime(2026, 11, 16, 18, 20, tzinfo=timezone.utc)
 EXTERNAL = "111111111111111111"
