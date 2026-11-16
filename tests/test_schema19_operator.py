@@ -156,3 +156,60 @@ def test_old_certified_report_enables_new_prepare_without_rewriting_old_state(op
                 "completed": list(STEPS), "reports": panel._read()["reports"]}
     assert _safe_report(original)["next"] == "schema19_prepare"
     assert CONFIRMATIONS["schema19_restore"] == "NOVO DESTINO V19 VAZIO"
+
+
+def test_controller_submits_only_explicit_v19_action_and_recovers_missing_report(operator):
+    panel, target, _, _, _ = operator
+    class V19Northflank(FakeNorthflank):
+        def __call__(self, request):
+            if request.method == "POST":
+                payload = json.loads(request.content)
+                assert payload == {"runtimeEnvironment": {"AMORA_PCS4_JOB_ACTION": "schema19_restore"}}
+                self.calls.append((request.method, request.url.path))
+                self.runs = [{"id": "run-1", "status": "RUNNING", "active": 1, "concluded": False,
+                              "startedAt": "2026-11-15T01:00:00Z"}]
+                return httpx.Response(200, json={"data": {"id": "run-1"}})
+            return super().__call__(request)
+    fake = V19Northflank()
+    fake.runs = [{"id": "run-1", "status": "SUCCESS", "active": 0, "concluded": True,
+                  "startedAt": "2026-11-15T01:00:00Z", "concludedAt": "2026-11-15T01:01:00Z"}]
+    fake.report = action(panel, target, "schema19_prepare")
+    control = controller(fake)
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        control.start("schema19_restart", CONFIRMATIONS["schema19_restart"])
+    with pytest.raises(HTTPException):
+        control.start("schema19_restore", "wrong")
+    assert control.start("schema19_restore", CONFIRMATIONS["schema19_restore"]) == {"status": "running"}
+    assert control.status()["status"] == "running"
+    fake.runs[0].update(status="FAILED", active=0, concluded=True, concludedAt="2026-11-15T01:01:00Z")
+    fake.report = {"status": "error", "action": "schema19_restore",
+                   "reason": "SCHEMA19_CONFIGURATION_REQUIRED", "private": "secret"}
+    report = control.status()
+    assert report["next"] == "schema19_status"
+    assert "secret" not in json.dumps(report)
+    fake.report["reason"] = "secret"
+    assert control.status()["status"] == "blocked"
+
+
+def test_shared_lock_and_interrupted_restart_do_not_run_again(operator):
+    panel, target, server, _, _ = operator
+    fd = panel._lock()
+    import os
+    try:
+        with pytest.raises(BlockingIOError):
+            action(panel, target, "schema19_prepare")
+    finally:
+        os.close(fd)
+    action(panel, target, "schema19_prepare")
+    action(panel, target, "schema19_restore")
+    path = panel.root / "schema19" / "state.json"
+    state = json.loads(path.read_text())
+    state.update(status="running", failed_action="schema19_restart")
+    _atomic_json(path, state)
+    calls = len(server.calls)
+    result = _safe_report(action(panel, target, "schema19_status"))
+    assert result["status"] == "error" and result["next"] is None
+    with pytest.raises(ValueError, match="STEP_BLOCKED"):
+        action(panel, target, "schema19_restart")
+    assert len(server.calls) == calls
