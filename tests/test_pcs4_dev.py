@@ -177,3 +177,33 @@ def test_missing_report_stays_blocked_and_partial_frames_not_accepted():
     with pytest.raises(HTTPException):
         control.start("verify", CONFIRMATIONS["verify"])
     assert all(method == "GET" for method, _ in fake.calls)
+
+
+def test_review_report_only_unlocks_proven_outcomes():
+    from amora.storage.pcs4_dev import _safe_report
+    base = {"status": "ok", "schema_version": 18, "tables": 51, "rows": 48059, "assets": 0}
+    report = {"status": "ok", "action": "review_restore", "running": None,
+              "completed": ["backup", "verify"], "review_outcome": "empty",
+              "reports": {"backup": dict(base), "verify": dict(base)}}
+    assert _safe_report(report)["next"] == "restore"
+    report["review_outcome"] = "exact"
+    with pytest.raises(ValueError):
+        _safe_report(report)
+    report["completed"].append("restore")
+    report["reports"]["restore"] = dict(base, equal_tables=51)
+    assert _safe_report(report)["next"] == "restart"
+    report["reports"]["restore"]["equal_tables"] = 50
+    with pytest.raises(ValueError):
+        _safe_report(report)
+
+
+def test_failed_job_only_exposes_review_not_restore():
+    from fastapi import HTTPException
+    fake = FakeNorthflank()
+    fake.runs = [{"id": "run-1", "status": "FAILED", "active": 0, "concluded": True,
+                  "startedAt": "2026-11-15T01:00:00Z", "concludedAt": "2026-11-15T01:01:00Z"}]
+    control = controller(fake)
+    assert control.status()["next"] == "review_restore"
+    with pytest.raises(HTTPException):
+        control.start("restore", CONFIRMATIONS["restore"])
+    assert all(method == "GET" for method, _ in fake.calls)
