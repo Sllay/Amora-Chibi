@@ -15,8 +15,11 @@ from .pcs4_recovery import (
 )
 from .pcs4_restart import certify_restart
 from .pcs4_web import _atomic_json, _origin_digest, _sync_dir
-from .schema19_migration import migrate_certified_destination, review_certified_destination
-from .schema19_drill import prepare_schema19_copy, compare_upgrade
+from .schema19_migration import (
+    BASELINE_NAME, compare_certified_baseline, migrate_certified_destination,
+    prepare_certified_destination, review_certified_destination,
+)
+from .schema19_drill import compare_upgrade
 from .pcs4_contract import STEPS, SCHEMA19_STEPS, SCHEMA19_ACTIONS, SCHEMA19_REPORT_KEYS, SCHEMA19_ERROR_CODES
 
 
@@ -76,6 +79,7 @@ def run_schema19(panel, action):
         state_path = root / "state.json"
         pair = root / "candidate"
         snapshot = pair / "schema19.db"
+        baseline = pair / BASELINE_NAME
         state = (json.loads(state_path.read_text()) if state_path.exists() else {
             "status": "idle", "completed": [], "reports": {},
             "source_sha": original["database_sha256"], "source_archive_sha": original["archive_sha256"],
@@ -91,8 +95,11 @@ def run_schema19(panel, action):
 
         def pinned():
             report = verify_snapshot(snapshot, expected_schema=19)
+            current = verify_snapshot(baseline, expected_schema=18)
             if (state.get("database_sha256") != report["database_sha256"]
-                    or state.get("archive_sha256") != report["archive_sha256"]):
+                    or state.get("archive_sha256") != report["archive_sha256"]
+                    or state.get("baseline_database_sha256") != current["database_sha256"]
+                    or state.get("baseline_archive_sha256") != current["archive_sha256"]):
                 raise ValueError("SCHEMA19_CANDIDATE_CHANGED")
             return report
 
@@ -120,28 +127,37 @@ def run_schema19(panel, action):
                 # only a verified exact upgrade of the original pinned backup.
                 if pair.exists():
                     report = verify_snapshot(snapshot, expected_schema=19)
-                    report.update(compare_upgrade(panel.snapshot, snapshot))
+                    report.update(compare_upgrade(baseline, snapshot))
+                    report["relationship_sequence_delta"] = compare_certified_baseline(panel.snapshot, baseline)
                 else:
                     with tempfile.TemporaryDirectory(prefix="staging-", dir=root) as staging:
-                        prepared, report = prepare_schema19_copy(panel.snapshot, Path(staging) / "pair")
-                        for path in (prepared, Path(str(prepared) + ".avatar.zip")):
+                        prepared, report = prepare_certified_destination(
+                            panel.snapshot, Path(staging) / "pair", target,
+                        )
+                        for path in (prepared, Path(str(prepared) + ".avatar.zip"),
+                                     prepared.parent / BASELINE_NAME,
+                                     prepared.parent / (BASELINE_NAME + ".avatar.zip")):
                             with path.open("rb") as stream:
                                 os.fsync(stream.fileno())
                         _sync_dir(prepared.parent)
                         prepared.parent.rename(pair)
                         _sync_dir(root)
-                if report["archive_sha256"] != original["archive_sha256"]:
+                current = verify_snapshot(baseline, expected_schema=18)
+                if (report["archive_sha256"] != original["archive_sha256"]
+                        or current["archive_sha256"] != original["archive_sha256"]):
                     raise ValueError("SCHEMA19_SOURCE_CHANGED")
                 state["database_sha256"] = report["database_sha256"]
                 state["archive_sha256"] = report["archive_sha256"]
+                state["baseline_database_sha256"] = current["database_sha256"]
+                state["baseline_archive_sha256"] = current["archive_sha256"]
                 report["source_schema_version"] = 18
             elif action == "schema19_migrate":
                 pinned()
-                report = migrate_certified_destination(panel.snapshot, snapshot, target)
+                report = migrate_certified_destination(baseline, snapshot, target)
                 pinned()
             elif action == "schema19_review_migration":
                 pinned()
-                outcome, report = review_certified_destination(panel.snapshot, snapshot, target)
+                outcome, report = review_certified_destination(baseline, snapshot, target)
                 pinned()
                 if outcome not in {"v18_exact", "exact"}:
                     raise ValueError("SCHEMA19_REVIEW_INVALID")
