@@ -13,3 +13,26 @@ REPORT_KEYS = frozenset({
     "boots", "query_count", "rank_equal", "memory_tables_equal", "hit_counts",
     "private_hits", "archived_hits", "public_hits", "nonremote_hits",
 })
+
+
+SCHEMA19_STEPS = ("schema19_prepare", "schema19_migrate", "schema19_restart")
+SCHEMA19_ACTIONS = frozenset((*SCHEMA19_STEPS, "schema19_review_migration", "schema19_status"))
+CONFIRMATIONS.update({
+    "schema19_prepare": "PRESERVAR BACKUP V18",
+    "schema19_migrate": "MIGRAR TESTE V18 PARA V19",
+    "schema19_restart": "DESTINO V19 ISOLADO",
+    "schema19_review_migration": "REVISAR MIGRACAO V19",
+    "schema19_status": "CONSULTAR ESTADO V19",
+})
+SCHEMA19_REPORT_KEYS = REPORT_KEYS | frozenset({
+    "source_schema_version", "old_tables", "preserved_tables", "new_tables",
+    "migration_history_preserved", "episode_work_tables_equal", "relationship_sequence_delta",
+})
+
+SCHEMA19_ERROR_CODES = frozenset({
+    "SCHEMA19_V18_NOT_CERTIFIED", "SCHEMA19_V18_DESTINATION_CHANGED",
+    "SCHEMA19_DESTINATION_NOT_INDEPENDENT", "SCHEMA19_PIN_CHANGED",
+    "SCHEMA19_CANDIDATE_CHANGED", "SCHEMA19_STEP_BLOCKED",
+    "SCHEMA19_CONFIGURATION_REQUIRED", "SCHEMA19_REVIEW_REQUIRED",
+    "SCHEMA19_DESTINATION_DIVERGED",
+})

@@ -1,0 +1,191 @@
+"""Upgrade the already certified, isolated PCS.4C destination in place.
+
+No source connection, delete, restore or replacement of existing rows.
+The caller pins the destination and holds the operator lock.
+"""
+from contextlib import closing
+from pathlib import Path
+import shutil
+import tempfile
+
+from .pcs4_recovery import (
+    _open, _row_hashes, _schema, _sha, _tables, compare_snapshots, verify_snapshot,
+)
+from .remote import statements
+from .schema19_drill import compare_upgrade, prepare_schema19_copy
+from .sensory_episode_schema import SENSORY_EPISODE_QUEUE_CANDIDATE_SQL
+
+
+class _TransactionSnapshot:
+    """SELECT-only view of the transaction already owned by the caller."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, parameters=()):
+        if not sql.lstrip().upper().startswith("SELECT "):
+            raise ValueError("SCHEMA19_SNAPSHOT_READ_ONLY")
+        return self.connection.execute(sql, parameters)
+
+
+
+BASELINE_NAME = "baseline-v18.db"
+
+
+def compare_certified_baseline(original, baseline):
+    """Compare historical v18 and current test v18 without lowering sequences.
+
+    The previous Core boots can advance the relationships AUTOINCREMENT
+    counter through an INSERT ... ON CONFLICT UPDATE. Every other schema
+    object, logical row and sequence counter must match the certified backup.
+    """
+    original, baseline = Path(original), Path(baseline)
+    with closing(_open(original)) as old, closing(_open(baseline)) as current:
+        tables = _tables(old)
+        if _schema(old) != _schema(current) or tables != _tables(current):
+            raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+        for table in tables:
+            if table != "sqlite_sequence" and _row_hashes(old, table) != _row_hashes(current, table):
+                raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+        if "sqlite_sequence" not in tables:
+            return 0
+
+        def sequences(db):
+            rows = db.execute("SELECT name,seq FROM sqlite_sequence").fetchall()
+            if (len({row[0] for row in rows}) != len(rows)
+                    or any(type(name) is not str or type(seq) is not int or seq < 0
+                           for name, seq in rows)):
+                raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+            return dict(rows)
+
+        before, after = sequences(old), sequences(current)
+        if before.keys() != after.keys():
+            raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+        delta = 0
+        for name, seq in before.items():
+            if name == "relationships":
+                delta = after[name] - seq
+                if delta < 0:
+                    raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+            elif after[name] != seq:
+                raise ValueError("SCHEMA19_DESTINATION_DIVERGED")
+        return delta
+
+
+def prepare_certified_destination(original, output_directory, backend):
+    """Read the existing test v18 database; create a local v18/v19 pair.
+
+    The baseline is a real logical export from the pinned destination, not a
+    modified copy of the production backup. The only admissible drift is the
+    audited monotonic relationships sequence. All remote operations are reads.
+    """
+    original, output_directory = Path(original), Path(output_directory)
+    certified = verify_snapshot(original, expected_schema=18)
+    with tempfile.TemporaryDirectory(prefix="schema19-baseline-") as directory:
+        baseline = Path(directory) / BASELINE_NAME
+        with closing(backend.connect(baseline)) as conn, conn.read_transaction():
+            backend.backup(_TransactionSnapshot(conn), baseline)
+        baseline.chmod(0o600)
+        archive = Path(str(baseline) + ".avatar.zip")
+        shutil.copyfile(Path(str(original) + ".avatar.zip"), archive)
+        archive.chmod(0o600)
+        current = verify_snapshot(baseline, expected_schema=18)
+        delta = compare_certified_baseline(original, baseline)
+        _pin_pair(original, baseline, certified, current)
+        candidate, report = prepare_schema19_copy(baseline, output_directory)
+        # Keep the real baseline alongside the candidate for the atomic
+        # migration preflight and read-only crash reconciliation.
+        try:
+            saved = output_directory / BASELINE_NAME
+            saved_archive = Path(str(saved) + ".avatar.zip")
+            shutil.copyfile(baseline, saved)
+            shutil.copyfile(archive, saved_archive)
+            saved.chmod(0o600)
+            saved_archive.chmod(0o600)
+            _pin_pair(original, saved, certified, current)
+            report["relationship_sequence_delta"] = delta
+            return candidate, report
+        except BaseException:
+            shutil.rmtree(output_directory)
+            raise
+
+
+def _verify_pair(original, candidate):
+    v18 = verify_snapshot(original, expected_schema=18)
+    v19 = verify_snapshot(candidate, expected_schema=19)
+    compare_upgrade(original, candidate)
+    if v18["archive_sha256"] != v19["archive_sha256"]:
+        raise ValueError("SCHEMA19_SOURCE_CHANGED")
+    return v18, v19
+
+
+def _pin_pair(original, candidate, v18, v19):
+    for path, report in ((original, v18), (candidate, v19)):
+        if (_sha(path) != report["database_sha256"]
+                or _sha(Path(str(path) + ".avatar.zip")) != report["archive_sha256"]):
+            raise ValueError("SCHEMA19_SOURCE_CHANGED")
+
+
+def _compare_destination(expected, recovered):
+    try:
+        return compare_snapshots(expected, recovered)
+    except ValueError as exc:
+        if str(exc) in {"PCS4C_SCHEMA_MISMATCH", "PCS4C_DATA_MISMATCH"}:
+            raise ValueError("SCHEMA19_DESTINATION_DIVERGED") from None
+        raise
+
+
+def migrate_certified_destination(original, candidate, backend):
+    """One transaction: exact v18 preflight, additive DDL, exact v19 proof.
+
+    The existing v18 database must match the pinned test baseline exactly.
+    Historical boot counter drift was already audited during preparation.
+    """
+    original, candidate = Path(original), Path(candidate)
+    v18, report = _verify_pair(original, candidate)
+    with closing(_open(candidate)) as db:
+        applied_at = db.execute("SELECT applied_at FROM schema_migrations WHERE version=19").fetchone()[0]
+    with tempfile.TemporaryDirectory(prefix="schema19-migrate-") as directory:
+        recovered = Path(directory) / "target.db"
+        with closing(backend.connect(recovered)) as conn, conn:
+            # The remote adapter opens BEGIN IMMEDIATE here. Its backup routine
+            # must borrow this transaction, not start a nested one.
+            reader = _TransactionSnapshot(conn)
+            backend.backup(reader, recovered)
+            _compare_destination(original, recovered)
+            for sql in statements(SENSORY_EPISODE_QUEUE_CANDIDATE_SQL):
+                conn.execute(sql)
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES (?,?)",
+                         (19, applied_at))
+            backend.backup(reader, recovered)
+            report["equal_tables"] = _compare_destination(candidate, recovered)
+            _pin_pair(original, candidate, v18, report)
+        # No success report until COMMIT returns. An ambiguous commit is
+        # reconciled by the read-only review, not a second write.
+    return report
+
+
+def review_certified_destination(original, candidate, backend):
+    """Read-only reconciliation; only an exact v18 or exact v19 is accepted."""
+    original, candidate = Path(original), Path(candidate)
+    v18, v19 = _verify_pair(original, candidate)
+    with tempfile.TemporaryDirectory(prefix="schema19-review-") as directory:
+        recovered = Path(directory) / "target.db"
+        with closing(backend.connect(recovered)) as conn, conn.read_transaction():
+            backend.backup(_TransactionSnapshot(conn), recovered)
+        try:
+            v19["equal_tables"] = compare_snapshots(candidate, recovered)
+            outcome, report = "exact", v19
+        except ValueError as exc:
+            if str(exc) not in {"PCS4C_SCHEMA_MISMATCH", "PCS4C_DATA_MISMATCH"}:
+                raise
+            v18["equal_tables"] = _compare_destination(original, recovered)
+            outcome, report = "v18_exact", v18
+        _pin_pair(original, candidate, v18, v19)
+    return outcome, report

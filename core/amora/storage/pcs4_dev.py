@@ -16,7 +16,10 @@ import httpx
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
-from .pcs4_contract import CONFIRMATIONS, MARKER, STEPS as _STEPS, REPORT_KEYS as _REPORT_KEYS
+from .pcs4_contract import (
+    CONFIRMATIONS, MARKER, STEPS as _STEPS, REPORT_KEYS as _REPORT_KEYS,
+    SCHEMA19_STEPS, SCHEMA19_ACTIONS, SCHEMA19_REPORT_KEYS, SCHEMA19_ERROR_CODES,
+)
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
@@ -51,6 +54,12 @@ def _report_window(started, concluded):
 
 
 def _safe_report(raw):
+    if isinstance(raw, dict) and raw.get("action") in SCHEMA19_ACTIONS:
+        if raw.get("status") == "error":
+            if raw.get("reason") not in SCHEMA19_ERROR_CODES:
+                raise ValueError("invalid v19 failure")
+            return _state("error", reason=raw["reason"], next_step="schema19_status")
+        return _safe_schema19(raw)
     if not isinstance(raw, dict) or raw.get("status") != "ok":
         raise ValueError("invalid report")
     completed = raw.get("completed")
@@ -95,8 +104,97 @@ def _safe_report(raw):
              "next": _STEPS[len(completed)] if len(completed) < len(_STEPS) else None}
     if action == "review_restore":
         state["review_outcome"] = outcome
+    if completed == list(_STEPS):
+        state["next"] = "schema19_prepare"
     return state
 
+
+
+def _safe_schema19(raw):
+    if raw.get("status") != "ok" or raw.get("completed") != list(_STEPS):
+        raise ValueError("invalid v18 prefix")
+    base = _safe_report({**raw, "action": "restart"})
+    original = base["reports"]["backup"]
+    if (original["schema_version"] != 18 or any(
+        base["reports"][step].get(key) != original[key]
+        for step in ("verify", "restore") for key in ("schema_version", "tables", "rows", "assets")
+    ) or base["reports"]["restart"].get("schema_version") != 18):
+        raise ValueError("invalid v18 evidence")
+    drill = raw.get("schema19")
+    if not isinstance(drill, dict):
+        raise ValueError("invalid v19 report")
+    completed = drill.get("completed")
+    status = drill.get("status")
+    failed = drill.get("failed_action")
+    outcome = drill.get("review_outcome")
+    reason = drill.get("reason")
+    if reason is not None and (status != "error" or reason not in SCHEMA19_ERROR_CODES):
+        raise ValueError("invalid v19 reason")
+    if (not isinstance(completed, list) or completed != list(SCHEMA19_STEPS[:len(completed)])
+            or status not in {"idle", "ok", "error"}
+            or (status == "idle" and completed)
+            or (status == "error" and failed not in SCHEMA19_ACTIONS)
+            or (status != "error" and failed is not None)):
+        raise ValueError("invalid v19 progression")
+    action = raw["action"]
+    if action not in {"schema19_status", "schema19_review_migration"}:
+        if status == "ok" and (not completed or action != completed[-1]):
+            raise ValueError("invalid v19 action")
+    if outcome not in {None, "v18_exact", "exact"}:
+        raise ValueError("invalid v19 review")
+    if outcome == "v18_exact" and completed != ["schema19_prepare"]:
+        raise ValueError("invalid v19 review")
+    if outcome == "exact" and completed != ["schema19_prepare", "schema19_migrate"]:
+        raise ValueError("invalid v19 review")
+    reports = {}
+    for step in completed:
+        item = drill.get("reports", {}).get(step)
+        if not isinstance(item, dict) or item.get("status") != "ok":
+            raise ValueError("missing v19 evidence")
+        safe = {"status": "ok"}
+        for key in SCHEMA19_REPORT_KEYS - {"rank_equal", "hit_counts", "migration_history_preserved"}:
+            value = item.get(key)
+            if type(value) is int and 0 <= value <= 10**12:
+                safe[key] = value
+        for key in ("rank_equal", "migration_history_preserved"):
+            if type(item.get(key)) is bool:
+                safe[key] = item[key]
+        counts = item.get("hit_counts")
+        if isinstance(counts, list) and len(counts) == 5 and all(type(n) is int and 0 <= n <= 50 for n in counts):
+            safe["hit_counts"] = counts
+        if safe.get("schema_version") != 19 or safe.get("tables") != original["tables"] + 3:
+            raise ValueError("v19 schema mismatch")
+        if step != "schema19_restart" and (safe.get("rows") != original["rows"] + 1 or safe.get("assets") != original["assets"]):
+            raise ValueError("v19 rows mismatch")
+        if step == "schema19_prepare" and (
+            safe.get("source_schema_version") != 18 or safe.get("old_tables") != original["tables"]
+            or safe.get("preserved_tables") != original["tables"] - 1
+            or safe.get("new_tables") != 3 or safe.get("migration_history_preserved") is not True
+            or "relationship_sequence_delta" not in safe
+        ):
+            raise ValueError("v19 upgrade mismatch")
+        if step != "schema19_prepare" and safe.get("equal_tables") != safe["tables"]:
+            raise ValueError("v19 restore mismatch")
+        if step == "schema19_restart" and (
+            safe.get("boots") != 2 or safe.get("query_count") != 5
+            or safe.get("memory_tables_equal") != 4 or safe.get("episode_work_tables_equal") != 3
+            or safe.get("rank_equal") is not True or not any(safe.get("hit_counts", []))
+        ):
+            raise ValueError("v19 restart mismatch")
+        reports[step] = safe
+    next_step = SCHEMA19_STEPS[len(completed)] if len(completed) < len(SCHEMA19_STEPS) else None
+    if status == "error":
+        if failed == "schema19_prepare" and not completed:
+            next_step = "schema19_prepare"
+        elif failed in {"schema19_migrate", "schema19_review_migration"} and completed == ["schema19_prepare"]:
+            next_step = "schema19_review_migration"
+        else:
+            next_step = None
+    return {"status": "error" if status == "error" else "ok",
+            "reason": (reason or "SCHEMA19_REVIEW_REQUIRED") if status == "error" else None,
+            "completed": list(_STEPS), "reports": {**base["reports"], **reports},
+            "next": next_step, "schema19": {"status": status, "completed": completed},
+            "review_outcome": outcome}
 
 def _state(status, *, reason=None, next_step=None):
     return {"status": status, "reason": reason, "completed": [], "reports": {}, "next": next_step}
@@ -155,8 +253,9 @@ class NorthflankRecovery:
         if not _RUN_ID.fullmatch(run_id):
             raise HTTPException(503, "RECOVERY_JOB_STATUS_INVALID")
         detail = self._request("GET", "/runs/" + quote(run_id, safe=""))
-        if detail.get("status") != "SUCCESS" or detail.get("concluded") is not True:
+        if detail.get("concluded") is not True:
             return _state("error", reason="JOB_FAILED_REVIEW_REQUIRED", next_step="review_restore")
+        failed_run = detail.get("status") != "SUCCESS"
         if not detail.get("startedAt") or not detail.get("concludedAt"):
             return _state("blocked", reason="JOB_REPORT_UNAVAILABLE")
         try:
@@ -181,13 +280,19 @@ class NorthflankRecovery:
             if payload is None:
                 continue
             try:
-                report = _safe_report(json.loads(payload))
+                raw = json.loads(payload)
+                if failed_run and (not isinstance(raw, dict) or raw.get("action") not in SCHEMA19_ACTIONS):
+                    continue
+                report = _safe_report(raw)
+                if failed_run and report["status"] != "error":
+                    continue
             except (ValueError, TypeError, AttributeError):
                 return _state("blocked", reason="JOB_REPORT_INVALID")
             if report not in found:
                 found.append(report)
         if not found:
-            return _state("blocked", reason="JOB_REPORT_UNAVAILABLE")
+            return (_state("error", reason="JOB_FAILED_REVIEW_REQUIRED", next_step="review_restore")
+                    if failed_run else _state("blocked", reason="JOB_REPORT_UNAVAILABLE"))
         if len(found) != 1:
             return _state("blocked", reason="JOB_REPORT_INVALID")
         return found[0]
@@ -201,7 +306,11 @@ class NorthflankRecovery:
             raise HTTPException(400, "RECOVERY_CONFIRMATION_REQUIRED")
         with self.lock:
             state = self._status()
-            if state["next"] != action:
+            if state["next"] != action and not (
+                action == "schema19_status" and (state["status"] in {"error", "blocked"}
+                    or (state["status"] == "ok" and state["completed"] == list(_STEPS)))
+                and not self.uncertain
+            ):
                 raise HTTPException(409, "RECOVERY_STEP_BLOCKED")
             try:
                 data = self._request("POST", "/runs", json={

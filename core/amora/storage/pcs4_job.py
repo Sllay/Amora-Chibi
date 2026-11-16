@@ -7,12 +7,15 @@ from pathlib import Path
 import time
 
 from .pcs4_web import RecoveryPanel, _mounted
-from .pcs4_contract import CONFIRMATIONS, MARKER, STEPS as _STEPS
+from .pcs4_contract import CONFIRMATIONS, MARKER, STEPS as _STEPS, SCHEMA19_ACTIONS, SCHEMA19_ERROR_CODES
+from .schema19_operator import run_schema19
 from .remote import LibSQLBackend
 
 
 
 def run(panel, action):
+    if action in SCHEMA19_ACTIONS:
+        return run_schema19(panel, action)
     if action == "review_restore":
         return panel.review_restore()
     if action not in _STEPS:
@@ -39,9 +42,18 @@ def main():
         result = run(panel, action)
         result["action"] = action
         print(MARKER + json.dumps(result, separators=(",", ":")), flush=True)
+        if action in SCHEMA19_ACTIONS:
+            return 0 if result["schema19"]["status"] in {"ok", "idle"} else 1
         return 0 if result["status"] == "ok" and (action in result["completed"] or action == "review_restore") else 1
     except Exception as exc:
         reason = "JOB_FAILED_REVIEW_REQUIRED"
+        if action in SCHEMA19_ACTIONS:
+            reason = (str(exc) if type(exc) is ValueError and str(exc) in SCHEMA19_ERROR_CODES
+                      else "SCHEMA19_CONFIGURATION_REQUIRED" if isinstance(exc, KeyError)
+                      else "SCHEMA19_REVIEW_REQUIRED")
+            print(MARKER + json.dumps({"status": "error", "action": action, "reason": reason},
+                                      separators=(",", ":")), flush=True)
+            return 1
         if action == "review_restore" and isinstance(exc, ValueError) and exc.args and exc.args[0] in {
             "PCS4C_REVIEW_STATE", "PCS4C_REVIEW_DESTINATION_CHANGED",
             "PCS4C_DESTINATION_IS_SOURCE", "PCS4C_SCHEMA_MISMATCH",
