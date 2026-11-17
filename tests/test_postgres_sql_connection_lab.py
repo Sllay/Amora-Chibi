@@ -165,7 +165,7 @@ def test_memory_reads_allowed_but_writes_require_atomic_postings_path(pair):
     assert row["id"] == "m1"
     assert row[1] == "coração da floresta"
     assert dict(row)["owner_entity_id"] == "BK"
-    assert db.execute(COUNT_ACTIVE).fetchone()[0] == 1
+    assert db.execute(COUNT_ACTIVE, ("BK",)).fetchone()[0] == 1
     assert db.execute(FETCH_ALLOWED, ("m1", "OTHER")).fetchone() is None
     assert raw.execute("""
         SELECT COUNT(*) FROM amora_pg_v18_lab.fts_term_postings
