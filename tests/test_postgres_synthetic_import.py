@@ -136,3 +136,43 @@ def test_fails_closed_before_any_pg_sql_with_remote_destination(sqlite_source):
             raise AssertionError("Never execute SQL on remote PostgreSQL")
     with pytest.raises(ValueError, match="POSTGRES_LAB_LOCAL_DB_REQUIRED"):
         importer.import_synthetic_v18(sqlite_source, Remote())
+
+
+def test_invalid_fts_foreign_key_rolls_back_entire_import(pg, sqlite_source):
+    psycopg = pytest.importorskip("psycopg")
+    # FTS5 has no relational FK in SQLite. A stale reference must NOT be
+    # imported as a partially committed PostgreSQL memory graph.
+    sqlite_source.execute("""
+        INSERT INTO memory_fts(memory_id,content,tags)
+        VALUES ('orphan-fts','orphan synthetic text','test')
+    """)
+    sqlite_source.commit()
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        importer.import_synthetic_v18(sqlite_source, pg)
+    assert pg.execute("""
+        SELECT COUNT(*) FROM amora_pg_v18_lab.memory_records
+    """).fetchone() == (0,)
+    assert pg.execute("""
+        SELECT COUNT(*) FROM amora_pg_v18_lab.entities
+    """).fetchone() == (0,)
+    assert pg.execute("""
+        SELECT COUNT(*) FROM amora_pg_v18_lab.memory_search
+    """).fetchone() == (0,)
+
+
+def test_batches_and_identity_sequence_preserved(pg, sqlite_source):
+    sqlite_source.executemany(
+        "INSERT INTO memory_tags(memory_id,tag) VALUES ('mem-1',?)",
+        [(f"tag-{i:03d}",) for i in range(250)],
+    )
+    sqlite_source.commit()
+    report = importer.import_synthetic_v18(sqlite_source, pg)
+    assert report["typed_row_parity"] is True
+    assert pg.execute("""
+        SELECT COUNT(*) FROM amora_pg_v18_lab.memory_tags
+    """).fetchone() == (251,)
+    # The relational SQLite autoincrement high-water mark must survive.
+    next_id = pg.execute("""
+        SELECT nextval(pg_get_serial_sequence('amora_pg_v18_lab.relationships', 'id'))
+    """).fetchone()[0]
+    assert next_id == 2
