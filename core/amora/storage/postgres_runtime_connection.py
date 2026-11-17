@@ -309,12 +309,12 @@ class PostgresRuntimeConnection:
             self._state_lock.release()
 
     def verify_prepared_schema(self, expected_version: int) -> None:
-        with self._state_lock:
-            """Verify an already-imported synthetic v18 schema; never apply DDL.
+        """Verify an already-imported synthetic v18 schema; never apply DDL.
 
-            This is an infrastructure guard. It does not certify SQL/ranking
-            parity or permit serving against real Aiven records.
-            """
+        This is an infrastructure guard. It does not certify SQL/ranking
+        parity or permit serving against real Aiven records.
+        """
+        with self._state_lock:
             self._ensure_ready()
             if expected_version != 18:
                 raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_TARGET_UNSUPPORTED")
