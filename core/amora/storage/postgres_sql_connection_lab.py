@@ -34,38 +34,32 @@ FROM amora_pg_v18_lab.memory_records
 WHERE id=%s AND owner_entity_id=%s
   AND privacy_scope NOT IN ('AUTH','SECRET') AND archived_at IS NULL
 """.strip()
-INSERT_MEMORY = """
-INSERT INTO amora_pg_v18_lab.memory_records (
-  id,kind,content,provenance_kind,provenance_source,
-  provenance_confidence,actor_id,privacy_scope,owner_entity_id,
-  remote_processing_allowed,created_at,updated_at,importance,gate_score
+# Event writes do not have dependent BM25/index documents. Deliberately
+# omit any MemoryStore text/tag UPDATE from this low-level lab adapter:
+# those writes MUST go through the atomic posting maintenance path.
+INSERT_EVENT = """
+INSERT INTO amora_pg_v18_lab.events (
+  id,schema_version,event_type,timestamp,source,actor,confidence,
+  importance,priority,payload_json,privacy_scope,dedupe_key
 ) VALUES (
-  %s,'semantic',%s,'user_assertion','synthetic:connection-lab',
-  1.0,%s,'PERSONAL',%s,0,%s,%s,0.8,0.8
-) ON CONFLICT (id) DO NOTHING
+  %s,1,%s,%s,'synthetic:connection-lab',%s,1.0,
+  0.5,0,%s,'PERSONAL',%s
+) ON CONFLICT (dedupe_key) DO NOTHING
 """.strip()
-UPDATE_CAS = """
-UPDATE amora_pg_v18_lab.memory_records
-SET content=%s, updated_at=%s
-WHERE id=%s AND owner_entity_id=%s AND updated_at=%s
-RETURNING id
+FETCH_EVENT = """
+SELECT id,event_type,timestamp,actor
+FROM amora_pg_v18_lab.events
+WHERE id=%s AND actor=%s
+  AND privacy_scope NOT IN ('AUTH','SECRET')
 """.strip()
-INSERT_TAG = """
-INSERT INTO amora_pg_v18_lab.memory_tags(memory_id,tag) VALUES (%s,%s)
-""".strip()
-SELECT_TAGS = """
-SELECT tag FROM amora_pg_v18_lab.memory_tags
-WHERE memory_id=%s ORDER BY tag LIMIT 100
-""".strip()
-DELETE_TAGS = """
-DELETE FROM amora_pg_v18_lab.memory_tags WHERE memory_id=%s
+COUNT_EVENTS = """
+SELECT COUNT(*) AS total FROM amora_pg_v18_lab.events
+WHERE actor=%s AND privacy_scope NOT IN ('AUTH','SECRET')
 """.strip()
 
-_ALLOWLIST = frozenset((
-    COUNT_ACTIVE, FETCH_ALLOWED, INSERT_MEMORY, UPDATE_CAS,
-    INSERT_TAG, SELECT_TAGS, DELETE_TAGS,
-))
-_BATCH_ALLOWLIST = frozenset((INSERT_TAG,))
+_ALLOWLIST = frozenset((COUNT_ACTIVE, FETCH_ALLOWED,
+                        INSERT_EVENT, FETCH_EVENT, COUNT_EVENTS))
+_BATCH_ALLOWLIST = frozenset((INSERT_EVENT,))
 # This list is deliberately small and explicit; no SQL parsing or regex-based
 # rewriting can expand the permissions.
 _MAX_RESULT_ROWS = 1000
