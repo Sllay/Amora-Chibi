@@ -50,7 +50,7 @@ class PostgresTargetPolicy:
                 or not isinstance(self.schema, str)
                 or re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", self.schema) is None
                 or type(self.port) is not int or not 1 <= self.port <= 65535
-                or type(self.server_major) is not int or self.server_major < 12
+                or type(self.server_major) is not int or self.server_major != 18
                 or type(self.require_tls) is not bool):
             raise ValueError("PG_RUNTIME_INVALID_TARGET")
         if self.host not in {"127.0.0.1", "::1", "localhost"} and not self.require_tls:
@@ -176,6 +176,8 @@ class PostgresRuntimeConnection:
         *, target: PostgresTargetPolicy | None = None,
         on_close: Callable[[], None] | None = None,
     ) -> None:
+        if target is not None and not isinstance(target, PostgresTargetPolicy):
+            raise PostgresRuntimeError("PG_RUNTIME_INVALID_TARGET_POLICY")
         self._target = target or PostgresTargetPolicy()
         self._target.verify(raw)
         if getattr(raw, "closed", True) or getattr(raw, "autocommit", None) is not True:
@@ -408,6 +410,8 @@ class PostgresBackendCandidate:
         )
         if type(max_connections) is not int or not 1 <= max_connections <= 16:
             raise PostgresRuntimeError("PG_RUNTIME_INVALID_CONNECTION_BUDGET")
+        if target is not None and not isinstance(target, PostgresTargetPolicy):
+            raise PostgresRuntimeError("PG_RUNTIME_INVALID_TARGET_POLICY")
         self._factory = connection_factory
         self._target = target or PostgresTargetPolicy()
         self._statements = _infra_sql(self._target.schema)
