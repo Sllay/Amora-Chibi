@@ -90,6 +90,19 @@ class ReviewedStatement:
             raise ValueError("PG_RUNTIME_INVALID_STATEMENT_LIMIT")
 
 
+# Schema-qualified translations for the two Core bootstrap metadata reads.
+# Every domain SQL statement remains a separate reviewed Run 2 mapping.
+_INFRA_SQL: dict[str, ReviewedStatement] = {
+    "SELECT version FROM schema_migrations": ReviewedStatement(
+        "SELECT version FROM amora_pg_v18_lab.schema_migrations", 0, 32,
+    ),
+    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations": ReviewedStatement(
+        "SELECT COALESCE(MAX(version), 0) FROM "
+        "amora_pg_v18_lab.schema_migrations", 0, 1,
+    ),
+}
+
+
 @dataclass(frozen=True)
 class PostgresRow(Mapping[str, Any]):
     """Supports SQLite-style row[0], row['name'] and dict(row)."""
@@ -270,6 +283,43 @@ class PostgresRuntimeConnection:
             finally:
                 raise PostgresCommitUnknown("PG_RUNTIME_COMMIT_OR_ROLLBACK_UNKNOWN") from exc
 
+    def verify_prepared_schema(self, expected_version: int) -> None:
+        """Verify an already-imported synthetic v18 schema; never apply DDL.
+
+        This is an infrastructure guard. It does not certify SQL/ranking
+        parity or permit serving against real Aiven records.
+        """
+        self._ensure_ready()
+        if expected_version != 18:
+            raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_TARGET_UNSUPPORTED")
+        from .postgres_v18_manifest import build_manifest
+
+        manifest = build_manifest()
+        required = {
+            table["name"] for table in manifest["tables"]
+            if table["kind"] == "ordinary"
+        } | {"memory_search"}
+        try:
+            with self._raw.cursor() as cursor:
+                cursor.execute(
+                    "SELECT tablename FROM pg_catalog.pg_tables "
+                    "WHERE schemaname=%s", ("amora_pg_v18_lab",),
+                )
+                actual = {row[0] for row in cursor.fetchall()}
+                if not required.issubset(actual):
+                    raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_TABLES_MISSING")
+                cursor.execute(
+                    "SELECT version FROM amora_pg_v18_lab.schema_migrations "
+                    "ORDER BY version"
+                )
+                versions = tuple(row[0] for row in cursor.fetchall())
+            if versions != tuple(range(1, expected_version + 1)):
+                raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_VERSION_MISMATCH")
+        except PostgresRuntimeError:
+            raise
+        except Exception as exc:
+            raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_NOT_PREPARED") from exc
+
     def close(self) -> None:
         if not self._closed:
             self._closed = True
@@ -308,7 +358,11 @@ class PostgresBackendCandidate:
             raise PostgresRuntimeError("PG_RUNTIME_INVALID_CONNECTION_BUDGET")
         self._factory = connection_factory
         self._target = target or PostgresTargetPolicy()
-        self._statements = dict(statements)
+        self._statements = dict(_INFRA_SQL)
+        for sqlite_sql, statement in statements.items():
+            if sqlite_sql in self._statements and self._statements[sqlite_sql] != statement:
+                raise PostgresRuntimeError("PG_RUNTIME_INFRA_SQL_CONFLICT")
+            self._statements[sqlite_sql] = statement
         self._max_connections = max_connections
         self._opened = 0
         self._lock = Lock()
