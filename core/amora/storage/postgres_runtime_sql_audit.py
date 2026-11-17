@@ -108,11 +108,20 @@ def scan_source(source: str, *, path: str) -> list[QuerySite]:
             sql_index = 2
         else:
             continue
-        if len(node.args) <= sql_index:
-            # Indirect keyword/dynamic SQL is not certified.
+        # Audit positional and keyword SQL. Previously calls such as
+        # conn.execute(sql="SELECT ...") were classified only as dynamic,
+        # hiding SQLite-specific syntax and reducing migration coverage.
+        sql_node = node.args[sql_index] if len(node.args) > sql_index else None
+        if sql_node is None:
+            keyword_names = ("sql", "statement", "query")
+            for keyword in node.keywords:
+                if keyword.arg in keyword_names:
+                    sql_node = keyword.value
+                    break
+        if sql_node is None:
             result.append(QuerySite(path, node.lineno, method, "dynamic", ("unresolved_sql",), None))
             continue
-        sql = _static_sql(node.args[sql_index], constants)
+        sql = _static_sql(sql_node, constants)
         if sql is None:
             result.append(QuerySite(path, node.lineno, method, "dynamic", ("unresolved_sql",), None))
             continue
