@@ -230,3 +230,44 @@ def test_no_remote_connection_even_for_ddl():
             raise AssertionError("no remote transaction")
     with pytest.raises(ValueError, match="POSTGRES_LAB_LOCAL_DB_REQUIRED"):
         bm25.install_bm25_lab(Remote())
+
+
+def test_stale_postgres_search_document_fails_before_posting_write(pair):
+    sqlite, pg = pair
+    memory(sqlite, "original", "coração da floresta")
+    sqlite.commit()
+    importer.import_synthetic_v18(sqlite, pg)
+    bm25.install_bm25_lab(pg)
+    pg.execute("""
+        UPDATE amora_pg_v18_lab.memory_search SET content='tampered synthetic'
+        WHERE memory_id='original'
+    """)
+    with pytest.raises(bm25.BM25LabError,
+                       match="BM25_SOURCE_TARGET_DOCUMENT_DRIFT"):
+        bm25.import_synthetic_fts5_vocabulary(sqlite, pg)
+    assert pg.execute("""
+        SELECT COUNT(*) FROM amora_pg_v18_lab.fts_doc_tokens
+    """).fetchone() == (0,)
+    assert pg.execute("""
+        SELECT COUNT(*) FROM amora_pg_v18_lab.fts_term_postings
+    """).fetchone() == (0,)
+
+
+def test_bm25_global_stats_and_top_150_scoped_before_limit(pair):
+    sqlite, pg = pair
+    for index in range(160):
+        memory(sqlite, f"bk-{index:03d}", f"café coelho {index}", owner="BK")
+        memory(sqlite, f"other-{index:03d}", f"café coelho {index}", owner="OTHER")
+    sqlite.commit()
+    importer.import_synthetic_v18(sqlite, pg)
+    bm25.install_bm25_lab(pg)
+    report = bm25.import_synthetic_fts5_vocabulary(sqlite, pg)
+    assert report["documents"] == 320
+    assert report["matching_token_counts"] is True
+    _certify_numeric(sqlite, pg, "cafe coelho", owner="BK")
+    result = bm25.bm25_ranked_scores(
+        pg, query="cafe coelho", owner_id="BK", now=NOW
+    )
+    assert len(result) == 150
+    assert all(ident.startswith("bk-") for ident, _ in result)
+    _certify_numeric(sqlite, pg, "café", owner="OTHER")
