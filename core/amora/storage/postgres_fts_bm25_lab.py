@@ -108,6 +108,20 @@ def import_synthetic_fts5_vocabulary(source: sqlite3.Connection, conn) -> dict:
     """).fetchone()[0]
     if count_pg != n_source:
         raise BM25LabError("BM25_SOURCE_TARGET_DOCUMENT_COUNT_MISMATCH")
+    # Never build a posting index against silently changed source content.
+    # The comparison streams complete synthetic rows, reports no personal
+    # text or IDs, and happens BEFORE any PostgreSQL posting writes.
+    source_rows = source.execute("""
+        SELECT memory_id,content,tags FROM memory_fts ORDER BY memory_id
+    """)
+    target_rows = conn.execute("""
+        SELECT memory_id,content,tags
+        FROM amora_pg_v18_lab.memory_search ORDER BY memory_id
+    """)
+    from itertools import zip_longest
+    for source_row, target_row in zip_longest(source_rows, target_rows):
+        if source_row is None or target_row is None or tuple(source_row) != tuple(target_row):
+            raise BM25LabError("BM25_SOURCE_TARGET_DOCUMENT_DRIFT")
     # SQLite resolves fts5vocab's target within its own schema; therefore
     # create the read-only vocabulary virtual table in main, but only on an
     # already verified in-memory synthetic source (never a real backup).
