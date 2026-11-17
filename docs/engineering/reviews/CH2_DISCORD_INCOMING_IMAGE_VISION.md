@@ -77,3 +77,5 @@ Teste real após deploy do PR: a mesma foto na DM com consentimento ativo; verif
 3. Se houver `IMAGE_TRANSPORT_RECOVERY reason=CORE_HTTP_413`, o gateway rejeitou o payload; confirmar retry pequeno e `CORE_INBOUND_OK`.
 4. No Core, procurar `INCOMING_IMAGE_ANALYZED` e comparar a resposta com a imagem. Se houver `INCOMING_IMAGE_NOT_ANALYZED`, buscar `incoming_image_analysis_failed` (modelo) ou `incoming_image_unavailable` (ingestão).
 5. Nunca publicar a foto privada ou assinaturas CDN em issues/logs; somente códigos e tempos. Não afirmar sucesso no Discord antes dessa prova.
+
+**Ajuste de desempenho CH2.3:** a conversão WebP por libvips usa `effort=2` (o padrão é 4), preserva os fatores Q previstos e tem orçamento limitado de **12 segundos totais** e **6 segundos por preset**, em vez de 8s/4s no CH2.2. O objetivo é reduzir timeouts em CPUs menores com imagens de aproximadamente 10 MiB; o teste físico ainda é obrigatório. O modelo social continua separado da preparação de imagem.
