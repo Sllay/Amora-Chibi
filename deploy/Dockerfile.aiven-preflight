@@ -1,0 +1,26 @@
+# Operator-only Aiven connectivity check; NOT the Amora Core runtime image.
+# Build with: docker build -f deploy/Dockerfile.aiven-preflight -t amora-aiven-preflight .
+# Run only as an on-demand Northflank Job, never as a continuously running service.
+ARG PYTHON_BASE=python:3.12.15-alpine3.24@sha256:b658b05ce9c4eb97ec6fc19424818a1f31993659c2b505a532f470e83807815d
+FROM ${PYTHON_BASE} AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /opt/amora
+
+# The real Core Dockerfile deliberately omits psycopg. This tiny, separate
+# image includes the client only for the two read-only metadata SHOW queries.
+# Pinned 3.3.9 wheels contain libpq for musllinux/Alpine; no compilation.
+RUN --mount=type=secret,id=proxy_ca \
+    set -eu; \
+    PIP_CERT="${PIP_CERT:-/etc/ssl/certs/ca-certificates.crt}"; \
+    if [ -f /run/secrets/proxy_ca ]; then PIP_CERT=/run/secrets/proxy_ca; fi; \
+    export PIP_CERT; \
+    python -m pip install --only-binary=:all: --no-cache-dir 'psycopg[binary]==3.3.9' && \
+    python -m pip uninstall -y pip && \
+    python -c 'import psycopg; assert psycopg.__version__ == "3.3.9"'
+
+RUN addgroup -g 10001 amora && adduser -D -u 10001 -G amora amora
+COPY --chmod=0444 core/amora/storage/aiven_preflight.py /opt/amora/aiven_preflight.py
+
+USER 10001:10001
+CMD ["python", "/opt/amora/aiven_preflight.py"]
