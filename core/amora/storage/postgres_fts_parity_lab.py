@@ -36,12 +36,14 @@ def sqlite_ranked_fts_ids(source: sqlite3.Connection, *, query: str,
 
     Candidate filters are applied BEFORE the 150-row FTS cap.
     """
+    if any(row[2] for row in source.execute("PRAGMA database_list")):
+        raise SearchParityError("FTS_SOURCE_MUST_BE_IN_MEMORY")
     terms = _search_terms(query)
     expression = " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
     return [row[0] for row in source.execute(
         """
-        SELECT m.id FROM memory_fts AS f
-        JOIN memory_records AS m ON m.id=f.memory_id
+        SELECT m.id FROM memory_fts
+        JOIN memory_records AS m ON m.id=memory_fts.memory_id
         WHERE memory_fts MATCH ?
           AND m.owner_entity_id=?
           AND m.privacy_scope NOT IN ('AUTH','SECRET')
@@ -49,7 +51,7 @@ def sqlite_ranked_fts_ids(source: sqlite3.Connection, *, query: str,
           AND (m.valid_until IS NULL OR m.valid_until>=?)
           AND (?=0 OR m.remote_processing_allowed=1)
         ORDER BY bm25(memory_fts),m.id LIMIT 150
-        """.replace("memory_fts AS f", "memory_fts"),
+        """,
         (expression, owner_id, now, int(remote_only)),
     )]
 
