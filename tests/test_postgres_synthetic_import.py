@@ -73,6 +73,10 @@ def sqlite_source():
             INSERT INTO memory_fts(memory_id,content,tags)
             VALUES ('mem-1','coelho da floresta coelho','floresta')
         """)
+        con.execute(
+            "INSERT INTO avatar_asset_blobs(file_name,body) VALUES (?,?)",
+            ("synthetic-test-asset.bin", b"\x00\xff\x01\x02synthetic"),
+        )
         con.commit()
         yield con
 
@@ -103,6 +107,10 @@ def test_exact_synthetic_49_table_import_with_fts_and_identity(pg, sqlite_source
     assert pg.execute("""
         SELECT COUNT(*) FROM amora_pg_v18_lab.relationships
     """).fetchone() == (1,)
+    assert pg.execute("""
+        SELECT body FROM amora_pg_v18_lab.avatar_asset_blobs
+        WHERE file_name='synthetic-test-asset.bin'
+    """).fetchone() == (b"\x00\xff\x01\x02synthetic",)
 
 
 def test_nonempty_target_rejected_without_new_write(pg, sqlite_source):
