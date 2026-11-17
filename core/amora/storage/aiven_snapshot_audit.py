@@ -10,7 +10,6 @@ from contextlib import closing
 import json
 from pathlib import Path
 import re
-import sqlite3
 
 from .pcs4_recovery import _open, verify_snapshot
 
@@ -90,7 +89,7 @@ def audit(snapshot: Path, state_file: Path) -> dict[str, object]:
         }
     except SnapshotAuditError:
         raise
-    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, json.JSONDecodeError):
+    except Exception:
         raise SnapshotAuditError("PCS4C_AUDIT_FAILED") from None
 
 
