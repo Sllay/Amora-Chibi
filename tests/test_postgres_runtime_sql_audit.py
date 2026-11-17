@@ -125,3 +125,22 @@ def test_no_postgres_activation_while_core_dialect_unreviewed(monkeypatch):
     monkeypatch.setenv("AMORA_STORAGE_BACKEND", "postgres")
     with pytest.raises(ValueError, match="sqlite or libsql"):
         backend_from_environment()
+
+
+def test_keyword_sql_sites_are_audited_not_hidden_as_dynamic():
+    source = '''
+def example(conn, sql):
+    conn.execute(sql="SELECT id FROM memory_fts WHERE memory_fts MATCH ?")
+    conn.executemany(sql="INSERT OR IGNORE INTO tags(id) VALUES (?)", values=[])
+    conn.executescript(script="PRAGMA foreign_keys=ON")
+    conn.execute(sql=sql)
+    execute_atomic_statement(backend=conn, connection=conn, sql="UPDATE events SET id=?")
+'''
+    found = audit.scan_source(source, path="keyword.py")
+    assert len(found) == 5
+    assert "fts5_or_bm25" in found[0].flags
+    assert "sqlite_conflict" in found[1].flags
+    # executescript uses a different keyword name and must remain fail-closed.
+    assert found[2].classification == "dynamic"
+    assert found[3].classification == "dynamic"
+    assert "qmark_placeholder" in found[4].flags
