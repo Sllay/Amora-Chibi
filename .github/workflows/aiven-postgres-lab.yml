@@ -1,0 +1,58 @@
+name: Aiven PostgreSQL 18 synthetic memory lab
+
+on:
+  pull_request:
+    paths:
+      - 'core/amora/storage/postgres_memory_lab.py'
+      - 'tests/test_postgres_memory_lab_contract.py'
+      - 'tests/test_postgres_memory_lab_integration.py'
+      - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
+      - '.github/workflows/aiven-postgres-lab.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'core/amora/storage/postgres_memory_lab.py'
+      - 'tests/test_postgres_memory_lab_contract.py'
+      - 'tests/test_postgres_memory_lab_integration.py'
+      - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
+      - '.github/workflows/aiven-postgres-lab.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: amora_pg_synthetic
+          POSTGRES_USER: amora_ci
+          POSTGRES_PASSWORD: synthetic_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U amora_ci -d amora_pg_synthetic"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install synthetic-only test dependencies
+        run: |
+          python -m pip install -e '.[dev,aiven-preflight]'
+          python -m pip install --only-binary=:all: 'psycopg[binary]==3.3.9'
+      - name: Run fail-closed unit tests and real PostgreSQL 18 integration
+        env:
+          AMORA_PG_SYNTHETIC_LAB: '1'
+        run: |
+          python -m pytest -q \
+            tests/test_postgres_memory_lab_contract.py \
+            tests/test_postgres_memory_lab_integration.py
