@@ -123,7 +123,7 @@ def import_synthetic_fts5_vocabulary(source: sqlite3.Connection, conn) -> dict:
     """)
     posting_rows = source.execute("""
         SELECT f.memory_id, v.term, COUNT(*)
-        FROM temp.amora_bm25_vocab AS v
+        FROM amora_bm25_vocab AS v
         JOIN memory_fts AS f ON f.rowid=v.doc
         GROUP BY f.memory_id,v.term ORDER BY f.memory_id,v.term
     """)
