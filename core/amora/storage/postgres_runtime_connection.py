@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+import re
 from threading import Lock, RLock, get_ident
 from typing import Any, Callable
 
@@ -36,6 +37,7 @@ class PostgresTargetPolicy:
 
     host: str = "127.0.0.1"
     database: str = "amora_pg_synthetic"
+    schema: str = "amora_pg_v18_lab"
     port: int = 5432
     server_major: int = 18
     require_tls: bool = False
@@ -45,6 +47,8 @@ class PostgresTargetPolicy:
                 or not self.host or any(char in self.host for char in "/@?# ")
                 or not isinstance(self.database, str)
                 or not self.database or any(char in self.database for char in "/@?# ")
+                or not isinstance(self.schema, str)
+                or re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", self.schema) is None
                 or type(self.port) is not int or not 1 <= self.port <= 65535
                 or type(self.server_major) is not int or self.server_major < 12
                 or type(self.require_tls) is not bool):
@@ -94,17 +98,18 @@ class ReviewedStatement:
             raise ValueError("PG_RUNTIME_INVALID_STATEMENT_LIMIT")
 
 
-# Schema-qualified translations for the two Core bootstrap metadata reads.
-# Every domain SQL statement remains a separate reviewed Run 2 mapping.
-_INFRA_SQL: dict[str, ReviewedStatement] = {
-    "SELECT version FROM schema_migrations": ReviewedStatement(
-        "SELECT version FROM amora_pg_v18_lab.schema_migrations", 0, 32,
-    ),
-    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations": ReviewedStatement(
-        "SELECT COALESCE(MAX(version), 0) FROM "
-        "amora_pg_v18_lab.schema_migrations", 0, 1,
-    ),
-}
+# Schema-qualified translations for Core bootstrap metadata. Schema names
+# come only from the validated PostgresTargetPolicy identifier, never SQL input.
+def _infra_sql(schema: str) -> dict[str, ReviewedStatement]:
+    table = '"' + schema + '".schema_migrations'
+    return {
+        "SELECT version FROM schema_migrations": ReviewedStatement(
+            "SELECT version FROM " + table, 0, 32,
+        ),
+        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations": ReviewedStatement(
+            "SELECT COALESCE(MAX(version), 0) FROM " + table, 0, 1,
+        ),
+    }
 
 
 @dataclass(frozen=True)
@@ -326,6 +331,7 @@ class PostgresRuntimeConnection:
                 if table["kind"] == "ordinary"
             ]
             required = {table["name"] for table in ordinary} | {"memory_search"}
+            schema = self._target.schema
             expected_columns = {
                 table["name"]: tuple(column["name"] for column in table["columns"])
                 for table in ordinary
@@ -335,7 +341,7 @@ class PostgresRuntimeConnection:
                 with self._raw.cursor() as cursor:
                     cursor.execute(
                         "SELECT tablename FROM pg_catalog.pg_tables "
-                        "WHERE schemaname=%s", ("amora_pg_v18_lab",),
+                        "WHERE schemaname=%s", (schema,),
                     )
                     actual = {row[0] for row in cursor.fetchall()}
                     if not required.issubset(actual):
@@ -345,7 +351,7 @@ class PostgresRuntimeConnection:
                         "FROM information_schema.columns "
                         "WHERE table_schema=%s "
                         "ORDER BY table_name, ordinal_position",
-                        ("amora_pg_v18_lab",),
+                        (schema,),
                     )
                     actual_columns: dict[str, list[str]] = {}
                     for table_name, column_name in cursor.fetchall():
@@ -354,7 +360,7 @@ class PostgresRuntimeConnection:
                            for name, columns in expected_columns.items()):
                         raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_COLUMNS_MISMATCH")
                     cursor.execute(
-                        "SELECT version FROM amora_pg_v18_lab.schema_migrations "
+                        'SELECT version FROM "' + schema + '".schema_migrations '
                         "ORDER BY version"
                     )
                     versions = tuple(row[0] for row in cursor.fetchall())
@@ -404,7 +410,7 @@ class PostgresBackendCandidate:
             raise PostgresRuntimeError("PG_RUNTIME_INVALID_CONNECTION_BUDGET")
         self._factory = connection_factory
         self._target = target or PostgresTargetPolicy()
-        self._statements = dict(_INFRA_SQL)
+        self._statements = _infra_sql(self._target.schema)
         for sqlite_sql, statement in statements.items():
             if sqlite_sql in self._statements and self._statements[sqlite_sql] != statement:
                 raise PostgresRuntimeError("PG_RUNTIME_INFRA_SQL_CONFLICT")
