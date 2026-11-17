@@ -16,6 +16,9 @@ const SOURCE_EXTENSIONS = Object.freeze({
   'image/png': 'png',
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+  'image/avif': 'avif',
 });
 const PRESETS = Object.freeze([
   { size: 2560, quality: 92 },
