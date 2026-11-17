@@ -22,6 +22,11 @@ dev = [
   "pytest>=8.3,<10",
   "pytest-asyncio>=0.24,<2",
 ]
+# Optional and strictly out-of-band: does NOT select PostgreSQL as Core storage.
+# Used only by the standalone, read-only Aiven connectivity preflight.
+aiven-preflight = [
+  "psycopg[binary]>=3.2,<4",
+]
 
 [project.scripts]
 amora = "amora.__main__:main"
