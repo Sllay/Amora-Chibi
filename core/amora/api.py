@@ -19,6 +19,7 @@ from amora.security import SecurityMiddleware, SecuritySettings, token_role, iss
 
 from amora import __version__
 from amora.actions.routes import register_action_routes
+from amora.art.routes import register_art_routes
 from amora.app import AmoraCore
 from amora.audio import AudioSegment, SpeakerResult, SttCredentialsError, SttError, SttRateLimitedError
 from amora.autonomy.routes import register_autonomy_routes
@@ -243,6 +244,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
     register_emotion_routes(app, core, require_auth)
     register_autonomy_routes(app, core, require_auth)
     register_action_routes(app, core, require_auth)
+    register_art_routes(app, core, require_auth)
     register_conversation_routes(app, core, require_auth)
     register_cognition_routes(app, core, require_auth)
     register_avatar_routes(app, core, require_auth)
