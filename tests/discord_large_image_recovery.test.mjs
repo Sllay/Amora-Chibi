@@ -113,7 +113,7 @@ test('native small AVIF and HEIC are still converted to provider-safe WebP', asy
 test('unrecognized native image type propagates unavailable status instead of fake observation', async () => {
   const input = photo({ mime: 'image/gif', filename: 'animado.gif' });
   const worker = fakeWorker({ inbound: async (p) => {
-    assert.equal(p.incoming_image, undefined);
+    assert.equal(p.incoming_image, null);
     assert.equal(p.incoming_image_status, 'IMAGE_UNSUPPORTED_FORMAT');
     return { decision: { action: 'context_only' }, outbound: [] };
   } });
