@@ -370,6 +370,20 @@ class SecurityMiddleware:
                 maximum = 128 * 1024 * 1024
             elif path == "/v1/audio/transcribe" or path.startswith("/v1/avatar/assets/"):
                 maximum = 12 * 1024 * 1024
+            elif (
+                not self.worker
+                and path == "/v1/messaging/worker/inbound"
+                and scope["method"] == "POST"
+                and role == "messaging"
+            ):
+                # Discord can carry up to 4 MiB of *validated* image bytes
+                # encoded as Base64 (5.59 MiB of JSON text) plus a bounded
+                # inbound envelope. This is a strict, authenticated,
+                # path-and-method-specific exception. All other JSON routes
+                # retain their 256 KiB cap, including admin/browser requests
+                # to this endpoint. Auth and expensive/concurrency gates run
+                # before the body is read.
+                maximum = 6 * 1024 * 1024
             else:
                 maximum = 256 * 1024
             if path == "/v1/pairing/redeem" or self.worker:
