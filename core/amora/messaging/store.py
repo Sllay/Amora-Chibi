@@ -356,10 +356,14 @@ class MessagingStore:
             with trace_lock(self.database._lock):
                 ready = self.database._conn.execute(
                     """SELECT 1 FROM messaging_outbound_queue
-                       WHERE platform=? AND account_scope=? AND (
-                           status='queued' OR (status='claimed' AND claim_expires_at < ?))
+                       WHERE platform=? AND account_scope=? AND status='queued'
+                       UNION ALL
+                       SELECT 1 FROM messaging_outbound_queue
+                       WHERE platform=? AND account_scope=? AND status='claimed'
+                         AND claim_expires_at < ?
                        LIMIT 1""",
-                    (platform.value, account_scope, now.isoformat()),
+                    (platform.value, account_scope,
+                     platform.value, account_scope, now.isoformat()),
                 ).fetchone()
             if ready is None:
                 return ()
