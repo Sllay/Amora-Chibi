@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 export const MAX_VISION_WIRE_BYTES = 4 * 1024 * 1024;
-const TRANSFORM_BUDGET_MS = 8_000;
+const TRANSFORM_BUDGET_MS = 12_000;
 const SOURCE_EXTENSIONS = Object.freeze({
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -88,8 +88,8 @@ export async function transcodeOversizedImage(bytes, mime, {
         // itself is written at target, with no brackets in its actual path.
         await run([
           source, '--size', String(preset.size) + '>',
-          '--path', target + '[Q=' + preset.quality + ',strip]',
-        ], Math.min(4000, left));
+          '--path', target + '[Q=' + preset.quality + ',effort=2,strip]',
+        ], Math.min(6000, left));
         const info = await stat(target);
         if (!info.isFile() || !info.size) {
           throw new ImageTransformError('IMAGE_TRANSFORM_FAILED');
