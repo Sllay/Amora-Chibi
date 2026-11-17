@@ -92,7 +92,7 @@ class InboundImageContent(BaseModel):
 
     attachment_id: str = Field(min_length=1, max_length=256)
     content_mime: str = Field(min_length=6, max_length=64)
-    content_base64: str = Field(min_length=4, max_length=5_592_408)
+    content_base64: str = Field(min_length=4, max_length=26_666_668)
 
 
 class ExpressionSemanticProfile(BaseModel):
