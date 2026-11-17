@@ -41,9 +41,13 @@ class PostgresTargetPolicy:
     require_tls: bool = False
 
     def __post_init__(self) -> None:
-        if (not self.host or any(char in self.host for char in "/@?# ")
+        if (not isinstance(self.host, str)
+                or not self.host or any(char in self.host for char in "/@?# ")
+                or not isinstance(self.database, str)
                 or not self.database or any(char in self.database for char in "/@?# ")
-                or not 1 <= self.port <= 65535 or self.server_major < 12):
+                or type(self.port) is not int or not 1 <= self.port <= 65535
+                or type(self.server_major) is not int or self.server_major < 12
+                or type(self.require_tls) is not bool):
             raise ValueError("PG_RUNTIME_INVALID_TARGET")
         if self.host not in {"127.0.0.1", "::1", "localhost"} and not self.require_tls:
             raise ValueError("PG_RUNTIME_REMOTE_TLS_REQUIRED")
@@ -453,7 +457,7 @@ def make_psycopg_connection_factory(
     def connect() -> Any:
         try:
             import psycopg
-            raw = psycopg.connect(
+            connection_args = dict(
                 host=target.host,
                 port=target.port,
                 dbname=target.database,
@@ -461,10 +465,12 @@ def make_psycopg_connection_factory(
                 password=password,
                 connect_timeout=connect_timeout,
                 sslmode="verify-full" if target.require_tls else "disable",
-                sslrootcert=sslrootcert,
                 options="-c search_path=pg_catalog",
                 autocommit=True,
             )
+            if sslrootcert is not None:
+                connection_args["sslrootcert"] = sslrootcert
+            raw = psycopg.connect(**connection_args)
         except Exception:
             # libpq errors can contain hostnames, usernames or other sensitive
             # connection details. Keep the public exception code deterministic.
