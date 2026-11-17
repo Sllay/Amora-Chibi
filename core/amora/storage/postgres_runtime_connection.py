@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from threading import Lock
+from threading import Lock, RLock, get_ident
 from typing import Any, Callable
 
 
@@ -184,13 +184,16 @@ class PostgresRuntimeConnection:
         self._raw = raw
         self._statements = dict(statements)
         self._transactions: list[Any] = []
+        self._state_lock = RLock()
+        self._transaction_owner: int | None = None
         self._closed = False
         self._broken = False
         self._on_close = on_close
 
     @property
     def in_transaction(self) -> bool:
-        return bool(self._transactions)
+        with self._state_lock:
+            return bool(self._transactions)
 
     def _ensure_ready(self) -> None:
         if self._closed or self._broken or getattr(self._raw, "closed", True):
@@ -232,53 +235,63 @@ class PostgresRuntimeConnection:
         return PostgresResult(columns, rows, count)
 
     def execute(self, sql: str, parameters: Iterable[Any] = ()) -> PostgresResult:
-        self._ensure_ready()
-        statement = self._review(sql)
-        params = self._parameters(parameters, statement.parameter_count)
-        with self._raw.cursor() as cursor:
-            cursor.execute(statement.postgres_sql, params)
-            return self._materialize(cursor, statement.max_result_rows)
+        with self._state_lock:
+            self._ensure_ready()
+            statement = self._review(sql)
+            params = self._parameters(parameters, statement.parameter_count)
+            with self._raw.cursor() as cursor:
+                cursor.execute(statement.postgres_sql, params)
+                return self._materialize(cursor, statement.max_result_rows)
 
     def executemany(
         self, sql: str, values: Iterable[Iterable[Any]],
     ) -> int:
-        self._ensure_ready()
-        statement = self._review(sql)
-        if not statement.batch_allowed:
-            raise PostgresRuntimeError("PG_RUNTIME_BATCH_SQL_NOT_REVIEWED")
-        if not self.in_transaction:
-            raise PostgresRuntimeError("PG_RUNTIME_BATCH_REQUIRES_TRANSACTION")
-        if isinstance(values, (str, bytes, bytearray, dict)):
-            raise PostgresRuntimeError("PG_RUNTIME_BATCH_PARAMS_REQUIRED")
-        rows = []
-        for values_row in values:
-            if len(rows) >= 256:
-                raise PostgresRuntimeError("PG_RUNTIME_BATCH_LIMIT_EXCEEDED")
-            rows.append(self._parameters(values_row, statement.parameter_count))
-        with self._raw.cursor() as cursor:
-            cursor.executemany(statement.postgres_sql, rows)
-            return cursor.rowcount
+        with self._state_lock:
+            self._ensure_ready()
+            statement = self._review(sql)
+            if not statement.batch_allowed:
+                raise PostgresRuntimeError("PG_RUNTIME_BATCH_SQL_NOT_REVIEWED")
+            if not self.in_transaction:
+                raise PostgresRuntimeError("PG_RUNTIME_BATCH_REQUIRES_TRANSACTION")
+            if isinstance(values, (str, bytes, bytearray, dict)):
+                raise PostgresRuntimeError("PG_RUNTIME_BATCH_PARAMS_REQUIRED")
+            rows = []
+            for values_row in values:
+                if len(rows) >= 256:
+                    raise PostgresRuntimeError("PG_RUNTIME_BATCH_LIMIT_EXCEEDED")
+                rows.append(self._parameters(values_row, statement.parameter_count))
+            with self._raw.cursor() as cursor:
+                cursor.executemany(statement.postgres_sql, rows)
+                return cursor.rowcount
 
     def executescript(self, _script: str) -> None:
         raise PostgresRuntimeError("PG_RUNTIME_SQLITE_SCRIPT_UNSUPPORTED")
 
     def __enter__(self):
-        self._ensure_ready()
-        transaction = self._raw.transaction()
+        # Keep the reentrant lock for the full with-block. No other thread
+        # can write into a transaction owned by the current thread.
+        self._state_lock.acquire()
         try:
-            transaction.__enter__()
-        except BaseException:
-            self._broken = True
+            self._ensure_ready()
+            transaction = self._raw.transaction()
             try:
-                self.close()
-            except Exception:
-                pass
+                transaction.__enter__()
+            except BaseException:
+                self._broken = True
+                try:
+                    self.close()
+                except Exception:
+                    pass
+                raise
+            self._transactions.append(transaction)
+            self._transaction_owner = get_ident()
+            return self
+        except BaseException:
+            self._state_lock.release()
             raise
-        self._transactions.append(transaction)
-        return self
 
     def __exit__(self, kind, value, traceback):
-        if not self._transactions:
+        if not self._transactions or self._transaction_owner != get_ident():
             raise PostgresRuntimeError("PG_RUNTIME_TRANSACTION_NOT_OPEN")
         transaction = self._transactions.pop()
         try:
@@ -290,71 +303,77 @@ class PostgresRuntimeConnection:
             except Exception:
                 pass
             raise PostgresCommitUnknown("PG_RUNTIME_COMMIT_OR_ROLLBACK_UNKNOWN") from exc
+        finally:
+            if not self._transactions:
+                self._transaction_owner = None
+            self._state_lock.release()
 
     def verify_prepared_schema(self, expected_version: int) -> None:
-        """Verify an already-imported synthetic v18 schema; never apply DDL.
+        with self._state_lock:
+            """Verify an already-imported synthetic v18 schema; never apply DDL.
 
-        This is an infrastructure guard. It does not certify SQL/ranking
-        parity or permit serving against real Aiven records.
-        """
-        self._ensure_ready()
-        if expected_version != 18:
-            raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_TARGET_UNSUPPORTED")
-        from .postgres_v18_manifest import build_manifest
+            This is an infrastructure guard. It does not certify SQL/ranking
+            parity or permit serving against real Aiven records.
+            """
+            self._ensure_ready()
+            if expected_version != 18:
+                raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_TARGET_UNSUPPORTED")
+            from .postgres_v18_manifest import build_manifest
 
-        manifest = build_manifest()
-        ordinary = [
-            table for table in manifest["tables"]
-            if table["kind"] == "ordinary"
-        ]
-        required = {table["name"] for table in ordinary} | {"memory_search"}
-        expected_columns = {
-            table["name"]: tuple(column["name"] for column in table["columns"])
-            for table in ordinary
-        }
-        expected_columns["memory_search"] = ("memory_id", "content", "tags")
-        try:
-            with self._raw.cursor() as cursor:
-                cursor.execute(
-                    "SELECT tablename FROM pg_catalog.pg_tables "
-                    "WHERE schemaname=%s", ("amora_pg_v18_lab",),
-                )
-                actual = {row[0] for row in cursor.fetchall()}
-                if not required.issubset(actual):
-                    raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_TABLES_MISSING")
-                cursor.execute(
-                    "SELECT table_name, column_name "
-                    "FROM information_schema.columns "
-                    "WHERE table_schema=%s "
-                    "ORDER BY table_name, ordinal_position",
-                    ("amora_pg_v18_lab",),
-                )
-                actual_columns: dict[str, list[str]] = {}
-                for table_name, column_name in cursor.fetchall():
-                    actual_columns.setdefault(table_name, []).append(column_name)
-                if any(tuple(actual_columns.get(name, ())) != columns
-                       for name, columns in expected_columns.items()):
-                    raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_COLUMNS_MISMATCH")
-                cursor.execute(
-                    "SELECT version FROM amora_pg_v18_lab.schema_migrations "
-                    "ORDER BY version"
-                )
-                versions = tuple(row[0] for row in cursor.fetchall())
-            if versions != tuple(range(1, expected_version + 1)):
-                raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_VERSION_MISMATCH")
-        except PostgresRuntimeError:
-            raise
-        except Exception as exc:
-            raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_NOT_PREPARED") from exc
+            manifest = build_manifest()
+            ordinary = [
+                table for table in manifest["tables"]
+                if table["kind"] == "ordinary"
+            ]
+            required = {table["name"] for table in ordinary} | {"memory_search"}
+            expected_columns = {
+                table["name"]: tuple(column["name"] for column in table["columns"])
+                for table in ordinary
+            }
+            expected_columns["memory_search"] = ("memory_id", "content", "tags")
+            try:
+                with self._raw.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT tablename FROM pg_catalog.pg_tables "
+                        "WHERE schemaname=%s", ("amora_pg_v18_lab",),
+                    )
+                    actual = {row[0] for row in cursor.fetchall()}
+                    if not required.issubset(actual):
+                        raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_TABLES_MISSING")
+                    cursor.execute(
+                        "SELECT table_name, column_name "
+                        "FROM information_schema.columns "
+                        "WHERE table_schema=%s "
+                        "ORDER BY table_name, ordinal_position",
+                        ("amora_pg_v18_lab",),
+                    )
+                    actual_columns: dict[str, list[str]] = {}
+                    for table_name, column_name in cursor.fetchall():
+                        actual_columns.setdefault(table_name, []).append(column_name)
+                    if any(tuple(actual_columns.get(name, ())) != columns
+                           for name, columns in expected_columns.items()):
+                        raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_COLUMNS_MISMATCH")
+                    cursor.execute(
+                        "SELECT version FROM amora_pg_v18_lab.schema_migrations "
+                        "ORDER BY version"
+                    )
+                    versions = tuple(row[0] for row in cursor.fetchall())
+                if versions != tuple(range(1, expected_version + 1)):
+                    raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_VERSION_MISMATCH")
+            except PostgresRuntimeError:
+                raise
+            except Exception as exc:
+                raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_NOT_PREPARED") from exc
 
     def close(self) -> None:
-        if not self._closed:
-            self._closed = True
-            try:
-                self._raw.close()
-            finally:
-                if self._on_close is not None:
-                    self._on_close()
+        with self._state_lock:
+            if not self._closed:
+                self._closed = True
+                try:
+                    self._raw.close()
+                finally:
+                    if self._on_close is not None:
+                        self._on_close()
 
 
 class PostgresBackendCandidate:
