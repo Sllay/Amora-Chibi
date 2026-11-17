@@ -406,3 +406,49 @@ class PostgresBackendCandidate:
         # SQLite's file-based backup contract cannot represent PostgreSQL
         # snapshot/restore guarantees. Never fake a successful backup.
         raise PostgresRuntimeError("PG_RUNTIME_BACKUP_NOT_IMPLEMENTED")
+
+
+def make_psycopg_connection_factory(
+    *, target: PostgresTargetPolicy, username: str, password: str,
+    sslrootcert: str | None = None, connect_timeout: int = 5,
+) -> Callable[[], Any]:
+    """Explicit psycopg3 connection factory; NEVER selected by environment.
+
+    Production credentials are supplied by the caller at runtime. Remote
+    destinations must use verify-full with an explicit CA certificate.
+    This function does not open any connection until its result is called.
+    """
+    if not username or not password:
+        raise PostgresRuntimeError("PG_RUNTIME_CREDENTIALS_REQUIRED")
+    if type(connect_timeout) is not int or not 1 <= connect_timeout <= 30:
+        raise PostgresRuntimeError("PG_RUNTIME_INVALID_TIMEOUT")
+    if target.require_tls and not sslrootcert:
+        raise PostgresRuntimeError("PG_RUNTIME_CA_REQUIRED")
+
+    def connect() -> Any:
+        try:
+            import psycopg
+            raw = psycopg.connect(
+                host=target.host,
+                port=target.port,
+                dbname=target.database,
+                user=username,
+                password=password,
+                connect_timeout=connect_timeout,
+                sslmode="verify-full" if target.require_tls else "disable",
+                sslrootcert=sslrootcert,
+                options="-c search_path=pg_catalog",
+                autocommit=True,
+            )
+        except Exception:
+            # libpq errors can contain hostnames, usernames or other sensitive
+            # connection details. Keep the public exception code deterministic.
+            raise PostgresRuntimeError("PG_RUNTIME_CONNECT_FAILED") from None
+        try:
+            target.verify(raw)
+        except BaseException:
+            raw.close()
+            raise
+        return raw
+
+    return connect
