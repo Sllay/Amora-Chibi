@@ -189,7 +189,6 @@ class SecurityMiddleware:
         self.limits = RateLimits(clock)
         self.expensive_running = 0
         self.bodies_running = 0
-        self.large_vision_inbound_running = 0
         self.sockets = {}
 
     async def __call__(self, scope, receive, send):
@@ -359,31 +358,11 @@ class SecurityMiddleware:
                 or self.expensive_running >= 4
             ):
                 return await respond(429, "work limit reached")
-        # A 20 MB original image expands to ~26.7 MB of Base64 before
-        # Pydantic/httpx decoding. Only ONE large authenticated vision JSON
-        # body may be in-flight; smaller messaging/other endpoints are not
-        # held behind a high-memory request. Chunked/unknown lengths count
-        # as large so they cannot bypass this resource guard.
-        visual_inbound = (
-            not self.worker
-            and path == "/v1/messaging/worker/inbound"
-            and scope["method"] == "POST"
-            and role == "messaging"
-        )
-        declared_body_size = headers.get(b"content-length", b"")
-        large_visual_inbound = visual_inbound and (
-            not declared_body_size.isdigit()
-            or int(declared_body_size) > 6 * 1024 * 1024
-        )
-        if large_visual_inbound and self.large_vision_inbound_running >= 1:
-            return await respond(429, "large visual body capacity reached")
         if self.bodies_running >= 32:
             return await respond(429, "body concurrency limit reached")
         self.bodies_running += 1
         if expensive:
             self.expensive_running += 1
-        if large_visual_inbound:
-            self.large_vision_inbound_running += 1
         try:
             if headers.get(b"content-encoding", b"identity") != b"identity":
                 return await respond(415, "content encoding is not supported")
@@ -397,14 +376,14 @@ class SecurityMiddleware:
                 and scope["method"] == "POST"
                 and role == "messaging"
             ):
-                # Groq Qwen 3.8 advertises 20 MB maximum image file size
-                # for URL inputs; Data URI acceptance at that ceiling
-                # remains a live provider gate. A 20,000,000-byte image
-                # becomes 26,666,668 Base64 characters, plus bounded JSON.
-                # Do not broaden the limit to unauthenticated or generic
-                # endpoints; high-volume payloads have a separate 1-slot
-                # concurrency guard to protect the 512 MB Core container.
-                maximum = 28 * 1024 * 1024
+                # Groq's 20 MB limit applies to hosted image URLs.
+                # A *separate*, signature-verified and same-ID Discord
+                # CDN URL may be passed to Groq for larger owner-DM images;
+                # the Core receives only a <=3 MB binary WebP preview as
+                # Base64 (<=4 MB string), plus small signed URL metadata.
+                # This exact authenticated route may carry up to 5 MiB of
+                # JSON; other JSON routes remain capped at 256 KiB.
+                maximum = 5 * 1024 * 1024
             else:
                 maximum = 256 * 1024
             if path == "/v1/pairing/redeem" or self.worker:
@@ -420,7 +399,7 @@ class SecurityMiddleware:
             chunks = []
             size = 0
             try:
-                async with asyncio.timeout(20 if large_visual_inbound else 10):
+                async with asyncio.timeout(10):
                     while True:
                         message = await receive()
                         if message["type"] == "http.disconnect":
@@ -473,8 +452,6 @@ class SecurityMiddleware:
             self.bodies_running -= 1
             if expensive:
                 self.expensive_running -= 1
-            if large_visual_inbound:
-                self.large_vision_inbound_running -= 1
 
 
 def trusted_proxy_ips():
