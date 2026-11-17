@@ -270,3 +270,53 @@ def test_existing_production_selector_still_rejects_postgres(monkeypatch):
     monkeypatch.setenv("AMORA_STORAGE_BACKEND", "postgres")
     with pytest.raises(ValueError, match="sqlite or libsql"):
         backend_from_environment()
+
+
+def test_batch_requires_transaction_and_caps_size():
+    write = "INSERT INTO synthetic_events(id) VALUES (?)"
+    backend = PostgresBackendCandidate(FakeRaw, {
+        write: ReviewedStatement(
+            "INSERT INTO amora_pg_v18_lab.synthetic_events(id) VALUES (%s)",
+            1, batch_allowed=True,
+        ),
+    })
+    db = backend.connect(Path("unused"))
+    with pytest.raises(PostgresRuntimeError, match="PG_RUNTIME_BATCH_REQUIRES_TRANSACTION"):
+        db.executemany(write, (("a",),))
+    with db:
+        assert db.executemany(write, (("a",), ("b",))) == 2
+        with pytest.raises(PostgresRuntimeError, match="PG_RUNTIME_BATCH_LIMIT_EXCEEDED"):
+            db.executemany(write, (("x",) for _ in range(257)))
+    db.close()
+
+
+def test_concurrent_thread_does_not_interleave_into_transaction():
+    from threading import Event, Thread
+
+    raw = FakeRaw()
+    db = PostgresRuntimeConnection(raw, REGISTRY)
+    started, completed = Event(), Event()
+
+    def worker():
+        started.set()
+        db.execute(SQL, ("worker",))
+        completed.set()
+
+    with db:
+        thread = Thread(target=worker, daemon=True)
+        thread.start()
+        assert started.wait(2)
+        # A concurrent statement cannot execute before the owner commits.
+        assert not completed.wait(0.05)
+        assert raw.calls == []
+    thread.join(2)
+    assert completed.is_set()
+    assert raw.calls == [(REGISTRY[SQL].postgres_sql, ("worker",))]
+    db.close()
+
+
+def test_target_rejects_wrong_schema_and_pg_version():
+    with pytest.raises(ValueError, match="PG_RUNTIME_INVALID_TARGET"):
+        PostgresTargetPolicy(schema="other-schema")
+    with pytest.raises(ValueError, match="PG_RUNTIME_INVALID_TARGET"):
+        PostgresTargetPolicy(server_major=17)
