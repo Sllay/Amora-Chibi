@@ -343,6 +343,14 @@ Não transformar V1.1 automaticamente em editor profissional de Live2D/rig compl
 
 ---
 
+### Preparação experimental de geração de arte (fora da certificação V1.2)
+
+Branch/PR dedicado: `amora.art` prepara text2img OVH, preset versionado,
+comando Discord de teste, export de dataset revisado e seam para backend LoRA.
+Status: `EXPERIMENTAL / SOFTWARE UNDER REVIEW / LIVE NOT CERTIFIED`.
+Nada disso declara autoimagem persistente ou referências visuais já disponíveis.
+Ver ADR-0041 e `docs/engineering/AMORA_ART_SDXL.md`.
+
 ## 8. V1.2 — estética e autoimagem
 
 **Status:** `PLANNED`
