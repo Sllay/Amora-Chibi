@@ -78,7 +78,7 @@ async def test_ovh_dedicated_endpoint_uses_negative_prompt_and_bounded_image():
         service = ArtService(FakeSecrets(), backend=OvhSdxlBackend("secret", client))
         art = await service.generate("pose lateral", preset="full_body", remote_processing_allowed=True)
     assert art.mime_type == "image/png"
-    assert calls[0].url == OVH_SDXL_URL
+    assert str(calls[0].url) == OVH_SDXL_URL
     assert b"negative_prompt" in calls[0].content
     assert calls[0].headers["Authorization"] == "Bearer secret"
 
