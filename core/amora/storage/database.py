@@ -50,6 +50,12 @@ class AmoraDatabase:
 
     def migrate(self) -> int:
         with trace_lock(self._lock):
+            # PostgreSQL must never execute the SQLite DDL/bootstrap sequence.
+            # Run 1 only accepts a separately prepared and imported v18 schema;
+            # domain SQL support and production activation are later gates.
+            if self.backend.capabilities.name == "postgres-candidate":
+                self._conn.verify_prepared_schema(self.expected_schema_version)
+                return 0
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             applied = {row[0] for row in self._conn.execute("SELECT version FROM schema_migrations")}
             # Fail before any bootstrap writes if an older runtime opens a v19 DB.
