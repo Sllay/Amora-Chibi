@@ -102,7 +102,9 @@ def test_reflection_candidates_use_existing_unique_dedupe_index():
             for row in plan
         ), plan
         assert not any("SCAN m" in row[3] for row in plan)
-        assert conn.execute(INDEXED_REFLECTION_CANDIDATES).fetchall() == []
+        assert [row[0] for row in conn.execute(INDEXED_REFLECTION_CANDIDATES)] == [
+            "turn-0", "turn-100", "turn-200", "turn-300", "turn-400"
+        ]
         # The canonical comparison of key and turn_id remains authoritative:
         # no other prefix or malformed cognitive-input row is eligible.
     finally:
