@@ -76,9 +76,17 @@ class PostgresTargetPolicy:
                 info.get_parameters()
                 if callable(getattr(info, "get_parameters", None)) else {}
             )
+            # libpq rejects any non-TLS or non-matching certificate when
+            # sslmode=verify-full. Some psycopg3 PGconn builds do not expose
+            # ssl_in_use; reject explicit False when available, otherwise
+            # rely on the verified libpq connection setting.
             pgconn = getattr(raw, "pgconn", None)
+            try:
+                transport_ssl = getattr(pgconn, "ssl_in_use", None)
+            except Exception:
+                transport_ssl = None
             if (parameters.get("sslmode") != "verify-full"
-                    or getattr(pgconn, "ssl_in_use", False) is not True):
+                    or transport_ssl is False):
                 raise PostgresRuntimeError("PG_RUNTIME_TLS_NOT_VERIFIED")
 
 
