@@ -420,6 +420,12 @@ class PostgresBackendCandidate:
             raise PostgresRuntimeError("PG_RUNTIME_INVALID_CONNECTION_BUDGET")
         if target is not None and not isinstance(target, PostgresTargetPolicy):
             raise PostgresRuntimeError("PG_RUNTIME_INVALID_TARGET_POLICY")
+        if not isinstance(statements, Mapping):
+            raise PostgresRuntimeError("PG_RUNTIME_INVALID_SQL_REGISTRY")
+        if any(not isinstance(key, str) or not key
+               or not isinstance(value, ReviewedStatement)
+               for key, value in statements.items()):
+            raise PostgresRuntimeError("PG_RUNTIME_INVALID_SQL_REGISTRY")
         self._factory = connection_factory
         self._target = target or PostgresTargetPolicy()
         self._statements = _infra_sql(self._target.schema)
