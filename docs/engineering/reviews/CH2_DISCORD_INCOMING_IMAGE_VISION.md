@@ -57,3 +57,23 @@ Teste real após deploy do PR: a mesma foto na DM com consentimento ativo; verif
 **Testes de liberação:** Node com assinatura, original/proxy, arquivo >4 MiB que chega convertido, falha de conversor, nativo >25 MiB e status explícito; Python com WebP convertido ligado ao mesmo anexo, recusa de arquivo não-imagem, visão indisponível sem alucinação; container Alpine com libvips instalado e smoke **real** de PNG→WebP pelo binário nativo. CI verde é necessário, mas teste físico com uma arte real de >4 MiB e exame da resposta ainda é o gate de qualidade visual.
 
 **Limitação conhecida:** somente a *primeira* imagem por mensagem é analisada nesta etapa; múltiplas fotos anexadas simultaneamente e capturas de vídeo não estão incluídas. Para próximas iterações, considerar percepção multi-imagem/crops específicos após medir custo, qualidade e latência.
+
+## CH2.3 — Fotos grandes sem resposta: diagnóstico do worker e recuperação de 413
+
+**Incidente relatado:** imagem nativa de aproximadamente 10 MB enviada em DM após CH2.2; logs fornecidos **apenas do Core** entre 2026-11-16 23:53 UTC e 2026-11-17 00:19 UTC mostram `reflection_idle`, `tool_call wait` e startup, sem `messaging_inbound_result` ou `context_compiled` para essa foto. Estes logs **não** confirmam nem descartam que o worker Discord recebeu o gateway event. A versão de deploy do worker não foi observada. Nenhuma causa exata pode ser declarada sem o log do worker.
+
+**Falhas de diagnóstico corrigidas:**
+- O worker informa no startup `vision_pipeline=ch2.3` e, para DMs com imagem relevante, `IMAGE_INGEST_BEGIN pipeline=ch2.3 native_mib_ceil=N`, `IMAGE_INGEST_STAGE candidate/original_fetch/downloaded/transcode_started/transcode_completed/ready`, `IMAGE_INGEST_READY mime=... wire_kib_ceil=N`. Somente tamanho arredondado, etapas e MIME de um pequeno conjunto validado; **nunca** conteúdo/assinatura, filename, URL, bearer, mensagem, base64 ou IDs sociais.
+- `content_type` de anexos Discord é opcional. JPEG/PNG/WebP com filename permitido e MIME ausente ou `application/octet-stream` passam pela mesma verificação de bytes reais, sem confiar na extensão como prova. Rótulo MIME do mesmo ID só é preenchido após verificação da assinatura.
+- Adicionado suporte a ingestão nativa HEIC/HEIF/AVIF (marcas do cabeçalho ISO BMFF verificadas, conversão libvips local para WebP), inclusive para nativo inferior a 4 MiB, pois os providers visuais continuam aceitando somente PNG/JPEG/WebP. Caso o runtime de imagem não suporte esse formato, registrar erro de conversão; não inventar imagem.
+- Formato não suportado (ex. GIF nesta via) recebe `IMAGE_UNSUPPORTED_FORMAT` e observação de indisponibilidade, evitando ignorar imagens sem notificação.
+- Se o Core/ingress devolver HTTP **413** para o JSON Base64 (até aproximadamente 5,6 MiB), a mesma mensagem lógica recebe **no máximo uma** recompactação WebP ≤640 KiB (payload JSON <1 MiB). Se a recompactação ou segunda chamada ainda falhar por 413, encaminhar **metadados apenas** com `IMAGE_TRANSPORT_TOO_LARGE`, preservando o turno e informando falta de visão. Não há retry ilimitado nem alteração do ID/lease; o Core continua responsável por dedupe. A redução mais agressiva acontece **apenas após um 413 observado**, preservando a primeira análise em qualidade maior.
+- Core só aceita imagem convertida em WebP ligada ao mesmo ID de attachment raster nativo; dados inválidos/não autorizados nunca chegam ao modelo. Falhas ficam como `visual_observation.failure_reason` não canônico (`too_large` ou `unsupported_format`), sem alucinações.
+- Testes: Node simula efetivamente 10 MiB de download, HEIC/AVIF, MIME opcional, 413 com retry pequeno, 413 repetido e falha de codec; Python valida mesma identidade e resposta não-hallucinada no Core; CI worker usa libvips real em container.
+
+**Gate físico após merge e novo deploy dos dois containers:**
+1. No log do **worker Discord**, confirmar `[amora-discord] START ... vision_pipeline=ch2.3`. Não confundir serviço Core com worker.
+2. Enviar a mesma foto de 10 MB por DM. Checar etapas `IMAGE_INGEST_*` no **worker**. Se nenhuma aparecer, olhar `READY`, eventos do gateway, `remote_processing` e se o envio de foto foi um anexo reconhecido. Não conclua nada a partir de `reflection_idle` do Core.
+3. Se houver `IMAGE_TRANSPORT_RECOVERY reason=CORE_HTTP_413`, o gateway rejeitou o payload; confirmar retry pequeno e `CORE_INBOUND_OK`.
+4. No Core, procurar `INCOMING_IMAGE_ANALYZED` e comparar a resposta com a imagem. Se houver `INCOMING_IMAGE_NOT_ANALYZED`, buscar `incoming_image_analysis_failed` (modelo) ou `incoming_image_unavailable` (ingestão).
+5. Nunca publicar a foto privada ou assinaturas CDN em issues/logs; somente códigos e tempos. Não afirmar sucesso no Discord antes dessa prova.
