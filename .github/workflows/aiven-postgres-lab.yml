@@ -6,9 +6,11 @@ on:
       - 'core/amora/storage/postgres_memory_lab.py'
       - 'core/amora/storage/postgres_v18_manifest.py'
       - 'core/amora/storage/postgres_v18_lab_schema.py'
+      - 'core/amora/storage/postgres_synthetic_import.py'
       - 'tests/test_postgres_memory_lab_contract.py'
       - 'tests/test_postgres_v18_manifest.py'
       - 'tests/test_postgres_v18_lab_schema.py'
+      - 'tests/test_postgres_synthetic_import.py'
       - 'tests/test_postgres_memory_lab_integration.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
       - '.github/workflows/aiven-postgres-lab.yml'
@@ -61,4 +63,5 @@ jobs:
             tests/test_postgres_memory_lab_contract.py \
             tests/test_postgres_memory_lab_integration.py \
             tests/test_postgres_v18_manifest.py \
-            tests/test_postgres_v18_lab_schema.py
+            tests/test_postgres_v18_lab_schema.py \
+            tests/test_postgres_synthetic_import.py
