@@ -108,16 +108,17 @@ def import_synthetic_fts5_vocabulary(source: sqlite3.Connection, conn) -> dict:
     """).fetchone()[0]
     if count_pg != n_source:
         raise BM25LabError("BM25_SOURCE_TARGET_DOCUMENT_COUNT_MISMATCH")
-    # The FTS vocab is a *temporary* read-only view on the in-memory
-    # synthetic FTS5 index; do not mutate any logical source records.
+    # SQLite resolves fts5vocab's target within its own schema; therefore
+    # create the read-only vocabulary virtual table in main, but only on an
+    # already verified in-memory synthetic source (never a real backup).
     source.execute("""
-        CREATE VIRTUAL TABLE temp.amora_bm25_vocab
+        CREATE VIRTUAL TABLE amora_bm25_vocab
           USING fts5vocab(memory_fts,'instance')
     """)
     doc_rows = source.execute("""
         SELECT f.memory_id, COUNT(v.term)
         FROM memory_fts AS f
-        LEFT JOIN temp.amora_bm25_vocab AS v ON v.doc=f.rowid
+        LEFT JOIN amora_bm25_vocab AS v ON v.doc=f.rowid
         GROUP BY f.memory_id ORDER BY f.memory_id
     """)
     posting_rows = source.execute("""
