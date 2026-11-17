@@ -265,7 +265,10 @@ class PostgresRuntimeConnection:
             transaction.__enter__()
         except BaseException:
             self._broken = True
-            self._raw.close()
+            try:
+                self.close()
+            except Exception:
+                pass
             raise
         self._transactions.append(transaction)
         return self
@@ -279,9 +282,10 @@ class PostgresRuntimeConnection:
         except BaseException as exc:
             self._broken = True
             try:
-                self._raw.close()
-            finally:
-                raise PostgresCommitUnknown("PG_RUNTIME_COMMIT_OR_ROLLBACK_UNKNOWN") from exc
+                self.close()
+            except Exception:
+                pass
+            raise PostgresCommitUnknown("PG_RUNTIME_COMMIT_OR_ROLLBACK_UNKNOWN") from exc
 
     def verify_prepared_schema(self, expected_version: int) -> None:
         """Verify an already-imported synthetic v18 schema; never apply DDL.
@@ -389,6 +393,8 @@ class PostgresBackendCandidate:
         except BaseException:
             try:
                 raw.close()
+            except Exception:
+                pass
             finally:
                 self._release()
             raise
