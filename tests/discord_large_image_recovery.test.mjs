@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  collectDiscordIncomingImage, MAX_NATIVE_IMAGE_BYTES, MAX_INBOUND_IMAGE_BYTES,
+  collectDiscordIncomingImage, MAX_NATIVE_IMAGE_BYTES, MAX_INBOUND_IMAGE_BYTES, MAX_GROQ_URL_IMAGE_BYTES,
 } from '../workers/discord/incoming-image.mjs';
 import { DiscordWorker } from '../workers/discord/worker.mjs';
 
@@ -46,8 +46,8 @@ function avifHeader(brand) {
   return bytes;
 }
 
-test('native PNG above Groq 20 MB limit is boundedly converted to WebP', async () => {
-  const native = Buffer.alloc(MAX_INBOUND_IMAGE_BYTES + 100, 0x31);
+test('native PNG above Groq 20 MB URL limit is converted to provider-safe WebP', async () => {
+  const native = Buffer.alloc(MAX_GROQ_URL_IMAGE_BYTES + 100, 0x31);
   PNG.copy(native, 0);
   assert.ok(native.length < MAX_NATIVE_IMAGE_BYTES);
   const stages = [];
@@ -64,22 +64,33 @@ test('native PNG above Groq 20 MB limit is boundedly converted to WebP', async (
   assert.equal(receivedBytes, native.length);
   assert.equal(result.content_mime, 'image/webp');
   assert.equal(result.attachment_id, ATTACHMENT);
+  assert.equal(result.source_url, undefined);
   assert.deepEqual(stages, [
     'candidate', 'original_fetch', 'downloaded',
     'transcode_started', 'transcode_completed', 'ready',
   ]);
 });
 
-test('10 MB native PNG stays full fidelity without transcoding', async () => {
+test('10 MB original is available by verified URL with bounded local WebP preview', async () => {
   const native = Buffer.alloc(10_000_000, 0x31);
   PNG.copy(native, 0);
-  const out = await collectDiscordIncomingImage(photo({ bytes: native }), {
+  let converted = 0;
+  const original = photo({ bytes: native });
+  const out = await collectDiscordIncomingImage(original, {
     fetchImpl: async () => fakeResponse(native),
-    convertImpl: async () => { throw new Error('10 MB should not be transcoded'); },
+    convertImpl: async (bytes, mime) => {
+      converted++;
+      assert.equal(bytes.length, native.length);
+      assert.equal(mime, 'image/png');
+      return { bytes: WEBP, mime: 'image/webp' };
+    },
   });
-  assert.equal(out.content_mime, 'image/png');
-  assert.deepEqual(Buffer.from(out.content_base64, 'base64'), native);
+  assert.equal(converted, 1);
+  assert.equal(out.source_url, original.attachments[0].url);
+  assert.equal(out.content_mime, 'image/webp');
+  assert.deepEqual(Buffer.from(out.content_base64, 'base64'), WEBP);
 });
+
 
 test('native photo without Discord content_type is sniffed rather than silently ignored', async () => {
   const input = photo({ mime: null });
