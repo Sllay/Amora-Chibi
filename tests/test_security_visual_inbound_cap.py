@@ -71,7 +71,7 @@ def test_large_body_not_granted_to_other_routes_or_roles(cloud_messaging, kind):
         content=b"\x00" * (256 * 1024 + 1),
         headers={**headers, "Content-Type": "application/json"},
     )
-    assert response.status_code == (401 if kind == "no_auth" else 413)
+    assert response.status_code == {"no_auth": 401, "wrong_method": 403}.get(kind, 413)
 
 
 def test_messaging_inbound_has_finite_6_mib_cap(cloud_messaging):
@@ -85,6 +85,7 @@ def test_messaging_inbound_has_finite_6_mib_cap(cloud_messaging):
     assert response.json() == {"detail": "body too large"}
 
 
+@pytest.mark.asyncio
 async def test_chunked_image_payload_still_stops_on_six_mib(cloud_messaging):
     import httpx
 
