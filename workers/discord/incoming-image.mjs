@@ -25,7 +25,7 @@ function nativeMimeHint(item) {
   return EXTENSION_MIMES[ext] || null;
 }
 // Keep the Core->worker wire payload small even for large native artwork.
-export const MAX_INBOUND_IMAGE_BYTES = 3_000_000;
+export const MAX_INBOUND_IMAGE_BYTES = 2_800_000;
 export const MAX_GROQ_URL_IMAGE_BYTES = 20_000_000;
 export const MAX_NATIVE_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_TIMEOUT_MS = 8_000;
