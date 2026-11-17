@@ -194,13 +194,15 @@ def put_synthetic_memory(
             """,
             (memory_id, content, " ".join(sorted(tags))),
         )
-        conn.executemany(
-            """
-            INSERT INTO amora_pg_lab.memory_tags(memory_id, tag)
-            VALUES (%s, %s)
-            """,
-            [(memory_id, tag) for tag in sorted(tags)],
-        )
+        if tags:
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO amora_pg_lab.memory_tags(memory_id, tag)
+                    VALUES (%s, %s)
+                    """,
+                    [(memory_id, tag) for tag in sorted(tags)],
+                )
 
 
 def candidate_ids(
