@@ -586,7 +586,7 @@ export class DiscordWorker {
       const likelyImage = nativeAttachments.find((item) => {
         const mime = String(item?.content_type || '').toLowerCase().split(';')[0];
         return mime.startsWith('image/') ||
-          (/\\.(?:png|jpe?g|webp|heic|heif|avif)$/i).test(String(item?.filename || ''));
+          (/\.(?:png|jpe?g|webp|heic|heif|avif)$/i).test(String(item?.filename || ''));
       });
       if (likelyImage) {
         const announced = Number(likelyImage.size);
