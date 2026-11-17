@@ -57,12 +57,24 @@ reads two **private, unlogged** environment values:
 - `AMORA_POSTGRES_DSN`: Aiven PostgreSQL **Service URI**, directly from
   Aiven Connections (not a Turso key). The URI includes username/password,
   hostname, port and database.
-- `AMORA_POSTGRES_CA_PEM`: the PEM text of the **CA certificate** downloaded
-  from that Aiven project. Use a dedicated Northflank secret; never paste
-  either value into PRs, logs, Discord or ChatGPT.
+- `AMORA_POSTGRES_CA_FILE` (**recommended on Northflank**): absolute path
+  to the CA certificate mounted as a *runtime Secret File*, for example
+  `/secrets/amora-aiven-ca.pem`. Use the **Add file** control (not the JSON
+  environment variable editor), upload the certificate from Aiven, and set
+  this mount path. Set the variable `AMORA_POSTGRES_CA_FILE` to exactly the
+  same path in the service/job running the preflight.
+- `AMORA_POSTGRES_CA_PEM` (**alternative**): inline PEM text, only if not
+  using `AMORA_POSTGRES_CA_FILE`. Both set at once is rejected; a missing,
+  relative or overlarge Secret File is rejected without printing its path.
+
+Never paste the DSN, password or either CA value into PRs, logs, Discord or
+ChatGPT. A public CA certificate is not a database password, but its mount
+configuration still belongs in the environment, not the repository.
 
 The preflight validates the DSN is a PostgreSQL URI to an Aiven-hosted
-endpoint, creates a mode-0600 temporary CA file, and **forces TLS
+endpoint, reads a configured runtime Secret File with a strict 64 KiB bound
+(or inline PEM as an alternative), copies the CA to a mode-0600 temporary
+file, and **forces TLS
 `sslmode=verify-full`** instead of Aiven's default `require`. It connects
 with a default read-only session and performs exactly two metadata queries:
 `SHOW transaction_read_only` and `SHOW server_version_num`. The certificate
@@ -93,3 +105,19 @@ verifies hostname.
   about the contents of the PCS4C backup.
 
 Only after this stage is complete may Phase 1 inspect snapshot data.
+
+
+### Northflank UI: avoid modifying existing secrets
+
+The Northflank environment page may already contain many Amora keys. **Do
+not switch to the JSON editor, export all environment variables or paste
+existing values**. The user only needs to add one standalone runtime
+Secret File when directed. Service and secret-group files are encrypted
+at rest and mounted at the path selected by the operator, per Northflank's
+official [secret files guide](https://northflank.com/docs/v1/application/secure/upload-secret-files).
+
+The screenshot includes a Northflank warning recommending rotation of
+user-defined credentials created before the **October 30 security incident**.
+A separate credential-rotation review should be scheduled by the operator,
+without sharing those values; the preflight change is not a substitute for
+rotating previously exposed secrets.

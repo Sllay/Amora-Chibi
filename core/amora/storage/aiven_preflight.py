@@ -1,8 +1,9 @@
 """Aiven PostgreSQL connectivity preflight, strictly isolated from serving Core.
 
 This module does NOT implement a storage backend, create tables, migrate
-snapshots, change AMORA_STORAGE_BACKEND, or access Turso. All connection
-secrets remain in environment variables and are never written to logs.
+snapshots, change AMORA_STORAGE_BACKEND, or access Turso. The DSN stays
+in a private environment variable and CA certificate may be provided as a
+Northflank Secret File. Neither value is written to logs.
 """
 from __future__ import annotations
 
@@ -15,6 +16,42 @@ from urllib.parse import parse_qsl, urlsplit
 
 class AivenPreflightError(RuntimeError):
     """Structured, non-secret error. Never include raw driver exceptions."""
+
+
+_MAX_CA_FILE_BYTES = 65536
+
+
+def load_aiven_ca_certificate(*, pem: str = "", file_path: str = "") -> str:
+    """Load a mounted secret file without exposing paths or content in errors.
+
+    The file and inline PEM settings are mutually exclusive; both missing is
+    rejected by the existing TLS configuration validator.
+    """
+    if file_path and pem:
+        raise AivenPreflightError("AIVEN_CA_SOURCE_AMBIGUOUS")
+    if not file_path:
+        return pem
+    if (
+        len(file_path) > 2048
+        or not Path(file_path).is_absolute()
+        or "\x00" in file_path
+    ):
+        raise AivenPreflightError("AIVEN_CA_FILE_UNAVAILABLE")
+    try:
+        file = Path(file_path)
+        size = file.stat().st_size
+        if not 0 < size <= _MAX_CA_FILE_BYTES or not file.is_file():
+            raise AivenPreflightError("AIVEN_CA_FILE_UNAVAILABLE")
+        with file.open("rb") as stream:
+            raw = stream.read(_MAX_CA_FILE_BYTES + 1)
+        if len(raw) > _MAX_CA_FILE_BYTES:
+            raise AivenPreflightError("AIVEN_CA_FILE_UNAVAILABLE")
+        return raw.decode("utf-8")
+    except AivenPreflightError:
+        raise
+    except (OSError, UnicodeError, ValueError):
+        # Never expose mount paths, certificate text or driver details.
+        raise AivenPreflightError("AIVEN_CA_FILE_UNAVAILABLE") from None
 
 
 def validate_aiven_settings(dsn: str, ca_pem: str) -> None:
@@ -125,7 +162,10 @@ def main() -> int:
     try:
         result = check_aiven_read_only(
             os.environ.get("AMORA_POSTGRES_DSN", ""),
-            os.environ.get("AMORA_POSTGRES_CA_PEM", ""),
+            load_aiven_ca_certificate(
+                pem=os.environ.get("AMORA_POSTGRES_CA_PEM", ""),
+                file_path=os.environ.get("AMORA_POSTGRES_CA_FILE", ""),
+            ),
         )
     except AivenPreflightError as exc:
         print(json.dumps({"status": "blocked", "reason": str(exc)}))

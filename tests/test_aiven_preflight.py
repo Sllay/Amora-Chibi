@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 from amora.storage.aiven_preflight import (
-    AivenPreflightError, check_aiven_read_only, main, validate_aiven_settings,
+    AivenPreflightError, check_aiven_read_only, load_aiven_ca_certificate,
+    main, validate_aiven_settings,
 )
 
 
@@ -141,3 +142,66 @@ def test_cli_missing_secrets_fails_closed_without_changing_active_backend(
     output = json.loads(capsys.readouterr().out)
     assert output == {"status": "blocked", "reason": "AIVEN_DSN_MISSING_OR_INVALID"}
     assert os.environ["AMORA_STORAGE_BACKEND"] == "libsql"
+
+
+
+def test_secret_file_is_read_by_bounded_absolute_path(tmp_path):
+    cert_file = tmp_path / "aiven-ca.pem"
+    cert_file.write_text(_CA, encoding="utf-8")
+    assert load_aiven_ca_certificate(file_path=str(cert_file)) == _CA
+    assert load_aiven_ca_certificate(pem=_CA) == _CA
+
+
+def test_secret_file_cannot_be_relative_oversized_or_missing(tmp_path):
+    big = tmp_path / "large-ca.pem"
+    big.write_bytes(b"x" * 65537)
+    cases = ["../aiven-ca.pem", str(big), str(tmp_path / "missing.pem")]
+    for path in cases:
+        with pytest.raises(AivenPreflightError, match="AIVEN_CA_FILE_UNAVAILABLE"):
+            load_aiven_ca_certificate(file_path=path)
+
+
+def test_secret_file_and_inline_ca_are_mutually_exclusive(tmp_path):
+    p = tmp_path / "ca.pem"
+    p.write_text(_CA)
+    with pytest.raises(AivenPreflightError, match="AIVEN_CA_SOURCE_AMBIGUOUS"):
+        load_aiven_ca_certificate(pem=_CA, file_path=str(p))
+
+
+def test_cli_uses_northflank_secret_file_without_exposing_contents(
+    monkeypatch, tmp_path, capsys
+):
+    cert = tmp_path / "northflank-secret-file.pem"
+    cert.write_text(_CA)
+    monkeypatch.setenv("AMORA_POSTGRES_DSN", _DSN)
+    monkeypatch.setenv("AMORA_POSTGRES_CA_FILE", str(cert))
+    monkeypatch.delenv("AMORA_POSTGRES_CA_PEM", raising=False)
+    monkeypatch.setenv("AMORA_STORAGE_BACKEND", "libsql")
+    captured = {}
+
+    def fake_check(dsn, pem):
+        captured["dsn"] = dsn
+        captured["pem"] = pem
+        return {"status": "ok", "read_only": True}
+
+    monkeypatch.setattr(
+        "amora.storage.aiven_preflight.check_aiven_read_only",
+        fake_check,
+    )
+    assert main() == 0
+    assert captured == {"dsn": _DSN, "pem": _CA}
+    assert json.loads(capsys.readouterr().out) == {
+        "read_only": True, "status": "ok"
+    }
+    assert os.environ["AMORA_STORAGE_BACKEND"] == "libsql"
+
+
+def test_cli_missing_ca_secret_file_fails_safely(monkeypatch, capsys):
+    monkeypatch.setenv("AMORA_POSTGRES_DSN", _DSN)
+    monkeypatch.setenv("AMORA_POSTGRES_CA_FILE", "/secrets/nonexistent.pem")
+    monkeypatch.delenv("AMORA_POSTGRES_CA_PEM", raising=False)
+    assert main() == 2
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "blocked",
+        "reason": "AIVEN_CA_FILE_UNAVAILABLE",
+    }
