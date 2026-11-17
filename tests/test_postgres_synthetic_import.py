@@ -176,3 +176,13 @@ def test_batches_and_identity_sequence_preserved(pg, sqlite_source):
         SELECT nextval(pg_get_serial_sequence('amora_pg_v18_lab.relationships', 'id'))
     """).fetchone()[0]
     assert next_id == 2
+
+
+def test_source_index_drift_is_rejected_before_any_pg_insert(pg, sqlite_source):
+    sqlite_source.execute("DROP INDEX idx_memory_kind_created")
+    with pytest.raises(importer.SyntheticImportError,
+                       match="SYNTHETIC_SOURCE_INDEX_DRIFT"):
+        importer.import_synthetic_v18(sqlite_source, pg)
+    assert pg.execute("""
+        SELECT COUNT(*) FROM amora_pg_v18_lab.memory_records
+    """).fetchone() == (0,)
