@@ -1,0 +1,20 @@
+{
+  "images": [
+    {
+      "path": "approved/front.png",
+      "view": "front",
+      "source": "original",
+      "license": "owned",
+      "approved": true,
+      "caption": "amora_original, stylized hand-drawn cartoon character, front orthographic view, clean line art"
+    },
+    {
+      "path": "approved/back.png",
+      "view": "back",
+      "source": "original",
+      "license": "owned",
+      "approved": true,
+      "caption": "amora_original, stylized hand-drawn cartoon character, back orthographic view, clean line art"
+    }
+  ]
+}
