@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -92,8 +93,41 @@ class InboundImageContent(BaseModel):
 
     attachment_id: str = Field(min_length=1, max_length=256)
     content_mime: str = Field(min_length=6, max_length=64)
-    content_base64: str = Field(min_length=4, max_length=4_000_000)
+    content_base64: str = Field(min_length=4, max_length=3_733_336)
     source_url: str | None = Field(default=None, max_length=2048)
+
+
+def _verified_discord_cdn_url(url: str, channel: str, attachment_id: str) -> bool:
+    """Accept only the signed, same-channel attachment URL, not arbitrary URLs.
+
+    This URL may be given to the *visual* provider after owner DM approval,
+    never the conversation model. Hostname, channel and attachment ID cannot
+    be selected by user text. No URL contents are logged or persisted.
+    """
+    try:
+        parsed = urlsplit(url)
+        if (parsed.scheme != "https"
+                or parsed.hostname not in {"cdn.discordapp.com", "media.discordapp.net"}
+                or parsed.netloc != parsed.hostname
+                or parsed.fragment or len(url) > 2048
+                or not url.isascii() or any(ord(c) < 33 or ord(c) == 127 for c in url)):
+            return False
+        chunks = parsed.path.split("/")
+        if (len(chunks) < 5 or chunks[1] != "attachments"
+                or chunks[2] != channel or chunks[3] != attachment_id
+                or not all(part not in {"", ".", ".."} for part in chunks[4:])):
+            return False
+        # Only standard Discord CDN signed query parameters; no credentials,
+        # arbitrary metadata, redirects or attacker-selected content.
+        params = parse_qsl(parsed.query, strict_parsing=True, keep_blank_values=False)
+        if (len(params) > 3
+                or len({k for k, _ in params}) != len(params)
+                or any(k not in {"ex", "is", "hm"}
+                       or not v or len(v) > 256 for k, v in params)):
+            return False
+        return True
+    except (ValueError, UnicodeError):
+        return False
 
 
 class ExpressionSemanticProfile(BaseModel):
@@ -196,6 +230,16 @@ class InboundMessage(BaseModel):
                                and a.media_type.lower().split(";", 1)[0] in image_mimes
                                for a in self.attachments)):
                 raise ValueError("incoming image must match a native Discord DM raster attachment")
+            if self.incoming_image.source_url and (
+                not self.remote_processing_allowed
+                or self.privacy_scope != PrivacyScope.PERSONAL
+                or not _verified_discord_cdn_url(
+                    self.incoming_image.source_url,
+                    self.conversation_id,
+                    self.incoming_image.attachment_id,
+                )
+            ):
+                raise ValueError("incoming image URL must be a verified same-channel Discord attachment")
         if not self.text.strip() and not self.attachments and not self.expressions:
             raise ValueError("inbound message requires text, attachment metadata, or expression metadata")
         return self
