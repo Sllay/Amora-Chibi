@@ -15,6 +15,7 @@ on:
       - 'core/amora/storage/postgres_sql_connection_lab.py'
       - 'core/amora/storage/postgres_domain_parity_lab.py'
       - 'core/amora/storage/postgres_speech_leases_lab.py'
+      - 'core/amora/storage/postgres_auth_sessions_lab.py'
       - 'tests/test_postgres_memory_lab_contract.py'
       - 'tests/test_postgres_v18_manifest.py'
       - 'tests/test_postgres_v18_lab_schema.py'
@@ -27,6 +28,7 @@ on:
       - 'tests/test_postgres_sql_connection_lab.py'
       - 'tests/test_postgres_domain_parity.py'
       - 'tests/test_postgres_speech_leases_lab.py'
+      - 'tests/test_postgres_auth_sessions_lab.py'
       - 'tests/test_postgres_memory_lab_integration.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
       - '.github/workflows/aiven-postgres-lab.yml'
@@ -88,4 +90,5 @@ jobs:
             tests/test_postgres_atomic_index_lab.py \
             tests/test_postgres_sql_connection_lab.py \
             tests/test_postgres_domain_parity.py \
-            tests/test_postgres_speech_leases_lab.py
+            tests/test_postgres_speech_leases_lab.py \
+            tests/test_postgres_auth_sessions_lab.py
