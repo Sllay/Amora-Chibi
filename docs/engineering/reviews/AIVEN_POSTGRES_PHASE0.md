@@ -121,3 +121,53 @@ user-defined credentials created before the **October 30 security incident**.
 A separate credential-rotation review should be scheduled by the operator,
 without sharing those values; the preflight change is not a substitute for
 rotating previously exposed secrets.
+
+
+## Phase 0b — Independent, manual Northflank preflight job
+
+The **production Core Dockerfile intentionally does not include psycopg**, so
+running `python -m amora.storage.aiven_preflight` directly inside its normal
+container would return `POSTGRES_DRIVER_NOT_INSTALLED`. Also, Core bootstrap
+fails on the currently blocked Turso, so a service shell may be unavailable.
+Never fix this by changing the live Core's command or by installing packages
+interactively in its container.
+
+This repository now provides **`deploy/Dockerfile.aiven-preflight`**, an
+isolated, pin-based, non-root Python 3.12 image containing exactly the
+standalone `aiven_preflight.py` and psycopg driver, with no Amora Core,
+Turso connector, migrations or user data. It runs its metadata-only check
+once and exits; no scheduler and no continuously-running database process.
+
+### Operator setup, only after CI green
+
+1. Northflank project: create a **Manual job** using the existing linked
+   `Sllay/Amora-Chibi` repository, branch `main`. Dockerfile path
+   `/deploy/Dockerfile.aiven-preflight`, build context `/`, runtime
+   command **Default**. No need to create a new paid database, service or
+   schedule. Select only a job plan that is confirmed included in the
+   existing zero-cost Northflank entitlement; otherwise do not run.
+2. Configure that *job's* runtime secrets: `AMORA_POSTGRES_DSN` and
+   `AMORA_POSTGRES_CA_FILE=/secrets/amora-aiven-ca.pem`, and mount the
+   existing downloaded Aiven CA certificate at that same path.
+   **Important:** secrets configured directly on the Core service do **not**
+   automatically propagate to a different job. The job must explicitly
+   inherit a project secret group containing *only these Aiven credentials*,
+   or have these two secrets added separately in the job environment.
+   Never copy all existing Core secrets into the job. Do not paste DSNs or
+   certificates into Dockerfile code, GitHub Actions, or support chats.
+3. Run the manual job once. The successful, non-sensitive output shape is:
+   `{"status":"ok","provider":"aiven-postgresql","server_major":18,"read_only":true,"tls":"verify-full","core_storage_switched":false,"data_migration_performed":false}`.
+   A `{"status":"blocked","reason":"..."}` means **do not start a
+   migration**; investigate the code, CA mount, DSN source or Aiven
+   allowlist using the reason code only. Never print DB credentials to
+   troubleshoot.
+
+CI builds and smoke-tests the real container **with no credentials and no
+network connection to Aiven**; success only certifies image construction
+and secret-free failure behavior. The live Aiven connection is not
+verified until the operator runs the manual job with the secret mount.
+
+Operator documentation:
+- Northflank [manual jobs](https://northflank.com/docs/v1/application/run/run-an-image-once-or-on-a-schedule)
+- Northflank [custom command rules](https://northflank.com/docs/v1/application/run/override-command-entrypoint)
+- Northflank [secret files](https://northflank.com/docs/v1/application/secure/upload-secret-files)
