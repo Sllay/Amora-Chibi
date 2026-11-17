@@ -328,3 +328,87 @@ async def test_owner_image_only_failure_is_conveyed_without_fake_observation(tmp
         ) == request.metadata["visual_observation"]
     finally:
         core.close()
+
+
+def test_native_heic_and_avif_are_only_accepted_after_provider_safe_webp_conversion(
+    tmp_path, monkeypatch,
+):
+    from amora.messaging.models import InboundMessage
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        for media_type in ("image/heic", "image/heif", "image/avif"):
+            base = _message(
+                core, message_id="format-" + media_type, actor_id="111111111111111111",
+                channel_type=ChannelType.DM, text="Olha a imagem",
+            ).model_dump(mode="json")
+            base["attachments"] = [
+                {"attachment_id": ATTACHMENT, "media_type": media_type}
+            ]
+            base["incoming_image"] = {
+                "attachment_id": ATTACHMENT,
+                "content_mime": "image/webp",
+                "content_base64": base64.b64encode(WEBP).decode("ascii"),
+            }
+            assert InboundMessage.model_validate(base).incoming_image.content_mime == "image/webp"
+            base["incoming_image"]["content_mime"] = media_type
+            with pytest.raises(ValidationError):
+                InboundMessage.model_validate(base)
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_code,media_type,expected_reason", [
+    ("IMAGE_TRANSPORT_TOO_LARGE", "image/png", "too_large"),
+    ("IMAGE_UNSUPPORTED_FORMAT", "image/gif", "unsupported_format"),
+])
+async def test_owner_discord_image_not_silenced_after_ingress_failure(
+    tmp_path, monkeypatch, failure_code, media_type, expected_reason,
+):
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        seen = []
+
+        class AvailableVision:
+            available = True
+
+            async def analyze(self, image, user_text):
+                raise AssertionError("No image bytes should be sent")
+
+        core.messaging.incoming_vision = AvailableVision()
+
+        async def respond(request, *, on_segment=None, fallback_text=None):
+            seen.append(request)
+            return CognitiveResponsePlan(
+                turn_id=request.turn_id,
+                display_text="Não consegui abrir essa imagem.",
+                speech_text="Não consegui abrir essa imagem.",
+                provider="test", model="test",
+            )
+
+        monkeypatch.setattr(core.cognition, "respond_observed", respond)
+        original = _message(
+            core, message_id="failed-image-" + failure_code,
+            actor_id="111111111111111111", channel_type=ChannelType.DM,
+            text="test-placeholder",
+        )
+        image_only = original.model_copy(update={
+            "text": "", "remote_processing_allowed": True,
+            "attachments": [AttachmentRef(
+                attachment_id=ATTACHMENT, media_type=media_type,
+            )],
+            "incoming_image_status": failure_code,
+        })
+        result = await core.messaging.receive(image_only)
+        assert result.decision.action == RoutingAction.RESPOND
+        assert len(result.outbound) == 1
+        assert len(seen) == 1
+        request = seen[0]
+        assert "não conseguiu" in request.text
+        assert request.metadata["visual_observation"]["status"] == "unavailable"
+        assert request.metadata["visual_observation"]["failure_reason"] == expected_reason
+    finally:
+        core.close()
