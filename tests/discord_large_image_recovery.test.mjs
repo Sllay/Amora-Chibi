@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  collectDiscordIncomingImage, MAX_NATIVE_IMAGE_BYTES,
+  collectDiscordIncomingImage, MAX_NATIVE_IMAGE_BYTES, MAX_INBOUND_IMAGE_BYTES,
 } from '../workers/discord/incoming-image.mjs';
 import { DiscordWorker } from '../workers/discord/worker.mjs';
 
@@ -46,8 +46,8 @@ function avifHeader(brand) {
   return bytes;
 }
 
-test('10 MiB native PNG passes secure bounded streaming and reaches WebP conversion', async () => {
-  const native = Buffer.alloc(10 * 1024 * 1024, 0x31);
+test('native PNG above Groq 20 MB limit is boundedly converted to WebP', async () => {
+  const native = Buffer.alloc(MAX_INBOUND_IMAGE_BYTES + 100, 0x31);
   PNG.copy(native, 0);
   assert.ok(native.length < MAX_NATIVE_IMAGE_BYTES);
   const stages = [];
@@ -68,6 +68,17 @@ test('10 MiB native PNG passes secure bounded streaming and reaches WebP convers
     'candidate', 'original_fetch', 'downloaded',
     'transcode_started', 'transcode_completed', 'ready',
   ]);
+});
+
+test('10 MB native PNG stays full fidelity without transcoding', async () => {
+  const native = Buffer.alloc(10_000_000, 0x31);
+  PNG.copy(native, 0);
+  const out = await collectDiscordIncomingImage(photo({ bytes: native }), {
+    fetchImpl: async () => fakeResponse(native),
+    convertImpl: async () => { throw new Error('10 MB should not be transcoded'); },
+  });
+  assert.equal(out.content_mime, 'image/png');
+  assert.deepEqual(Buffer.from(out.content_base64, 'base64'), native);
 });
 
 test('native photo without Discord content_type is sniffed rather than silently ignored', async () => {
