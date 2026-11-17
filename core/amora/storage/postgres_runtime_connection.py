@@ -218,3 +218,49 @@ class PostgresRuntimeConnection:
         if not self._closed:
             self._closed = True
             self._raw.close()
+
+
+class PostgresBackendCandidate:
+    """StorageBackend-compatible factory; deliberately not environment-selectable.
+
+    An embedding application must supply an already-reviewed psycopg connection
+    factory and the complete SQL statement registry. No production cutover,
+    schema creation or backup is inferred from constructing this object.
+    """
+
+    def __init__(
+        self, connection_factory: Any,
+        statements: Mapping[str, ReviewedStatement],
+    ) -> None:
+        from .backend import StorageCapabilities
+
+        if not callable(connection_factory):
+            raise PostgresRuntimeError("PG_RUNTIME_FACTORY_REQUIRED")
+        self.capabilities = StorageCapabilities(
+            name="postgres-candidate",
+            local_wal=False,
+            consistent_snapshot=False,
+            remote=True,
+        )
+        self._factory = connection_factory
+        self._statements = dict(statements)
+        if not self._statements:
+            raise PostgresRuntimeError("PG_RUNTIME_NO_REVIEWED_SQL")
+
+    def connect(self, _path: Any) -> PostgresRuntimeConnection:
+        # The existing storage protocol carries a SQLite file path; a PG
+        # connection is selected by the explicit factory, not by that path.
+        raw = self._factory()
+        try:
+            return PostgresRuntimeConnection(raw, self._statements)
+        except BaseException:
+            try:
+                raw.close()
+            except Exception:
+                pass
+            raise
+
+    def backup(self, _connection: Any, _destination: Any):
+        # SQLite's file-based backup contract cannot represent PostgreSQL
+        # snapshot/restore guarantees. Never fake a successful backup.
+        raise PostgresRuntimeError("PG_RUNTIME_BACKUP_NOT_IMPLEMENTED")
