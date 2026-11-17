@@ -89,7 +89,10 @@ class LabRow(Mapping[str, Any]):
     def __getitem__(self, key: str | int) -> Any:
         if isinstance(key, int):
             return self.values[key]
-        return self.values[self.columns.index(key)]
+        try:
+            return self.values[self.columns.index(key)]
+        except ValueError:
+            raise KeyError(key) from None
 
     def __iter__(self) -> Iterator[str]:
         return iter(self.columns)
