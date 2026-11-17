@@ -117,9 +117,12 @@ class PlatformMessagingService(BasePlatformMessagingService):
                 and decision.action == RoutingAction.RESPOND
                 and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)):
             return None
-        has_image = any(
+        has_image = bool(message.incoming_image) or any(
             a.media_type and a.media_type.lower().split(";", 1)[0].startswith("image/")
             for a in message.attachments
+        ) or (
+            message.incoming_image_status == "IMAGE_UNSUPPORTED_FORMAT"
+            and bool(message.attachments)
         )
         if not has_image:
             return None
@@ -130,9 +133,11 @@ class PlatformMessagingService(BasePlatformMessagingService):
         ingest_status = message.incoming_image_status or ""
         if ingest_status in {
             "IMAGE_NATIVE_TOO_LARGE", "IMAGE_TOO_LARGE",
-            "IMAGE_TRANSFORM_SIZE_EXCEEDED",
+            "IMAGE_TRANSFORM_SIZE_EXCEEDED", "IMAGE_TRANSPORT_TOO_LARGE",
         }:
             failure_reason = "too_large"
+        elif ingest_status == "IMAGE_UNSUPPORTED_FORMAT":
+            failure_reason = "unsupported_format"
         elif ingest_status.startswith("IMAGE_TRANSFORM_"):
             failure_reason = "processing_failed"
         elif ingest_status.startswith(("IMAGE_CDN_", "IMAGE_FETCH_", "IMAGE_URL_")):

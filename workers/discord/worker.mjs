@@ -16,6 +16,7 @@ import {
 } from './normalize.mjs';
 import { DiscordSocialRuntime } from './social-runtime.mjs';
 import { collectDiscordIncomingImage, IncomingImageError } from './incoming-image.mjs';
+import { transcodeOversizedImage } from './incoming-image-transform.mjs';
 import { messagingTurnId, startTypingProgress } from './typing-progress.mjs';
 
 const TRUE = new Set(['1', 'true', 'yes', 'on']);
@@ -26,6 +27,10 @@ const READY_POLL_MS = 2_000;
 const IDLE_POLL_MS = 2_500;
 const LOOP_BACKOFF_MAX_MS = 15_000;
 const INBOUND_RETRY_WINDOW_MS = 30_000;
+// 640 KiB WebP yields < 0.9 MiB JSON including Base64 and metadata.
+// Only used after an observed HTTP 413; not a silent quality reduction.
+const IMAGE_RETRY_WIRE_BYTES = 640 * 1024;
+const IMAGE_PIPELINE_VERSION = 'ch2.3';
 const OUTBOUND_CLAIM_LEASE_SECONDS = 120;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const enabled = (name, fallback = false) => {
@@ -109,10 +114,11 @@ export class DiscordWorker {
     this.reconnectRequested = false;
     this.processingOutbound = false;
     this.terminalGatewayError = null;
+    this.recompressIncomingImage = transcodeOversizedImage;
   }
 
   async run() {
-    safeLog('START', `remote_processing=${this.remoteProcessingAllowed}`);
+    safeLog('START', `remote_processing=${this.remoteProcessingAllowed} vision_pipeline=${IMAGE_PIPELINE_VERSION}`);
     let consecutiveFailures = 0;
     while (!this.stopped) {
       let delay = this.ready ? READY_POLL_MS : IDLE_POLL_MS;
@@ -576,8 +582,39 @@ export class DiscordWorker {
     // Core still checks the verified owner and response permission before Groq.
     if (this.remoteProcessingAllowed && normalized.channel_type === 'dm'
         && enabled('AMORA_DISCORD_IMAGE_VISION', true)) {
+      const nativeAttachments = Array.isArray(message.attachments) ? message.attachments.slice(0, 16) : [];
+      const likelyImage = nativeAttachments.find((item) => {
+        const mime = String(item?.content_type || '').toLowerCase().split(';')[0];
+        return mime.startsWith('image/') ||
+          (/\.(?:png|jpe?g|webp|heic|heif|avif)$/i).test(String(item?.filename || ''));
+      });
+      if (likelyImage) {
+        const announced = Number(likelyImage.size);
+        const mib = Number.isFinite(announced) && announced >= 0
+          ? Math.ceil(announced / (1024 * 1024)) : -1;
+        safeLog('IMAGE_INGEST_BEGIN', `pipeline=${IMAGE_PIPELINE_VERSION} native_mib_ceil=${mib}`);
+      }
       try {
-        normalized.incoming_image = await collectDiscordIncomingImage(message);
+        normalized.incoming_image = await collectDiscordIncomingImage(message, {
+          onStage: (stage) => safeLog('IMAGE_INGEST_STAGE', stage),
+        });
+        if (normalized.incoming_image) {
+          // Discord may omit content_type. Once magic bytes are verified,
+          // fill in the safe media label on the same immutable attachment ID.
+          const nativeRef = normalized.attachments?.find(
+            (item) => item.attachment_id === normalized.incoming_image.attachment_id,
+          );
+          if (nativeRef && (!nativeRef.media_type
+              || nativeRef.media_type === 'application/octet-stream')) {
+            nativeRef.media_type = normalized.incoming_image.content_mime;
+          }
+          const mime = normalized.incoming_image.content_mime;
+          const wireBytes = Math.floor(normalized.incoming_image.content_base64.length * 3 / 4);
+          safeLog('IMAGE_INGEST_READY', `mime=${mime} wire_kib_ceil=${Math.ceil(wireBytes / 1024)}`);
+        } else if (likelyImage) {
+          normalized.incoming_image_status = 'IMAGE_UNSUPPORTED_FORMAT';
+          safeLog('IMAGE_INGEST_SKIPPED', normalized.incoming_image_status);
+        }
       } catch (error) {
         normalized.incoming_image_status = error instanceof IncomingImageError
           ? error.code : 'IMAGE_FETCH_FAILED';
@@ -591,6 +628,7 @@ export class DiscordWorker {
     try {
       const started = Date.now();
       let attempt = 0;
+      let image413Recovery = 0;
       while (true) {
         attempt += 1;
         try {
@@ -606,6 +644,44 @@ export class DiscordWorker {
           if (outboundCount > 0 && this.ready) await this.flushOutbound();
           return result;
         } catch (error) {
+          // A gateway can reject a 4 MiB image after Base64 expands JSON
+          // beyond its request-body cap. Never silently lose the entire turn.
+          // Try one smaller visual derivative, then metadata-only delivery.
+          if (Number(error?.status) === 413 && normalized.incoming_image) {
+            if (image413Recovery === 0) {
+              image413Recovery = 1;
+              safeLog('IMAGE_TRANSPORT_RECOVERY', 'reason=CORE_HTTP_413 action=recompress');
+              try {
+                const source = Buffer.from(normalized.incoming_image.content_base64, 'base64');
+                const reduced = await this.recompressIncomingImage(
+                  source, normalized.incoming_image.content_mime,
+                  { maxBytes: IMAGE_RETRY_WIRE_BYTES },
+                );
+                if (!reduced || reduced.mime !== 'image/webp'
+                    || !Buffer.isBuffer(reduced.bytes)
+                    || reduced.bytes.length > IMAGE_RETRY_WIRE_BYTES
+                    || reduced.bytes.length < 12) {
+                  throw new IncomingImageError('IMAGE_TRANSPORT_RECOMPRESS_INVALID');
+                }
+                normalized.incoming_image = {
+                  ...normalized.incoming_image,
+                  content_mime: reduced.mime,
+                  content_base64: reduced.bytes.toString('base64'),
+                };
+                safeLog('IMAGE_TRANSPORT_RECOVERY', 'action=retry_small_visual');
+              } catch {
+                // Core still receives original native attachment metadata.
+                delete normalized.incoming_image;
+                normalized.incoming_image_status = 'IMAGE_TRANSPORT_TOO_LARGE';
+                safeLog('IMAGE_TRANSPORT_RECOVERY', 'action=metadata_only');
+              }
+              continue;
+            }
+            delete normalized.incoming_image;
+            normalized.incoming_image_status = 'IMAGE_TRANSPORT_TOO_LARGE';
+            safeLog('IMAGE_TRANSPORT_RECOVERY', 'reason=CORE_HTTP_413 action=metadata_only');
+            continue;
+          }
           const label = errorLabel(error);
           if (!isRetryableCoreError(error)) {
             safeLog('CORE_INBOUND_FAILED', label);

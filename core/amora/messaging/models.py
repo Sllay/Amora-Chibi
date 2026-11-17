@@ -178,12 +178,18 @@ class InboundMessage(BaseModel):
     @model_validator(mode="after")
     def require_content(self) -> "InboundMessage":
         if self.incoming_image is not None:
-            image_mimes = {"image/png", "image/jpeg", "image/webp"}
+            image_mimes = {
+                "image/png", "image/jpeg", "image/webp",
+                # Native iPhone/modern browser formats are converted to WebP
+                # by the trusted worker; raw HEIC/AVIF never reaches Qwen.
+                "image/heic", "image/heif", "image/avif",
+            }
+            provider_mimes = {"image/png", "image/jpeg", "image/webp"}
             # The trusted Discord worker may optimize an original PNG/JPEG to
             # WebP. The native attachment ID and original raster MIME remain
             # mandatory; Core independently checks the converted byte signature.
             if (self.platform != MessagingPlatform.DISCORD or self.channel_type != ChannelType.DM
-                    or self.incoming_image.content_mime not in image_mimes
+                    or self.incoming_image.content_mime not in provider_mimes
                     or not any(a.attachment_id == self.incoming_image.attachment_id
                                and a.media_type
                                and a.media_type.lower().split(";", 1)[0] in image_mimes

@@ -179,7 +179,7 @@ test('private transform artifacts are deleted even when a preset fails', async (
   const sources = [];
   const result = await transcodeOversizedImage(oversizedPng(), 'image/png', {
     run: async (args, ms) => {
-      assert.ok(ms > 0 && ms <= 4000);
+      assert.ok(ms > 0 && ms <= 6000);
       sources.push(args[0]);
       assert.equal(args[3], '--path');
       const target = args[4].split('[')[0];

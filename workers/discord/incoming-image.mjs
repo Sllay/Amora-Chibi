@@ -5,7 +5,25 @@
 import { transcodeOversizedImage, ImageTransformError } from './incoming-image-transform.mjs';
 
 const ALLOWED_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
-const MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const CORE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const NATIVE_MIMES = new Set([
+  ...CORE_MIMES, 'image/heic', 'image/heif', 'image/avif',
+]);
+const EXTENSION_MIMES = Object.freeze({
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+  jfif: 'image/jpeg', webp: 'image/webp',
+  heic: 'image/heic', heif: 'image/heif', avif: 'image/avif',
+});
+
+function nativeMimeHint(item) {
+  const declared = String(item?.content_type || '').split(';')[0].toLowerCase().trim();
+  if (NATIVE_MIMES.has(declared)) return declared;
+  // Discord's content_type is optional. Use the filename only as a
+  // candidate hint, then verify the actual magic signature after download.
+  if (declared && declared !== 'application/octet-stream') return null;
+  const ext = /\.([a-z0-9]+)$/i.exec(String(item?.filename || ''))?.[1]?.toLowerCase();
+  return EXTENSION_MIMES[ext] || null;
+}
 // Keep the Core->worker wire payload small even for large native artwork.
 export const MAX_INBOUND_IMAGE_BYTES = 4 * 1024 * 1024;
 export const MAX_NATIVE_IMAGE_BYTES = 25 * 1024 * 1024;
@@ -51,6 +69,21 @@ function mimeFromSignature(bytes) {
       && bytes[2] === 0xff) return 'image/jpeg';
   if (bytes.length >= 12 && Buffer.from(bytes.subarray(0, 4)).toString('ascii') === 'RIFF'
       && Buffer.from(bytes.subarray(8, 12)).toString('ascii') === 'WEBP') return 'image/webp';
+  if (bytes.length >= 16 && bytes.subarray(4, 8).toString('ascii') === 'ftyp') {
+    const length = bytes.readUInt32BE(0);
+    if (length >= 16 && length <= Math.min(bytes.length, 256)
+        && length % 4 === 0) {
+      const brands = [];
+      for (let i = 8; i + 4 <= length; i += 4) {
+        if (i === 12) continue; // minor version
+        brands.push(bytes.subarray(i, i + 4).toString('ascii'));
+      }
+      if (brands.includes('avif') || brands.includes('avis')) return 'image/avif';
+      if (brands.some((brand) =>
+        ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis'].includes(brand)
+      )) return 'image/heic';
+    }
+  }
   throw new IncomingImageError('IMAGE_SIGNATURE_INVALID');
 }
 
@@ -89,12 +122,14 @@ export async function collectDiscordIncomingImage(message, {
   fetchImpl = fetch,
   timeoutMs = MAX_TIMEOUT_MS,
   convertImpl = transcodeOversizedImage,
+  onStage = () => {},
 } = {}) {
   if (!message?.id || !snowflake(message?.channel_id) || message.guild_id) return null;
   const candidate = (Array.isArray(message.attachments) ? message.attachments.slice(0, 16) : [])
-    .find((item) => MIMES.has(String(item?.content_type || '').split(';')[0].toLowerCase()));
+    .find((item) => nativeMimeHint(item) !== null);
   if (!candidate) return null;
   if (!snowflake(candidate.id)) throw new IncomingImageError('IMAGE_ATTACHMENT_ID_INVALID');
+  onStage('candidate');
   if (Number.isFinite(candidate.size) && candidate.size > MAX_NATIVE_IMAGE_BYTES) {
     throw new IncomingImageError('IMAGE_NATIVE_TOO_LARGE');
   }
@@ -117,18 +152,25 @@ export async function collectDiscordIncomingImage(message, {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.min(MAX_TIMEOUT_MS, timeoutMs));
     try {
+      onStage(field === 'url' ? 'original_fetch' : 'proxy_fetch');
       const response = await fetchImpl(url, {
         method: 'GET', redirect: 'error', signal: controller.signal,
       });
       const source = await boundedImageResponse(response);
+      onStage('downloaded');
       const mime = mimeFromSignature(source);
-      const declared = String(candidate.content_type).split(';')[0].toLowerCase();
-      if (field === 'url' && mime !== declared) {
+      const declared = nativeMimeHint(candidate);
+      const nativeMatches = mime === declared ||
+        (declared === 'image/heif' && mime === 'image/heic');
+      if (field === 'url' && !nativeMatches) {
         throw new IncomingImageError('IMAGE_MIME_MISMATCH');
       }
       let bytes = source;
       let outputMime = mime;
-      if (source.length > MAX_INBOUND_IMAGE_BYTES) {
+      // HEIC and AVIF are decoded locally into the closed, provider-safe
+      // image MIME contract even when the native file is under 4 MiB.
+      if (source.length > MAX_INBOUND_IMAGE_BYTES || !CORE_MIMES.has(mime)) {
+        onStage('transcode_started');
         const converted = await convertImpl(source, mime);
         if (!converted || !Buffer.isBuffer(converted.bytes) ||
             !converted.bytes.length || converted.bytes.length > MAX_INBOUND_IMAGE_BYTES ||
@@ -137,7 +179,9 @@ export async function collectDiscordIncomingImage(message, {
         }
         bytes = converted.bytes;
         outputMime = converted.mime;
+        onStage('transcode_completed');
       }
+      onStage('ready');
       return {
         attachment_id: String(candidate.id),
         content_mime: outputMime,
