@@ -23,7 +23,7 @@ def validate_aiven_settings(dsn: str, ca_pem: str) -> None:
         raise AivenPreflightError("AIVEN_DSN_MISSING_OR_INVALID")
     try:
         parsed = urlsplit(dsn)
-        params = parse_qsl(parsed.query, strict_parsing=True, keep_blank_values=False)
+        params = parse_qsl(parsed.query, strict_parsing=True, keep_blank_values=True)
         valid = (
             parsed.scheme in {"postgres", "postgresql"}
             and parsed.hostname is not None
@@ -66,8 +66,8 @@ def check_aiven_read_only(
     if connect is None:
         try:
             import psycopg
-        except ImportError as exc:
-            raise AivenPreflightError("POSTGRES_DRIVER_NOT_INSTALLED") from exc
+        except ImportError:
+            raise AivenPreflightError("POSTGRES_DRIVER_NOT_INSTALLED") from None
         connect = psycopg.connect
 
     with tempfile.TemporaryDirectory(prefix="amora-aiven-check-") as folder:
@@ -109,10 +109,10 @@ def check_aiven_read_only(
             }
         except AivenPreflightError:
             raise
-        except Exception as exc:
+        except Exception:
             # PostgreSQL errors may repeat DSNs, usernames, hostnames, or SQL
-            # parameters. Do not surface underlying exception text.
-            raise AivenPreflightError("AIVEN_CONNECTION_FAILED") from exc
+            # parameters. Do not expose the exception or its traceback chain.
+            raise AivenPreflightError("AIVEN_CONNECTION_FAILED") from None
         finally:
             if connection is not None:
                 try:
