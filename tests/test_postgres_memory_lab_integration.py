@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 
 import pytest
 
@@ -133,3 +134,35 @@ def test_postgres_json_cast_rollback_and_gin_index(pg):
     assert pg.execute("""
         SELECT COUNT(*) FROM amora_pg_lab.memory_search WHERE memory_id='invalid-one'
     """).fetchone()[0] == 0
+
+
+def test_memory_columns_match_canonical_v18_sqlite_migrations(pg):
+    """Five lab tables must not silently omit fields from canonical v18."""
+    from amora.storage.migrations import MIGRATIONS
+
+    tables = (
+        "events", "memory_records", "memory_entities",
+        "memory_tags", "memory_links",
+    )
+    with sqlite3.connect(":memory:") as source:
+        for version, ddl in MIGRATIONS:
+            if version > 3:
+                break
+            source.executescript(ddl)
+        for table in tables:
+            sqlite_fields = {
+                row[1] for row in source.execute(f"PRAGMA table_info('{table}')")
+            }
+            pg_fields = {
+                row[0] for row in pg.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                     WHERE table_schema='amora_pg_lab' AND table_name=%s
+                    """,
+                    (table,),
+                ).fetchall()
+            }
+            assert sqlite_fields, table
+            assert pg_fields == sqlite_fields, (
+                f"PostgreSQL lab columns diverge from canonical SQLite table {table}"
+            )
