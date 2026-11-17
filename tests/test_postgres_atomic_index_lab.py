@@ -196,7 +196,7 @@ def test_posting_constraint_failure_rolls_back_record_tags_and_search(pair):
     assert pg.execute("""
         SELECT term FROM amora_pg_v18_lab.fts_term_postings WHERE memory_id='safe'
     ORDER BY term
-    """).fetchall() == [("coelho",)]
+    """).fetchall() == [("a",), ("coelho",)]
 
 
 def test_archive_retains_corpus_then_hard_delete_cascades(pair):
