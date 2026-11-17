@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from zipfile import ZipFile
 
-import pytest
 
-from tools.art.prepare_style_dataset import prepare
+CLI = Path(__file__).resolve().parents[1] / "tools/art/prepare_style_dataset.py"
 
 
 def _manifest(tmp_path: Path, image_path: str = "front.png", *, approved=True):
@@ -22,10 +23,18 @@ def _manifest(tmp_path: Path, image_path: str = "front.png", *, approved=True):
     return path
 
 
+def _run(manifest: Path, output: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(CLI), str(manifest), str(output)],
+        capture_output=True, text=True, check=False, timeout=10,
+    )
+
+
 def test_approved_dataset_is_zip_with_caption_and_hash(tmp_path):
     output = tmp_path / "dataset.zip"
-    result = prepare(_manifest(tmp_path), output)
-    assert result == {"images": 1, "train": 1, "val": 0}
+    completed = _run(_manifest(tmp_path), output)
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {"images": 1, "train": 1, "val": 0}
     with ZipFile(output) as archive:
         assert "train/000.png" in archive.namelist()
         assert "train/000.txt" in archive.namelist()
@@ -33,7 +42,10 @@ def test_approved_dataset_is_zip_with_caption_and_hash(tmp_path):
 
 
 def test_rejects_unapproved_or_path_escape(tmp_path):
-    with pytest.raises(ValueError):
-        prepare(_manifest(tmp_path, approved=False), tmp_path / "x.zip")
-    with pytest.raises(ValueError):
-        prepare(_manifest(tmp_path, image_path="../secret.png"), tmp_path / "x.zip")
+    unapproved = _run(_manifest(tmp_path, approved=False), tmp_path / "x.zip")
+    assert unapproved.returncode == 1
+    assert not (tmp_path / "x.zip").exists()
+
+    outside = _run(_manifest(tmp_path, image_path="../secret.png"), tmp_path / "x.zip")
+    assert outside.returncode == 1
+    assert not (tmp_path / "x.zip").exists()
