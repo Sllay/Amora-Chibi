@@ -51,3 +51,45 @@ Actual output includes other aggregate counters and sizes; the values above are 
 - Runtime PostgreSQL compatibility, privacy, rank semantics or an operational rollback.
 
 Next engineering gate: map the SQL stores, design the PostgreSQL schema and full-text/JSON equivalence and run synthetic compatibility tests without live memory data. Preserve v18 source and keep `AMORA_STORAGE_BACKEND` unchanged until a separately certified cutover.
+
+## Operador — evidência pós-CI, 2026-11-17 (commit da imagem auditada: `35dbf5bf`)
+
+Job `pcs4c-recovery` com mesmo volume `/private` retornou `AIVEN_SNAPSHOT_AUDIT` com `status=ok`, exit code `0`, `read_only=true` e `certification_hashes_match=true`. Métricas sanitizadas:
+
+| Campo | Resultado |
+|---|---:|
+| Schema | v18 |
+| Tabelas lógicas | 51 |
+| Registros de todas as tabelas | 48.059 |
+| Arquivo SQLite | 75.563.008 bytes (72,0625 MiB) |
+| Sidecar ZIP | 151 bytes |
+| Assets | 0 |
+| Índices | 65 |
+| Tabelas virtuais FTS5 | 1 |
+| Triggers / views | 0 / 0 |
+
+Essas 48.059 linhas **não são contagem de memórias individuais**; incluem outras tabelas e estruturas de histórico. A certificação garante apenas equivalência à **cópia preservada**, não atualização em relação a um Turso atualmente bloqueado. O comando não migrou nem alterou runtime/dados de produção.
+
+## Matriz preliminar de compatibilidade: Core v18 → PostgreSQL 18
+
+Base: leitura direta do código de `main` no commit `75372e1`; este inventário não é conversão implementada nem teste de semântica real. Os contratos completos devem ser medidos em CI antes de qualquer importação de dados privados.
+
+| Dependência existente | Evidência no código | Direção de engenharia e gate obrigatório |
+|---|---|---|
+| Conexão/transações | `core/amora/storage/backend.py` expõe `SQLConnection`; `database.py` usa `executescript`, `BEGIN IMMEDIATE` e ledger de migração | Introduzir backend explícito com transações verdadeiras, rollback e erro de commit ambíguo; sem mudar selector de produção nem substituir SQL genericamente |
+| Schema e FKs | `migrations.py` e `migrations_v*.py`; tipos SQLite `TEXT`, `INTEGER`, `REAL`, `BLOB`, `AUTOINCREMENT`, `ON CONFLICT` | Esquema PostgreSQL versionado por migration, preservando IDs, PK, FK/CASCADE, CHECK, UNIQUE, DEFAULT e ordem de importação; decisões de tipo definidas por coluna, não por busca textual |
+| Busca de memória | `memory/store.py` usa `CREATE VIRTUAL TABLE ... fts5`, tokenizer `unicode61 remove_diacritics 2`, `MATCH`, `bm25`, RRF e MMR | Avaliar `tsvector/tsquery` com índice GIN e normalização; **ts_rank NÃO equivale automaticamente ao bm25**. Congelar fixture de ranking e privacidade, comparar top-K, tie-break e escopo antes do corte |
+| JSON/arrays | `memory/store.py` inclui `json_extract`, `json_each`, `json_array_length`, colunas `*_json` | Semântica de `jsonb`, extração e array expansion deve preservar tipos, nulos, igualdade, ordenação e limites de privacidade; testar acesso e invalidação de memórias |
+| Filtragem lexical | `memory/store.py` usa `instr(lower(...), ...)`, comparação de datas como strings ISO, concatenação `||` | Definir operações PostgreSQL explícitas, Unicode/acentos e comportamento de NULL; não assumir ordenação/timestamp equivalente |
+| Identidades e política de escopo | `memory/store.py` consulta ACL/owner/audience/remote gate; `database.py` e outras stores persistem identidade e histórico | Testes de isolamento por pessoa, privada/pública, arquivada, exclusão/edição, escopo remoto, dedupe e restart sem fallback para um banco vazio |
+| Assets e backup | `pcs4_recovery.verify_snapshot` valida ZIP e hash por asset; volume v18 tem `assets=0` | Regras de `bytea`/blobs e restore precisam funcionar mesmo com assets em fixtures sintéticas, não apenas porque o backup atual não tem assets |
+| Conexões concorrentes | `core/amora/storage/backend.py` gerencia instâncias por store; `memory/store.py` mantém conexão com lock próprio | Aiven Free tem `max_connections=20`, com até seis conexões reservadas: orçar o conjunto Core + Discord + jobs sem contar com pooler do serviço gratuito; medir em lab |
+
+Referências oficiais para projeto de tipos e busca:
+- https://www.postgresql.org/docs/18/textsearch-controls.html
+- https://www.postgresql.org/docs/18/functions-textsearch.html
+- https://www.postgresql.org/docs/18/functions-json.html
+- https://aiven.io/docs/products/postgresql/concepts/pg-free-tier
+- https://aiven.io/docs/products/postgresql/reference/pg-connection-limits
+
+**Gates seguintes**: (i) esquema SQL PostgreSQL completo auditado, (ii) testes com fixture sintética para constraints/transações/FTS/JSON/rank/privacidade/rollback, (iii) carga de cópia do snapshot em destino isolado aprovado pelo operador, (iv) comparação por tabela + restart real, (v) reconciliação das diferenças temporais após último backup; só então uma mudança de backend em produção com rollback.
