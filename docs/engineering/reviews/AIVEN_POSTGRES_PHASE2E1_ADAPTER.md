@@ -14,7 +14,7 @@ The Phase 2D.5 PR #278 HEAD `ebb49c24` finished all five workflows green, includ
 
 New module `core/amora/storage/postgres_sql_connection_lab.py`:
 - Wraps a **caller-supplied** PostgreSQL 18 psycopg connection that is already connected with autocommit to loopback `amora_pg_synthetic`. `ensure_local_lab` runs at wrapper construction and before each operation. No DSN, network connector, production backend selector or local snapshot access.
-- Supports a **small, fixed allowlist** of explicitly reviewed PostgreSQL SQL statements using psycopg `%s` positional parameters (count, owner-restricted retrieval, insert-only memory, revision CAS update, tags). Unknown statements and all raw SQLite SQL fail closed; no regex rewriting of queries or hidden compatibility fallback.
+- Supports a **small, fixed allowlist** of explicitly reviewed PostgreSQL SQL statements using psycopg `%s` positional parameters (count, owner-restricted memory **reads**, idempotent event INSERT, actor-restricted event reads and counts). Unknown statements and all raw SQLite SQL fail closed; no regex rewriting of queries or hidden compatibility fallback.
 - Exposes `LabRow` supporting integer and column-name indexes and mapping conversion; materialized `LabResult` retains stable rows after transaction commit, exposes `rowcount`, `fetchone`, `fetchall` and iteration. Results above 1,000 rows are explicitly rejected; the approved query set is bounded.
 - `with connection:` creates a real PostgreSQL transaction, nested contexts use psycopg savepoints, exceptions cause rollback. Batch writes are only allowed inside a transaction and capped. A failed COMMIT/ROLLBACK marks the wrapper unusable and raises an ambiguous-outcome code; **never replay a potentially committed write**.
 - `execute_atomic_statement` can use the wrapper directly with its own laboratory capabilities metadata; **`backend_from_environment` stays unchanged** and `AMORA_STORAGE_BACKEND=postgres` is rejected.
@@ -36,3 +36,9 @@ A future production backend must additionally validate:
 4. Capacity and performance with real saved records before any `AMORA_STORAGE_BACKEND` switch.
 
 **Do not merge/deploy as a storage switch. No Aiven/Turso/PCS.4C traffic.**
+
+## Additional review: memory/search atomicity
+
+The first draft exposed bare INSERT/UPDATE operations for `memory_records` and `memory_tags`. Those operations could leave BM25 postings out of sync, even in a laboratory. **Removed before certification**. The reviewed SQL allowlist now includes only safe event writes, owner-filtered event reads/counts and owner-filtered memory reads. Any memory content, summary or tag mutation must remain on the separately certified Phase 2D.5 transaction path, which updates the original record, search document and posting frequencies together. A read-only memory GET through this wrapper is not an authorization proof for all Core memory scopes.
+
+A fault-injection test also verifies a lost COMMIT acknowledgement poisons the connection and forbids automatic replay.
