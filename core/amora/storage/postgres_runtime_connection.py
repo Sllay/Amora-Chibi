@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from threading import Lock
+from typing import Any, Callable
 
 
 class PostgresRuntimeError(RuntimeError):
@@ -22,6 +23,55 @@ class PostgresRuntimeError(RuntimeError):
 
 class PostgresCommitUnknown(PostgresRuntimeError):
     """Commit outcome may be ambiguous; a failed write must not be replayed."""
+
+
+
+@dataclass(frozen=True)
+class PostgresTargetPolicy:
+    """Pinned connection destination, including TLS requirements for Aiven.
+
+    No credentials are held or logged. Supplying a remote policy does not
+    register the backend in the production environment selector.
+    """
+
+    host: str = "127.0.0.1"
+    database: str = "amora_pg_synthetic"
+    port: int = 5432
+    server_major: int = 18
+    require_tls: bool = False
+
+    def __post_init__(self) -> None:
+        if (not self.host or any(char in self.host for char in "/@?# ")
+                or not self.database or any(char in self.database for char in "/@?# ")
+                or not 1 <= self.port <= 65535 or self.server_major < 12):
+            raise ValueError("PG_RUNTIME_INVALID_TARGET")
+        if self.host not in {"127.0.0.1", "::1", "localhost"} and not self.require_tls:
+            raise ValueError("PG_RUNTIME_REMOTE_TLS_REQUIRED")
+
+    def verify(self, raw: Any) -> None:
+        """Check effective libpq destination, not merely caller-supplied DSN."""
+        info = getattr(raw, "info", None)
+        try:
+            matching = (
+                info is not None
+                and info.host == self.host
+                and info.dbname == self.database
+                and int(info.port) == self.port
+                and int(info.server_version) // 10000 == self.server_major
+            )
+        except (AttributeError, TypeError, ValueError):
+            matching = False
+        if not matching:
+            raise PostgresRuntimeError("PG_RUNTIME_DESTINATION_MISMATCH")
+        if self.require_tls:
+            parameters = (
+                info.get_parameters()
+                if callable(getattr(info, "get_parameters", None)) else {}
+            )
+            pgconn = getattr(raw, "pgconn", None)
+            if (parameters.get("sslmode") != "verify-full"
+                    or getattr(pgconn, "ssl_in_use", False) is not True):
+                raise PostgresRuntimeError("PG_RUNTIME_TLS_NOT_VERIFIED")
 
 
 @dataclass(frozen=True)
@@ -101,7 +151,11 @@ class PostgresRuntimeConnection:
 
     def __init__(
         self, raw: Any, statements: Mapping[str, ReviewedStatement],
+        *, target: PostgresTargetPolicy | None = None,
+        on_close: Callable[[], None] | None = None,
     ) -> None:
+        self._target = target or PostgresTargetPolicy()
+        self._target.verify(raw)
         if getattr(raw, "closed", True) or getattr(raw, "autocommit", None) is not True:
             raise PostgresRuntimeError("PG_RUNTIME_AUTOCOMMIT_REQUIRED")
         if not statements:
@@ -115,6 +169,7 @@ class PostgresRuntimeConnection:
         self._transactions: list[Any] = []
         self._closed = False
         self._broken = False
+        self._on_close = on_close
 
     @property
     def in_transaction(self) -> bool:
@@ -123,6 +178,7 @@ class PostgresRuntimeConnection:
     def _ensure_ready(self) -> None:
         if self._closed or self._broken or getattr(self._raw, "closed", True):
             raise PostgresRuntimeError("PG_RUNTIME_CONNECTION_UNUSABLE")
+        self._target.verify(self._raw)
 
     def _review(self, sql: str) -> ReviewedStatement:
         if not isinstance(sql, str):
@@ -217,7 +273,11 @@ class PostgresRuntimeConnection:
     def close(self) -> None:
         if not self._closed:
             self._closed = True
-            self._raw.close()
+            try:
+                self._raw.close()
+            finally:
+                if self._on_close is not None:
+                    self._on_close()
 
 
 class PostgresBackendCandidate:
@@ -231,6 +291,8 @@ class PostgresBackendCandidate:
     def __init__(
         self, connection_factory: Any,
         statements: Mapping[str, ReviewedStatement],
+        *, target: PostgresTargetPolicy | None = None,
+        max_connections: int = 16,
     ) -> None:
         from .backend import StorageCapabilities
 
@@ -242,23 +304,49 @@ class PostgresBackendCandidate:
             consistent_snapshot=False,
             remote=True,
         )
+        if type(max_connections) is not int or not 1 <= max_connections <= 16:
+            raise PostgresRuntimeError("PG_RUNTIME_INVALID_CONNECTION_BUDGET")
         self._factory = connection_factory
+        self._target = target or PostgresTargetPolicy()
         self._statements = dict(statements)
+        self._max_connections = max_connections
+        self._opened = 0
+        self._lock = Lock()
         if not self._statements:
             raise PostgresRuntimeError("PG_RUNTIME_NO_REVIEWED_SQL")
 
     def connect(self, _path: Any) -> PostgresRuntimeConnection:
         # The existing storage protocol carries a SQLite file path; a PG
         # connection is selected by the explicit factory, not by that path.
-        raw = self._factory()
+        with self._lock:
+            if self._opened >= self._max_connections:
+                raise PostgresRuntimeError("PG_RUNTIME_CONNECTION_BUDGET_EXCEEDED")
+            self._opened += 1
         try:
-            return PostgresRuntimeConnection(raw, self._statements)
+            raw = self._factory()
+        except BaseException:
+            self._release()
+            raise
+        try:
+            return PostgresRuntimeConnection(
+                raw, self._statements, target=self._target,
+                on_close=self._release,
+            )
         except BaseException:
             try:
                 raw.close()
-            except Exception:
-                pass
+            finally:
+                self._release()
             raise
+
+    @property
+    def opened_connections(self) -> int:
+        with self._lock:
+            return self._opened
+
+    def _release(self) -> None:
+        with self._lock:
+            self._opened -= 1
 
     def backup(self, _connection: Any, _destination: Any):
         # SQLite's file-based backup contract cannot represent PostgreSQL
