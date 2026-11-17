@@ -175,6 +175,7 @@ def _fk_ddl(table: dict, foreign_key: dict, ordinal: int, known_tables: set[str]
         + " ADD CONSTRAINT " + _q(f"fk_{table['name']}_{ordinal}")
         + " FOREIGN KEY (" + cols + ") REFERENCES " + _ref(parent)
         + " (" + targets + ") ON UPDATE " + update + " ON DELETE " + delete
+        + " DEFERRABLE INITIALLY IMMEDIATE"
     )
 
 
