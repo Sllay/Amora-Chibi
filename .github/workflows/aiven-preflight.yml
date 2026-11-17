@@ -1,0 +1,44 @@
+name: Aiven isolated preflight
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/Dockerfile.aiven-preflight'
+      - 'core/amora/storage/aiven_preflight.py'
+      - 'tests/test_aiven_preflight.py'
+      - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE0.md'
+      - '.github/workflows/aiven-preflight.yml'
+  push:
+    paths:
+      - 'deploy/Dockerfile.aiven-preflight'
+      - 'core/amora/storage/aiven_preflight.py'
+      - 'tests/test_aiven_preflight.py'
+      - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE0.md'
+      - '.github/workflows/aiven-preflight.yml'
+
+jobs:
+  safe-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Build pinned non-root preflight container
+        run: docker build --file deploy/Dockerfile.aiven-preflight --tag amora-aiven-preflight:check .
+      - name: Verify rootless runtime and read-only dependency
+        run: |
+          docker run --rm --entrypoint python amora-aiven-preflight:check -c "import os,psycopg; assert os.getuid()==10001 and psycopg.__version__=='3.3.9'"
+      - name: Verify fail-closed without any connection credentials
+        run: |
+          set +e
+          output="$(docker run --rm amora-aiven-preflight:check 2>&1)"
+          code="$?"
+          set -e
+          [ "$code" -eq 2 ]
+          [ "$output" = '{"status": "blocked", "reason": "AIVEN_DSN_MISSING_OR_INVALID"}' ]
+      - name: Verify fake DSN cannot reach filesystem or network
+        run: |
+          set +e
+          output="$(docker run --rm --network none -e AMORA_POSTGRES_DSN='postgresql://u:fictional@anything.invalid:1234/d?sslmode=require' -e AMORA_POSTGRES_CA_FILE=/secrets/absent-ca.pem amora-aiven-preflight:check 2>&1)"
+          code="$?"
+          set -e
+          [ "$code" -eq 2 ]
+          [ "$output" = '{"status": "blocked", "reason": "AIVEN_CA_FILE_UNAVAILABLE"}' ]
