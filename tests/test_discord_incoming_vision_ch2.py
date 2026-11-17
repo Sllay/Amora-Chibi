@@ -412,3 +412,23 @@ async def test_owner_discord_image_not_silenced_after_ingress_failure(
         assert request.metadata["visual_observation"]["failure_reason"] == expected_reason
     finally:
         core.close()
+
+
+def test_qwen_model_size_boundary_matches_20_mb_native_image():
+    """The Core validates the same raw-byte ceiling used by the Discord worker."""
+    from amora.messaging.incoming_vision import MAX_BASE64_LENGTH
+    assert MAX_IMAGE_BYTES == 20_000_000
+    assert MAX_BASE64_LENGTH == 26_666_668
+    valid = b"\\x89PNG\\r\\n\\x1a\\n".decode("unicode_escape").encode("latin1")
+    # Use a binary test fixture without metadata or real user media.
+    raw = valid + bytes(MAX_IMAGE_BYTES - len(valid))
+    image = InboundImageContent(
+        attachment_id=ATTACHMENT, content_mime="image/png",
+        content_base64=base64.b64encode(raw).decode("ascii"),
+    )
+    assert len(valid_image_bytes(image)) == MAX_IMAGE_BYTES
+    with pytest.raises(ValidationError):
+        InboundImageContent(
+            attachment_id=ATTACHMENT, content_mime="image/png",
+            content_base64=image.content_base64 + "AAAA",
+        )
