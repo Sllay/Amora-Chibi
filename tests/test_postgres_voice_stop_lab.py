@@ -86,11 +86,13 @@ def test_stop_after_enqueue_cancels_and_future_segments_stay_cancelled(pg):
 
 
 def test_concurrent_stop_and_enqueue_never_resurrect(pg):
-    rendezvous = Barrier(2)
+    rendezvous = Barrier(2, timeout=12)
 
     def worker(kind):
         with connect() as conn:
-            rendezvous.wait()
+            conn.execute("SET lock_timeout = '7000ms'")
+            conn.execute("SET statement_timeout = '12000ms'")
+            rendezvous.wait(timeout=12)
             if kind == "stop":
                 return stop.cancel_guarded(
                     conn, "turn-race", NOW, speech_only=True,
