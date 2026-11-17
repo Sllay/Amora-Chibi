@@ -599,6 +599,15 @@ export class DiscordWorker {
           onStage: (stage) => safeLog('IMAGE_INGEST_STAGE', stage),
         });
         if (normalized.incoming_image) {
+          // Discord may omit content_type. Once magic bytes are verified,
+          // fill in the safe media label on the same immutable attachment ID.
+          const nativeRef = normalized.attachments?.find(
+            (item) => item.attachment_id === normalized.incoming_image.attachment_id,
+          );
+          if (nativeRef && (!nativeRef.media_type
+              || nativeRef.media_type === 'application/octet-stream')) {
+            nativeRef.media_type = normalized.incoming_image.content_mime;
+          }
           const mime = normalized.incoming_image.content_mime;
           const wireBytes = Math.floor(normalized.incoming_image.content_base64.length * 3 / 4);
           safeLog('IMAGE_INGEST_READY', `mime=${mime} wire_kib_ceil=${Math.ceil(wireBytes / 1024)}`);
