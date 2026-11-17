@@ -17,6 +17,7 @@ from .postgres_memory_lab import ensure_local_lab
 from .postgres_v18_lab_schema import _q, _ref, LAB_SCHEMA
 from .postgres_v18_manifest import (
     build_manifest, synthetic_v18_connection, _source_tables,
+    _foreign_keys, _unique_constraints,
 )
 
 _BATCH = 100
@@ -43,9 +44,23 @@ def _validate_source(source: sqlite3.Connection, manifest: dict) -> None:
     version = source.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
     if version != (18,):
         raise SyntheticImportError("SYNTHETIC_SOURCE_VERSION")
-    names = {row[0] for row in _source_tables(source)}
-    if names != {table["name"] for table in manifest["tables"]}:
+    source_tables = dict(_source_tables(source))
+    if set(source_tables) != {table["name"] for table in manifest["tables"]}:
         raise SyntheticImportError("SYNTHETIC_SOURCE_TABLES")
+    # Column names alone are insufficient: do not accept a source whose
+    # CHECK constraints, FK actions, UNIQUE policy or index DDL drifted.
+    indexes = dict(source.execute("""
+        SELECT name,sql FROM sqlite_schema
+        WHERE type='index' AND sql IS NOT NULL
+    """))
+    if indexes != {
+        item["name"]: item["sqlite_create_sql"] for item in manifest["indexes"]
+    }:
+        raise SyntheticImportError("SYNTHETIC_SOURCE_INDEX_DRIFT")
+    if source.execute("""
+        SELECT COUNT(*) FROM sqlite_schema WHERE type IN ('trigger','view')
+    """).fetchone()[0]:
+        raise SyntheticImportError("SYNTHETIC_SOURCE_UNREVIEWED_OBJECT")
     with closing(synthetic_v18_connection()) as reference:
         for table in manifest["tables"]:
             name = table["name"]
@@ -59,6 +74,15 @@ def _validate_source(source: sqlite3.Connection, manifest: dict) -> None:
             ]
             if source_cols != expected_cols:
                 raise SyntheticImportError("SYNTHETIC_SOURCE_COLUMNS")
+            # The CI importer is intentionally stricter than the future
+            # private backup importer: identical synthetic DDL is mandatory.
+            if source_tables[name] != table["sqlite_create_sql"]:
+                raise SyntheticImportError("SYNTHETIC_SOURCE_DDL_DRIFT")
+            if table["kind"] == "ordinary":
+                if (_foreign_keys(source, name) != table["foreign_keys"]
+                        or _unique_constraints(source, name)
+                           != table["unique_constraints"]):
+                    raise SyntheticImportError("SYNTHETIC_SOURCE_CONSTRAINT_DRIFT")
 
 
 def _copy_rows(source, destination, table: str, columns: list[str]) -> int:
