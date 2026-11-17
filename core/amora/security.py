@@ -370,6 +370,20 @@ class SecurityMiddleware:
                 maximum = 128 * 1024 * 1024
             elif path == "/v1/audio/transcribe" or path.startswith("/v1/avatar/assets/"):
                 maximum = 12 * 1024 * 1024
+            elif (
+                not self.worker
+                and path == "/v1/messaging/worker/inbound"
+                and scope["method"] == "POST"
+                and role == "messaging"
+            ):
+                # Groq's 20 MB limit applies to hosted image URLs.
+                # A *separate*, signature-verified and same-ID Discord
+                # CDN URL may be passed to Groq for larger owner-DM images;
+                # the Core receives only a <=3 MB binary WebP preview as
+                # Base64 (<=4 MB string), plus small signed URL metadata.
+                # This exact authenticated route may carry up to 5 MiB of
+                # JSON; other JSON routes remain capped at 256 KiB.
+                maximum = 5 * 1024 * 1024
             else:
                 maximum = 256 * 1024
             if path == "/v1/pairing/redeem" or self.worker:

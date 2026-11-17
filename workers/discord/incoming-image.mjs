@@ -25,7 +25,8 @@ function nativeMimeHint(item) {
   return EXTENSION_MIMES[ext] || null;
 }
 // Keep the Core->worker wire payload small even for large native artwork.
-export const MAX_INBOUND_IMAGE_BYTES = 4 * 1024 * 1024;
+export const MAX_INBOUND_IMAGE_BYTES = 2_800_000;
+export const MAX_GROQ_URL_IMAGE_BYTES = 20_000_000;
 export const MAX_NATIVE_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_TIMEOUT_MS = 8_000;
 
@@ -167,6 +168,16 @@ export async function collectDiscordIncomingImage(message, {
       }
       let bytes = source;
       let outputMime = mime;
+      // Groq advertises a 20 MB limit for *image URL* input, while inline
+      // Base64 can have a smaller request cap. An original from the verified
+      // Discord CDN is eligible for direct visual reading only if its bytes
+      // and native MIME passed all the checks above. The signed URL never
+      // enters conversation memory, logs or a generic URL-fetch tool.
+      const sourceUrl = (
+        field === 'url' && CORE_MIMES.has(mime)
+        && source.length > MAX_INBOUND_IMAGE_BYTES
+        && source.length <= MAX_GROQ_URL_IMAGE_BYTES
+      ) ? url : null;
       // HEIC and AVIF are decoded locally into the closed, provider-safe
       // image MIME contract even when the native file is under 4 MiB.
       if (source.length > MAX_INBOUND_IMAGE_BYTES || !CORE_MIMES.has(mime)) {
@@ -186,6 +197,7 @@ export async function collectDiscordIncomingImage(message, {
         attachment_id: String(candidate.id),
         content_mime: outputMime,
         content_base64: bytes.toString('base64'),
+        ...(sourceUrl ? { source_url: sourceUrl } : {}),
       };
     } catch (error) {
       if (error instanceof ImageTransformError) throw new IncomingImageError(error.code);

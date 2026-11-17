@@ -412,3 +412,116 @@ async def test_owner_discord_image_not_silenced_after_ingress_failure(
         assert request.metadata["visual_observation"]["failure_reason"] == expected_reason
     finally:
         core.close()
+
+
+def test_inline_fallback_size_boundary_is_below_4_mb_encoded():
+    from amora.messaging.incoming_vision import MAX_BASE64_LENGTH
+    assert MAX_IMAGE_BYTES == 2_800_000
+    assert MAX_BASE64_LENGTH == 3_733_336
+    valid = bytes([137, 80, 78, 71, 13, 10, 26, 10])
+    raw = valid + bytes(MAX_IMAGE_BYTES - len(valid))
+    image = InboundImageContent(
+        attachment_id=ATTACHMENT, content_mime="image/png",
+        content_base64=base64.b64encode(raw).decode("ascii"),
+    )
+    assert len(valid_image_bytes(image)) == MAX_IMAGE_BYTES
+    with pytest.raises(ValidationError):
+        InboundImageContent(
+            attachment_id=ATTACHMENT, content_mime="image/png",
+            content_base64=image.content_base64 + "AAAA",
+        )
+
+
+@pytest.mark.asyncio
+async def test_qwen_prefers_20mb_signed_discord_url_and_falls_back_on_404(tmp_path):
+    source = ("https://cdn.discordapp.com/attachments/"
+              "123456789012345678/" + ATTACHMENT + "/art.png"
+              "?ex=aaaa&is=bbbb&hm=cccc")
+    image = payload().model_copy(update={"source_url": source})
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen = body["messages"][0]["content"][1]["image_url"]["url"]
+        calls.append(seen)
+        if len(calls) == 1:
+            assert seen == source
+            return httpx.Response(404, json={"error": "signed original not available"})
+        assert seen == "data:image/png;base64," + image.content_base64
+        return httpx.Response(200, json={"choices": [{
+            "finish_reason": "stop",
+            "message": {"content": json.dumps({
+                "description": observation()["description"],
+                "visible_text": [], "uncertainties": observation()["uncertainties"],
+                "confidence": observation()["confidence"],
+            })}
+        }]})
+
+    vision = GroqIncomingImageVision(secrets(tmp_path), transport=httpx.MockTransport(handler))
+    assert await vision.analyze(image) == observation()
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_qwen_original_discord_url_success_never_sends_thumbnail(tmp_path):
+    source = ("https://cdn.discordapp.com/attachments/"
+              "123456789012345678/" + ATTACHMENT + "/art.png?ex=aaaa")
+    image = payload().model_copy(update={"source_url": source})
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append(body["messages"][0]["content"][1]["image_url"]["url"])
+        return httpx.Response(200, json={"choices": [{
+            "finish_reason": "stop", "message": {"content": json.dumps({
+                "description": observation()["description"],
+                "visible_text": [], "uncertainties": observation()["uncertainties"],
+                "confidence": observation()["confidence"],
+            })}
+        }]})
+
+    vision = GroqIncomingImageVision(secrets(tmp_path), transport=httpx.MockTransport(handler))
+    assert await vision.analyze(image) == observation()
+    assert calls == [source]
+
+
+@pytest.mark.parametrize("bad_url", [
+    "https://evil.example/attachments/123456789012345678/" + ATTACHMENT + "/a.png",
+    "http://cdn.discordapp.com/attachments/123456789012345678/" + ATTACHMENT + "/a.png",
+    "https://cdn.discordapp.com/attachments/888888888888888888/" + ATTACHMENT + "/a.png",
+    "https://cdn.discordapp.com/attachments/123456789012345678/888888888888888888/a.png",
+    "https://cdn.discordapp.com/attachments/123456789012345678/" + ATTACHMENT + "/a.png?redirect=https://evil.example",
+    "https://cdn.discordapp.com.evil.example/attachments/123456789012345678/" + ATTACHMENT + "/a.png",
+])
+def test_core_rejects_untrusted_discord_cdn_image_urls(tmp_path, monkeypatch, bad_url):
+    from amora.messaging.models import InboundMessage
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        base = _message(
+            core, message_id="url-boundary", actor_id="111111111111111111",
+            channel_type=ChannelType.DM, text="olha",
+        ).model_dump(mode="json")
+        base["conversation_id"] = "123456789012345678"
+        base["remote_processing_allowed"] = True
+        base["attachments"] = [
+            {"attachment_id": ATTACHMENT, "media_type": "image/png"}
+        ]
+        base["incoming_image"] = {
+            **payload().model_dump(mode="json"), "source_url": bad_url,
+        }
+        with pytest.raises(ValidationError):
+            InboundMessage.model_validate(base)
+        base["incoming_image"]["source_url"] = (
+            "https://cdn.discordapp.com/attachments/123456789012345678/"
+            + ATTACHMENT + "/a.png?ex=aaaa&is=bbbb&hm=cccc"
+        )
+        assert InboundMessage.model_validate(base).incoming_image.source_url.startswith(
+            "https://cdn.discordapp.com/"
+        )
+        base["remote_processing_allowed"] = False
+        with pytest.raises(ValidationError):
+            InboundMessage.model_validate(base)
+    finally:
+        core.close()

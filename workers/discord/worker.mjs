@@ -30,7 +30,7 @@ const INBOUND_RETRY_WINDOW_MS = 30_000;
 // 640 KiB WebP yields < 0.9 MiB JSON including Base64 and metadata.
 // Only used after an observed HTTP 413; not a silent quality reduction.
 const IMAGE_RETRY_WIRE_BYTES = 640 * 1024;
-const IMAGE_PIPELINE_VERSION = 'ch2.3';
+const IMAGE_PIPELINE_VERSION = 'ch2.5';
 const OUTBOUND_CLAIM_LEASE_SECONDS = 120;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const enabled = (name, fallback = false) => {
