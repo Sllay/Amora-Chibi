@@ -26,7 +26,8 @@ from .postgres_memory_lab import ensure_local_lab
 # This is a tiny contract slice, not a general Core dialect.
 COUNT_ACTIVE = """
 SELECT COUNT(*) AS total FROM amora_pg_v18_lab.memory_records
-WHERE archived_at IS NULL
+WHERE owner_entity_id=%s AND privacy_scope NOT IN ('AUTH','SECRET')
+  AND archived_at IS NULL
 """.strip()
 FETCH_ALLOWED = """
 SELECT id,content,updated_at,owner_entity_id
