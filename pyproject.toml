@@ -27,6 +27,11 @@ dev = [
 aiven-preflight = [
   "psycopg[binary]>=3.2,<4",
 ]
+# Explicit opt-in dependency for the injected Run 1 PostgreSQL backend candidate.
+# This does not register the candidate in the production backend selector.
+postgres-runtime-candidate = [
+  "psycopg[binary]>=3.2,<4",
+]
 
 [project.scripts]
 amora = "amora.__main__:main"
