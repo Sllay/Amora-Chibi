@@ -299,10 +299,16 @@ class PostgresRuntimeConnection:
         from .postgres_v18_manifest import build_manifest
 
         manifest = build_manifest()
-        required = {
-            table["name"] for table in manifest["tables"]
+        ordinary = [
+            table for table in manifest["tables"]
             if table["kind"] == "ordinary"
-        } | {"memory_search"}
+        ]
+        required = {table["name"] for table in ordinary} | {"memory_search"}
+        expected_columns = {
+            table["name"]: tuple(column["name"] for column in table["columns"])
+            for table in ordinary
+        }
+        expected_columns["memory_search"] = ("memory_id", "content", "tags")
         try:
             with self._raw.cursor() as cursor:
                 cursor.execute(
@@ -312,6 +318,19 @@ class PostgresRuntimeConnection:
                 actual = {row[0] for row in cursor.fetchall()}
                 if not required.issubset(actual):
                     raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_TABLES_MISSING")
+                cursor.execute(
+                    "SELECT table_name, column_name "
+                    "FROM information_schema.columns "
+                    "WHERE table_schema=%s "
+                    "ORDER BY table_name, ordinal_position",
+                    ("amora_pg_v18_lab",),
+                )
+                actual_columns: dict[str, list[str]] = {}
+                for table_name, column_name in cursor.fetchall():
+                    actual_columns.setdefault(table_name, []).append(column_name)
+                if any(tuple(actual_columns.get(name, ())) != columns
+                       for name, columns in expected_columns.items()):
+                    raise PostgresRuntimeError("PG_RUNTIME_SCHEMA_COLUMNS_MISMATCH")
                 cursor.execute(
                     "SELECT version FROM amora_pg_v18_lab.schema_migrations "
                     "ORDER BY version"
