@@ -44,6 +44,12 @@ class FakeCursor:
         self.owner.calls.append((sql, tuple(params)))
         if "pg_catalog.pg_tables" in sql:
             self.rows = [(name,) for name in sorted(self.owner.tables)]
+        elif "information_schema.columns" in sql:
+            self.rows = [
+                (table, column)
+                for table, columns in sorted(self.owner.columns.items())
+                for column in columns
+            ]
         elif "schema_migrations" in sql and "ORDER BY version" in sql:
             self.rows = [(value,) for value in self.owner.versions]
         elif sql.startswith("SELECT"):
@@ -98,6 +104,7 @@ class FakeRaw:
         self.tx_depth = 0
         self.fail_commit = False
         self.tables = set()
+        self.columns = {}
         self.versions = tuple(range(1, 19))
 
     def cursor(self):
@@ -215,15 +222,22 @@ def test_prepared_schema_is_strictly_read_only():
     from amora.storage.postgres_v18_manifest import build_manifest
 
     raw = FakeRaw()
-    raw.tables = {
-        table["name"] for table in build_manifest()["tables"]
-        if table["kind"] == "ordinary"
-    } | {"memory_search"}
+    manifest = build_manifest()
+    raw.columns = {
+        table["name"]: tuple(c["name"] for c in table["columns"])
+        for table in manifest["tables"] if table["kind"] == "ordinary"
+    }
+    raw.columns["memory_search"] = ("memory_id", "content", "tags")
+    raw.tables = set(raw.columns)
     db = PostgresRuntimeConnection(raw, REGISTRY)
     db.verify_prepared_schema(18)
     assert all(sql.startswith("SELECT") for sql, _ in raw.calls)
     with pytest.raises(PostgresRuntimeError, match="PG_RUNTIME_SCHEMA_TARGET_UNSUPPORTED"):
         db.verify_prepared_schema(19)
+    raw.columns["memory_search"] = ("memory_id", "content")
+    with pytest.raises(PostgresRuntimeError, match="PG_RUNTIME_SCHEMA_COLUMNS_MISMATCH"):
+        db.verify_prepared_schema(18)
+    raw.columns["memory_search"] = ("memory_id", "content", "tags")
     raw.versions = (1, 2)
     with pytest.raises(PostgresRuntimeError, match="PG_RUNTIME_SCHEMA_VERSION_MISMATCH"):
         db.verify_prepared_schema(18)
