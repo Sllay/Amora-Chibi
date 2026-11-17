@@ -22,7 +22,7 @@ from .models import InboundImageContent
 from .visual_enrichment import VisualEnrichmentError, VisualExpressionEnrichmentService
 
 
-MAX_IMAGE_BYTES = 3_000_000
+MAX_IMAGE_BYTES = 2_800_000
 MAX_BASE64_LENGTH = 4 * ((MAX_IMAGE_BYTES + 2) // 3)
 
 VISUAL_OBSERVATION_SCHEMA = {
@@ -116,7 +116,7 @@ class GroqIncomingImageVision:
             "model": self.model,
             "messages": [{"role": "user", "content": [
                 {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": data_url}},
+                {"type": "image_url", "image_url": {"url": image.source_url or data_url}},
             ]}],
             "temperature": 0.1,
             # Structured visual extraction does not need chain-of-thought. Reserve
@@ -141,7 +141,41 @@ class GroqIncomingImageVision:
                 timeout=httpx.Timeout(self.timeout_seconds, connect=min(10.0, self.timeout_seconds)),
                 follow_redirects=False,
             ) as client:
-                response = await client.post(self.endpoint, json=payload, headers=headers)
+                if image.source_url:
+                    # The 20 MB provider limit is documented for image URLs,
+                    # NOT for Base64. The original CDN URL has already been
+                    # bound to owner DM + native Discord channel/attachment
+                    # by InboundMessage validation; it is ephemeral, never
+                    # included in the conversation provider or logs.
+                    first_timeout = min(10.0, self.timeout_seconds / 2)
+                    response = None
+                    reason = ""
+                    try:
+                        response = await client.post(
+                            self.endpoint, json=payload, headers=headers,
+                            timeout=httpx.Timeout(first_timeout),
+                        )
+                        if response.status_code in {400, 403, 404, 413, 422}:
+                            reason = "PROVIDER_URL_REJECTED"
+                        elif response.status_code >= 400:
+                            reason = ""
+                    except (httpx.TimeoutException, httpx.TransportError):
+                        reason = "PROVIDER_URL_UNAVAILABLE"
+                    if reason:
+                        logging.getLogger("amora.incoming_vision").info(
+                            "incoming_visual_url_fallback code=%s", reason
+                        )
+                        # One sanitized, strict Base64 preview attempt.
+                        # The worker prepared <=2.8 MB binary specifically
+                        # to remain below historical ~4 MB inline budgets.
+                        payload["messages"][0]["content"][1]["image_url"]["url"] = data_url
+                        remaining = max(1.0, self.timeout_seconds - first_timeout)
+                        response = await client.post(
+                            self.endpoint, json=payload, headers=headers,
+                            timeout=httpx.Timeout(remaining),
+                        )
+                else:
+                    response = await client.post(self.endpoint, json=payload, headers=headers)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise GroqVisionError("INCOMING_VISION_TRANSPORT_FAILED", "image analysis transport failed") from exc
         if response.status_code >= 400:
