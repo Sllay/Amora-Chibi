@@ -92,3 +92,19 @@ Teste real após deploy do PR: a mesma foto na DM com consentimento ativo; verif
 **Regressões:** testes no próprio ASGI Core simulam uma requisição de serviço com **4 MiB de bytes codificados em 5.59 MiB Base64 + JSON** — o tamanho deve alcançar a validação do Pydantic (422 por envelope propositalmente incompleto), não falhar no middleware (413). Outros papéis, métodos, caminhos, requisições sem autorização e requisições acima de 6 MiB continuam negados. Uploads em chunks também são interrompidos acima de 6 MiB. Não usar conteúdo pessoal nesses testes.
 
 **Pós-deploy:** atualizar **somente Core** é necessário para corrigir a causa identificada; o worker CH2.3 já consta ativo pelos logs. Validar fisicamente imagens pequenas (~707 KiB) e maiores (~1.5 MiB/10 MiB): ausência de `IMAGE_TRANSPORT_RECOVERY reason=CORE_HTTP_413`, presença de `CORE_INBOUND_OK` e `INCOMING_IMAGE_ANALYZED` no Core. Se 413 persistir mesmo com o Core novo, examinar proxy/ingress ou outros limites a partir dos headers/logs, sem aumentar globalmente limites de segurança e sem fabricar observação visual.
+
+
+## CH2.5 — Teto de arquivo do modelo como contrato do transporte (supersede CH2.4)
+
+Solicitação do operador: evitar reduzir obras artísticas apenas por um limite interno de 4 MiB se o modelo Qwen 3.8 27B anuncia teto de arquivo de **20 MB**.
+
+**Fonte oficial:** https://console.groq.com/docs/model/qwen/qwen3.8-27b anuncia `MAX FILE SIZE 20 MB`; https://console.groq.com/docs/vision explicita 20 MB **para imagens fornecidas por URL**. A mesma página documenta data URI/Base64, porém **não garante explicitamente** que uma data URI com 20 MB de imagem seja aceita. O teste real do provider continua obrigatório. Não aplicar limites da API QwenCloud/Alibaba como se fossem Groq.
+
+**Limites sincronizados CH2.5:**
+- Discord coleta nativo de até **25 MiB**, como antes; arquivo PNG/JPEG/WebP **até 20.000.000 bytes** passa pelo wire sem perda de fidelidade. Arquivo maior é convertido localmente para WebP de até 20.000.000 bytes; HEIF/AVIF ainda requerem conversão obrigatória independentemente do tamanho.
+- `InboundImageContent.content_base64` (Pydantic) e `valid_image_bytes` (Core) aceitam no máximo 20.000.000 bytes decodificados = **26.666.668 caracteres Base64**, com MIME/assinatura e binding de attachment id validados.
+- `SecurityMiddleware` permite no máximo **28 MiB de JSON bruto** somente ao papel `messaging` autenticado, **POST /v1/messaging/worker/inbound** no Core. O teto HTTP é necessariamente superior ao teto binário do modelo, porque transporta Base64 + metadata. Outras rotas e outros papéis continuam limitados a 256 KiB ou a seus tetos anteriores. No Core há no máximo **uma** requisição de visão grande (corpo declarado acima de 6 MiB ou chunked) em andamento para limitar pressão de memória no serviço de 512 MB; a leitura desses corpos tem timeout de 20s, os menores continuam em 10s. O custo e a latência de payloads muito grandes podem aumentar.
+- O worker mantém fallback do HTTP 413 para uma prévia WebP ≤640 KiB e, por último, metadata-only, preservando a mensagem sem alucinar imagem. A versão CH2.4 antiga que limitava a 6 MiB foi substituída e seus testes atualizados.
+- **Não** alegar que um arquivo de 20 MB com Base64 necessariamente será aceito pela Groq em produção. A aprovação depende da integração Core + worker e envio real ao modelo. Caso Groq rejeite 20 MB na modalidade Base64, não elevar ainda mais o limite; verificar um teto adequado, envio por URL com consentimento/controles específicos ou reduzir a cópia visual mantendo o original intacto no Discord.
+
+**Testes:** boundary de 20.000.000 bytes em worker e Core, campo Base64 fechado (26.666.668 caracteres), HTTP serviço aceita >256 KiB até ~26,7 MB Base64, rejeita >28 MiB, limita streaming e concorrência, mantém autenticação/restrições das outras rotas; smoke nativo libvips e restante da matriz de segurança/cognição. **Merge apenas após CI verde.**
