@@ -47,6 +47,26 @@ Identidade **não** é equivalente a estilo:
 6. Validar em seeds e prompts não vistos, comparar identidade/traço/falhas e só então promover adapter LoRA ao runtime da Amora.
 7. O formato de artefato previsto para uma LoRA é `safetensors`; salvar hashes, modelo base, licença e instruções de inferência. Nunca subir checkpoints pesados no Git.
 
+## LoRAs SDXL candidatas para obter o traço-base
+
+Catálogo apenas para **avaliação**, não instaladas na OVH nem no Core:
+
+| Candidata | Objetivo | Fonte |
+|---|---|---|
+| `xinhai342/lora-trained-style_cartoonline` | linhas cartoon legíveis; candidata ao traço desenhado à mão | https://huggingface.co/xinhai342/lora-trained-style_cartoonline |
+| `shawn323/sd-xl-lora-cartoon` | acabamento cartoon generalista | https://huggingface.co/shawn323/sd-xl-lora-cartoon |
+| `issaccyj/cartoonillustration` | variação de cartoon ilustrado | https://huggingface.co/issaccyj/cartoonillustration |
+
+As model cards indicam SDXL/openrail++; cada licença e derivação devem ser
+revalidadas no momento da utilização. Nenhuma está visualmente aprovada para a
+Amora, nem pode ser servida pelo endpoint OVH atual. Testar em backend de
+inferência SDXL com `load_lora_weights`/ComfyUI, comparar com desenhos
+canônicos, então curar somente outputs aprovados.
+
+As cinco vistas originais **não** viram 20 imagens por espelhamento/rotação
+artificial; a diversidade de pose e composição precisa ser real. Preservar
+conjunto separado de referência/validação para detectar overfitting.
+
 ## Próximas gates, antes de produção
 - Teste offline de contrato; teste live da OVH requer credencial e não foi executado neste PR.
 - Validar que a plataforma real não altera MIME/dimensões e que mensagens remotas ficam dentro do budget.
