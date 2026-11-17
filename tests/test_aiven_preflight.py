@@ -15,7 +15,7 @@ from amora.storage.aiven_preflight import (
 
 _DSN = (
     "postgresql://avnadmin:secret_value@"
-    "amora-database-amora-ia.f.aivencloud.com:14600/defaultdb?sslmode=require"
+    "synthetic-test-project.f.aivencloud.com:14600/defaultdb?sslmode=require"
 )
 _CA = "-----BEGIN CERTIFICATE-----\nTEST-ONLY-PEM\n-----END CERTIFICATE-----\n"
 
@@ -62,12 +62,12 @@ class _Connection:
 
 @pytest.mark.parametrize("dsn", [
     "",
-    "https://amora-database-amora-ia.f.aivencloud.com",
+    "https://synthetic-test-project.f.aivencloud.com",
     "postgresql://avnadmin:secret_value@evil.example:14600/defaultdb",
-    "postgresql://avnadmin:secret_value@amora-database-amora-ia.f.aivencloud.com/defaultdb",
-    "postgresql://avnadmin@amora-database-amora-ia.f.aivencloud.com:14600/defaultdb",
-    "postgresql://avnadmin:secret_value@amora-database-amora-ia.f.aivencloud.com:14600/defaultdb?sslmode=disable",
-    "postgresql://avnadmin:secret_value@amora-database-amora-ia.f.aivencloud.com:14600/defaultdb?options=-c%20allow_system_table_mods=on",
+    "postgresql://avnadmin:secret_value@synthetic-test-project.f.aivencloud.com/defaultdb",
+    "postgresql://avnadmin@synthetic-test-project.f.aivencloud.com:14600/defaultdb",
+    "postgresql://avnadmin:secret_value@synthetic-test-project.f.aivencloud.com:14600/defaultdb?sslmode=disable",
+    "postgresql://avnadmin:secret_value@synthetic-test-project.f.aivencloud.com:14600/defaultdb?options=-c%20allow_system_table_mods=on",
 ])
 def test_reject_untrusted_or_incomplete_aiven_connection_settings(dsn):
     with pytest.raises(AivenPreflightError, match="AIVEN_DSN_MISSING_OR_INVALID"):
