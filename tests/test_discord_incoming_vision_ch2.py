@@ -419,7 +419,7 @@ def test_qwen_model_size_boundary_matches_20_mb_native_image():
     from amora.messaging.incoming_vision import MAX_BASE64_LENGTH
     assert MAX_IMAGE_BYTES == 20_000_000
     assert MAX_BASE64_LENGTH == 26_666_668
-    valid = b"\\x89PNG\\r\\n\\x1a\\n".decode("unicode_escape").encode("latin1")
+    valid = bytes([137, 80, 78, 71, 13, 10, 26, 10])
     # Use a binary test fixture without metadata or real user media.
     raw = valid + bytes(MAX_IMAGE_BYTES - len(valid))
     image = InboundImageContent(
