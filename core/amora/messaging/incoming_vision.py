@@ -22,7 +22,7 @@ from .models import InboundImageContent
 from .visual_enrichment import VisualEnrichmentError, VisualExpressionEnrichmentService
 
 
-MAX_IMAGE_BYTES = 20_000_000
+MAX_IMAGE_BYTES = 3_000_000
 MAX_BASE64_LENGTH = 4 * ((MAX_IMAGE_BYTES + 2) // 3)
 
 VISUAL_OBSERVATION_SCHEMA = {
