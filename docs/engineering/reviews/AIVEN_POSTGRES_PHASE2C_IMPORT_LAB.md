@@ -24,3 +24,7 @@ Garantias do laboratório:
 - Em uma futura importação privada, também serão exigidos checksum e sidecar originais, relatório sanitizado, limite de armazenamento e conexões do Free, rollback ensaiado, comparação por tabela e aprovação explícita do operador.
 
 **Nenhuma ação no Northflank necessária neste checkpoint.** Não executar o laboratório contra Aiven/Turso.
+
+## Evidência adicional de CI
+
+O importador rejeita DDL divergente, incluindo definição de índices/constraints e colunas. A suíte sintética cobre agora: mais de dois lotes de etiquetas; rollover da sequência AUTOINCREMENT, bytea com bytes não UTF-8, FK de documento FTS órfão com rollback de todas as tabelas, e tentativa de reimportação em destino não vazio. Essas provas não substituem auditoria de backup privado em ambiente isolado.
