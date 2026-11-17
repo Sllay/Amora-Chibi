@@ -10,7 +10,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-export const MAX_VISION_WIRE_BYTES = 20_000_000;
+export const MAX_VISION_WIRE_BYTES = 3_000_000;
 const TRANSFORM_BUDGET_MS = 12_000;
 const SOURCE_EXTENSIONS = Object.freeze({
   'image/png': 'png',
