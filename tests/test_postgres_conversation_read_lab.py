@@ -6,7 +6,7 @@ write through the bridge. No production backend or external PostgreSQL.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import RLock
 from types import SimpleNamespace
 from uuid import UUID
@@ -77,7 +77,7 @@ def pair():
 def turn(n: int, dedupe: str):
     return TurnDecision(
         id=UUID(int=n), state=TurnState.TAKE_TURN,
-        score=0.8, created_at=NOW,
+        score=0.8, created_at=NOW + timedelta(seconds=n),
         signal=TurnSignal(
             speaker_id="PERSON_SYNTHETIC",
             direct_call=True,
@@ -90,7 +90,7 @@ def turn(n: int, dedupe: str):
 def speech(n: int, *, dedupe=None):
     return SpeechUtterance(
         id=UUID(int=n), text=f"mensagem sintética {n}",
-        device_id="PHONE", created_at=NOW,
+        device_id="PHONE", created_at=NOW + timedelta(seconds=n),
         dedupe_key=dedupe or f"synthetic:speech:{n}",
         metadata={"cognitive_turn_id":"synthetic-turn"},
     )
@@ -157,7 +157,6 @@ def test_actual_utterance_read_count_methods_and_reconnect(pair):
     )
     assert sqlite_store.pending_count() == pg_store.pending_count() == 3
     assert sqlite_store.spoken_count() == pg_store.spoken_count() == 0
-    from datetime import timedelta
     clock = SimpleNamespace(now=lambda:NOW)
     sqlite_store.clock = clock
     sqlite_store.acknowledge(UUID(int=20), spoken=True)
