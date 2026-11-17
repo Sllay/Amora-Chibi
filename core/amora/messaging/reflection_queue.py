@@ -21,7 +21,10 @@ _MAX_ATTEMPTS = 5
 _LEASE_SECONDS = 180
 _TIMEOUT_SECONDS = 60
 _IDLE_POLL_SECONDS = 10.0
-_RECONCILE_SECONDS = 30.0
+# Reconciliation is a durable *crash-gap* sweep, not the normal enqueue path.
+# Ordinary accepted turns call enqueue()+wake immediately. Avoid rescanning
+# all historical messages every 30 seconds on remote Turso storage.
+_RECONCILE_SECONDS = 120.0
 _RETRY_REASONS = {
     "REFLECTION_PROVIDER_FAILURE", "NO_STRUCTURED_REFLECTION_PROVIDER",
     "CONTEXT_ENVELOPE_OVERFLOW", "REFLECTION_SKIPPED", "REFLECTION_LEASE_LOST",
@@ -96,7 +99,9 @@ class ReflectionQueue:
             """INSERT INTO memory_reflection_jobs(turn_id,input_id,status,created_at,available_at)
                SELECT m.turn_id,m.id,'pending',m.started_at,?
                FROM conversation_messages m
-               WHERE m.dedupe_key='cognitive-input:' || m.turn_id
+               WHERE m.dedupe_key >= 'cognitive-input:'
+                 AND m.dedupe_key < 'cognitive-input;'
+                 AND m.dedupe_key='cognitive-input:' || m.turn_id
                  AND m.remote_processing_allowed=1 AND m.privacy_scope NOT IN ('AUTH','SECRET')
                  AND json_extract(m.metadata_json,'$.surface')='platform_messaging'
                  AND json_extract(m.metadata_json,'$.reflection_enqueue_requested')=1
@@ -201,7 +206,9 @@ class ReflectionQueue:
             conn = self.database._conn
             rows = conn.execute(
                 "SELECT m.turn_id FROM conversation_messages m "
-                "WHERE m.dedupe_key='cognitive-input:' || m.turn_id "
+                "WHERE m.dedupe_key >= 'cognitive-input:' "
+                "AND m.dedupe_key < 'cognitive-input;' "
+                "AND m.dedupe_key='cognitive-input:' || m.turn_id "
                 "AND m.privacy_scope='PERSONAL' AND m.remote_processing_allowed=1 "
                 "AND m.speaker_id IS NOT NULL AND m.session_id IS NOT NULL "
                 "AND json_extract(m.metadata_json,'$.surface')='platform_messaging' "
