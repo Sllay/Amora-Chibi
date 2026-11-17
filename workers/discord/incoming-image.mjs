@@ -89,12 +89,14 @@ export async function collectDiscordIncomingImage(message, {
   fetchImpl = fetch,
   timeoutMs = MAX_TIMEOUT_MS,
   convertImpl = transcodeOversizedImage,
+  onStage = () => {},
 } = {}) {
   if (!message?.id || !snowflake(message?.channel_id) || message.guild_id) return null;
   const candidate = (Array.isArray(message.attachments) ? message.attachments.slice(0, 16) : [])
     .find((item) => MIMES.has(String(item?.content_type || '').split(';')[0].toLowerCase()));
   if (!candidate) return null;
   if (!snowflake(candidate.id)) throw new IncomingImageError('IMAGE_ATTACHMENT_ID_INVALID');
+  onStage('candidate');
   if (Number.isFinite(candidate.size) && candidate.size > MAX_NATIVE_IMAGE_BYTES) {
     throw new IncomingImageError('IMAGE_NATIVE_TOO_LARGE');
   }
@@ -117,10 +119,12 @@ export async function collectDiscordIncomingImage(message, {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.min(MAX_TIMEOUT_MS, timeoutMs));
     try {
+      onStage(field === 'url' ? 'original_fetch' : 'proxy_fetch');
       const response = await fetchImpl(url, {
         method: 'GET', redirect: 'error', signal: controller.signal,
       });
       const source = await boundedImageResponse(response);
+      onStage('downloaded');
       const mime = mimeFromSignature(source);
       const declared = String(candidate.content_type).split(';')[0].toLowerCase();
       if (field === 'url' && mime !== declared) {
@@ -129,6 +133,7 @@ export async function collectDiscordIncomingImage(message, {
       let bytes = source;
       let outputMime = mime;
       if (source.length > MAX_INBOUND_IMAGE_BYTES) {
+        onStage('transcode_started');
         const converted = await convertImpl(source, mime);
         if (!converted || !Buffer.isBuffer(converted.bytes) ||
             !converted.bytes.length || converted.bytes.length > MAX_INBOUND_IMAGE_BYTES ||
@@ -137,7 +142,9 @@ export async function collectDiscordIncomingImage(message, {
         }
         bytes = converted.bytes;
         outputMime = converted.mime;
+        onStage('transcode_completed');
       }
+      onStage('ready');
       return {
         attachment_id: String(candidate.id),
         content_mime: outputMime,
