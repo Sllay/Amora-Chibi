@@ -18,6 +18,7 @@ on:
       - 'core/amora/storage/postgres_auth_sessions_lab.py'
       - 'core/amora/storage/postgres_voice_stop_lab.py'
       - 'core/amora/storage/postgres_runtime_sql_audit.py'
+      - 'core/amora/storage/postgres_conversation_read_lab.py'
       - 'tests/test_postgres_memory_lab_contract.py'
       - 'tests/test_postgres_v18_manifest.py'
       - 'tests/test_postgres_v18_lab_schema.py'
@@ -33,6 +34,7 @@ on:
       - 'tests/test_postgres_auth_sessions_lab.py'
       - 'tests/test_postgres_voice_stop_lab.py'
       - 'tests/test_postgres_runtime_sql_audit.py'
+      - 'tests/test_postgres_conversation_read_lab.py'
       - 'tests/test_postgres_memory_lab_integration.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
       - '.github/workflows/aiven-postgres-lab.yml'
@@ -97,4 +99,5 @@ jobs:
             tests/test_postgres_speech_leases_lab.py \
             tests/test_postgres_auth_sessions_lab.py \
             tests/test_postgres_voice_stop_lab.py \
-            tests/test_postgres_runtime_sql_audit.py
+            tests/test_postgres_runtime_sql_audit.py \
+            tests/test_postgres_conversation_read_lab.py
