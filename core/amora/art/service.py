@@ -84,10 +84,10 @@ class OvhSdxlBackend:
     supports_references = False
     supports_lora = False
 
-    def __init__(self, token: str, client: httpx.AsyncClient | None = None) -> None:
-        if not token:
-            raise ArtError("ART_PROVIDER_UNCONFIGURED")
-        self._token = token
+    def __init__(self, token: str | None = None, client: httpx.AsyncClient | None = None) -> None:
+        # OVH documents a small anonymous pool (2 req/min/IP/model).
+        # Never emit a literal "Bearer None" or assume a key is required.
+        self._token = token or ""
         self._client = client
 
     async def generate(self, prompt: str, negative_prompt: str) -> tuple[bytes, str]:
@@ -97,8 +97,9 @@ class OvhSdxlBackend:
                     "POST", OVH_SDXL_URL,
                     json={"prompt": prompt, "negative_prompt": negative_prompt},
                     headers={
-                        "Authorization": f"Bearer {self._token}",
+                        **({"Authorization": f"Bearer {self._token}"} if self._token else {}),
                         "Accept": "application/octet-stream",
+                        "Content-Type": "application/json",
                     },
                 ) as response:
                     if response.status_code == 429:
