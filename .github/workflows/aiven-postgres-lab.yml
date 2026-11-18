@@ -96,6 +96,7 @@ on:
       - 'tests/test_postgres_run2_native_backup_restore.py'
       - 'tests/test_postgres_run2_episode_worker.py'
       - 'tests/test_postgres_run2_discord_core.py'
+      - 'tests/test_postgres_run2_expression_lifecycle.py'
       - 'tests/test_postgres_run2_discord_pipeline.py'
       - 'tests/test_postgres_run2_scaled_import.py'
       - 'tests/test_postgres_run2_unicode_rank_stress.py'
@@ -187,6 +188,7 @@ jobs:
             tests/test_postgres_run2_native_backup_restore.py \
             tests/test_postgres_run2_episode_worker.py \
             tests/test_postgres_run2_discord_core.py \
+            tests/test_postgres_run2_expression_lifecycle.py \
             tests/test_postgres_run2_discord_pipeline.py \
             tests/test_postgres_run2_scaled_import.py \
             tests/test_postgres_run2_unicode_rank_stress.py \
