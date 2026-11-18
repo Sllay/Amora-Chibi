@@ -27,7 +27,7 @@ _STAGING_SCHEMA = "amora_pg_v18_lab"
 _EXPECTED_MAJOR = 18
 
 
-class AivenInventoryError(RuntimeError):
+class AivenInventoryError(AivenPreflightError):
     """Only stable, non-sensitive reason codes are exposed."""
 
 
