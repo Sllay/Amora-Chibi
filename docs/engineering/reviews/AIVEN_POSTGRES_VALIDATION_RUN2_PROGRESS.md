@@ -11,6 +11,7 @@ All PostgreSQL results below are disposable local PG18 and wholly synthetic.
 - **Telemetry errors:** best-effort usage recorder previously only caught `sqlite3.Error` and could abort cognition on psycopg failures. PG SQL failures and unknown commit outcomes are separately classified, without automatic retry; unrelated coding errors still propagate. A subsequent cloud-container run found a missing optional `psycopg` import wrongly masking a TypeError; corrected to preserve the original exception. Tested in both PG18 and dependency-light container.
 - **Lost memory decay updates:** two writers could read the same old retrievability and overwrite each other. Replaced with one PostgreSQL `UPDATE ... retrievability*factor RETURNING` statement. Real PG two-worker regression proves 1.0 -> 0.5 -> 0.25.
 - **Episode provenance test:** event fixture initially violated Core's canonical sensory event contract; test now uses `build_observation_event(ObservationContext,SensoryObservation)`. Opt-in v19-candidate episode test exercises a stale lease, authorized memory+search+queue completion and post-ACK replay rejection without enabling v19 or production.
+- **Reflection edit invalidation:** real PG18 test uncovered `PG_RUNTIME_SQL_NOT_REVIEWED` on dynamically concatenated SQLite UPDATEs when cancelling stale reflections and archiving derived memories. Added reviewed fixed keys `PG_REFLECTION_INVALIDATE_CANCEL`/`PG_REFLECTION_INVALIDATE_ARCHIVE`, routed PG paths through them and preserved original SQLite execution. Real PG integration now proves enqueue/claim, edit invalidation, delayed ACK refusal and successful newer transport revision.
 
 ## Synthetic PG18 integration tests added
 
@@ -22,11 +23,12 @@ All PostgreSQL results below are disposable local PG18 and wholly synthetic.
 - `test_postgres_run2_rank_parity.py`: SQLite FTS5 vs PG BM25/RRF/MMR order and owner scope with accent-sensitive text.
 - `test_postgres_run2_atomic_decay.py`: parallel PG updates without lost retrievability decay.
 - `test_postgres_run2_episode_fence.py`: opt-in PG18 sensory schema, canonical evidence, atomic lease+memory completion.
+- `test_postgres_run2_reflection_queue.py`: real PostgreSQL reflection enqueue, cross-connection claims, cancellation after native edit, stale ACK refusal, revision recovery.
 - These are wired into the actual `aiven-postgres-lab.yml` runner; not only standalone, unexecuted tests.
 
 ## Verified gates
 
-The PG18 lab, perception, provider/capability, cloud-container and security gates passed at **`4819df96219c40356d1aa761e2d94bb8da095b45`**. At the time of this note, the complete Python 3.11–3.14 Core matrix for that SHA is still running and must be checked separately before a final run status is claimed. PG18 lab success means the new episode fence test passed in the synthetic opt-in configuration.
+The PG18 lab, perception, provider/capability, cloud-container and security gates passed at **`b7a7ba7532bd8dc79d915161037c6d67d672e402`**, including the real reflection invalidation test. At the time of this note the Python 3.11–3.14 Core matrix for that SHA is still running and must be checked separately before claiming a clean full matrix. Opt-in episode fence passed in the synthetic configuration; no v19 production migration was performed.
 
 ## Remaining Run 2 blockers
 
