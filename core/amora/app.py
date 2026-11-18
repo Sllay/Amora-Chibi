@@ -201,8 +201,13 @@ class AmoraCore:
             identities,
             events,
         )
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.autonomy.postgres_store import PostgresAutonomyStore
+            autonomy_store_class = PostgresAutonomyStore
+        else:
+            autonomy_store_class = AutonomyStore
         autonomy = AutonomyEngine(
-            AutonomyStore(paths.database, active_clock, backend=storage),
+            autonomy_store_class(paths.database, active_clock, backend=storage),
             active_clock,
             identities,
             emotion,
