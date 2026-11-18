@@ -21,7 +21,7 @@ class FakeReader:
         }
 
     def item(self, category, identifier):
-        return self.records[{"loyal-coat": "core", "pcs4c-recovery": "pcs4", "aiven-job": "aiven"}[identifier]
+        return self.records[{"loyal-coat": "core", "pcs4c-recovery": "pcs4", "aiven-job": "aiven"}[identifier]]
 
     def find_aiven_job(self):
         return "aiven-job"
