@@ -121,13 +121,15 @@ class ActionStore:
         payload = json.dumps(result.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"))
         with self._lock, self._conn:
             try:
-                self._conn.execute(
+                cursor = self._conn.execute(
                     """
                     INSERT INTO action_runs(id, plan_id, status, result_json, created_at, updated_at, dedupe_key)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (str(run_id), str(result.plan.id), status, payload, now.isoformat(), now.isoformat(), dedupe_key),
                 )
+                if self.backend.capabilities.name == "postgres-candidate":
+                    return cursor.rowcount == 1
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise
