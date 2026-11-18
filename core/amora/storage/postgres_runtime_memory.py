@@ -69,7 +69,9 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
     add(PUT,
         "INSERT INTO amora_pg_v18_lab.memory_records ("+cols+") "
         "VALUES ("+",".join(["%s"]*26)+") "
-        "ON CONFLICT(id) DO UPDATE SET "+update,26)
+        "ON CONFLICT(id) DO UPDATE SET "+update+
+        " WHERE memory_records.owner_entity_id IS NOT DISTINCT "
+        "FROM EXCLUDED.owner_entity_id",26)
     add(CREATE,
         "INSERT INTO amora_pg_v18_lab.memory_records ("+cols+") "
         "VALUES ("+",".join(["%s"]*26)+") "
