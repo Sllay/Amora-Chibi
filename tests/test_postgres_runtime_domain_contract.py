@@ -95,7 +95,7 @@ def test_cross_domain_registry_has_no_silent_overrides():
         action_statements(),avatar_statements(),autonomy_statements(),
         emotion_statements(),messaging_statements(),
         generation_statements(),reflection_statements(),agenda_statements(),
-        temporal_statements(),episode_statements(),expression_statements(),
+        temporal_statements(),episode_statements(),expression_statements(),conversation_runtime_statements(),
         conversation_runtime_statements(),
     )
     assert len(registry)==sum(len(domain) for domain in domains)
