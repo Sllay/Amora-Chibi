@@ -38,6 +38,9 @@ AUTHORIZE_REFLECTION = "PG_MEMORY_AUTHORIZE_REFLECTION"
 OWNER_TURN_STATUS = "PG_MEMORY_OWNER_TURN_STATUS"
 SHAREABLE_OWNER = "PG_MEMORY_SHAREABLE_OWNER"
 OWNER_RECALL = "PG_MEMORY_OWNER_RECALL"
+ENTITY_RANK = "PG_MEMORY_ENTITY_RANK"
+REFLECTION_AUDIT_COUNT = "PG_MEMORY_REFLECTION_AUDIT_COUNT"
+REFLECTION_AUDIT_ROWS = "PG_MEMORY_REFLECTION_AUDIT_ROWS"
 
 
 def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
@@ -326,4 +329,22 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
             AND (%s=0 OR m.privacy_scope='PUBLIC')
         ORDER BY m.created_at DESC,m.id DESC LIMIT %s OFFSET %s
     """,6,64)
+    add(ENTITY_RANK, """
+        SELECT memory_id,entity_id,confidence
+        FROM amora_pg_v18_lab.memory_entities
+        WHERE entity_id=ANY(%s::text[])
+        ORDER BY confidence DESC,memory_id
+    """,1,50000)
+    add(REFLECTION_AUDIT_COUNT, """
+        SELECT COUNT(*) FROM amora_pg_v18_lab.memory_records
+        WHERE archived_at IS NULL AND remote_processing_allowed=0
+          AND provenance_source LIKE 'cognition:%%'
+    """,0,1)
+    add(REFLECTION_AUDIT_ROWS, """
+        SELECT id,owner_entity_id,privacy_scope
+        FROM amora_pg_v18_lab.memory_records
+        WHERE archived_at IS NULL AND remote_processing_allowed=0
+          AND provenance_source LIKE 'cognition:%%'
+        ORDER BY created_at DESC LIMIT 100
+    """,0,100)
     return m
