@@ -8,6 +8,8 @@ from __future__ import annotations
 from .postgres_runtime_connection import ReviewedStatement
 
 HISTORY = "PG_COGNITION_SCOPED_HISTORY"
+LATEST_USAGE = "PG_COGNITION_LATEST_USAGE"
+MERGE_METADATA = "PG_COGNITION_MERGE_MESSAGE_METADATA"
 
 def cognition_statements() -> dict[str,ReviewedStatement]:
     m: dict[str,ReviewedStatement] = {}
@@ -143,4 +145,37 @@ def cognition_statements() -> dict[str,ReviewedStatement]:
         "SELECT COUNT(*) FROM amora_pg_v18_lab.conversation_messages",0,1)
     add("SELECT COUNT(*) FROM cognitive_journal",
         "SELECT COUNT(*) FROM amora_pg_v18_lab.cognitive_journal",0,1)
+    # V1 cognition observability must remain present when the PostgreSQL
+    # candidate replaces the canonical V1 store. Keep a fixed SQL key for the
+    # optional task_class filter rather than concatenating SQLite predicates.
+    add(LATEST_USAGE, """
+        SELECT * FROM amora_pg_v18_lab.model_usage
+        WHERE provider=%s AND (%s::text IS NULL OR task_class=%s)
+        ORDER BY timestamp DESC,id DESC LIMIT 1
+    """,3,1)
+    add("""SELECT provider, COUNT(*) AS request_count,
+              SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS success_count,
+              COALESCE(SUM(input_tokens), 0) AS input_tokens,
+              COALESCE(SUM(output_tokens), 0) AS output_tokens,
+              MAX(timestamp) AS last_used_at
+       FROM model_usage GROUP BY provider ORDER BY provider""",
+        """SELECT provider, COUNT(*) AS request_count,
+              SUM(CASE WHEN success=1 THEN 1 ELSE 0 END) AS success_count,
+              COALESCE(SUM(input_tokens),0) AS input_tokens,
+              COALESCE(SUM(output_tokens),0) AS output_tokens,
+              MAX(timestamp) AS last_used_at
+        FROM amora_pg_v18_lab.model_usage
+        GROUP BY provider ORDER BY provider""",0,1000)
+    add(MERGE_METADATA, """
+        UPDATE amora_pg_v18_lab.conversation_messages
+        SET metadata_json=(COALESCE(metadata_json,'{}')::jsonb
+                           || %s::jsonb)::text
+        WHERE id=%s
+    """,2)
+    add("SELECT speech_text, metadata_json FROM speech_segments WHERE id = ?",
+        """SELECT speech_text,metadata_json
+        FROM amora_pg_v18_lab.speech_segments WHERE id=%s""",1,1)
+    add("UPDATE speech_segments SET metadata_json = ? WHERE id = ?",
+        """UPDATE amora_pg_v18_lab.speech_segments
+        SET metadata_json=%s WHERE id=%s""",2)
     return m
