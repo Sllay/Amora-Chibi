@@ -32,6 +32,8 @@ on:
       - 'core/amora/storage/postgres_runtime_autonomy.py'
       - 'core/amora/storage/postgres_runtime_emotion.py'
       - 'core/amora/storage/postgres_runtime_messaging.py'
+      - 'core/amora/storage/postgres_runtime_synthetic_setup.py'
+      - 'core/amora/storage/backend.py'
       - 'core/amora/world/postgres_store.py'
       - 'core/amora/autonomy/postgres_store.py'
       - 'core/amora/emotion/postgres_store.py'
