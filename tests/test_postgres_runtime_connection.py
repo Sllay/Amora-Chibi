@@ -320,3 +320,42 @@ def test_target_rejects_wrong_schema_and_pg_version():
         PostgresTargetPolicy(schema="other-schema")
     with pytest.raises(ValueError, match="PG_RUNTIME_INVALID_TARGET"):
         PostgresTargetPolicy(server_major=17)
+
+
+def test_run1_real_pg_adapter_bootstrap_with_disposable_v18_fixture(tmp_path):
+    """End-to-end backend adapter preflight against real local PG18 only."""
+    import os
+    from contextlib import closing
+
+    if os.getenv("AMORA_PG_SYNTHETIC_LAB") != "1":
+        pytest.skip("Only a disposable local PG18 CI service is permitted")
+    psycopg = pytest.importorskip("psycopg")
+    from amora.storage.postgres_runtime_synthetic_setup import (
+        prepare_disposable_core_v18,
+    )
+    from amora.storage.postgres_runtime_registry import synthetic_core_backend
+    from amora.storage.postgres_runtime_memory import READY
+
+    def raw_connection():
+        return psycopg.connect(
+            host="127.0.0.1",port=5432,dbname="amora_pg_synthetic",
+            user="amora_ci",password="synthetic_only",
+            connect_timeout=5,autocommit=True,
+        )
+
+    with closing(raw_connection()) as manager:
+        manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
+        try:
+            preparation = prepare_disposable_core_v18(manager)
+            assert preparation["production_backend_switched"] is False
+            backend = synthetic_core_backend(raw_connection,max_connections=2)
+            with closing(AmoraDatabase(
+                tmp_path / "no-sqlite-backup.db",backend=backend,
+            )) as database:
+                assert database.migrate() == 0
+                assert database.schema_version() == 18
+                assert database._conn.execute(READY).fetchone()[0] is True
+                assert database.event_count() >= 0
+            assert backend.opened_connections == 0
+        finally:
+            manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
