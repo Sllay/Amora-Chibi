@@ -74,7 +74,7 @@ async def test_pg18_full_discord_like_inbound_identity_outbound_and_restart(
         manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
         try:
             prepare_disposable_core_v18(manager)
-            backend=synthetic_core_backend(_raw,max_connections=20)
+            backend=synthetic_core_backend(_raw,max_connections=16)
             clock=SimulatedClock(NOW)
             core=AmoraCore.bootstrap(clock=clock,storage=backend)
             try:
