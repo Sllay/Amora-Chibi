@@ -3,13 +3,13 @@
 A native Discord message first enters ExpressionMemory even without stickers.
 Missing reviewed SQL here causes a runtime reject before identity/attention.
 """
-from amora.messaging.expression_memory import ExpressionMemory
+from amora.messaging.expression_memory import PerceptualExpressionMemory
 from amora.storage.postgres_runtime_registry import compiled_domain_registry
 from test_postgres_run3_sql_inventory import _sql_calls
 
 
 def test_all_expression_literal_sql_is_reviewed_for_postgres():
-    sources, unresolved=_sql_calls(ExpressionMemory)
+    sources, unresolved=_sql_calls(PerceptualExpressionMemory)
     registry=compiled_domain_registry()
     missing=sources-registry.keys()
     assert not missing, sorted(missing)
