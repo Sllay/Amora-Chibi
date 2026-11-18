@@ -136,3 +136,20 @@ def test_discord_art_permission_binds_to_real_profile():
         with pytest.raises(HTTPException) as exc:
             authorize_art_request(core, role, ArtGenerateRequest(prompt="x", discord_actor_id=actor))
         assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_ovh_anonymous_does_not_send_authorization_header():
+    calls = []
+    def transport(req):
+        calls.append(req)
+        return httpx.Response(200, content=PNG)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        backend = OvhSdxlBackend(None, client)
+        art = await ArtService(FakeSecrets(), backend=backend).generate(
+            "sorrindo", remote_processing_allowed=True
+        )
+    assert art.mime_type == "image/png"
+    assert len(calls) == 1
+    assert "authorization" not in calls[0].headers
+    assert calls[0].headers["content-type"] == "application/json"
