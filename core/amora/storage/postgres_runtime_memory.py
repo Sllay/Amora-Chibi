@@ -356,8 +356,8 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
         GROUP BY m.id
         HAVING COUNT(DISTINCT p.term)=(SELECT COUNT(*) FROM needed)
         ORDER BY m.created_at DESC,m.id DESC
-        LIMIT 129
-    """,5,129)
+        LIMIT 129 OFFSET %s
+    """,6,129)
     add(ENTITY_RANK, """
         SELECT memory_id,entity_id,confidence
         FROM amora_pg_v18_lab.memory_entities
