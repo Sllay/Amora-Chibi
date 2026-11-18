@@ -36,6 +36,7 @@ def conversation_statements(*, schema: str = "amora_pg_v18_lab") -> dict[str, Re
         INSERT INTO amora_pg_v18_lab.conversation_turn_decisions(
             id, state, score, result_json, created_at, dedupe_key
         ) VALUES (%s,%s,%s,%s,%s,%s)
+        ON CONFLICT DO NOTHING
     """, 6)
     add("SELECT result_json FROM conversation_turn_decisions WHERE dedupe_key = ?",
         "SELECT result_json FROM " + table + "conversation_turn_decisions WHERE dedupe_key=%s", 1, 1)
@@ -57,6 +58,7 @@ def conversation_statements(*, schema: str = "amora_pg_v18_lab") -> dict[str, Re
             id,target_id,kind,priority,privacy_scope,device_id,status,
             utterance_json,created_at,claimed_at,claim_expires_at,spoken_at,dedupe_key
         ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT DO NOTHING
     """, 13)
     add("SELECT utterance_json FROM speech_utterances WHERE dedupe_key = ?",
         "SELECT utterance_json FROM " + table + "speech_utterances WHERE dedupe_key=%s", 1, 1)
