@@ -432,6 +432,12 @@ class AmoraDatabase:
     @trace_stage("integrity_check")
     def integrity_check(self) -> str:
         with trace_lock(self._lock):
+            if self.backend.capabilities.name == "postgres-candidate":
+                # SQLite PRAGMA cannot attest a PostgreSQL database. Verify
+                # prepared structural prerequisites, then report explicitly
+                # *uncertified* until full PG semantic/data-integrity gates.
+                self._conn.verify_prepared_schema(self.expected_schema_version)
+                return "postgres-candidate-unverified"
             row = self._conn.execute("PRAGMA integrity_check").fetchone()
             return str(row[0]) if row else "unknown"
 
