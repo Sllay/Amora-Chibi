@@ -91,6 +91,8 @@ on:
       - 'tests/test_postgres_run2_atomic_decay.py'
       - 'tests/test_postgres_run2_episode_fence.py'
       - 'tests/test_postgres_run2_reflection_queue.py'
+      - 'tests/test_postgres_run2_replica_epoch.py'
+      - 'core/amora/storage/postgres_memory_epoch_lab.py'
       - 'tests/test_postgres_runtime_domain_contract.py'
       - 'tests/test_postgres_run3_sql_inventory.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN3_AUDIT.md'
@@ -174,5 +176,6 @@ jobs:
             tests/test_postgres_run2_atomic_decay.py \
             tests/test_postgres_run2_episode_fence.py \
             tests/test_postgres_run2_reflection_queue.py \
+            tests/test_postgres_run2_replica_epoch.py \
             tests/test_postgres_runtime_domain_contract.py \
             tests/test_postgres_run3_sql_inventory.py
