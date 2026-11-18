@@ -185,7 +185,10 @@ def import_private_staging_v18(
         raise PrivateStagingImportError("PG_PRIVATE_SOURCE_NOT_VERIFIED") from None
     path = Path(snapshot)
     sidecar = Path(str(path) + ".avatar.zip")
-    start = (_sha(path), _sha(sidecar))
+    try:
+        start = (_sha(path), _sha(sidecar))
+    except Exception:
+        raise PrivateStagingImportError("PG_PRIVATE_SOURCE_CHANGED") from None
 
     preflight = inspect_prepared_postgres(raw, target, require_memory_epoch=True)
     if preflight.status != "structural_pass":
@@ -203,7 +206,12 @@ def import_private_staging_v18(
     except Exception:
         raise PrivateStagingImportError("PG_PRIVATE_TARGET_EMPTY_CHECK_FAILED") from None
 
-    with closing(_open(path)) as snapshot_source, closing(sqlite3.connect(":memory:")) as source:
+    try:
+        snapshot_source = _open(path)
+        source_copy = sqlite3.connect(":memory:")
+    except Exception:
+        raise PrivateStagingImportError("PG_PRIVATE_SOURCE_COPY_FAILED") from None
+    with closing(snapshot_source) as snapshot_source, closing(source_copy) as source:
         # A private, immutable memory copy allows fts5vocab construction without
         # writing any helper objects into the original PCS.4C backup.
         try:
