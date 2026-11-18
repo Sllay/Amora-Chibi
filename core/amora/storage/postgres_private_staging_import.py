@@ -190,8 +190,13 @@ def import_private_staging_v18(
     except Exception:
         raise PrivateStagingImportError("PG_PRIVATE_SOURCE_CHANGED") from None
 
-    preflight = inspect_prepared_postgres(raw, target, require_memory_epoch=True)
-    if preflight.status != "structural_pass":
+    preflight = inspect_prepared_postgres(
+        raw, target, require_memory_epoch=True,
+        allow_empty_migrations_for_import=True,
+    )
+    # A full runtime structural_pass is insufficient: staging import
+    # requires the strict, separately named EMPTY migrations state.
+    if preflight.status != "preimport_structural_pass":
         raise PrivateStagingImportError("PG_PRIVATE_TARGET_STRUCTURE_BLOCKED")
 
     manifest = build_manifest()
