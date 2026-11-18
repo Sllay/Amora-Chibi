@@ -406,15 +406,23 @@ class PostgresMemoryStore(MemoryStore):
                 # unrelated memories. Exact topic semantics remain in Python.
                 indexed_terms = normalized_fts5_terms(" ".join(sorted(terms)))
                 if indexed_terms:
-                    indexed = self._conn.execute(q.OWNER_RECALL_FTS,(
-                        indexed_terms,owner_id,stamp,stamp,int(public_only),
-                    )).fetchall()
-                    for row in indexed:
-                        collect(row)
-                        if len(selected) >= limit:
-                            return list(self._hydrate_many(selected[:limit]).values()),(
-                                len(indexed)<129
-                            )
+                    # FTS indexes tags as well as content. A result can match
+                    # only its tags while failing canonical topic_terms(text).
+                    # Page the whole owner-scoped index, not just its first
+                    # 129 candidates, before falling back to legacy scans.
+                    for index_page in range(16):
+                        indexed=self._conn.execute(q.OWNER_RECALL_FTS,(
+                            indexed_terms,owner_id,stamp,stamp,
+                            int(public_only),index_page*129,
+                        )).fetchall()
+                        for row in indexed:
+                            collect(row)
+                            if len(selected) >= limit:
+                                return list(self._hydrate_many(selected[:limit]).values()),(
+                                    len(indexed)<129
+                                )
+                        if len(indexed)<129:
+                            break
             # Fallback for legacy documents without postings and for cases
             # where FTS tokens differ from the canonical topic_terms parser.
             # Bound the scan and report incomplete rather than falsely
