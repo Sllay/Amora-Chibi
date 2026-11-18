@@ -1,6 +1,7 @@
 """Run 2: full conversation runtime session and turn transitions on PG18."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime,timezone
 import os
@@ -115,6 +116,28 @@ def test_pg_conversation_session_turn_cas_source_edit_reopen(tmp_path):
                     speaker_entity_id="PERSON_BK",direct=True,
                 )
                 assert reopened.session_id!=engaged.session_id
+
+                # Two independent PostgreSQL connections racing to establish
+                # a *new* transport session must not hit a duplicate PK.
+                race_fields={**fields,"conversation_id":"fictional-race"}
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    left=pool.submit(
+                        runtime.engage,**race_fields,
+                        actor_ref="fictional-first",
+                        speaker_entity_id="PERSON_BK",direct=True,
+                    )
+                    right=pool.submit(
+                        second.engage,**race_fields,
+                        actor_ref="fictional-second",
+                        speaker_entity_id="PERSON_BK",direct=True,
+                    )
+                    a,b=left.result(),right.result()
+                assert a.session_id==b.session_id
+                assert second.get(**race_fields).state==SessionState.ACTIVE
+                assert manager.execute("""
+                    SELECT COUNT(*) FROM amora_pg_v18_lab.conversation_runtime_sessions
+                    WHERE conversation_id='fictional-race'
+                """).fetchone()[0]==1
             assert backend.opened_connections==0
         finally:
             manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
