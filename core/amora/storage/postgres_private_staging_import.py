@@ -196,6 +196,10 @@ def import_private_staging_v18(
     )
     # A full runtime structural_pass is insufficient: staging import
     # requires the strict, separately named EMPTY migrations state.
+    if preflight.status == "structural_pass":
+        # The migration ledger is already populated: never treat an old
+        # import as fresh, even if the caller requests a second run.
+        raise PrivateStagingImportError("PG_PRIVATE_DESTINATION_NOT_EMPTY")
     if preflight.status != "preimport_structural_pass":
         raise PrivateStagingImportError("PG_PRIVATE_TARGET_STRUCTURE_BLOCKED")
 
