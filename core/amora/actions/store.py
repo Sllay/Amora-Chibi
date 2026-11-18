@@ -45,7 +45,7 @@ class ActionStore:
                         plan.created_at.isoformat(), plan.updated_at.isoformat(), plan.dedupe_key,
                     ),
                 )
-            except sqlite3.IntegrityError as exc:
+            except Exception as exc:
                 if not is_duplicate_error(exc):
                     raise
                 return False
@@ -130,7 +130,7 @@ class ActionStore:
                 )
                 if self.backend.capabilities.name == "postgres-candidate":
                     return cursor.rowcount == 1
-            except sqlite3.IntegrityError as exc:
+            except Exception as exc:
                 if not is_duplicate_error(exc):
                     raise
                 return False
