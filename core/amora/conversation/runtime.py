@@ -6,6 +6,7 @@ from enum import StrEnum
 from uuid import uuid4
 
 from amora.time import Clock
+from amora.storage.postgres_runtime_conversation_lifecycle import CANCEL_SOURCE as PG_CANCEL_SOURCE
 
 
 class SessionState(StrEnum):
@@ -469,22 +470,29 @@ class ConversationRuntime:
             return 0
         now = self.clock.now().isoformat()
         final_values = tuple(state.value for state in _FINAL_TURN_STATES)
-        placeholders = ",".join("?" for _ in final_values)
         with self.database._lock, self.database._conn:
-            cursor = self.database._conn.execute(
-                f"""UPDATE conversation_runtime_turns
-                    SET state='cancelled', revision=revision+1, updated_at=?,
-                        cancellation_reason=?
-                    WHERE session_id=? AND source_native_message_id=?
-                      AND state NOT IN ({placeholders})""",
-                (
-                    now,
-                    reason,
-                    session.session_id,
-                    source_native_message_id,
-                    *final_values,
-                ),
-            )
+            if self.database.backend.capabilities.name=="postgres-candidate":
+                # Fixed reviewed PG array predicate; never concatenate an
+                # arbitrary number of dialect-specific SQL placeholders.
+                sql=PG_CANCEL_SOURCE
+                parameters=(
+                    now,reason,session.session_id,
+                    source_native_message_id,list(final_values),
+                )
+            else:
+                placeholders=",".join("?" for _ in final_values)
+                sql=(
+                    "UPDATE conversation_runtime_turns "
+                    "SET state='cancelled', revision=revision+1, updated_at=?, "
+                    "cancellation_reason=? WHERE session_id=? "
+                    "AND source_native_message_id=? "
+                    f"AND state NOT IN ({placeholders})"
+                )
+                parameters=(
+                    now,reason,session.session_id,
+                    source_native_message_id,*final_values,
+                )
+            cursor=self.database._conn.execute(sql,parameters)
             return cursor.rowcount
 
     def turn_deliverable(self, turn_id: str) -> bool:
