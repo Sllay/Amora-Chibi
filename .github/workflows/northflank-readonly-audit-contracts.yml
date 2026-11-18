@@ -1,0 +1,29 @@
+name: Northflank read-only audit contracts
+on:
+  pull_request:
+    paths:
+      - 'tools/ops/northflank_readonly_audit.py'
+      - 'tests/test_northflank_readonly_audit.py'
+      - '.github/workflows/northflank-readonly-audit-contracts.yml'
+  push:
+    branches:
+      - 'feat/aiven-full-runtime-integration'
+    paths:
+      - 'tools/ops/northflank_readonly_audit.py'
+      - 'tests/test_northflank_readonly_audit.py'
+      - '.github/workflows/northflank-readonly-audit-contracts.yml'
+permissions:
+  contents: read
+jobs:
+  offline-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Compile isolated auditor and offline tests
+        run: python -m compileall -q tools/ops/northflank_readonly_audit.py tests/test_northflank_readonly_audit.py
+      - name: Verify only mocked read-only calls and secret redaction
+        run: python -m unittest discover -s tests -p test_northflank_readonly_audit.py -v
