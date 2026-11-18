@@ -205,7 +205,12 @@ class AmoraCore:
             events,
         )
         models = ModelRouter()
-        cognitive_store = CognitiveStore(paths.database, active_clock, backend=storage)
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.cognition.postgres_store import PostgresCognitiveStore
+            cognitive_store_class = PostgresCognitiveStore
+        else:
+            cognitive_store_class = CognitiveStore
+        cognitive_store = cognitive_store_class(paths.database, active_clock, backend=storage)
         cognition = CognitiveEngine(
             cognitive_store,
             ContextCompiler(
