@@ -29,5 +29,5 @@ def test_runtime_cancel_is_explicitly_pg_reviewed():
     from amora.storage.postgres_runtime_conversation_lifecycle import CANCEL_SOURCE
     stmt=compiled_domain_registry()[CANCEL_SOURCE]
     assert "amora_pg_v18_lab.conversation_runtime_turns" in stmt.postgres_sql
-    assert "NOT IN" in stmt.postgres_sql
+    assert ("NOT IN" in stmt.postgres_sql or "NOT (state=ANY(" in stmt.postgres_sql)
     assert stmt.parameter_count==stmt.postgres_sql.count("%s")
