@@ -161,7 +161,10 @@ def test_pg_owner_recall_finds_old_indexed_memory_beyond_512_newer_rows(tmp_path
                     owner,"zeldoino77",limit=3,
                 )
                 assert [item.id for item in recalled] == [secret.id]
-                assert complete is True
+                # Deliberately unindexed noise means full legacy coverage is
+                # not provable after the bounded fallback. Report incomplete
+                # rather than falsely claiming an exhaustive lookup.
+                assert complete is False
                 assert memory.recall_owner_records(
                     "PERSON_OTHER","zeldoino77",
                 )[0] == []
