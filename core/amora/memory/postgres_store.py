@@ -327,9 +327,57 @@ class PostgresMemoryStore(MemoryStore):
                 now.isoformat(),list(memory_ids),
             )).rowcount
 
+    def read_memory_projection_stamp(self):
+        """Read the authoritative opt-in PostgreSQL revision, not a replica."""
+        from amora.storage.replica_coherence import (
+            ProjectionStamp, ReplicaCoherenceError,
+        )
+        with self._lock:
+            ready=self._conn.execute(q.EPOCH_READY).fetchone()
+            if ready is None or ready[0] is not True:
+                raise ReplicaCoherenceError("PG_MEMORY_EPOCH_NOT_INSTALLED")
+            row=self._conn.execute(q.EPOCH_STAMP).fetchone()
+        if row is None:
+            raise ReplicaCoherenceError("PG_MEMORY_EPOCH_NOT_INSTALLED")
+        return ProjectionStamp(row["epoch_id"],int(row["revision"]),"memory")
+
     def record_verified_access(self, hits: list[MemoryHit], stamp) -> list[MemoryHit]:
-        # Replica revision invariants need an explicit PostgreSQL equivalent.
-        raise PostgresRuntimeError("PG_MEMORY_REPLICA_COHERENCE_UNREVIEWED")
+        """Validate a PG-authoritative memory revision and write access once.
+
+        The same transaction locks the epoch row and updates ALL requested
+        records. A mismatch rolls back completely. Ambiguous commit failures
+        propagate without retry. Never accept a combined/SQLite stamp.
+        """
+        from amora.storage.replica_coherence import (
+            ProjectionStamp, ReplicaCoherenceError,
+        )
+        if not hits:
+            return hits
+        if not isinstance(stamp,ProjectionStamp) or stamp.scope!="memory":
+            raise ReplicaCoherenceError("PG_MEMORY_EPOCH_SCOPE_UNVERIFIED")
+        ids=[str(hit.memory.id) for hit in hits]
+        if len(ids)>50 or len(ids)!=len(set(ids)):
+            raise ReplicaCoherenceError("REPLICA_DUPLICATE_MEMORY_HIT")
+        now=self.clock.now()
+        iso=now.isoformat()
+        with self._lock,self._conn:
+            ready=self._conn.execute(q.EPOCH_READY).fetchone()
+            if ready is None or ready[0] is not True:
+                raise ReplicaCoherenceError("PG_MEMORY_EPOCH_NOT_INSTALLED")
+            epoch=self._conn.execute(q.EPOCH_LOCK).fetchone()
+            if (epoch is None or epoch["epoch_id"]!=stamp.epoch_id
+                    or int(epoch["revision"])!=stamp.revision):
+                raise ReplicaCoherenceError("REPLICA_ACCESS_REVISION_CHANGED")
+            updated=self._conn.execute(q.VERIFIED_ACCESS,(iso,ids)).fetchall()
+            counts={str(row["id"]):row["access_count"] for row in updated}
+            if (len(updated)!=len(ids) or set(counts)!=set(ids)
+                    or any(type(value) is not int or value<1 for value in counts.values())
+                    or any(row["last_accessed_at"]!=iso for row in updated)):
+                raise ReplicaCoherenceError("REPLICA_ACCESS_ROWS_CHANGED")
+        for hit in hits:
+            hit.memory.access_count=counts[str(hit.memory.id)]
+            hit.memory.last_accessed_at=now
+        return hits
 
     def authorize_reviewed_reflection(self, memory_id: UUID | str, owner_id: str) -> bool:
         if self.identities.get(owner_id) is None:
