@@ -11,7 +11,11 @@ class MessagingStorageWorker:
     def __init__(self, database, clock):
         self.database = AmoraDatabase(database.path, backend=database.backend)
         self.generations = InboundGeneration(self.database, clock)
-        self.store = MessagingStore(self.database, clock)
+        if database.backend.capabilities.name == "postgres-candidate":
+            from .postgres_store import PostgresMessagingStore
+            self.store = PostgresMessagingStore(self.database, clock)
+        else:
+            self.store = MessagingStore(self.database, clock)
 
     def close(self):
         self.database.close()
