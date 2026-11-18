@@ -63,7 +63,7 @@ def world_statements() -> dict[str,ReviewedStatement]:
           AND (%s=TRUE OR (
             valid_from<=%s AND (valid_until IS NULL OR valid_until>%s)
           ))
-        ORDER BY valid_from DESC,created_at DESC LIMIT %s""",14,500)
+        ORDER BY valid_from DESC,created_at DESC LIMIT %s""",13,500)
     add("SELECT id, created_at FROM self_entries WHERE layer = ? AND key = ?",
         "SELECT id,created_at FROM amora_pg_v18_lab.self_entries WHERE layer=%s AND key=%s FOR UPDATE",2,1)
     add("""INSERT INTO self_entries(id, layer, key, value_json, confidence, source, locked, created_at, updated_at, metadata_json)
