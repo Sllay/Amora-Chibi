@@ -27,6 +27,8 @@ on:
       - 'core/amora/storage/postgres_runtime_voice.py'
       - 'core/amora/storage/postgres_runtime_cognition.py'
       - 'core/amora/storage/postgres_runtime_expression.py'
+      - 'core/amora/storage/postgres_runtime_conversation_lifecycle.py'
+      - 'core/amora/conversation/runtime.py'
       - 'core/amora/storage/postgres_runtime_world.py'
       - 'core/amora/storage/postgres_runtime_actions.py'
       - 'core/amora/storage/postgres_runtime_avatar.py'
@@ -97,6 +99,7 @@ on:
       - 'tests/test_postgres_run2_episode_worker.py'
       - 'tests/test_postgres_run2_discord_core.py'
       - 'tests/test_postgres_run2_expression_lifecycle.py'
+      - 'tests/test_postgres_run2_conversation_lifecycle.py'
       - 'tests/test_postgres_run2_discord_pipeline.py'
       - 'tests/test_postgres_run2_scaled_import.py'
       - 'tests/test_postgres_run2_unicode_rank_stress.py'
@@ -190,6 +193,7 @@ jobs:
             tests/test_postgres_run2_episode_worker.py \
             tests/test_postgres_run2_discord_core.py \
             tests/test_postgres_run2_expression_lifecycle.py \
+            tests/test_postgres_run2_conversation_lifecycle.py \
             tests/test_postgres_run2_discord_pipeline.py \
             tests/test_postgres_run2_scaled_import.py \
             tests/test_postgres_run2_unicode_rank_stress.py \
