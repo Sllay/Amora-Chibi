@@ -2,17 +2,15 @@ name: Amora art - OVH anonymous live probe
 
 on:
   pull_request:
-    types: [labeled]
+    types: [synchronize]
 
 permissions:
   contents: read
 
 jobs:
   live-ovh:
-    # One-off opt-in: runs only when the enhancement label is added to PR #286.
-    # No secrets, Core service, database, migrations or production deploys.
+    # Branch/PR-specific one-shot run. Other changes do not call OVH.
     if: >-
-      github.event.label.name == 'enhancement' &&
       github.event.pull_request.number == 286 &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.head.ref == 'feat/amora-art-sdxl-style-pipeline'
@@ -24,18 +22,30 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Check one-shot request marker
+        id: activation
+        shell: bash
+        run: |
+          if [ "$(git log -1 --format=%s)" = "ci(art): run one-shot anonymous OVH smoke" ]; then
+            echo "run_live=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_live=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Install Python
+        if: steps.activation.outputs.run_live == 'true'
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
       - name: Install Amora art adapter (no app boot)
+        if: steps.activation.outputs.run_live == 'true'
         run: python -m pip install -e .
       - name: Generate one anonymous synthetic cartoon image
+        if: steps.activation.outputs.run_live == 'true'
         env:
           OVH_AI_ENDPOINTS_ACCESS_TOKEN: ''
         run: python tools/art/ovh_live_probe.py --output reports/art-probe
-      - name: Save generated image and typed diagnostic
-        if: always()
+      - name: Save generated image and diagnostic
+        if: steps.activation.outputs.run_live == 'true' && always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: amora-ovh-live-probe-${{ github.run_id }}
