@@ -21,25 +21,24 @@ _RELEVANT_TABLES = (
 )
 
 
-def install_pg_memory_epoch_lab(raw) -> str:
-    """Create a transactional, monotonic epoch in an isolated PG18 schema."""
-    ensure_local_lab(raw)
-    if getattr(raw, "autocommit", False) is not True:
-        raise ValueError("PG_EPOCH_SYNTHETIC_AUTOCOMMIT_REQUIRED")
-    epoch = str(uuid4())
-    with raw.transaction():
-        raw.execute("""
+def memory_epoch_schema_statements(epoch: str) -> tuple[tuple[str, tuple], ...]:
+    """Audited DDL/parameters for the memory projection revision fence.
+
+    Shared by disposable labs and explicitly authorized empty staging prep.
+    """
+    statements: list[tuple[str, tuple]] = [
+        ("""
             CREATE TABLE amora_pg_v18_lab.amora_memory_projection_epoch(
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                 epoch_id TEXT NOT NULL CHECK(length(epoch_id)>0),
                 revision BIGINT NOT NULL CHECK(revision>=0)
             )
-        """)
-        raw.execute(
+        """, ()),
+        (
             "INSERT INTO amora_pg_v18_lab.amora_memory_projection_epoch "
             "(singleton,epoch_id,revision) VALUES (1,%s,0)", (epoch,),
-        )
-        raw.execute("""
+        ),
+        ("""
             CREATE FUNCTION amora_pg_v18_lab.bump_memory_projection_epoch()
             RETURNS TRIGGER AS $$
             BEGIN
@@ -51,16 +50,31 @@ def install_pg_memory_epoch_lab(raw) -> str:
                 RETURN NULL;
             END;
             $$ LANGUAGE plpgsql
-        """)
-        for table in _RELEVANT_TABLES:
-            # Identifiers come from an internal compile-time tuple, never
-            # untrusted SQL or a remote connection string.
-            for verb in ("INSERT", "UPDATE", "DELETE"):
-                raw.execute(
-                    f"CREATE TRIGGER epoch_{table}_{verb.lower()} "
-                    f"AFTER {verb} ON {_SCHEMA}.{table} FOR EACH ROW "
-                    f"EXECUTE FUNCTION {_SCHEMA}.bump_memory_projection_epoch()"
-                )
+        """, ()),
+    ]
+    for table in _RELEVANT_TABLES:
+        for verb in ("INSERT", "UPDATE", "DELETE"):
+            statements.append((
+                f"CREATE TRIGGER epoch_{table}_{verb.lower()} "
+                f"AFTER {verb} ON {_SCHEMA}.{table} FOR EACH ROW "
+                f"EXECUTE FUNCTION {_SCHEMA}.bump_memory_projection_epoch()",
+                (),
+            ))
+    return tuple(statements)
+
+
+def install_pg_memory_epoch_lab(raw) -> str:
+    """Create a transactional, monotonic epoch in an isolated PG18 schema."""
+    ensure_local_lab(raw)
+    if getattr(raw, "autocommit", False) is not True:
+        raise ValueError("PG_EPOCH_SYNTHETIC_AUTOCOMMIT_REQUIRED")
+    epoch = str(uuid4())
+    with raw.transaction():
+        for sql, parameters in memory_epoch_schema_statements(epoch):
+            if parameters:
+                raw.execute(sql, parameters)
+            else:
+                raw.execute(sql)
     return epoch
 
 

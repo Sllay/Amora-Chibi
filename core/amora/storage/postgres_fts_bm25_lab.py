@@ -62,6 +62,34 @@ def normalized_fts5_terms(query: str) -> list[str]:
         )]
 
 
+def bm25_schema_ddl() -> tuple[str, ...]:
+    """Audited DDL shared by disposable lab and empty staging preparation."""
+    return (
+        """
+        CREATE TABLE amora_pg_v18_lab.fts_doc_tokens (
+            memory_id TEXT PRIMARY KEY
+                REFERENCES amora_pg_v18_lab.memory_records(id)
+                ON DELETE CASCADE,
+            document_length BIGINT NOT NULL CHECK (document_length>=0)
+        )
+        """,
+        """
+        CREATE TABLE amora_pg_v18_lab.fts_term_postings (
+            memory_id TEXT NOT NULL
+                REFERENCES amora_pg_v18_lab.fts_doc_tokens(memory_id)
+                ON DELETE CASCADE,
+            term TEXT NOT NULL,
+            frequency BIGINT NOT NULL CHECK (frequency>0),
+            PRIMARY KEY(memory_id,term)
+        )
+        """,
+        """
+        CREATE INDEX fts_term_postings_lookup
+            ON amora_pg_v18_lab.fts_term_postings(term,memory_id)
+        """,
+    )
+
+
 def install_bm25_lab(conn) -> None:
     """Explicit PG lab tables. Never mutate the main Core schema."""
     ensure_local_lab(conn)
@@ -70,28 +98,8 @@ def install_bm25_lab(conn) -> None:
             "SELECT 1 FROM pg_namespace WHERE nspname=%s", (_SCHEMA,)
         ).fetchone() is None:
             raise BM25LabError("BM25_TARGET_SCHEMA_MISSING")
-        conn.execute("""
-            CREATE TABLE amora_pg_v18_lab.fts_doc_tokens (
-                memory_id TEXT PRIMARY KEY
-                    REFERENCES amora_pg_v18_lab.memory_records(id)
-                    ON DELETE CASCADE,
-                document_length BIGINT NOT NULL CHECK (document_length>=0)
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE amora_pg_v18_lab.fts_term_postings (
-                memory_id TEXT NOT NULL
-                    REFERENCES amora_pg_v18_lab.fts_doc_tokens(memory_id)
-                    ON DELETE CASCADE,
-                term TEXT NOT NULL,
-                frequency BIGINT NOT NULL CHECK (frequency>0),
-                PRIMARY KEY(memory_id,term)
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX fts_term_postings_lookup
-                ON amora_pg_v18_lab.fts_term_postings(term,memory_id)
-        """)
+        for ddl in bm25_schema_ddl():
+            conn.execute(ddl)
 
 
 def import_synthetic_fts5_vocabulary(source: sqlite3.Connection, conn) -> dict:
