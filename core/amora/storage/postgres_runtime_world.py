@@ -59,8 +59,8 @@ def world_statements() -> dict[str,ReviewedStatement]:
           AND (%s::text IS NULL OR predicate=%s)
           AND (%s::text IS NULL OR context_key=%s)
           AND (%s::text[] IS NULL OR kind=ANY(%s::text[]))
-          AND (%s=FALSE OR canonical=1)
-          AND (%s=TRUE OR (
+          AND (%s=0 OR canonical=1)
+          AND (%s=1 OR (
             valid_from<=%s AND (valid_until IS NULL OR valid_until>%s)
           ))
         ORDER BY valid_from DESC,created_at DESC LIMIT %s""",13,500)
