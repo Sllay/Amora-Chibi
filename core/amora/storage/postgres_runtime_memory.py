@@ -39,6 +39,7 @@ OWNER_TURN_STATUS = "PG_MEMORY_OWNER_TURN_STATUS"
 SHAREABLE_OWNER = "PG_MEMORY_SHAREABLE_OWNER"
 OWNER_RECALL = "PG_MEMORY_OWNER_RECALL"
 OWNER_RECALL_FTS = "PG_MEMORY_OWNER_RECALL_FTS"
+OWNER_RECALL_UNINDEXED = "PG_MEMORY_OWNER_RECALL_UNINDEXED"
 ENTITY_RANK = "PG_MEMORY_ENTITY_RANK"
 REFLECTION_AUDIT_COUNT = "PG_MEMORY_REFLECTION_AUDIT_COUNT"
 REFLECTION_AUDIT_ROWS = "PG_MEMORY_REFLECTION_AUDIT_ROWS"
@@ -358,6 +359,24 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
         ORDER BY m.created_at DESC,m.id DESC
         LIMIT 129 OFFSET %s
     """,6,129)
+    # A postings scan is exhaustive only if every otherwise eligible source
+    # record has a durable search document. Imported pre-index records need
+    # a separate bounded fallback, and completeness must remain false.
+    add(OWNER_RECALL_UNINDEXED, """
+        SELECT EXISTS(
+            SELECT 1 FROM amora_pg_v18_lab.memory_records m
+            WHERE m.owner_entity_id=%s
+              AND m.privacy_scope IN ('PERSONAL','PRIVATE','SOCIAL','PUBLIC')
+              AND m.archived_at IS NULL
+              AND (m.valid_from IS NULL OR m.valid_from<=%s)
+              AND (m.valid_until IS NULL OR m.valid_until>=%s)
+              AND (%s=0 OR m.privacy_scope='PUBLIC')
+              AND NOT EXISTS(
+                  SELECT 1 FROM amora_pg_v18_lab.fts_doc_tokens d
+                  WHERE d.memory_id=m.id
+              )
+        )
+    """,4,1)
     add(ENTITY_RANK, """
         SELECT memory_id,entity_id,confidence
         FROM amora_pg_v18_lab.memory_entities
