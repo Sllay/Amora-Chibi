@@ -305,7 +305,12 @@ class AmoraCore:
             events,
             cognition=cognition,
         )
-        messaging_store = MessagingStore(database, active_clock)
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.messaging.postgres_store import PostgresMessagingStore
+            messaging_store_class = PostgresMessagingStore
+        else:
+            messaging_store_class = MessagingStore
+        messaging_store = messaging_store_class(database, active_clock)
         platform_presence = PlatformPresenceController(messaging_store, active_clock)
         from amora.messaging.incoming_vision import GroqIncomingImageVision, IncomingVisionCascade
         from amora.messaging.nvidia_incoming_vision import NvidiaMistralIncomingImageVision
