@@ -362,7 +362,7 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
             AND (m.valid_until IS NULL OR m.valid_until>=%s)
             AND (%s=0 OR m.privacy_scope='PUBLIC')
         ORDER BY m.created_at DESC,m.id DESC LIMIT %s OFFSET %s
-    """,6,64)
+    """,6,512)
     # Search the *entire* eligible indexed corpus before the row limit. The
     # original SQLite FTS-first recall can reach old, low-importance memories
     # that are not in the newest 8 pages. A caller must recheck exact
@@ -384,8 +384,8 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
         GROUP BY m.id
         HAVING COUNT(DISTINCT p.term)=(SELECT COUNT(*) FROM needed)
         ORDER BY m.created_at DESC,m.id DESC
-        LIMIT 129 OFFSET %s
-    """,6,129)
+        LIMIT 512 OFFSET %s
+    """,6,512)
     # A postings scan is exhaustive only if every otherwise eligible source
     # record has a durable search document. Imported pre-index records need
     # a separate bounded fallback, and completeness must remain false.
