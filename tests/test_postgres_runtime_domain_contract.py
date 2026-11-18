@@ -20,6 +20,12 @@ from amora.storage.postgres_runtime_voice import (
     voice_stop_statements,VOICE_LOCK_TURN,
 )
 from amora.storage.postgres_runtime_cognition import cognition_statements,HISTORY
+from amora.storage.postgres_runtime_world import world_statements
+from amora.storage.postgres_runtime_actions import action_statements
+from amora.storage.postgres_runtime_avatar import avatar_statements
+from amora.storage.postgres_runtime_autonomy import autonomy_statements
+from amora.storage.postgres_runtime_emotion import emotion_statements
+from amora.storage.postgres_runtime_messaging import messaging_statements,OUTBOUND_INSERT
 from amora.storage.postgres_runtime_registry import compiled_domain_registry
 from amora.storage.postgres_runtime_connection import (
     PostgresBackendCandidate,PostgresRuntimeError,PostgresTargetPolicy,
@@ -78,7 +84,9 @@ def test_cross_domain_registry_has_no_silent_overrides():
     registry=compiled_domain_registry()
     domains=(
         identity_statements(),conversation_statements(),memory_statements(),
-        voice_stop_statements(),cognition_statements(),
+        voice_stop_statements(),cognition_statements(),world_statements(),
+        action_statements(),avatar_statements(),autonomy_statements(),
+        emotion_statements(),messaging_statements(),
     )
     assert len(registry)==sum(len(domain) for domain in domains)
     assert VOICE_LOCK_TURN in registry
@@ -95,3 +103,13 @@ def test_factory_stays_synthetic_and_production_selector_unchanged():
     assert backend._target.host=="127.0.0.1"
     assert backend._target.database=="amora_pg_synthetic"
     assert backend._target.schema=="amora_pg_v18_lab"
+
+
+def test_messaging_outbound_sql_is_fully_parameterized_and_guarded():
+    statement=messaging_statements()[OUTBOUND_INSERT]
+    assert statement.parameter_count==23
+    assert statement.postgres_sql.count("%s")==23
+    assert "messaging_inbound_generation" in statement.postgres_sql
+    assert "memory_reflection_invalidations" in statement.postgres_sql
+    assert "memory_records" in statement.postgres_sql
+    assert "ON CONFLICT" in statement.postgres_sql
