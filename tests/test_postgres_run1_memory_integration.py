@@ -156,6 +156,41 @@ def test_pg_owner_recall_finds_old_indexed_memory_beyond_512_newer_rows(tmp_path
                             )
                             for i in range(540)
                         ])
+                        # 270 newer documents contain the topic only in
+                        # TAGS, not in their content. They must not hide an
+                        # older true content match behind one 129-row page.
+                        indexed_ids=[
+                            f"synthetic-noise-{i:04d}" for i in range(270)
+                        ]
+                        cursor.executemany(
+                            "INSERT INTO amora_pg_v18_lab.memory_tags"
+                            "(memory_id,tag) VALUES (%s,%s)",
+                            [(id,"zeldoino77") for id in indexed_ids],
+                        )
+                        cursor.executemany(
+                            "INSERT INTO amora_pg_v18_lab.memory_search"
+                            "(memory_id,content,tags) VALUES (%s,%s,%s)",
+                            [
+                                (id,"novo registro irrelevante","zeldoino77")
+                                for id in indexed_ids
+                            ],
+                        )
+                        cursor.executemany(
+                            "INSERT INTO amora_pg_v18_lab.fts_doc_tokens"
+                            "(memory_id,document_length) VALUES (%s,%s)",
+                            [(id,4) for id in indexed_ids],
+                        )
+                        cursor.executemany(
+                            "INSERT INTO amora_pg_v18_lab.fts_term_postings"
+                            "(memory_id,term,frequency) VALUES (%s,%s,%s)",
+                            [
+                                (id,term,1)
+                                for id in indexed_ids
+                                for term in (
+                                    "novo","registro","irrelevante","zeldoino77"
+                                )
+                            ],
+                        )
                 assert memory.count() >= 541
                 recalled, complete = memory.recall_owner_records(
                     owner,"zeldoino77",limit=3,
@@ -165,6 +200,11 @@ def test_pg_owner_recall_finds_old_indexed_memory_beyond_512_newer_rows(tmp_path
                 # not provable after the bounded fallback. Report incomplete
                 # rather than falsely claiming an exhaustive lookup.
                 assert complete is False
+                early, exhaustive = memory.recall_owner_records(
+                    owner,"zeldoino77",limit=1,
+                )
+                assert [item.id for item in early]==[secret.id]
+                assert exhaustive is False
                 assert memory.recall_owner_records(
                     "PERSON_OTHER","zeldoino77",
                 )[0] == []
