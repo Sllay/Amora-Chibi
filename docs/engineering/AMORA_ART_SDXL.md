@@ -12,14 +12,36 @@
 ## OVHcloud: contrato confirmado em 17/11/2026
 - Endpoint: `POST https://stable-diffusion-xl.endpoints.kepler.ai.cloud.ovh.net/api/text2image`.
 - Corpo: `{"prompt":"...","negative_prompt":"..."}`. Retorna bytes da imagem.
-- Secret pela SecretStore da Amora: `AMORA_SECRET_OVH_AI_ENDPOINTS_ACCESS_TOKEN`.
+- Token opcional pela SecretStore da Amora: `AMORA_SECRET_OVH_AI_ENDPOINTS_ACCESS_TOKEN`. Sem token, o adapter usa modo anônimo de baixa taxa; nunca envia `Bearer None`.
 - A OVH anuncia SDXL como gratuito, mas custo/limites podem mudar.
 - **Não** está documentado nesse endpoint: carregamento de LoRA própria, img2img, pose/ControlNet, seed ou upload de imagem de referência.
 - Degradação honesta: requests com `reference_ids` ou `lora_id` retornam erro explícito, não ignoram controles silenciosamente.
 - O catálogo anuncia descontinuação do SDXL em **10/02/2027**. A arquitetura não pode depender dele permanentemente.
 
+## Certificação live independente (Amora offline)
+
+O Core, o Discord, Northflank e os bancos SQL/PostgreSQL **não precisam estar
+ativos** para o teste de geração:
+
+- Script isolado: `tools/art/ovh_live_probe.py`. Usa o **mesmo adapter** de
+  produção em memória, sem inicializar `AmoraCore`, sem escrever estado ou fazer
+  migrations.
+- Prompt sintético de bichinho cartoon; nenhuma imagem original da Amora ou
+  dado privado vai para a OVH.
+- A documentação oficial OVH admite **até 2 requisições/minuto anônimas** por
+  IP/modelo, mesmo sem token. Ao testar com token, o limite divulgado é 400
+  requisições/minuto/projeto/modelo. São limites sujeitos a revisão.
+- Executar em ambiente com Python e pacote Core instalado:
+  `python tools/art/ovh_live_probe.py --output reports/art-probe`.
+- O script gera `probe-result.json` com códigos de erro e, se houver sucesso,
+  `ovh_sdxl_live.jpg/png/webp`. Status 429/403 ou falha de rede **não** é PASS.
+- A execução GitHub Actions é **exclusivamente opt-in**, em PR experimental, sem
+  secrets, banco, persistência ou publicação. O artefato permite revisão visual.
+- A imagem recebida confirma somente geração `txt2img`, não fidelidade de
+  identidade ou suporte a LoRAs.
+
 ## Configuração mínima
-1. Provisionar credencial de API no painel OVH; não colocar no Git, docs, prompts ou mensagens.
+1. Opcional: provisionar credencial de API no painel OVH para taxa autenticada; não colocar no Git, docs, prompts ou mensagens. O modo anônimo pode ser usado para certificação experimental.
 2. Configurar no servidor Core, como secret `AMORA_SECRET_OVH_AI_ENDPOINTS_ACCESS_TOKEN`.
 3. Habilitar `AMORA_ART_ENABLED=1` no Core após consentimento sobre envio remoto de prompts.
 4. Requisição operator/admin: `POST /v1/art/generate` com
