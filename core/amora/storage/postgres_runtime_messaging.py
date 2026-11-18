@@ -97,7 +97,7 @@ def messaging_statements()->dict[str,ReviewedStatement]:
             )
         )
         ON CONFLICT(id) DO NOTHING
-    """,24)
+    """,23)
     add(OUTBOUND_EXISTS,
         "SELECT 1 FROM amora_pg_v18_lab.messaging_outbound_queue WHERE id=%s",1,1)
     add("SELECT * FROM messaging_outbound_queue WHERE id=?",
