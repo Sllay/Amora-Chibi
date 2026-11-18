@@ -122,15 +122,26 @@ def messaging_statements()->dict[str,ReviewedStatement]:
         WHERE platform=%s AND account_scope=%s
         AND (status='queued' OR (status='claimed' AND claim_expires_at<%s))
         ORDER BY created_at LIMIT %s FOR UPDATE SKIP LOCKED""",4,32)
-    for sql,key in [
-        ("UPDATE messaging_outbound_queue SET status='failed',error_code='AGENDA_DELIVERY_UNCERTAIN',claim_expires_at=NULL WHERE id=? AND status='claimed'","failed"),
-        ("UPDATE messaging_outbound_queue SET status='cancelled',error_code='AGENDA_STALE_OR_UNAUTHORIZED',claim_expires_at=NULL WHERE id=? AND status='queued'","agenda"),
-        ("UPDATE messaging_outbound_queue SET status='cancelled',error_code='TEMPORAL_INITIATIVE_STALE',claim_expires_at=NULL WHERE id=? AND status IN ('queued','claimed')","temporal"),
-        ("UPDATE messaging_outbound_queue SET status='cancelled',error_code='MEMORY_DISCLOSURE_STALE',claim_expires_at=NULL WHERE id=? AND status IN ('queued','claimed')","memory"),
-    ]:
-        # All four constants are reviewed, no interpolated end-user values.
-        add(sql,sql.replace("messaging_outbound_queue",
-            "amora_pg_v18_lab.messaging_outbound_queue").replace("id=?","id=%s"),1)
+    add(
+        "UPDATE messaging_outbound_queue SET status='failed',error_code='AGENDA_DELIVERY_UNCERTAIN',claim_expires_at=NULL WHERE id=? AND status='claimed'",
+        "UPDATE amora_pg_v18_lab.messaging_outbound_queue SET status='failed',error_code='AGENDA_DELIVERY_UNCERTAIN',claim_expires_at=NULL WHERE id=%s AND status='claimed'",
+        1,
+    )
+    add(
+        "UPDATE messaging_outbound_queue SET status='cancelled',error_code='AGENDA_STALE_OR_UNAUTHORIZED',claim_expires_at=NULL WHERE id=? AND status='queued'",
+        "UPDATE amora_pg_v18_lab.messaging_outbound_queue SET status='cancelled',error_code='AGENDA_STALE_OR_UNAUTHORIZED',claim_expires_at=NULL WHERE id=%s AND status='queued'",
+        1,
+    )
+    add(
+        "UPDATE messaging_outbound_queue SET status='cancelled',error_code='TEMPORAL_INITIATIVE_STALE',claim_expires_at=NULL WHERE id=? AND status IN ('queued','claimed')",
+        "UPDATE amora_pg_v18_lab.messaging_outbound_queue SET status='cancelled',error_code='TEMPORAL_INITIATIVE_STALE',claim_expires_at=NULL WHERE id=%s AND status IN ('queued','claimed')",
+        1,
+    )
+    add(
+        "UPDATE messaging_outbound_queue SET status='cancelled',error_code='MEMORY_DISCLOSURE_STALE',claim_expires_at=NULL WHERE id=? AND status IN ('queued','claimed')",
+        "UPDATE amora_pg_v18_lab.messaging_outbound_queue SET status='cancelled',error_code='MEMORY_DISCLOSURE_STALE',claim_expires_at=NULL WHERE id=%s AND status IN ('queued','claimed')",
+        1,
+    )
     add("""UPDATE messaging_outbound_queue
         SET status='claimed', claimed_at=?, claim_expires_at=?
         WHERE id=? AND (status='queued' OR (status='claimed' AND claim_expires_at < ?))""",
