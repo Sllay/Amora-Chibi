@@ -303,15 +303,13 @@ class PostgresMemoryStore(MemoryStore):
 
     def degrade_retrievability(self, memory_id: UUID | str, factor: float) -> float | None:
         factor = max(0.0,min(1.0,float(factor)))
+        # One server-side row update prevents two concurrent stores from
+        # overwriting each other's decay after both read the old value.
         with self._lock, self._conn:
-            row = self._conn.execute(q.GET,(str(memory_id),)).fetchone()
-            if row is None:
-                return None
-            value = max(0.02,min(1.0,float(row["retrievability"])*factor))
-            self._conn.execute(
-                q.DEGRADE,(value,self.clock.now().isoformat(),str(memory_id))
-            )
-            return value
+            row=self._conn.execute(q.DEGRADE,(
+                factor,self.clock.now().isoformat(),str(memory_id),
+            )).fetchone()
+            return float(row[0]) if row is not None else None
 
     def link(self, source_memory_id: UUID | str, target_memory_id: UUID | str,
              link_type: str, confidence: float=1.0) -> None:
