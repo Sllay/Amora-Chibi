@@ -58,11 +58,13 @@ class PostgresMemoryStore(MemoryStore):
         insert_only: bool = False,
         episode_lease: EpisodeWriteLease | None = None,
     ) -> bool | None:
-        if episode_lease is not None:
-            raise PostgresRuntimeError("PG_MEMORY_EPISODE_LEASE_UNREVIEWED")
+        if episode_lease is not None and (
+                not insert_only or reflection_lease is not None
+                or generation_lease is not None):
+            raise PostgresRuntimeError("PG_MEMORY_EPISODE_REQUIRES_CREATE_ONLY")
         if insert_only and (reflection_lease is not None or generation_lease is not None):
             raise PostgresRuntimeError("PG_MEMORY_INSERT_ONLY_LEASE_UNSUPPORTED")
-        if record.provenance.source == "perception:episode:v1":
+        if record.provenance.source == "perception:episode:v1" and episode_lease is None:
             raise PostgresRuntimeError("PG_MEMORY_EPISODE_WRITE_REQUIRES_LEASE")
         p = record.provenance
         ident = str(record.id)
@@ -88,6 +90,11 @@ class PostgresMemoryStore(MemoryStore):
         tags = " ".join(sorted(record.tags))
         document_length,posting = _document_terms(content,tags)
         with self._lock, self._conn:
+            if episode_lease is not None:
+                from .postgres_episode_fence import check_pg_episode_write
+                check_pg_episode_write(
+                    self._conn,record,episode_lease,self.clock.now(),
+                )
             if generation_lease is not None:
                 turn,token = generation_lease
                 lease = self._conn.execute(q.GENERATION_LEASE,(
@@ -106,6 +113,12 @@ class PostgresMemoryStore(MemoryStore):
                     raise PostgresRuntimeError("REFLECTION_LEASE_LOST")
             result = self._conn.execute(q.CREATE if insert_only else q.PUT,values)
             if insert_only and result.rowcount == 0:
+                if episode_lease is not None:
+                    from .postgres_episode_fence import complete_pg_episode_write
+                    complete_pg_episode_write(
+                        self._conn,record,episode_lease,
+                        self.clock.now(),inserted=False,
+                    )
                 return False
             if result.rowcount != 1:
                 raise PostgresRuntimeError("PG_MEMORY_WRITE_OUTCOME_UNKNOWN")
@@ -130,6 +143,12 @@ class PostgresMemoryStore(MemoryStore):
             actual = self._conn.execute(q.COUNT_POSTINGS,(ident,)).fetchone()
             if actual is None or int(actual[0]) != document_length:
                 raise PostgresRuntimeError("PG_MEMORY_ATOMIC_INDEX_DRIFT")
+            if episode_lease is not None:
+                from .postgres_episode_fence import complete_pg_episode_write
+                complete_pg_episode_write(
+                    self._conn,record,episode_lease,
+                    self.clock.now(),inserted=True,
+                )
         return True if insert_only else None
 
     def get(self, memory_id: UUID | str) -> MemoryRecord | None:
