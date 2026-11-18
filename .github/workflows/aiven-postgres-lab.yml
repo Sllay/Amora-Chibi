@@ -112,6 +112,7 @@ on:
       - 'tests/test_postgres_run3_snapshot_preflight.py'
       - 'tests/test_postgres_run3_queue_soak.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN3_AUDIT.md'
+      - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN3_RELEASE_READINESS.md'
       - 'tests/test_postgres_memory_lab_integration.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
       - '.github/workflows/aiven-postgres-lab.yml'
