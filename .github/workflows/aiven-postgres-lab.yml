@@ -26,6 +26,7 @@ on:
       - 'core/amora/storage/postgres_runtime_memory.py'
       - 'core/amora/storage/postgres_runtime_voice.py'
       - 'core/amora/storage/postgres_runtime_cognition.py'
+      - 'core/amora/storage/postgres_runtime_expression.py'
       - 'core/amora/storage/postgres_runtime_world.py'
       - 'core/amora/storage/postgres_runtime_actions.py'
       - 'core/amora/storage/postgres_runtime_avatar.py'
