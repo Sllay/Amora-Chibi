@@ -196,7 +196,12 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
     add(ARCHIVE,"""UPDATE amora_pg_v18_lab.memory_records
         SET archived_at=%s,updated_at=%s WHERE id=%s AND archived_at IS NULL""",3)
     add(DEGRADE,"""UPDATE amora_pg_v18_lab.memory_records
-        SET retrievability=%s,updated_at=%s WHERE id=%s""",3)
+        SET retrievability=GREATEST(
+                0.02::float8,LEAST(1.0::float8,retrievability*%s)
+            ),
+            updated_at=%s
+        WHERE id=%s
+        RETURNING retrievability""",3,1)
     add(LINK,"""INSERT INTO amora_pg_v18_lab.memory_links(
         source_memory_id,target_memory_id,link_type,confidence)
         VALUES (%s,%s,%s,%s)
