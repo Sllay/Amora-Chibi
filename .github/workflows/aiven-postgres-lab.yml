@@ -88,6 +88,7 @@ on:
       - 'tests/test_postgres_run2_messaging_queue.py'
       - 'tests/test_postgres_run2_cognition_v1.py'
       - 'tests/test_postgres_run2_rank_parity.py'
+      - 'tests/test_postgres_run2_atomic_decay.py'
       - 'tests/test_postgres_runtime_domain_contract.py'
       - 'tests/test_postgres_run3_sql_inventory.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN3_AUDIT.md'
@@ -168,5 +169,6 @@ jobs:
             tests/test_postgres_run2_messaging_queue.py \
             tests/test_postgres_run2_cognition_v1.py \
             tests/test_postgres_run2_rank_parity.py \
+            tests/test_postgres_run2_atomic_decay.py \
             tests/test_postgres_runtime_domain_contract.py \
             tests/test_postgres_run3_sql_inventory.py
