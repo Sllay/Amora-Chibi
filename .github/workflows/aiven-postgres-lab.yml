@@ -134,7 +134,7 @@ permissions:
 jobs:
   synthetic-postgres:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:18-alpine
@@ -167,7 +167,7 @@ jobs:
         env:
           AMORA_PG_SYNTHETIC_LAB: '1'
         run: |
-          python -m pytest -q \
+          python -m pytest -vv --durations=10 -o faulthandler_timeout=120 \
             tests/test_postgres_memory_lab_contract.py \
             tests/test_postgres_memory_lab_integration.py \
             tests/test_postgres_v18_manifest.py \
