@@ -13,6 +13,7 @@ from amora.storage.postgres_private_staging_import import (
     PrivateStagingImportError, import_private_staging_v18,
 )
 from amora.storage.postgres_runtime_connection import PostgresTargetPolicy
+from amora.storage.postgres_run3_preflight import inspect_prepared_postgres
 from amora.storage.postgres_v18_manifest import synthetic_v18_connection
 from amora.storage.postgres_v18_lab_schema import install_pg_v18_lab
 from amora.storage.postgres_fts_bm25_lab import install_bm25_lab
@@ -93,7 +94,14 @@ def _import(pair, target, confirm="IMPORT_VERIFIED_V18_TO_EMPTY_ISOLATED_STAGING
 
 
 def test_full_staged_private_shape_and_fts_token_parity(pair, target):
+    # An empty imported-target schema must NEVER be certified as ready to serve.
+    policy = PostgresTargetPolicy()
+    assert inspect_prepared_postgres(target, policy).status == "blocked"
+    assert inspect_prepared_postgres(
+        target, policy, allow_empty_migrations_for_import=True,
+    ).status == "preimport_structural_pass"
     result = _import(pair, target)
+    assert inspect_prepared_postgres(target, policy).status == "structural_pass"
     assert result["status"] == "staged_import_completed"
     assert result["schema_version"] == 18
     assert result["relational_tables"] == 49
