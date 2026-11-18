@@ -96,6 +96,7 @@ on:
       - 'tests/test_postgres_run2_episode_worker.py'
       - 'tests/test_postgres_run2_discord_core.py'
       - 'tests/test_postgres_run2_discord_pipeline.py'
+      - 'tests/test_postgres_run2_scaled_import.py'
       - 'core/amora/storage/postgres_memory_epoch_lab.py'
       - 'tests/test_postgres_runtime_domain_contract.py'
       - 'tests/test_postgres_run3_sql_inventory.py'
@@ -185,5 +186,6 @@ jobs:
             tests/test_postgres_run2_episode_worker.py \
             tests/test_postgres_run2_discord_core.py \
             tests/test_postgres_run2_discord_pipeline.py \
+            tests/test_postgres_run2_scaled_import.py \
             tests/test_postgres_runtime_domain_contract.py \
             tests/test_postgres_run3_sql_inventory.py
