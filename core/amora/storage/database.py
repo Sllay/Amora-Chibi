@@ -134,7 +134,7 @@ class AmoraDatabase:
                     """INSERT INTO events (id, schema_version, event_type, timestamp, source, actor, target, confidence, importance, priority, payload_json, privacy_scope, session_id, correlation_id, causation_id, causal_parent, sequence, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(dedupe_key) DO NOTHING""",
                     values,
                 )
-            except sqlite3.IntegrityError as exc:
+            except Exception as exc:
                 # Only an existing *same-kind* event with the same dedupe key is
                 # idempotent. Never suppress unrelated PK or constraint failures.
                 if not is_duplicate_error(exc) or not event.dedupe_key:
