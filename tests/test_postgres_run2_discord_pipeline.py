@@ -61,14 +61,14 @@ async def test_pg_discord_unknown_verified_duplicate_edit_and_ack(tmp_path,monke
         manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
         try:
             prepare_disposable_core_v18(manager)
-            backend=synthetic_core_backend(_raw,max_connections=18)
+            backend=synthetic_core_backend(_raw,max_connections=16)
             core=AmoraCore.bootstrap(clock=SimulatedClock(NOW),storage=backend)
             try:
                 provider=CountingStructuredProvider()
                 core.cognition.register_provider(provider)
                 unknown=await core.messaging.receive(_dm(
                     message_id="unknown",sender="999999999999999999",
-                ))
+                ).model_copy(update={"native_message_id":"synthetic-unknown"}))
                 assert unknown.decision.action==RoutingAction.QUARANTINE
                 assert not unknown.outbound
                 _bind_bk(core)
