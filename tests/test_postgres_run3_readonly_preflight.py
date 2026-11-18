@@ -105,3 +105,68 @@ def test_remote_target_cannot_be_claimed_from_local_connection():
         assert result.blockers==("PG_PREFLIGHT_TARGET_NOT_VERIFIED",)
         assert result.checks==()
         assert result.production_ready is False
+
+
+def test_missing_canonical_fk_check_and_index_are_each_blocked():
+    """A zero-unvalidated-constraints count must not hide removed protections."""
+    from amora.storage.postgres_v18_manifest import build_manifest
+    from amora.storage.postgres_v18_lab_schema import _checks
+
+    manifest = build_manifest()
+    with closing(_raw()) as manager:
+        manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
+        try:
+            prepare_disposable_core_v18(
+                manager, include_memory_epoch_candidate=True,
+            )
+            target = PostgresTargetPolicy()
+            assert inspect_prepared_postgres(manager, target).status == "structural_pass"
+
+            # Constraint names are deterministically generated from canonical
+            # trusted manifest identifiers; no untrusted SQL/credentials.
+            fk_table = next(
+                t["name"] for t in manifest["tables"]
+                if t["kind"] == "ordinary" and t["foreign_keys"]
+            )
+            fk_name = f"fk_{fk_table}_0"
+            manager.execute(
+                f'ALTER TABLE amora_pg_v18_lab."{fk_table}" '
+                f'DROP CONSTRAINT "{fk_name}"'
+            )
+            missing_fk = inspect_prepared_postgres(manager, target)
+            assert "PG_PREFLIGHT_FOREIGN_KEY_MISSING" in missing_fk.blockers
+
+            check_table = next(
+                t["name"] for t in manifest["tables"]
+                if t["kind"] == "ordinary"
+                and _checks(t["sqlite_create_sql"])
+            )
+            check_name = manager.execute(
+                "SELECT c.conname FROM pg_catalog.pg_constraint c "
+                "JOIN pg_catalog.pg_class t ON t.oid=c.conrelid "
+                "JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace "
+                "WHERE n.nspname=%s AND t.relname=%s AND c.contype='c' "
+                "ORDER BY c.conname LIMIT 1",
+                ("amora_pg_v18_lab", check_table),
+            ).fetchone()[0]
+            manager.execute(
+                f'ALTER TABLE amora_pg_v18_lab."{check_table}" '
+                f'DROP CONSTRAINT "{check_name}"'
+            )
+            missing_check = inspect_prepared_postgres(manager, target)
+            assert "PG_PREFLIGHT_CHECK_CONSTRAINT_MISSING" in missing_check.blockers
+
+            index_name = next(
+                item["name"] for item in manifest["indexes"]
+                if item["sqlite_create_sql"].lstrip().upper().startswith(
+                    "CREATE INDEX"
+                )
+            )
+            manager.execute(
+                f'DROP INDEX amora_pg_v18_lab."{index_name}"'
+            )
+            missing_index = inspect_prepared_postgres(manager, target)
+            assert "PG_PREFLIGHT_CANONICAL_INDEX_MISSING" in missing_index.blockers
+            assert missing_index.production_ready is False
+        finally:
+            manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
