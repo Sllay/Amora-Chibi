@@ -48,12 +48,27 @@ def test_full_amora_core_bootstrap_restart_and_health(tmp_path:Path,monkeypatch)
                 assert report["status"]=="degraded"  # never fake certified
                 assert report["self_core_identity"]=="ENTITY_AMORA"
                 assert len(report["drives"])==7
+                assert report["cognitive_usage_ledger"]==[]
+                first.cognition.store.record_usage(
+                    provider="synthetic-run2",model="invented",
+                    task_class="social",success=True,
+                    input_tokens=3,output_tokens=4,status_code=200,
+                )
+                ledger=first.cognition.store.usage_ledger()
+                assert len(ledger)==1
+                assert ledger[0]["success_count"]==1
+                assert ledger[0]["input_tokens"]==3
+                assert first.cognition.store.latest_usage(
+                    "synthetic-run2",task_class="social",
+                )["status_code"]==200
             finally:
                 first.close()
             assert backend.opened_connections==0
             second=AmoraCore.bootstrap(clock=clock,storage=backend)
             try:
-                assert second.health_report()["self_core_identity"]=="ENTITY_AMORA"
+                again=second.health_report()
+                assert again["self_core_identity"]=="ENTITY_AMORA"
+                assert again["cognitive_usage_ledger"][0]["output_tokens"]==4
             finally:
                 second.close()
             assert backend.opened_connections==0
