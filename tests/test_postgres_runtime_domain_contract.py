@@ -31,6 +31,7 @@ from amora.storage.postgres_runtime_reflections import reflection_statements
 from amora.storage.postgres_runtime_agenda import agenda_statements
 from amora.storage.postgres_runtime_temporal import temporal_statements
 from amora.storage.postgres_runtime_episode import episode_statements,EPISODE_FENCE_JOB
+from amora.storage.postgres_runtime_expression import expression_statements
 from amora.storage.postgres_runtime_registry import compiled_domain_registry
 from amora.storage.postgres_runtime_connection import (
     PostgresBackendCandidate,PostgresRuntimeError,PostgresTargetPolicy,
@@ -93,7 +94,7 @@ def test_cross_domain_registry_has_no_silent_overrides():
         action_statements(),avatar_statements(),autonomy_statements(),
         emotion_statements(),messaging_statements(),
         generation_statements(),reflection_statements(),agenda_statements(),
-        temporal_statements(),episode_statements(),
+        temporal_statements(),episode_statements(),expression_statements(),
     )
     assert len(registry)==sum(len(domain) for domain in domains)
     assert VOICE_LOCK_TURN in registry
