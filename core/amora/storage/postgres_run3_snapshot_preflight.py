@@ -67,7 +67,7 @@ def inspect_private_snapshot(snapshot: str | Path) -> dict[str, object]:
         }
     except Run3SnapshotError:
         raise
-    except BaseException:
+    except Exception:
         # sqlite, zipfile, filesystem and JSON exceptions can carry paths,
         # row content, archive member names or other private details.
         raise Run3SnapshotError("RUN3_SNAPSHOT_VERIFICATION_FAILED") from None
