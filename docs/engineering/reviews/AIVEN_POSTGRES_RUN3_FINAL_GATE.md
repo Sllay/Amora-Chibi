@@ -16,8 +16,10 @@ cutover is a separate operator-controlled acceptance, not an implied result.
 |---|---|---|
 | R3.1 — structural preflight | Read-only repeatable-read PG18 snapshot validates exact canonical v18 tables, columns and types, migrations, FTS index, validated constraints, optional memory projection epoch, and exact target policy | Implemented; CI pending |
 | R3.2 — lifecycle reliability | Repeated `AmoraCore.bootstrap()` / close, synthetic usage persistence after restart, zero database connection leaks, bootstrap failure injection with clean retry | Implemented; CI pending |
-| R3.3 — final regression matrix | Disposable PG18 real backend, Core Python 3.11–3.14, security, cloud container, expression/voice/cognition, provider and capability workflows on one immutable PR SHA | Pending |
-| R3.4 — integration decision | Green tests; review diff and report; merge into integration branch `feat/aiven-full-runtime-integration` only | Pending |
+| R3.2a — offline source gate | Operator-only PCS.4C v18 + sidecar verification; mocked/constructed CI file exercises drift, tamper and redaction; no private source ever sent to CI | Code integrated; synthetic CI pending; real source verification separate |
+| R3.2b — concurrent queue soak | Real disposable PG18, 96 synthetic outputs, 4 synchronized workers, idempotent claim/ACK, restart and bounded connection budget | Code integrated; CI pending |
+| R3.3 — final regression matrix | Disposable PG18 real backend, Core Python 3.11–3.14 (including Python provider/capability contracts), security, cloud container, PostgreSQL worker/voice/cognition and perceptual-memory checks on one immutable PR SHA | Pending |
+| R3.4 — integration decision | Green checks for the consolidated #290 + #291 scope; review diff and report; merge into integration branch `feat/aiven-full-runtime-integration` only | Pending |
 
 The `inspect_prepared_postgres` function checks an already connected target
 provided explicitly by an operator. It performs **no writes** under a
