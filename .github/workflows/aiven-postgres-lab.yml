@@ -117,6 +117,11 @@ on:
       - 'tests/test_postgres_run3_restart_soak.py'
       - 'core/amora/storage/postgres_private_staging_import.py'
       - 'tests/test_postgres_private_staging_import.py'
+      - 'core/amora/storage/postgres_staging_schema_prepare.py'
+      - 'core/amora/storage/postgres_fts_bm25_lab.py'
+      - 'core/amora/storage/postgres_voice_stop_lab.py'
+      - 'core/amora/storage/postgres_memory_epoch_lab.py'
+      - 'tests/test_postgres_staging_schema_prepare.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN3_AUDIT.md'
       - 'tests/test_postgres_memory_lab_integration.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
@@ -215,4 +220,5 @@ jobs:
             tests/test_postgres_run3_queue_soak.py \
             tests/test_postgres_run3_readonly_preflight.py \
             tests/test_postgres_run3_restart_soak.py \
-            tests/test_postgres_private_staging_import.py
+            tests/test_postgres_private_staging_import.py \
+            tests/test_postgres_staging_schema_prepare.py
