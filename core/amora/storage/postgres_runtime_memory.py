@@ -56,7 +56,7 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
     """,0,1)
     add(COUNT, """
         SELECT COUNT(*) FROM amora_pg_v18_lab.memory_records
-        WHERE (%s=TRUE OR archived_at IS NULL)
+        WHERE (%s=1 OR archived_at IS NULL)
     """,1,1)
     add(GET, "SELECT * FROM amora_pg_v18_lab.memory_records WHERE id=%s",1,1)
 
@@ -101,13 +101,13 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
     # Apply privacy, audience and expiry filtering *before* the candidate cap.
     # All filters are bound parameters. The caller supplies null for no filter.
     eligibility = """
-        (%s=TRUE OR m.archived_at IS NULL)
+        (%s=1 OR m.archived_at IS NULL)
         AND (m.valid_until IS NULL OR m.valid_until >= %s)
         AND (%s::text[] IS NULL OR m.kind=ANY(%s::text[]))
         AND (%s::text IS NULL OR m.created_at >= %s)
         AND (%s::text IS NULL OR m.created_at <= %s)
-        AND (%s=FALSE OR m.privacy_scope='PUBLIC')
-        AND (%s=FALSE OR m.remote_processing_allowed=1)
+        AND (%s=0 OR m.privacy_scope='PUBLIC')
+        AND (%s=0 OR m.remote_processing_allowed=1)
         AND (
             %s::text IS NULL OR m.privacy_scope='PUBLIC'
             OR (
@@ -161,13 +161,13 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
             JOIN amora_pg_v18_lab.memory_records m ON m.id=p.memory_id
             CROSS JOIN corpus c
             WHERE c.avgdl>0
-                AND (m.archived_at IS NULL OR %s=TRUE)
+                AND (m.archived_at IS NULL OR %s=1)
                 AND (m.valid_until IS NULL OR m.valid_until >= %s)
                 AND (%s::text[] IS NULL OR m.kind=ANY(%s::text[]))
                 AND (%s::text IS NULL OR m.created_at >= %s)
                 AND (%s::text IS NULL OR m.created_at <= %s)
-                AND (%s=FALSE OR m.privacy_scope='PUBLIC')
-                AND (%s=FALSE OR m.remote_processing_allowed=1)
+                AND (%s=0 OR m.privacy_scope='PUBLIC')
+                AND (%s=0 OR m.remote_processing_allowed=1)
                 AND (%s::text IS NULL OR m.privacy_scope='PUBLIC' OR (
                     m.privacy_scope NOT IN ('AUTH','SECRET')
                     AND (m.owner_entity_id=%s OR EXISTS (
@@ -322,7 +322,7 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
             AND m.archived_at IS NULL
             AND (m.valid_from IS NULL OR m.valid_from<=%s)
             AND (m.valid_until IS NULL OR m.valid_until>=%s)
-            AND (%s=FALSE OR m.privacy_scope='PUBLIC')
+            AND (%s=0 OR m.privacy_scope='PUBLIC')
         ORDER BY m.created_at DESC,m.id DESC LIMIT %s OFFSET %s
     """,6,64)
     return m
