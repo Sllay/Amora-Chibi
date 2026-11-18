@@ -314,6 +314,7 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
                   )
               )
           ) AND m.id=%s
+          FOR SHARE OF m
     """,4,1)
     add(OWNER_RECALL, """
         SELECT m.* FROM amora_pg_v18_lab.memory_records m
