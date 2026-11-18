@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
@@ -88,16 +89,15 @@ def validate_aiven_settings(dsn: str, ca_pem: str) -> None:
         raise AivenPreflightError("AIVEN_CA_CERT_REQUIRED")
 
 
-def check_aiven_read_only(
-    dsn: str,
-    ca_pem: str,
-    *,
-    connect=None,
-) -> dict[str, object]:
-    """Connect with TLS hostname verification and read-only session semantics.
+@contextmanager
+def verified_aiven_readonly_connection(
+    dsn: str, ca_pem: str, *, connect=None,
+    application_name: str = "amora-aiven-readonly-preflight",
+):
+    """Shared no-echo TLS-verified, read-only Aiven connection.
 
-    The CA is held only in a private, temporary mode-0600 file. The two SQL
-    statements are metadata-only and never read application data.
+    The context never returns credentials/CA to logs, never switches Core
+    storage, and always rolls back then closes the connection.
     """
     validate_aiven_settings(dsn, ca_pem)
     if connect is None:
@@ -106,56 +106,76 @@ def check_aiven_read_only(
         except ImportError:
             raise AivenPreflightError("POSTGRES_DRIVER_NOT_INSTALLED") from None
         connect = psycopg.connect
-
+    if application_name not in {
+        "amora-aiven-readonly-preflight",
+        "amora-aiven-capacity-inventory",
+    }:
+        raise AivenPreflightError("AIVEN_UNREVIEWED_APPLICATION_NAME")
     with tempfile.TemporaryDirectory(prefix="amora-aiven-check-") as folder:
         ca_path = Path(folder) / "ca.pem"
         fd = os.open(str(ca_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as target:
-            target.write(ca_pem)
+        with os.fdopen(fd, "w", encoding="utf-8") as destination:
+            destination.write(ca_pem)
         connection = None
         try:
-            # Override the Aiven-provided default sslmode=require, which does
-            # NOT verify the server certificate or hostname.
             connection = connect(
                 dsn,
                 sslmode="verify-full",
                 sslrootcert=str(ca_path),
                 connect_timeout=8,
-                application_name="amora-aiven-readonly-preflight",
+                application_name=application_name,
                 options="-c default_transaction_read_only=on",
             )
-            with connection.cursor() as cursor:
-                cursor.execute("SHOW transaction_read_only")
-                readonly = cursor.fetchone()
-                if not readonly or readonly[0] != "on":
-                    raise AivenPreflightError("POSTGRES_READ_ONLY_NOT_ENFORCED")
-                cursor.execute("SHOW server_version_num")
-                version = cursor.fetchone()
-                if not version or not str(version[0]).isdigit():
-                    raise AivenPreflightError("POSTGRES_VERSION_UNAVAILABLE")
-                major = int(str(version[0])) // 10000
-            connection.rollback()
-            return {
-                "status": "ok",
-                "provider": "aiven-postgresql",
-                "server_major": major,
-                "read_only": True,
-                "tls": "verify-full",
-                "core_storage_switched": False,
-                "data_migration_performed": False,
-            }
+            yield connection
         except AivenPreflightError:
             raise
         except Exception:
-            # PostgreSQL errors may repeat DSNs, usernames, hostnames, or SQL
-            # parameters. Do not expose the exception or its traceback chain.
+            # libpq errors may contain hostnames, DSNs and credentials.
             raise AivenPreflightError("AIVEN_CONNECTION_FAILED") from None
         finally:
             if connection is not None:
                 try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                try:
                     connection.close()
                 except Exception:
                     pass
+
+
+def check_aiven_read_only(
+    dsn: str,
+    ca_pem: str,
+    *,
+    connect=None,
+) -> dict[str, object]:
+    """Connect with TLS hostname verification and read-only session semantics.
+
+    Only two metadata queries, no application data or schema inspection.
+    """
+    with verified_aiven_readonly_connection(
+        dsn, ca_pem, connect=connect,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SHOW transaction_read_only")
+            readonly = cursor.fetchone()
+            if not readonly or readonly[0] != "on":
+                raise AivenPreflightError("POSTGRES_READ_ONLY_NOT_ENFORCED")
+            cursor.execute("SHOW server_version_num")
+            version = cursor.fetchone()
+            if not version or not str(version[0]).isdigit():
+                raise AivenPreflightError("POSTGRES_VERSION_UNAVAILABLE")
+            major = int(str(version[0])) // 10000
+        return {
+            "status": "ok",
+            "provider": "aiven-postgresql",
+            "server_major": major,
+            "read_only": True,
+            "tls": "verify-full",
+            "core_storage_switched": False,
+            "data_migration_performed": False,
+        }
 
 
 def main() -> int:
