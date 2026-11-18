@@ -218,7 +218,12 @@ class PostgresRuntimeConnection:
     def _review(self, sql: str) -> ReviewedStatement:
         if not isinstance(sql, str):
             raise PostgresRuntimeError("PG_RUNTIME_SQL_NOT_REVIEWED")
+        # Only the exact explicitly registered statement or its reviewed
+        # whitespace-normalized canonical form can execute. This is lookup
+        # normalization, never SQL syntax/placeholder translation.
         statement = self._statements.get(sql)
+        if statement is None:
+            statement = self._statements.get(" ".join(sql.split()))
         if statement is None:
             raise PostgresRuntimeError("PG_RUNTIME_SQL_NOT_REVIEWED")
         return statement
