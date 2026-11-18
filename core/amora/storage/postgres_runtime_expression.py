@@ -77,7 +77,7 @@ def expression_statements() -> dict[str, ReviewedStatement]:
          "UPDATE amora_pg_v18_lab.perceptual_expression_assets SET seen_count=%s, unique_senders_count=%s, last_seen_at=%s WHERE platform=%s AND account_scope=%s AND scope_id=%s AND kind=%s AND native_id=%s", 8, 1000),
         # 21: SELECT * FROM perceptual_expression_assets WHERE platform=? AND account_scope=? AND scope_id=? 
         ("SELECT * FROM perceptual_expression_assets WHERE platform=? AND account_scope=? AND scope_id=? ORDER BY last_seen_at DESC LIMIT ?",
-         "SELECT * FROM amora_pg_v18_lab.perceptual_expression_assets WHERE platform=%s AND account_scope=%s AND scope_id=%s ORDER BY last_seen_at DESC LIMIT %s", 4, 512),
+         "SELECT * FROM amora_pg_v18_lab.perceptual_expression_assets WHERE platform=%s AND account_scope=%s AND scope_id=%s ORDER BY last_seen_at DESC LIMIT %s", 4, 1024),
         # 22: SELECT COUNT(*) FROM perceptual_expression_assets
         ("SELECT COUNT(*) FROM perceptual_expression_assets",
          "SELECT COUNT(*) FROM amora_pg_v18_lab.perceptual_expression_assets", 0, 1),
