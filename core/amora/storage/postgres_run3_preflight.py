@@ -44,6 +44,7 @@ class Run3PreflightResult:
 
 def inspect_prepared_postgres(
     raw, target: PostgresTargetPolicy, *, require_memory_epoch: bool = True,
+    allow_empty_migrations_for_import: bool = False,
 ) -> Run3PreflightResult:
     """Inspect an already prepared schema inside a REPEATABLE READ READ ONLY tx.
 
@@ -55,6 +56,7 @@ def inspect_prepared_postgres(
     blockers: list[str] = []
     schema_version: int | None = None
     table_count: int | None = None
+    empty_migrations_for_import = False
     if not isinstance(target, PostgresTargetPolicy):
         return Run3PreflightResult("blocked", (), ("PG_PREFLIGHT_INVALID_TARGET",))
     try:
@@ -190,7 +192,13 @@ def inspect_prepared_postgres(
                         + '".schema_migrations ORDER BY version'
                     ).fetchall()
                 ]
-                if versions != list(range(1, 19)):
+                if allow_empty_migrations_for_import and versions == []:
+                    # A newly provisioned, EMPTY staging schema has no source
+                    # migration history until the atomic private import.
+                    # This distinct result is NEVER a runtime structural_pass.
+                    empty_migrations_for_import = True
+                    checks.append("empty_v18_import_migrations")
+                elif versions != list(range(1, 19)):
                     blockers.append("PG_PREFLIGHT_MIGRATION_VERSION_DRIFT")
                 else:
                     schema_version = 18
@@ -218,7 +226,10 @@ def inspect_prepared_postgres(
         blockers.append("PG_PREFLIGHT_READ_FAILED")
 
     return Run3PreflightResult(
-        "structural_pass" if not blockers else "blocked",
+        "blocked" if blockers else (
+            "preimport_structural_pass" if empty_migrations_for_import
+            else "structural_pass"
+        ),
         tuple(checks), tuple(dict.fromkeys(blockers)),
         schema_version=schema_version,
         relational_tables=table_count,
