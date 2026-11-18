@@ -32,6 +32,19 @@ on:
       - 'core/amora/storage/postgres_runtime_autonomy.py'
       - 'core/amora/storage/postgres_runtime_emotion.py'
       - 'core/amora/storage/postgres_runtime_messaging.py'
+      - 'core/amora/storage/postgres_runtime_generation.py'
+      - 'core/amora/storage/postgres_runtime_reflections.py'
+      - 'core/amora/storage/postgres_runtime_agenda.py'
+      - 'core/amora/storage/postgres_runtime_temporal.py'
+      - 'core/amora/storage/postgres_runtime_episode.py'
+      - 'core/amora/storage/postgres_episode_lab_schema.py'
+      - 'core/amora/memory/postgres_episode_fence.py'
+      - 'core/amora/memory/episode_work.py'
+      - 'core/amora/messaging/reflection_queue.py'
+      - 'core/amora/messaging/generation_lifecycle.py'
+      - 'core/amora/messaging/storage_lane.py'
+      - 'core/amora/agenda/service.py'
+      - 'core/amora/messaging/temporal_initiative.py'
       - 'core/amora/storage/postgres_runtime_synthetic_setup.py'
       - 'core/amora/storage/backend.py'
       - 'core/amora/world/postgres_store.py'
@@ -69,6 +82,8 @@ on:
       - 'tests/test_postgres_conversation_read_lab.py'
       - 'tests/test_postgres_runtime_connection.py'
       - 'tests/test_postgres_runtime_domain_contract.py'
+      - 'tests/test_postgres_run3_sql_inventory.py'
+      - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN3_AUDIT.md'
       - 'tests/test_postgres_memory_lab_integration.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
       - '.github/workflows/aiven-postgres-lab.yml'
@@ -136,4 +151,5 @@ jobs:
             tests/test_postgres_runtime_sql_audit.py \
             tests/test_postgres_conversation_read_lab.py \
             tests/test_postgres_runtime_connection.py \
-            tests/test_postgres_runtime_domain_contract.py
+            tests/test_postgres_runtime_domain_contract.py \
+            tests/test_postgres_run3_sql_inventory.py
