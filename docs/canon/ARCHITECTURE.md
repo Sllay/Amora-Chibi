@@ -464,6 +464,22 @@ Evitar prompt gigante como substituto para algoritmo local.
 
 ---
 
+## 12A. Arte generativa (experimental, ADR-0041)
+
+O Core possui a versão de estilo e decide autorização, não o modelo remoto.
+`amora.art` é capacidade substituível, desativada por padrão, com OVH SDXL
+exclusivamente text-to-image. Referências visuais, img2img e LoRA próprias
+**não são** capacidades certificadas desse provider. Pedidos contendo
+`reference_ids` ou `lora_id` falham explicitamente.
+
+A memória, a estética persistente e a identidade visual da V1.2 continuam
+canônicas fora do provider; gerar uma ilustração não altera o SelfModel.
+O pipeline experimental tem endpoints autenticados, opt-in para processamento
+remoto e validação de ator no Discord. Ver
+`docs/engineering/AMORA_ART_SDXL.md` e ADR-0041.
+
+---
+
 ## 13. Providers e roteamento
 
 Provider é substituível e aprovado por tarefa.

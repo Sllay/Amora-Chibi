@@ -205,6 +205,17 @@ export class MessagingCoreClient {
     });
   }
 
+  generateArt({ prompt, preset, remote_processing_allowed, discord_actor_id }) {
+    return this.request('/v1/art/generate', {
+      method: 'POST',
+      timeoutMs: 75_000,
+      body: {
+        prompt, preset, remote_processing_allowed, discord_actor_id,
+        account_scope: this.accountScope,
+      },
+    });
+  }
+
   getPresence() {
     const query = new URLSearchParams({ account_scope: this.accountScope });
     return this.request(`/v1/messaging/worker/presence/${this.platform}?${query}`);

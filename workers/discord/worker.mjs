@@ -5,6 +5,7 @@ import {
   discordInteractionEdit,
   parseDiscordAmoraInteraction,
 } from './commands.mjs';
+import { discordArtCommandDefinition, parseDiscordArtInteraction, handleDiscordArtInteraction } from './art-command.mjs';
 import { DiscordRestClient } from './http.mjs';
 import {
   DISCORD_INTENTS,
@@ -447,11 +448,26 @@ export class DiscordWorker {
         body: discordAmoraCommandDefinition(),
       },
     );
+    if (enabled('AMORA_DISCORD_ART', false)) {
+      await this.rest.request(
+        `/applications/${encodeURIComponent(this.applicationId)}/guilds/${encodeURIComponent(this.testGuildId)}/commands`,
+        { method: 'POST', body: discordArtCommandDefinition() },
+      );
+    }
     this.registeredCommandGuild = this.testGuildId;
     safeLog('STAGING_COMMAND_READY');
   }
 
   async handleInteraction(interaction) {
+    const artCommand = parseDiscordArtInteraction(interaction);
+    if (artCommand && enabled('AMORA_DISCORD_ART', false)) {
+      const result = await handleDiscordArtInteraction({
+        command: artCommand, core: this.core, rest: this.rest,
+        remoteProcessingAllowed: this.remoteProcessingAllowed,
+      });
+      if (result.status !== 'sent') safeLog('ART_COMMAND_RESULT', result.code || result.status);
+      return;
+    }
     const command = parseDiscordAmoraInteraction(interaction);
     if (!command) return;
 
