@@ -166,7 +166,18 @@ class AmoraCore:
         social = SocialSceneTracker()
         addressee = AddresseeEngine(identities)
         perspective = PerspectiveResolver(identities)
-        memory = MemoryService(MemoryStore(paths.database, active_clock, identities, backend=storage), active_clock)
+        if storage.capabilities.name == "postgres-candidate":
+            # Candidate is explicitly injected, never environment-selected.
+            # PostgreSQL memory must use atomic postings/BM25 instead of the
+            # SQLite-only FTS5 DDL and JSON1 candidate retrieval.
+            from amora.memory.postgres_store import PostgresMemoryStore
+            memory_store_class = PostgresMemoryStore
+        else:
+            memory_store_class = MemoryStore
+        memory = MemoryService(
+            memory_store_class(paths.database, active_clock, identities, backend=storage),
+            active_clock,
+        )
         world_store = WorldStore(paths.database, active_clock, backend=storage)
         world = WorldModelService(world_store, active_clock)
         self_model = SelfModelService(world_store, active_clock)
