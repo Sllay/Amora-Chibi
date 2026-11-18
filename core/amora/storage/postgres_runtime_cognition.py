@@ -38,7 +38,7 @@ def cognition_statements() -> dict[str,ReviewedStatement]:
           AND (%s::text IS NULL OR cm.turn_id=%s)
           AND (%s::text IS NULL OR cm.session_id=%s)
           AND (
-            %s=FALSE OR (
+            %s=0 OR (
                 (
                   COALESCE(cm.metadata_json::jsonb ->> 'temporal_initiative','0')
                     NOT IN ('1','true')
