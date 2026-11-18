@@ -38,6 +38,7 @@ AUTHORIZE_REFLECTION = "PG_MEMORY_AUTHORIZE_REFLECTION"
 OWNER_TURN_STATUS = "PG_MEMORY_OWNER_TURN_STATUS"
 SHAREABLE_OWNER = "PG_MEMORY_SHAREABLE_OWNER"
 OWNER_RECALL = "PG_MEMORY_OWNER_RECALL"
+OWNER_RECALL_FTS = "PG_MEMORY_OWNER_RECALL_FTS"
 ENTITY_RANK = "PG_MEMORY_ENTITY_RANK"
 REFLECTION_AUDIT_COUNT = "PG_MEMORY_REFLECTION_AUDIT_COUNT"
 REFLECTION_AUDIT_ROWS = "PG_MEMORY_REFLECTION_AUDIT_ROWS"
@@ -329,6 +330,29 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
             AND (%s=0 OR m.privacy_scope='PUBLIC')
         ORDER BY m.created_at DESC,m.id DESC LIMIT %s OFFSET %s
     """,6,64)
+    # Search the *entire* eligible indexed corpus before the row limit. The
+    # original SQLite FTS-first recall can reach old, low-importance memories
+    # that are not in the newest 8 pages. A caller must recheck exact
+    # topic_terms(content + summary), because tags are indexed too.
+    add(OWNER_RECALL_FTS, """
+        WITH needed AS (
+            SELECT DISTINCT unnest(%s::text[]) AS term
+        )
+        SELECT m.*
+        FROM amora_pg_v18_lab.memory_records AS m
+        JOIN amora_pg_v18_lab.fts_term_postings AS p ON p.memory_id=m.id
+        JOIN needed n ON n.term=p.term
+        WHERE m.owner_entity_id=%s
+          AND m.privacy_scope IN ('PERSONAL','PRIVATE','SOCIAL','PUBLIC')
+          AND m.archived_at IS NULL
+          AND (m.valid_from IS NULL OR m.valid_from<=%s)
+          AND (m.valid_until IS NULL OR m.valid_until>=%s)
+          AND (%s=0 OR m.privacy_scope='PUBLIC')
+        GROUP BY m.id
+        HAVING COUNT(DISTINCT p.term)=(SELECT COUNT(*) FROM needed)
+        ORDER BY m.created_at DESC,m.id DESC
+        LIMIT 129
+    """,5,129)
     add(ENTITY_RANK, """
         SELECT memory_id,entity_id,confidence
         FROM amora_pg_v18_lab.memory_entities
