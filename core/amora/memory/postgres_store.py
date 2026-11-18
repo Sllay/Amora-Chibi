@@ -189,6 +189,51 @@ class PostgresMemoryStore(MemoryStore):
             ).fetchall()
         return [row["id"] for row in rows if row["id"] in records]
 
+    def _entity_ranks(self,entity_ids:set[str],candidate_ids:Iterable[str]):
+        if not entity_ids:
+            return [],[]
+        candidates=set(candidate_ids)
+        with self._lock:
+            exact_rows=self._conn.execute(
+                q.ENTITY_RANK,(sorted(entity_ids),),
+            ).fetchall()
+        exact=[
+            row["memory_id"] for row in exact_rows
+            if row["memory_id"] in candidates
+        ]
+        related_entities=set()
+        for relation in self.identities.relationships:
+            if relation.source in entity_ids:
+                related_entities.add(relation.target)
+            if relation.target in entity_ids:
+                related_entities.add(relation.source)
+        related_entities-=entity_ids
+        related=[]
+        if related_entities:
+            with self._lock:
+                related_rows=self._conn.execute(
+                    q.ENTITY_RANK,(sorted(related_entities),),
+                ).fetchall()
+            seen=set(exact)
+            related=[
+                row["memory_id"] for row in related_rows
+                if row["memory_id"] in candidates and row["memory_id"] not in seen
+            ]
+        return list(dict.fromkeys(exact)),list(dict.fromkeys(related))
+
+    def local_only_reflection_audit(self)->dict:
+        with self._lock:
+            total=self._conn.execute(
+                q.REFLECTION_AUDIT_COUNT,
+            ).fetchone()
+            rows=self._conn.execute(
+                q.REFLECTION_AUDIT_ROWS,
+            ).fetchall()
+        return {
+            "total":int(total[0]) if total else 0,
+            "review_candidates":[dict(row) for row in rows],
+        }
+
     def _hydrate_many(self, rows: list) -> dict[str,MemoryRecord]:
         if not rows:
             return {}
