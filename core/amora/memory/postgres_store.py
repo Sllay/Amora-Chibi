@@ -418,9 +418,17 @@ class PostgresMemoryStore(MemoryStore):
                         for row in indexed:
                             collect(row)
                             if len(selected) >= limit:
-                                return list(self._hydrate_many(selected[:limit]).values()),(
-                                    len(indexed)<129
+                                indexed_exhausted=len(indexed)<129
+                                unindexed=self._conn.execute(
+                                    q.OWNER_RECALL_UNINDEXED,(
+                                        owner_id,stamp,stamp,int(public_only),
+                                    ),
+                                ).fetchone()
+                                complete=(
+                                    indexed_exhausted and unindexed is not None
+                                    and unindexed[0] is False
                                 )
+                                return list(self._hydrate_many(selected[:limit]).values()),complete
                         if len(indexed)<129:
                             break
             # Fallback for legacy documents without postings and for cases
