@@ -29,13 +29,17 @@ class ConversationStore:
         payload = json.dumps(item.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"))
         with self._lock:
             try:
-                execute_atomic_statement(
+                result = execute_atomic_statement(
                     self.backend,
                     self._conn,
                     """INSERT INTO conversation_turn_decisions(id, state, score, result_json, created_at, dedupe_key)
                     VALUES (?, ?, ?, ?, ?, ?)""",
                     (str(item.id), item.state.value, item.score, payload, item.created_at.isoformat(), item.dedupe_key),
                 )
+                if self.backend.capabilities.name == "postgres-candidate":
+                    # PostgreSQL uses ON CONFLICT DO NOTHING: detecting
+                    # duplicate writes must not abort the surrounding tx.
+                    return result.rowcount == 1
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise
@@ -85,7 +89,7 @@ class ConversationStore:
                         payload = json.dumps(item.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"))
                         break
             try:
-                self._conn.execute(
+                cursor = self._conn.execute(
                     """INSERT INTO speech_utterances(
                         id, target_id, kind, priority, privacy_scope, device_id, status,
                         utterance_json, created_at, claimed_at, claim_expires_at, spoken_at, dedupe_key
@@ -98,6 +102,8 @@ class ConversationStore:
                         item.spoken_at.isoformat() if item.spoken_at else None, item.dedupe_key,
                     ),
                 )
+                if self.backend.capabilities.name == "postgres-candidate":
+                    return cursor.rowcount == 1
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise
