@@ -11,7 +11,11 @@ import os
 
 import pytest
 
-from amora.events import AmoraEvent,PrivacyScope
+from amora.events import PrivacyScope
+from amora.events.multimodal import (
+    ObservationContext,ObservationSource,SensoryObservation,
+    SensoryModality,EvidenceKind,build_observation_event,
+)
 from amora.identity import build_initial_registry
 from amora.memory.episodic_observations import EpisodeSelection,episode_record_id
 from amora.memory.episode_fence import EpisodeWriteLease
@@ -57,17 +61,32 @@ def test_pg_episode_memory_and_queue_ack_are_atomic(tmp_path):
                 build_initial_registry(),backend=backend,
             )) as memory:
                 assert db.migrate()==0
-                source_id=UUID(int=81771)
                 correlation=UUID(int=81772)
-                assert db.append_event(AmoraEvent(
-                    id=source_id,
-                    event_type="perception.observation",
-                    timestamp=NOW,source="synthetic:perception",
-                    actor="PERSON_BK",target="PERSON_BK",
+                context=ObservationContext(
+                    source=ObservationSource.WEB,
                     session_id="synthetic-session",
+                    scope_id=UUID(int=81775),
                     correlation_id=correlation,
+                    stream_id=UUID(int=81776),
+                    epoch=0,actor_id="PERSON_BK",
+                    owner_entity_id="PERSON_BK",
+                    audience=("PERSON_BK",),
                     privacy_scope=PrivacyScope.PRIVATE,
-                )) is True
+                    remote_processing_allowed=False,
+                )
+                observation=SensoryObservation(
+                    modality=SensoryModality.IMAGE,
+                    evidence_kind=EvidenceKind.OBSERVED,
+                    sequence=1,
+                    capture_started_at=NOW,
+                    capture_ended_at=NOW,
+                    received_at=NOW,
+                    confidence=0.9,
+                    text="Observacao sintetica de um jardim",
+                )
+                event=build_observation_event(context,observation)
+                source_id=event.id
+                assert db.append_event(event) is True
                 selection=EpisodeSelection(
                     evidence_ids=(source_id,),recipient_id="PERSON_BK",
                 )
