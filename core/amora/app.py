@@ -272,8 +272,13 @@ class AmoraCore:
             cognition.register_provider(openrouter_cognition)
 
         events.subscribe_bootstrap("cognition.action_suggested", autonomy.handle_cognitive_suggestion)
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.conversation.postgres_store import PostgresConversationStore
+            conversation_store_class = PostgresConversationStore
+        else:
+            conversation_store_class = ConversationStore
         conversation = ConversationEngine(
-            ConversationStore(paths.database, active_clock, backend=storage),
+            conversation_store_class(paths.database, active_clock, backend=storage),
             active_clock,
             social,
             emotion,
