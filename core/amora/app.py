@@ -195,8 +195,13 @@ class AmoraCore:
         )
         relationships.seed_registry_relationships()
         perspective_consolidator = PerspectiveConsolidator(world)
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.emotion.postgres_store import PostgresEmotionStore
+            emotion_store_class = PostgresEmotionStore
+        else:
+            emotion_store_class = EmotionStore
         emotion = EmotionEngine(
-            EmotionStore(paths.database, active_clock, backend=storage),
+            emotion_store_class(paths.database, active_clock, backend=storage),
             active_clock,
             identities,
             events,
