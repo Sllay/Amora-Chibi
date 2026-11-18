@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from amora.observability import request_failure_fields
 from amora.operations import OperationMonitor, identifier
+from amora.storage.postgres_runtime_connection import PostgresCommitUnknown, PostgresRuntimeError
 from amora.time import Clock
 
 if TYPE_CHECKING:
@@ -49,11 +50,28 @@ class UsageRecorder:
     def record(self, **usage: Any) -> UsagePersistence:
         try:
             self.store.record_usage(**usage)
-        except sqlite3.Error as exc:
+        except Exception as exc:
+            # A best-effort usage ledger must handle both SQLite/libSQL and
+            # PostgreSQL DB-API exceptions. Never swallow application bugs.
+            if not isinstance(exc,(sqlite3.Error,PostgresRuntimeError)):
+                try:
+                    import psycopg
+                except ImportError:
+                    # PostgreSQL is an optional dependency for the SQLite /
+                    # cloud runtime. Never mask the original application bug
+                    # with an unrelated missing-driver ImportError.
+                    raise exc
+                if not isinstance(exc,psycopg.Error):
+                    raise
             fields = request_failure_fields(exc)
             storage_code = fields.get("storage_error_code", "SQL_ERROR")
             known_failure = (
                 isinstance(exc, sqlite3.IntegrityError)
+                or (getattr(exc,"sqlstate","") or "").startswith("23")
+                or (
+                    isinstance(exc,PostgresRuntimeError)
+                    and not isinstance(exc,PostgresCommitUnknown)
+                )
                 or storage_code.startswith("SQLITE_CONSTRAINT")
                 or storage_code
                 in {"SQL_CONNECTION_CLOSED", "SQL_CONNECTION_RECOVERY_FAILED"}

@@ -8,6 +8,9 @@ activated. Queue claim uses optimistic CAS to avoid duplicate claims.
 from __future__ import annotations
 from .postgres_runtime_connection import ReviewedStatement
 
+INVALIDATE_CANCEL = "PG_REFLECTION_INVALIDATE_CANCEL"
+INVALIDATE_ARCHIVE = "PG_REFLECTION_INVALIDATE_ARCHIVE"
+
 def reflection_statements()->dict[str,ReviewedStatement]:
     r:dict[str,ReviewedStatement]={}
     def add(source,postgres,count,cap=1000):
@@ -103,15 +106,13 @@ def reflection_statements()->dict[str,ReviewedStatement]:
             (m.metadata_json::jsonb ->> 'transport_revision')::BIGINT,1
           )<=x.invalidated_through"""
     add(
-        "UPDATE memory_reflection_jobs SET status='cancelled',lease_token=NULL,lease_until=NULL,"
-        "last_reason='REFLECTION_SOURCE_INVALIDATED' WHERE status<>'cancelled' AND turn_id IN ("+stale+")",
+        INVALIDATE_CANCEL,
         """UPDATE amora_pg_v18_lab.memory_reflection_jobs SET
             status='cancelled',lease_token=NULL,lease_until=NULL,
             last_reason='REFLECTION_SOURCE_INVALIDATED'
         WHERE status<>'cancelled' AND turn_id IN ("""+pg_stale+")",2)
     add(
-        "UPDATE memory_records SET archived_at=?,updated_at=? WHERE archived_at IS NULL "
-        "AND provenance_source LIKE 'cognition:%' AND json_extract(metadata_json,'$.turn_id') IN ("+stale+")",
+        INVALIDATE_ARCHIVE,
         """UPDATE amora_pg_v18_lab.memory_records SET
             archived_at=%s,updated_at=%s WHERE archived_at IS NULL
             AND provenance_source LIKE 'cognition:%%'

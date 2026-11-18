@@ -1,0 +1,56 @@
+# Aiven PostgreSQL — Validation Run 2, correction and integrated verification
+
+Branch: `fix/aiven-run2-integrity-20261118` (draft [PR #289](https://github.com/Sllay/Amora-Chibi/pull/289), base: `feat/aiven-full-runtime-integration`).
+**Status: IN PROGRESS — no completion, cutover or main merge authorized.**
+All PostgreSQL results below are disposable local PG18 and wholly synthetic.
+
+## Bugs reproduced and corrected
+
+- **Deep owner recall:** canonical owner-memory lookup formerly scanned only 512 newest rows. Review-backed query `PG_MEMORY_OWNER_RECALL_FTS` reads the entire eligible PG postings corpus before the fallback scan, with row cap and owner/public/privacy/time filters applied first. Test includes an old indexed memory behind 540 newer rows, 270 recent FTS tag-only distractors and private/other-owner checks. It reports `complete=False` when legacy unindexed records still exist rather than overstating search completeness.
+- **Cognition V1 inheritance:** original `PostgresCognitiveStore` inherited the primitive store and lacked V1 helpers `usage_ledger`, `latest_usage`, `merge_message_metadata` and `record_interrupted_progress`. Fixed to inherit canonical V1 store and added reviewed PostgreSQL mappings for V1 usage and interrupted speech. Metadata merging uses atomic JSONB `||`, avoiding race-prone read-modify-write.
+- **Telemetry errors:** best-effort usage recorder previously only caught `sqlite3.Error` and could abort cognition on psycopg failures. PG SQL failures and unknown commit outcomes are separately classified, without automatic retry; unrelated coding errors still propagate. A subsequent cloud-container run found a missing optional `psycopg` import wrongly masking a TypeError; corrected to preserve the original exception. Tested in both PG18 and dependency-light container.
+- **Lost memory decay updates:** two writers could read the same old retrievability and overwrite each other. Replaced with one PostgreSQL `UPDATE ... retrievability*factor RETURNING` statement. Real PG two-worker regression proves 1.0 -> 0.5 -> 0.25.
+- **Episode provenance test:** event fixture initially violated Core's canonical sensory event contract; test now uses `build_observation_event(ObservationContext,SensoryObservation)`. Opt-in v19-candidate episode test exercises a stale lease, authorized memory+search+queue completion and post-ACK replay rejection without enabling v19 or production.
+- **Reflection edit invalidation:** real PG18 test uncovered `PG_RUNTIME_SQL_NOT_REVIEWED` on dynamically concatenated SQLite UPDATEs when cancelling stale reflections and archiving derived memories. Added reviewed fixed keys `PG_REFLECTION_INVALIDATE_CANCEL`/`PG_REFLECTION_INVALIDATE_ARCHIVE`, routed PG paths through them and preserved original SQLite execution. Real PG integration now proves enqueue/claim, edit invalidation, delayed ACK refusal and successful newer transport revision.
+
+## Synthetic PG18 integration tests added
+
+- `test_postgres_run1_memory_integration.py`: full indexed recall with 540 newer rows, tag-only distractors, unindexed corpus honesty, owner/public/share isolation.
+- `test_postgres_run2_core_bootstrap.py`: real `AmoraCore.bootstrap` startup, health semantics, V1 usage ledger persistence, shutdown/restart, connection budget release.
+- `test_postgres_run2_usage_boundary.py`: psycopg constraints vs unknown commits, type errors not swallowed.
+- `test_postgres_run2_messaging_queue.py`: two different DB connections claiming one outbound, generation token fencing, ACK and restart.
+- `test_postgres_run2_cognition_v1.py`: atomic JSONB metadata patches and spoken-prefix tracking across restart.
+- `test_postgres_run2_rank_parity.py`: SQLite FTS5 vs PG BM25/RRF/MMR order and owner scope with accent-sensitive text.
+- `test_postgres_run2_atomic_decay.py`: parallel PG updates without lost retrievability decay.
+- `test_postgres_run2_episode_fence.py`: opt-in PG18 sensory schema, canonical evidence, atomic lease+memory completion.
+- `test_postgres_run2_reflection_queue.py`: real PostgreSQL reflection enqueue, cross-connection claims, cancellation after native edit, stale ACK refusal, revision recovery.
+- These are wired into the actual `aiven-postgres-lab.yml` runner; not only standalone, unexecuted tests.
+
+## Verified gates
+
+The PG18 lab, perception, provider/capability, cloud-container and security gates passed at **`b7a7ba7532bd8dc79d915161037c6d67d672e402`**, including the real reflection invalidation test. At the time of this note the Python 3.11–3.14 Core matrix for that SHA is still running and must be checked separately before claiming a clean full matrix. Opt-in episode fence passed in the synthetic configuration; no v19 production migration was performed.
+
+## Remaining Run 2 blockers
+
+1. `PostgresMemoryStore.record_verified_access` intentionally rejects replica epoch operations, pending PostgreSQL-native projection epoch/restore-fence implementation and end-to-end tests. Never replace this with an unverified no-op.
+2. Production-safe complete-source import, reconciled snapshots, restore/PITR and rollback are not implemented; old SQLite/Turso backups are NOT proof of real PG recovery.
+3. PG v19 opt-in sensory queue is not an approved full database migration; recovery, cross-event invalidation and live scheduler/worker end-to-end parity still need tests.
+4. Original Core API/Discord end-to-end inbound→generation→reflection→outbound→ACK/cancel under multi-worker retries and privacy grant invalidation still requires dedicated regression tests.
+5. Full postings parity on a broad, realistic Unicode corpus and full-corpus indexed search with tag-only and unindexed legacy records needs independent stress/verification; the bounded scan explicitly reports incompleteness where it cannot prove otherwise.
+6. Concurrent schema and data recovery, backup commitments and cross-principal authorization must be verified against synthetic PG18 before even considering a main merge.
+7. External Aiven is not being used as a validation target; production remains unchanged.
+
+**No merge to main, Aiven writes, Turso migration, production deployment or environment cutover.**
+
+## Run 2 continuation — coherence, recovery and broader integration
+
+- **PostgreSQL memory-only revision fence:** opt-in `postgres_memory_epoch_lab.py` installs transactional revision triggers over memory, search and disclosure dependencies, and an explicit operator-controlled epoch rotation primitive after restore. `PostgresMemoryStore.record_verified_access` now verifies the memory stamp under an exclusive epoch-row lock, returns access counters only after commit, and rolls back on missing/duplicate hit IDs. Combined-scope and absent-epoch access deliberately fail closed. `test_postgres_run2_replica_epoch.py` passed in disposable PG18. **This is not a connected native remote-replica implementation or Aiven production certification.**
+- **Native PG18 recovery test:** `test_postgres_run2_native_backup_restore.py` runs PostgreSQL 18's own `pg_dump`/`pg_restore` inside the isolated CI service, verifies typed record/index/optional sensory schema recovery, and requires a rotated epoch before reopening reads. Passed in PG18. This is NOT real Aiven PITR/retention, not a private-source import and not a production rollback.
+- **Actual sensory job repository:** `test_postgres_run2_episode_worker.py` passed against disposable PG18, including enqueue, lease expiry/recovery, stale worker refusal, atomic episode creation and invalidation of already-created derived memory. The v19 tables and scheduler remain candidate-only.
+- **Historical retrieval bound:** widened exact owner-scoped indexed and fallback scan pages to 512 records, up to 131,072 candidates per path; any cap or early stop must be explicitly reported as incomplete. A stronger regression places the only text match after 2,200 newer tag-only distractors. Candidate search remains bounded; this is not a claim of unbounded search.
+- **Full Discord flows:** `test_postgres_run2_discord_pipeline.py` and `test_postgres_run2_discord_core.py` (parallel contribution) test real Core inbound, identity, duplicate recovery, edit invalidation, outbound ACK and restart using invented messages and no real Discord provider. These are in the latest CI matrix; completion requires a green head.
+- **Source parity under volume:** `test_postgres_run2_scaled_import.py` validates the existing guarded synthetic importer against 2,400 invented memory records, privacy scopes, FTS documents, binary avatar data and 49 related ordinary tables. This is not a tool for reading private PCS.4C backups or connecting to production Aiven.
+
+### External cutover gates (not performed in Run 2)
+
+Real Aiven credentials, real archived-user data, host-level native backups/PITR, restoration drills, actual Discord transport and any production schema promotion require separate operator-approved cutover validation. Green disposable PG18 is meaningful correctness evidence for the candidate but **cannot certify those external gates**. The integration PR stays draft, and no `main` merge or production modification is permitted by this report.

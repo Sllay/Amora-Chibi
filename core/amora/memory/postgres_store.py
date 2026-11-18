@@ -167,9 +167,9 @@ class PostgresMemoryStore(MemoryStore):
         after = query.after.isoformat() if query.after else None
         before = query.before.isoformat() if query.before else None
         return (
-            bool(query.include_archived),now,kinds,kinds,
+            int(query.include_archived),now,kinds,kinds,
             after,after,before,before,
-            bool(query.projection_public_only),bool(query.projection_remote_only),
+            int(query.projection_public_only),int(query.projection_remote_only),
             recipient,recipient,recipient,recipient,
         )
 
@@ -199,8 +199,8 @@ class PostgresMemoryStore(MemoryStore):
         # Existing rank() applied all privacy, recipient and topic filters
         # to records before calling _text_rank. Restrict by that exact set.
         no_scope = (
-            True,now,None,None,None,None,None,None,
-            False,False,None,None,None,None,
+            1,now,None,None,None,None,None,None,
+            0,0,None,None,None,None,
         )
         with self._lock:
             rows = self._conn.execute(
@@ -303,15 +303,13 @@ class PostgresMemoryStore(MemoryStore):
 
     def degrade_retrievability(self, memory_id: UUID | str, factor: float) -> float | None:
         factor = max(0.0,min(1.0,float(factor)))
+        # One server-side row update prevents two concurrent stores from
+        # overwriting each other's decay after both read the old value.
         with self._lock, self._conn:
-            row = self._conn.execute(q.GET,(str(memory_id),)).fetchone()
-            if row is None:
-                return None
-            value = max(0.02,min(1.0,float(row["retrievability"])*factor))
-            self._conn.execute(
-                q.DEGRADE,(value,self.clock.now().isoformat(),str(memory_id))
-            )
-            return value
+            row=self._conn.execute(q.DEGRADE,(
+                factor,self.clock.now().isoformat(),str(memory_id),
+            )).fetchone()
+            return float(row[0]) if row is not None else None
 
     def link(self, source_memory_id: UUID | str, target_memory_id: UUID | str,
              link_type: str, confidence: float=1.0) -> None:
@@ -329,9 +327,57 @@ class PostgresMemoryStore(MemoryStore):
                 now.isoformat(),list(memory_ids),
             )).rowcount
 
+    def read_memory_projection_stamp(self):
+        """Read the authoritative opt-in PostgreSQL revision, not a replica."""
+        from amora.storage.replica_coherence import (
+            ProjectionStamp, ReplicaCoherenceError,
+        )
+        with self._lock:
+            ready=self._conn.execute(q.EPOCH_READY).fetchone()
+            if ready is None or ready[0] is not True:
+                raise ReplicaCoherenceError("PG_MEMORY_EPOCH_NOT_INSTALLED")
+            row=self._conn.execute(q.EPOCH_STAMP).fetchone()
+        if row is None:
+            raise ReplicaCoherenceError("PG_MEMORY_EPOCH_NOT_INSTALLED")
+        return ProjectionStamp(row["epoch_id"],int(row["revision"]),"memory")
+
     def record_verified_access(self, hits: list[MemoryHit], stamp) -> list[MemoryHit]:
-        # Replica revision invariants need an explicit PostgreSQL equivalent.
-        raise PostgresRuntimeError("PG_MEMORY_REPLICA_COHERENCE_UNREVIEWED")
+        """Validate a PG-authoritative memory revision and write access once.
+
+        The same transaction locks the epoch row and updates ALL requested
+        records. A mismatch rolls back completely. Ambiguous commit failures
+        propagate without retry. Never accept a combined/SQLite stamp.
+        """
+        from amora.storage.replica_coherence import (
+            ProjectionStamp, ReplicaCoherenceError,
+        )
+        if not hits:
+            return hits
+        if not isinstance(stamp,ProjectionStamp) or stamp.scope!="memory":
+            raise ReplicaCoherenceError("PG_MEMORY_EPOCH_SCOPE_UNVERIFIED")
+        ids=[str(hit.memory.id) for hit in hits]
+        if len(ids)>50 or len(ids)!=len(set(ids)):
+            raise ReplicaCoherenceError("REPLICA_DUPLICATE_MEMORY_HIT")
+        now=self.clock.now()
+        iso=now.isoformat()
+        with self._lock,self._conn:
+            ready=self._conn.execute(q.EPOCH_READY).fetchone()
+            if ready is None or ready[0] is not True:
+                raise ReplicaCoherenceError("PG_MEMORY_EPOCH_NOT_INSTALLED")
+            epoch=self._conn.execute(q.EPOCH_LOCK).fetchone()
+            if (epoch is None or epoch["epoch_id"]!=stamp.epoch_id
+                    or int(epoch["revision"])!=stamp.revision):
+                raise ReplicaCoherenceError("REPLICA_ACCESS_REVISION_CHANGED")
+            updated=self._conn.execute(q.VERIFIED_ACCESS,(iso,ids)).fetchall()
+            counts={str(row["id"]):row["access_count"] for row in updated}
+            if (len(updated)!=len(ids) or set(counts)!=set(ids)
+                    or any(type(value) is not int or value<1 for value in counts.values())
+                    or any(row["last_accessed_at"]!=iso for row in updated)):
+                raise ReplicaCoherenceError("REPLICA_ACCESS_ROWS_CHANGED")
+        for hit in hits:
+            hit.memory.access_count=counts[str(hit.memory.id)]
+            hit.memory.last_accessed_at=now
+        return hits
 
     def authorize_reviewed_reflection(self, memory_id: UUID | str, owner_id: str) -> bool:
         if self.identities.get(owner_id) is None:
@@ -380,32 +426,74 @@ class PostgresMemoryStore(MemoryStore):
         limit = max(1,min(5,int(limit)))
         stamp = self.clock.now().isoformat()
         selected: list = []
+        seen: set[str] = set()
         complete = False
+
+        def collect(row) -> None:
+            if str(row["id"]) in seen:
+                return
+            if not generic and not terms <= topic_terms(
+                str(row["content"])+" "+str(row["summary"] or ""),
+            ):
+                return
+            if share_only:
+                # Full canonical disclosure eligibility is checked *before*
+                # consuming the result cap, including source invalidations.
+                row = self._conn.execute(q.SHAREABLE_OWNER,(
+                    owner_id,stamp,stamp,str(row["id"]),
+                )).fetchone()
+                if row is None:
+                    return
+            seen.add(str(row["id"]))
+            selected.append(row)
+
         with self._lock:
-            for page in range(8):
+            if not generic:
+                # FTS postings search all eligible owner records before the
+                # cap: a memory from years ago must not be hidden by 512 new
+                # unrelated memories. Exact topic semantics remain in Python.
+                indexed_terms = normalized_fts5_terms(" ".join(sorted(terms)))
+                if indexed_terms:
+                    # FTS indexes tags as well as content. A result can match
+                    # only its tags while failing canonical topic_terms(text).
+                    # Page the owner-scoped index before fallback. A hard
+                    # 131k-row safety cap prevents unbounded remote reads;
+                    # incomplete scans always report complete=False.
+                    for index_page in range(256):
+                        indexed=self._conn.execute(q.OWNER_RECALL_FTS,(
+                            indexed_terms,owner_id,stamp,stamp,
+                            int(public_only),index_page*512,
+                        )).fetchall()
+                        for row in indexed:
+                            collect(row)
+                            if len(selected) >= limit:
+                                indexed_exhausted=len(indexed)<512
+                                unindexed=self._conn.execute(
+                                    q.OWNER_RECALL_UNINDEXED,(
+                                        owner_id,stamp,stamp,int(public_only),
+                                    ),
+                                ).fetchone()
+                                complete=(
+                                    indexed_exhausted and unindexed is not None
+                                    and unindexed[0] is False
+                                )
+                                return list(self._hydrate_many(selected[:limit]).values()),complete
+                        if len(indexed)<512:
+                            break
+            # Fallback for legacy documents without postings and for cases
+            # where FTS tokens differ from the canonical topic_terms parser.
+            # Scan a finite, generous 131k-row candidate window. Return
+            # complete=False if the corpus is larger or the limit stops us;
+            # never claim an unverified exhaustive search.
+            for page in range(256):
                 rows = self._conn.execute(q.OWNER_RECALL,(
-                    owner_id,stamp,stamp,public_only,64,page*64,
+                    owner_id,stamp,stamp,int(public_only),512,page*512,
                 )).fetchall()
                 for row in rows:
-                    if not generic and not terms <= topic_terms(
-                        str(row["content"])+" "+str(row["summary"] or ""),
-                    ):
-                        continue
-                    if share_only:
-                        # Check the full persisted disclosure predicate before
-                        # consuming the result cap; unsafe rows never fill the
-                        # top-k and hide later authorized memories.
-                        candidate=self._conn.execute(q.SHAREABLE_OWNER,(
-                            owner_id,stamp,stamp,str(row["id"]),
-                        )).fetchone()
-                        if candidate is None:
-                            continue
-                        selected.append(candidate)
-                    else:
-                        selected.append(row)
+                    collect(row)
                     if len(selected) >= limit:
                         break
-                if len(rows) < 64:
+                if len(rows) < 512:
                     complete = True
                     break
                 if len(selected) >= limit:

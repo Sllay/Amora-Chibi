@@ -32,12 +32,18 @@ ARCHIVE = "PG_MEMORY_ARCHIVE"
 DEGRADE = "PG_MEMORY_DEGRADE"
 LINK = "PG_MEMORY_LINK"
 ACCESS = "PG_MEMORY_ACCESS"
+EPOCH_READY = "PG_MEMORY_EPOCH_READY"
+EPOCH_STAMP = "PG_MEMORY_EPOCH_STAMP"
+EPOCH_LOCK = "PG_MEMORY_EPOCH_LOCK"
+VERIFIED_ACCESS = "PG_MEMORY_VERIFIED_ACCESS"
 GENERATION_LEASE = "PG_MEMORY_GENERATION_LEASE"
 REFLECTION_LEASE = "PG_MEMORY_REFLECTION_LEASE"
 AUTHORIZE_REFLECTION = "PG_MEMORY_AUTHORIZE_REFLECTION"
 OWNER_TURN_STATUS = "PG_MEMORY_OWNER_TURN_STATUS"
 SHAREABLE_OWNER = "PG_MEMORY_SHAREABLE_OWNER"
 OWNER_RECALL = "PG_MEMORY_OWNER_RECALL"
+OWNER_RECALL_FTS = "PG_MEMORY_OWNER_RECALL_FTS"
+OWNER_RECALL_UNINDEXED = "PG_MEMORY_OWNER_RECALL_UNINDEXED"
 ENTITY_RANK = "PG_MEMORY_ENTITY_RANK"
 REFLECTION_AUDIT_COUNT = "PG_MEMORY_REFLECTION_AUDIT_COUNT"
 REFLECTION_AUDIT_ROWS = "PG_MEMORY_REFLECTION_AUDIT_ROWS"
@@ -195,7 +201,12 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
     add(ARCHIVE,"""UPDATE amora_pg_v18_lab.memory_records
         SET archived_at=%s,updated_at=%s WHERE id=%s AND archived_at IS NULL""",3)
     add(DEGRADE,"""UPDATE amora_pg_v18_lab.memory_records
-        SET retrievability=%s,updated_at=%s WHERE id=%s""",3)
+        SET retrievability=GREATEST(
+                0.02::float8,LEAST(1.0::float8,retrievability*%s)
+            ),
+            updated_at=%s
+        WHERE id=%s
+        RETURNING retrievability""",3,1)
     add(LINK,"""INSERT INTO amora_pg_v18_lab.memory_links(
         source_memory_id,target_memory_id,link_type,confidence)
         VALUES (%s,%s,%s,%s)
@@ -319,6 +330,29 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
           ) AND m.id=%s
           FOR SHARE OF m
     """,4,1)
+    # An epoch is not inferred from a green CI: it must exist on the
+    # authoritative PostgreSQL primary and be rotated after a restore.
+    add(EPOCH_READY, """
+        SELECT to_regclass(
+            'amora_pg_v18_lab.amora_memory_projection_epoch'
+        ) IS NOT NULL
+    """,0,1)
+    add(EPOCH_STAMP, """
+        SELECT epoch_id,revision
+        FROM amora_pg_v18_lab.amora_memory_projection_epoch
+        WHERE singleton=1
+    """,0,1)
+    add(EPOCH_LOCK, """
+        SELECT epoch_id,revision
+        FROM amora_pg_v18_lab.amora_memory_projection_epoch
+        WHERE singleton=1 FOR UPDATE
+    """,0,1)
+    add(VERIFIED_ACCESS, """
+        UPDATE amora_pg_v18_lab.memory_records
+        SET access_count=access_count+1,last_accessed_at=%s
+        WHERE id=ANY(%s::text[])
+        RETURNING id,access_count,last_accessed_at
+    """,2,50)
     add(OWNER_RECALL, """
         SELECT m.* FROM amora_pg_v18_lab.memory_records m
         WHERE m.owner_entity_id=%s AND
@@ -328,7 +362,48 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
             AND (m.valid_until IS NULL OR m.valid_until>=%s)
             AND (%s=0 OR m.privacy_scope='PUBLIC')
         ORDER BY m.created_at DESC,m.id DESC LIMIT %s OFFSET %s
-    """,6,64)
+    """,6,512)
+    # Search the *entire* eligible indexed corpus before the row limit. The
+    # original SQLite FTS-first recall can reach old, low-importance memories
+    # that are not in the newest 8 pages. A caller must recheck exact
+    # topic_terms(content + summary), because tags are indexed too.
+    add(OWNER_RECALL_FTS, """
+        WITH needed AS (
+            SELECT DISTINCT unnest(%s::text[]) AS term
+        )
+        SELECT m.*
+        FROM amora_pg_v18_lab.memory_records AS m
+        JOIN amora_pg_v18_lab.fts_term_postings AS p ON p.memory_id=m.id
+        JOIN needed n ON n.term=p.term
+        WHERE m.owner_entity_id=%s
+          AND m.privacy_scope IN ('PERSONAL','PRIVATE','SOCIAL','PUBLIC')
+          AND m.archived_at IS NULL
+          AND (m.valid_from IS NULL OR m.valid_from<=%s)
+          AND (m.valid_until IS NULL OR m.valid_until>=%s)
+          AND (%s=0 OR m.privacy_scope='PUBLIC')
+        GROUP BY m.id
+        HAVING COUNT(DISTINCT p.term)=(SELECT COUNT(*) FROM needed)
+        ORDER BY m.created_at DESC,m.id DESC
+        LIMIT 512 OFFSET %s
+    """,6,512)
+    # A postings scan is exhaustive only if every otherwise eligible source
+    # record has a durable search document. Imported pre-index records need
+    # a separate bounded fallback, and completeness must remain false.
+    add(OWNER_RECALL_UNINDEXED, """
+        SELECT EXISTS(
+            SELECT 1 FROM amora_pg_v18_lab.memory_records m
+            WHERE m.owner_entity_id=%s
+              AND m.privacy_scope IN ('PERSONAL','PRIVATE','SOCIAL','PUBLIC')
+              AND m.archived_at IS NULL
+              AND (m.valid_from IS NULL OR m.valid_from<=%s)
+              AND (m.valid_until IS NULL OR m.valid_until>=%s)
+              AND (%s=0 OR m.privacy_scope='PUBLIC')
+              AND NOT EXISTS(
+                  SELECT 1 FROM amora_pg_v18_lab.fts_doc_tokens d
+                  WHERE d.memory_id=m.id
+              )
+        )
+    """,4,1)
     add(ENTITY_RANK, """
         SELECT memory_id,entity_id,confidence
         FROM amora_pg_v18_lab.memory_entities
