@@ -32,6 +32,12 @@ ARCHIVE = "PG_MEMORY_ARCHIVE"
 DEGRADE = "PG_MEMORY_DEGRADE"
 LINK = "PG_MEMORY_LINK"
 ACCESS = "PG_MEMORY_ACCESS"
+GENERATION_LEASE = "PG_MEMORY_GENERATION_LEASE"
+REFLECTION_LEASE = "PG_MEMORY_REFLECTION_LEASE"
+AUTHORIZE_REFLECTION = "PG_MEMORY_AUTHORIZE_REFLECTION"
+OWNER_TURN_STATUS = "PG_MEMORY_OWNER_TURN_STATUS"
+SHAREABLE_OWNER = "PG_MEMORY_SHAREABLE_OWNER"
+OWNER_RECALL = "PG_MEMORY_OWNER_RECALL"
 
 
 def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
@@ -195,4 +201,128 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
     add(ACCESS,"""UPDATE amora_pg_v18_lab.memory_records
         SET access_count=access_count+1,last_accessed_at=%s
         WHERE id=ANY(%s::text[])""",2)
+    add(GENERATION_LEASE, """
+        SELECT 1 FROM amora_pg_v18_lab.messaging_inbound_generation g
+        JOIN amora_pg_v18_lab.conversation_messages m
+          ON m.turn_id=g.turn_id
+         AND m.dedupe_key='cognitive-input:' || g.turn_id
+        WHERE g.turn_id=%s AND g.lease_token=%s AND g.lease_until>%s
+          AND m.speaker_id=%s AND m.session_id=g.session_id
+          AND m.session_id=%s AND m.privacy_scope=%s
+          AND (%s=0 OR (m.remote_processing_allowed=1
+                         AND m.privacy_scope='PERSONAL'))
+          AND m.metadata_json::jsonb ->> 'explicit_memory_request'
+              IN ('1','true')
+          AND m.metadata_json::jsonb ->> 'channel_type'='dm'
+          AND NOT EXISTS (
+              SELECT 1 FROM amora_pg_v18_lab.memory_reflection_invalidations x
+              WHERE x.session_id=g.session_id
+                AND x.native_message_hash=g.native_message_hash
+                AND x.invalidated_through>=g.transport_revision
+          )
+    """,7,1)
+    add(REFLECTION_LEASE, """
+        SELECT 1 FROM amora_pg_v18_lab.memory_reflection_jobs
+        WHERE turn_id=%s AND status='claimed'
+          AND lease_token=%s AND lease_until>%s
+    """,3,1)
+    add(AUTHORIZE_REFLECTION, """
+        UPDATE amora_pg_v18_lab.memory_records AS r
+        SET remote_processing_allowed=1,owner_entity_id=%s,updated_at=%s
+        WHERE r.id=%s AND r.privacy_scope='PERSONAL'
+          AND r.archived_at IS NULL AND r.remote_processing_allowed=0
+          AND r.provenance_source LIKE 'cognition:%%'
+          AND r.provenance_kind='inference' AND r.actor_id='ENTITY_AMORA'
+          AND (r.owner_entity_id IS NULL OR r.owner_entity_id=%s)
+          AND NOT EXISTS(
+              SELECT 1 FROM jsonb_array_elements_text(r.audience_json::jsonb)
+              AS audience(value) WHERE audience.value<>%s
+          )
+          AND jsonb_array_length(r.derived_from_json::jsonb)=0
+          AND EXISTS(
+              SELECT 1 FROM amora_pg_v18_lab.conversation_messages m
+              WHERE m.turn_id=r.metadata_json::jsonb ->> 'turn_id'
+                AND m.dedupe_key='cognitive-input:' || m.turn_id
+                AND m.session_id=r.session_id AND m.speaker_id=%s
+                AND m.privacy_scope='PERSONAL'
+                AND m.remote_processing_allowed=1
+                AND m.metadata_json::jsonb ->> 'surface'='platform_messaging'
+                AND m.metadata_json::jsonb ->> 'channel_type'='dm'
+                AND COALESCE(m.metadata_json::jsonb ->> 'test_mode','0')
+                    IN ('0','false')
+                AND COALESCE(
+                    m.metadata_json::jsonb ->> 'memory_consolidation','1'
+                ) IN ('1','true')
+                AND NOT EXISTS (
+                    SELECT 1 FROM amora_pg_v18_lab.memory_reflection_invalidations x
+                    WHERE x.session_id=m.session_id
+                    AND x.native_message_hash=m.metadata_json::jsonb ->>
+                        'native_message_id_hash'
+                    AND x.invalidated_through>=COALESCE(
+                        (m.metadata_json::jsonb ->> 'transport_revision')::BIGINT,1
+                    )
+                )
+          )
+    """,6)
+    add(OWNER_TURN_STATUS, """
+        SELECT id,privacy_scope,remote_processing_allowed,archived_at,
+               provenance_kind,provenance_source,valid_from,valid_until
+        FROM amora_pg_v18_lab.memory_records
+        WHERE owner_entity_id=%s
+          AND privacy_scope NOT IN ('AUTH','SECRET')
+          AND metadata_json::jsonb ->> 'turn_id'=%s
+        ORDER BY created_at,id LIMIT 50
+    """,2,50)
+    add(SHAREABLE_OWNER, """
+        SELECT m.* FROM amora_pg_v18_lab.memory_records m
+        WHERE m.owner_entity_id=%s AND m.privacy_scope='PERSONAL'
+          AND m.archived_at IS NULL
+          AND (m.valid_from IS NULL OR m.valid_from<=%s)
+          AND (m.valid_until IS NULL OR m.valid_until>=%s)
+          AND jsonb_array_length(m.derived_from_json::jsonb)=0
+          AND NOT EXISTS(
+              SELECT 1 FROM jsonb_array_elements_text(m.audience_json::jsonb)
+              AS a(value) WHERE a.value<>m.owner_entity_id
+          )
+          AND (
+              (m.provenance_kind='user_assertion'
+               AND m.actor_id=m.owner_entity_id)
+              OR (
+                  m.provenance_kind='inference' AND m.actor_id='ENTITY_AMORA'
+                  AND m.provenance_source LIKE 'cognition:%%'
+                  AND EXISTS(
+                      SELECT 1 FROM amora_pg_v18_lab.conversation_messages s
+                      WHERE s.turn_id=m.metadata_json::jsonb ->> 'turn_id'
+                        AND s.dedupe_key='cognitive-input:' || s.turn_id
+                        AND s.speaker_id=m.owner_entity_id
+                        AND s.session_id=m.session_id
+                        AND s.privacy_scope='PERSONAL'
+                        AND s.metadata_json::jsonb ->> 'surface'
+                            ='platform_messaging'
+                        AND s.metadata_json::jsonb ->> 'channel_type'='dm'
+                        AND COALESCE(s.metadata_json::jsonb ->> 'test_mode','0')
+                            IN ('0','false')
+                        AND NOT EXISTS(
+                            SELECT 1 FROM amora_pg_v18_lab.memory_reflection_invalidations x
+                            WHERE x.session_id=s.session_id
+                              AND x.native_message_hash=
+                                  s.metadata_json::jsonb ->> 'native_message_id_hash'
+                              AND x.invalidated_through>=COALESCE(
+                                  (s.metadata_json::jsonb ->> 'transport_revision')::BIGINT,1
+                              )
+                        )
+                  )
+              )
+          ) AND m.id=%s
+    """,4,1)
+    add(OWNER_RECALL, """
+        SELECT m.* FROM amora_pg_v18_lab.memory_records m
+        WHERE m.owner_entity_id=%s AND
+            m.privacy_scope IN ('PERSONAL','PRIVATE','SOCIAL','PUBLIC')
+            AND m.archived_at IS NULL
+            AND (m.valid_from IS NULL OR m.valid_from<=%s)
+            AND (m.valid_until IS NULL OR m.valid_until>=%s)
+            AND (%s=FALSE OR m.privacy_scope='PUBLIC')
+        ORDER BY m.created_at DESC,m.id DESC LIMIT %s OFFSET %s
+    """,6,64)
     return m
