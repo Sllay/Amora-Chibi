@@ -57,7 +57,10 @@ class UsageRecorder:
                 try:
                     import psycopg
                 except ImportError:
-                    raise
+                    # PostgreSQL is an optional dependency for the SQLite /
+                    # cloud runtime. Never mask the original application bug
+                    # with an unrelated missing-driver ImportError.
+                    raise exc
                 if not isinstance(exc,psycopg.Error):
                     raise
             fields = request_failure_fields(exc)
