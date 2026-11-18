@@ -15,9 +15,10 @@ from .postgres_v18_lab_schema import install_pg_v18_lab
 from .postgres_synthetic_import import import_synthetic_v18
 from .postgres_fts_bm25_lab import install_bm25_lab, import_synthetic_fts5_vocabulary
 from .postgres_voice_stop_lab import install_stop_table
+from .postgres_episode_lab_schema import install_episode_queue_lab
 
 
-def prepare_disposable_core_v18(raw) -> dict[str, object]:
+def prepare_disposable_core_v18(raw, *, include_episode_candidate: bool = False) -> dict[str, object]:
     """Import the exact canonical *invented* v18 fixture before PG add-ons.
 
     Order is intentional: the importer demands precisely the 49 original
@@ -33,11 +34,15 @@ def prepare_disposable_core_v18(raw) -> dict[str, object]:
         install_bm25_lab(raw)
         postings = import_synthetic_fts5_vocabulary(source, raw)
         install_stop_table(raw)
+        if include_episode_candidate:
+            install_episode_queue_lab(raw)
     return {
         "mode": "disposable-local-only",
         "structure": structure,
         "import": copied,
         "postings": postings,
         "voice_stop_installed": True,
+        "sensory_episode_candidate_installed": include_episode_candidate,
+        "schema19_migration_performed": False,
         "production_backend_switched": False,
     }
