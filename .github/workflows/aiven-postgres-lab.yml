@@ -20,6 +20,18 @@ on:
       - 'core/amora/storage/postgres_runtime_sql_audit.py'
       - 'core/amora/storage/postgres_conversation_read_lab.py'
       - 'core/amora/storage/postgres_runtime_connection.py'
+      - 'core/amora/storage/postgres_runtime_registry.py'
+      - 'core/amora/storage/postgres_runtime_conversation.py'
+      - 'core/amora/storage/postgres_runtime_identity.py'
+      - 'core/amora/storage/postgres_runtime_memory.py'
+      - 'core/amora/storage/postgres_runtime_voice.py'
+      - 'core/amora/storage/postgres_runtime_cognition.py'
+      - 'core/amora/memory/postgres_store.py'
+      - 'core/amora/conversation/postgres_store.py'
+      - 'core/amora/cognition/postgres_store.py'
+      - 'core/amora/app.py'
+      - 'core/amora/conversation/store.py'
+      - 'core/amora/cognition/store.py'
       - 'core/amora/storage/database.py'
       - 'pyproject.toml'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN1_INFRASTRUCTURE.md'
@@ -40,6 +52,7 @@ on:
       - 'tests/test_postgres_runtime_sql_audit.py'
       - 'tests/test_postgres_conversation_read_lab.py'
       - 'tests/test_postgres_runtime_connection.py'
+      - 'tests/test_postgres_runtime_domain_contract.py'
       - 'tests/test_postgres_memory_lab_integration.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
       - '.github/workflows/aiven-postgres-lab.yml'
@@ -106,4 +119,5 @@ jobs:
             tests/test_postgres_voice_stop_lab.py \
             tests/test_postgres_runtime_sql_audit.py \
             tests/test_postgres_conversation_read_lab.py \
-            tests/test_postgres_runtime_connection.py
+            tests/test_postgres_runtime_connection.py \
+            tests/test_postgres_runtime_domain_contract.py
