@@ -20,6 +20,7 @@ on:
       - 'core/amora/storage/postgres_runtime_sql_audit.py'
       - 'core/amora/storage/postgres_conversation_read_lab.py'
       - 'core/amora/storage/postgres_runtime_connection.py'
+      - 'core/amora/storage/postgres_run3_snapshot_preflight.py'
       - 'core/amora/storage/postgres_runtime_registry.py'
       - 'core/amora/storage/postgres_runtime_conversation.py'
       - 'core/amora/storage/postgres_runtime_identity.py'
@@ -108,6 +109,7 @@ on:
       - 'core/amora/storage/postgres_memory_epoch_lab.py'
       - 'tests/test_postgres_runtime_domain_contract.py'
       - 'tests/test_postgres_run3_sql_inventory.py'
+      - 'tests/test_postgres_run3_snapshot_preflight.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN3_AUDIT.md'
       - 'tests/test_postgres_memory_lab_integration.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
@@ -201,4 +203,5 @@ jobs:
             tests/test_postgres_run2_expression_inventory.py \
             tests/test_postgres_run2_core_entry_sql_inventory.py \
             tests/test_postgres_runtime_domain_contract.py \
-            tests/test_postgres_run3_sql_inventory.py
+            tests/test_postgres_run3_sql_inventory.py \
+            tests/test_postgres_run3_snapshot_preflight.py
