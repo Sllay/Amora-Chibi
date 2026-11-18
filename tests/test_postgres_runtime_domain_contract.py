@@ -147,3 +147,37 @@ def test_validation_run1_import_and_bind_count():
         if sql.parameter_count != sql.postgres_sql.count("%s")
     }
     assert bad == {}, bad
+
+
+def test_postgres_memory_text_rank_preserves_original_lexical_fallback():
+    from datetime import datetime, timezone
+    from threading import RLock
+    from types import SimpleNamespace
+    from amora.memory.postgres_store import PostgresMemoryStore
+    from amora.storage import postgres_runtime_memory as memory_sql
+
+    class QueryResult:
+        def fetchall(self):
+            return []
+
+    class EmptyBM25:
+        def execute(self, query, params=()):
+            assert query == memory_sql.FTS_RANK
+            return QueryResult()
+
+    memory = object.__new__(PostgresMemoryStore)
+    memory._lock = RLock()
+    memory._conn = EmptyBM25()
+    memory.clock = SimpleNamespace(now=lambda: datetime(
+        2026, 1, 1, tzinfo=timezone.utc,
+    ))
+    records = {
+        "record-one": SimpleNamespace(
+            content="A cenoura e laranja", summary=None, tags=set(),
+        ),
+        "record-two": SimpleNamespace(
+            content="A floresta cresce", summary=None, tags=set(),
+        ),
+    }
+    assert memory._text_rank("cenoura", records) == ["record-one"]
+    assert memory._text_rank("sem correspondencia", records) == []
