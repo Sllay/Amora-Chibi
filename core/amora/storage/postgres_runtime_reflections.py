@@ -73,12 +73,8 @@ def reflection_statements()->dict[str,ReviewedStatement]:
           )
         ORDER BY m.started_at,m.turn_id LIMIT 32
         ON CONFLICT(turn_id) DO NOTHING""",1)
-    add(
-        "SELECT 1 FROM memory_reflection_invalidations WHERE session_id=? "
-        "AND native_message_hash=? AND invalidated_through>=?",
-        """SELECT 1 FROM amora_pg_v18_lab.memory_reflection_invalidations
-           WHERE session_id=%s AND native_message_hash=%s
-             AND invalidated_through>=%s LIMIT 1""",3,1)
+    # Shared source_invalidated() is already reviewed and registered by
+    # cognition_statements(); do not override the exact same SQL key.
     add(
         "INSERT INTO memory_reflection_invalidations(session_id,native_message_hash,invalidated_through) "
         "VALUES (?,?,?) ON CONFLICT(session_id,native_message_hash) DO UPDATE SET "
