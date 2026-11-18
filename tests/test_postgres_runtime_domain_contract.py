@@ -121,3 +121,29 @@ def test_messaging_outbound_sql_is_fully_parameterized_and_guarded():
     assert "memory_reflection_invalidations" in statement.postgres_sql
     assert "memory_records" in statement.postgres_sql
     assert "ON CONFLICT" in statement.postgres_sql
+
+
+def test_validation_run1_import_and_bind_count():
+    """Exercise every registered statement at import time without external DB."""
+    import importlib
+    from amora.storage.postgres_runtime_registry import compiled_domain_registry
+    candidates = (
+        "amora.memory.postgres_store",
+        "amora.cognition.postgres_store",
+        "amora.conversation.postgres_store",
+        "amora.world.postgres_store",
+        "amora.emotion.postgres_store",
+        "amora.autonomy.postgres_store",
+        "amora.messaging.postgres_store",
+        "amora.memory.postgres_episode_fence",
+    )
+    for module in candidates:
+        assert importlib.import_module(module) is not None
+    statements = compiled_domain_registry()
+    assert len(statements) > 100
+    bad = {
+        key: (sql.parameter_count, sql.postgres_sql.count("%s"))
+        for key, sql in statements.items()
+        if sql.parameter_count != sql.postgres_sql.count("%s")
+    }
+    assert bad == {}, bad
