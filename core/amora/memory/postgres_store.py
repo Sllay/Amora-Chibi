@@ -309,7 +309,18 @@ class PostgresMemoryStore(MemoryStore):
                         str(row["content"])+" "+str(row["summary"] or ""),
                     ):
                         continue
-                    selected.append(row)
+                    if share_only:
+                        # Check the full persisted disclosure predicate before
+                        # consuming the result cap; unsafe rows never fill the
+                        # top-k and hide later authorized memories.
+                        candidate=self._conn.execute(q.SHAREABLE_OWNER,(
+                            owner_id,stamp,stamp,str(row["id"]),
+                        )).fetchone()
+                        if candidate is None:
+                            continue
+                        selected.append(candidate)
+                    else:
+                        selected.append(row)
                     if len(selected) >= limit:
                         break
                 if len(rows) < 64:
@@ -317,12 +328,4 @@ class PostgresMemoryStore(MemoryStore):
                     break
                 if len(selected) >= limit:
                     break
-        if share_only:
-            # Disclosure requires exact record-by-record persisted evidence.
-            authorized = []
-            for row in selected:
-                result = self.shareable_owner_record(owner_id,str(row["id"]))
-                if result is not None:
-                    authorized.append(result)
-            return authorized[:limit], False
         return list(self._hydrate_many(selected[:limit]).values()),complete
