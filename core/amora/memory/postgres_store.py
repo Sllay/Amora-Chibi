@@ -58,9 +58,10 @@ class PostgresMemoryStore(MemoryStore):
         insert_only: bool = False,
         episode_lease: EpisodeWriteLease | None = None,
     ) -> bool | None:
-        if (reflection_lease is not None or generation_lease is not None
-                or episode_lease is not None):
-            raise PostgresRuntimeError("PG_MEMORY_LEASE_PATH_UNREVIEWED")
+        if episode_lease is not None:
+            raise PostgresRuntimeError("PG_MEMORY_EPISODE_LEASE_UNREVIEWED")
+        if insert_only and (reflection_lease is not None or generation_lease is not None):
+            raise PostgresRuntimeError("PG_MEMORY_INSERT_ONLY_LEASE_UNSUPPORTED")
         if record.provenance.source == "perception:episode:v1":
             raise PostgresRuntimeError("PG_MEMORY_EPISODE_WRITE_REQUIRES_LEASE")
         p = record.provenance
@@ -87,6 +88,22 @@ class PostgresMemoryStore(MemoryStore):
         tags = " ".join(sorted(record.tags))
         document_length,posting = _document_terms(content,tags)
         with self._lock, self._conn:
+            if generation_lease is not None:
+                turn,token = generation_lease
+                lease = self._conn.execute(q.GENERATION_LEASE,(
+                    turn,token,self.clock.now().isoformat(),
+                    record.owner_entity_id,p.session_id,record.privacy_scope.value,
+                    int(record.remote_processing_allowed),
+                )).fetchone()
+                if lease is None:
+                    raise PostgresRuntimeError("INBOUND_GENERATION_LEASE_LOST")
+            if reflection_lease is not None:
+                turn,token = reflection_lease
+                lease = self._conn.execute(q.REFLECTION_LEASE,(
+                    turn,token,self.clock.now().isoformat(),
+                )).fetchone()
+                if lease is None:
+                    raise PostgresRuntimeError("REFLECTION_LEASE_LOST")
             result = self._conn.execute(q.CREATE if insert_only else q.PUT,values)
             if insert_only and result.rowcount == 0:
                 return False
@@ -235,13 +252,77 @@ class PostgresMemoryStore(MemoryStore):
         raise PostgresRuntimeError("PG_MEMORY_REPLICA_COHERENCE_UNREVIEWED")
 
     def authorize_reviewed_reflection(self, memory_id: UUID | str, owner_id: str) -> bool:
-        raise PostgresRuntimeError("PG_MEMORY_REFLECTION_AUTH_UNREVIEWED")
+        if self.identities.get(owner_id) is None:
+            return False
+        with self._lock, self._conn:
+            return self._conn.execute(q.AUTHORIZE_REFLECTION,(
+                owner_id,self.clock.now().isoformat(),str(memory_id),
+                owner_id,owner_id,owner_id,
+            )).rowcount == 1
 
     def owner_turn_memory_status(self, turn_id: str, owner_id: str) -> list[dict]:
-        raise PostgresRuntimeError("PG_MEMORY_TURN_STATUS_UNREVIEWED")
+        with self._lock:
+            rows = self._conn.execute(q.OWNER_TURN_STATUS,(
+                owner_id,str(turn_id),
+            )).fetchall()
+        now = self.clock.now().isoformat()
+        return [{
+            "memory_id":str(row["id"]),"privacy_scope":row["privacy_scope"],
+            "remote_processing_allowed":bool(row["remote_processing_allowed"]),
+            "active":row["archived_at"] is None and
+                (row["valid_from"] is None or row["valid_from"] <= now) and
+                (row["valid_until"] is None or row["valid_until"] >= now),
+            "archived":row["archived_at"] is not None,
+            "provenance_kind":row["provenance_kind"],
+            "provenance_source":row["provenance_source"],
+        } for row in rows]
 
     def shareable_owner_record(self, owner_id: str, record_id: str) -> MemoryRecord | None:
-        raise PostgresRuntimeError("PG_MEMORY_DISCLOSURE_UNREVIEWED")
+        stamp = self.clock.now().isoformat()
+        with self._lock:
+            row = self._conn.execute(q.SHAREABLE_OWNER,(
+                owner_id,stamp,stamp,str(record_id),
+            )).fetchone()
+        if row is None:
+            return None
+        return next(iter(self._hydrate_many([row]).values()),None)
 
-    def recall_owner_records(self, owner_id: str, topic: str, **kwargs):
-        raise PostgresRuntimeError("PG_MEMORY_OWNER_RECALL_UNREVIEWED")
+    def recall_owner_records(
+        self, owner_id: str, topic: str, *, generic: bool = False,
+        limit: int = 3, public_only: bool = False, share_only: bool = False,
+    ) -> tuple[list[MemoryRecord],bool]:
+        from .recall_intent import topic_terms
+        terms = topic_terms(topic)
+        if not owner_id or (not generic and not terms):
+            return [], True
+        limit = max(1,min(5,int(limit)))
+        stamp = self.clock.now().isoformat()
+        selected: list = []
+        complete = False
+        with self._lock:
+            for page in range(8):
+                rows = self._conn.execute(q.OWNER_RECALL,(
+                    owner_id,stamp,stamp,public_only,64,page*64,
+                )).fetchall()
+                for row in rows:
+                    if not generic and not terms <= topic_terms(
+                        str(row["content"])+" "+str(row["summary"] or ""),
+                    ):
+                        continue
+                    selected.append(row)
+                    if len(selected) >= limit:
+                        break
+                if len(rows) < 64:
+                    complete = True
+                    break
+                if len(selected) >= limit:
+                    break
+        if share_only:
+            # Disclosure requires exact record-by-record persisted evidence.
+            authorized = []
+            for row in selected:
+                result = self.shareable_owner_record(owner_id,str(row["id"]))
+                if result is not None:
+                    authorized.append(result)
+            return authorized[:limit], False
+        return list(self._hydrate_many(selected[:limit]).values()),complete
