@@ -7,6 +7,7 @@ regression guard, not a production performance SLA.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from contextlib import ExitStack,closing
 from datetime import datetime,timezone
 import os
@@ -70,7 +71,12 @@ def test_pg18_four_worker_96_message_queue_soak(tmp_path:Path):
                     assert stores[0].put_outbound(message) is True
                 assert stores[0].pending_outbound_count()==TOTAL
 
+                rendezvous=Barrier(WORKERS,timeout=15)
+
                 def drain(store:PostgresMessagingStore):
+                    # Force all four independent PG connections to start
+                    # competing for claims at the same time.
+                    rendezvous.wait(timeout=15)
                     consumed=[]
                     for _ in range(TOTAL):
                         batch=store.claim_outbound(
