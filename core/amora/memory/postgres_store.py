@@ -206,7 +206,25 @@ class PostgresMemoryStore(MemoryStore):
             rows = self._conn.execute(
                 q.FTS_RANK,(terms,*no_scope,list(records),list(records)),
             ).fetchall()
-        return [row["id"] for row in rows if row["id"] in records]
+        indexed = [row["id"] for row in rows if row["id"] in records]
+        if indexed:
+            return indexed
+        # Preserve canonical MemoryStore behavior when an indexed search has
+        # no hits. A lack of BM25 postings must not silently suppress valid
+        # direct lexical overlap among already authorized candidates.
+        query_set = set(_tokens(text))
+        scored: list[tuple[float, str]] = []
+        for memory_id, record in records.items():
+            haystack = _tokens(" ".join((
+                record.content,record.summary or ""," ".join(record.tags),
+            )))
+            if not haystack:
+                continue
+            overlap = len(query_set & haystack)
+            if overlap:
+                scored.append((overlap / len(query_set | haystack),memory_id))
+        scored.sort(reverse=True)
+        return [memory_id for _, memory_id in scored]
 
     def _entity_ranks(self,entity_ids:set[str],candidate_ids:Iterable[str]):
         if not entity_ids:
