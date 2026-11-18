@@ -1,8 +1,20 @@
 """Northflank read-only audit assertions: no API secrets, writes or guessed passes."""
 import unittest
 from unittest.mock import patch
+from pathlib import Path
+import importlib.util
 
-from tools.ops.northflank_readonly_audit import NorthflankReader, _read_config, audit
+# The standalone auditor is intentionally not installed in the serving wheel.
+# Pytest may run with tests/, not the repository root, in sys.path.
+spec = importlib.util.spec_from_file_location(
+    "northflank_readonly_audit",
+    Path(__file__).resolve().parents[1] / "tools/ops/northflank_readonly_audit.py",
+)
+audit_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(audit_module)
+NorthflankReader = audit_module.NorthflankReader
+_read_config = audit_module._read_config
+audit = audit_module.audit
 
 
 class FakeReader:
@@ -47,7 +59,7 @@ class ConfigAuditTests(unittest.TestCase):
 
     def test_only_get_api_calls_and_fixed_host(self):
         reader = NorthflankReader("SENSITIVE_DONT_LOG", "mejorberrys-team", "default")
-        with patch("tools.ops.northflank_readonly_audit.request.urlopen") as api:
+        with patch.object(audit_module.request, "urlopen") as api:
             api.return_value.__enter__.return_value.read.return_value = (
                 b'{"data":{"status":"ok","runtimeEnvironment":{"password":"PRIVATE"}}}'
             )
