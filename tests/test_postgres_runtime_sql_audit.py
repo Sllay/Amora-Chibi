@@ -140,7 +140,8 @@ def example(conn, sql):
     assert len(found) == 5
     assert "fts5_or_bm25" in found[0].flags
     assert "sqlite_conflict" in found[1].flags
-    # executescript uses a different keyword name and must remain fail-closed.
-    assert found[2].classification == "dynamic"
+    # A literal script passed via script= is now audited for SQLite hazards.
+    assert found[2].classification == "sqlite_sensitive"
+    assert "sqlite_pragma" in found[2].flags
     assert found[3].classification == "dynamic"
     assert "qmark_placeholder" in found[4].flags

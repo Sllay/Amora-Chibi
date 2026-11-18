@@ -113,7 +113,10 @@ def scan_source(source: str, *, path: str) -> list[QuerySite]:
         # hiding SQLite-specific syntax and reducing migration coverage.
         sql_node = node.args[sql_index] if len(node.args) > sql_index else None
         if sql_node is None:
-            keyword_names = ("sql", "statement", "query")
+            keyword_names = (
+                ("script", "sql", "statement", "query")
+                if method == "executescript" else ("sql", "statement", "query")
+            )
             for keyword in node.keywords:
                 if keyword.arg in keyword_names:
                     sql_node = keyword.value

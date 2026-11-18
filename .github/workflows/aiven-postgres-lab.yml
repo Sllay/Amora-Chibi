@@ -81,6 +81,8 @@ on:
       - 'tests/test_postgres_runtime_sql_audit.py'
       - 'tests/test_postgres_conversation_read_lab.py'
       - 'tests/test_postgres_runtime_connection.py'
+      - 'tests/test_postgres_run1_end_to_end.py'
+      - 'tests/test_postgres_run1_memory_integration.py'
       - 'tests/test_postgres_runtime_domain_contract.py'
       - 'tests/test_postgres_run3_sql_inventory.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN3_AUDIT.md'
@@ -154,5 +156,7 @@ jobs:
             tests/test_postgres_runtime_sql_audit.py \
             tests/test_postgres_conversation_read_lab.py \
             tests/test_postgres_runtime_connection.py \
+            tests/test_postgres_run1_end_to_end.py \
+            tests/test_postgres_run1_memory_integration.py \
             tests/test_postgres_runtime_domain_contract.py \
             tests/test_postgres_run3_sql_inventory.py
