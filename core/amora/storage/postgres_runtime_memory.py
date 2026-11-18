@@ -32,6 +32,10 @@ ARCHIVE = "PG_MEMORY_ARCHIVE"
 DEGRADE = "PG_MEMORY_DEGRADE"
 LINK = "PG_MEMORY_LINK"
 ACCESS = "PG_MEMORY_ACCESS"
+EPOCH_READY = "PG_MEMORY_EPOCH_READY"
+EPOCH_STAMP = "PG_MEMORY_EPOCH_STAMP"
+EPOCH_LOCK = "PG_MEMORY_EPOCH_LOCK"
+VERIFIED_ACCESS = "PG_MEMORY_VERIFIED_ACCESS"
 GENERATION_LEASE = "PG_MEMORY_GENERATION_LEASE"
 REFLECTION_LEASE = "PG_MEMORY_REFLECTION_LEASE"
 AUTHORIZE_REFLECTION = "PG_MEMORY_AUTHORIZE_REFLECTION"
@@ -326,6 +330,29 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
           ) AND m.id=%s
           FOR SHARE OF m
     """,4,1)
+    # An epoch is not inferred from a green CI: it must exist on the
+    # authoritative PostgreSQL primary and be rotated after a restore.
+    add(EPOCH_READY, """
+        SELECT to_regclass(
+            'amora_pg_v18_lab.amora_memory_projection_epoch'
+        ) IS NOT NULL
+    """,0,1)
+    add(EPOCH_STAMP, """
+        SELECT epoch_id,revision
+        FROM amora_pg_v18_lab.amora_memory_projection_epoch
+        WHERE singleton=1
+    """,0,1)
+    add(EPOCH_LOCK, """
+        SELECT epoch_id,revision
+        FROM amora_pg_v18_lab.amora_memory_projection_epoch
+        WHERE singleton=1 FOR UPDATE
+    """,0,1)
+    add(VERIFIED_ACCESS, """
+        UPDATE amora_pg_v18_lab.memory_records
+        SET access_count=access_count+1,last_accessed_at=%s
+        WHERE id=ANY(%s::text[])
+        RETURNING id,access_count,last_accessed_at
+    """,2,50)
     add(OWNER_RECALL, """
         SELECT m.* FROM amora_pg_v18_lab.memory_records m
         WHERE m.owner_entity_id=%s AND
