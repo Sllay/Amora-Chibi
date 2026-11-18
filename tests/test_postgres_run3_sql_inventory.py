@@ -32,6 +32,7 @@ from amora.storage.postgres_runtime_memory import (
     OWNER_RECALL, SHAREABLE_OWNER,
 )
 from amora.storage.postgres_runtime_registry import compiled_domain_registry
+from amora.storage.postgres_runtime_connection import _infra_sql
 
 
 def _literal(expr: ast.AST) -> str | None:
@@ -76,7 +77,7 @@ def _sql_calls(obj, *, skip_methods: frozenset[str] = frozenset()):
 
 
 def test_original_serving_store_literal_sql_covered():
-    approved = compiled_domain_registry()
+    approved = {**compiled_domain_registry(), **_infra_sql("amora_pg_v18_lab")}
     cases = [
         (AmoraDatabase, frozenset({"migrate", "integrity_check", "restore_backup"})),
         (ConversationStore, frozenset()),
