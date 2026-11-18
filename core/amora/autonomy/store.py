@@ -94,7 +94,7 @@ class AutonomyStore:
     def put_adjustment(self, item: DriveAdjustment) -> bool:
         with self._lock, self._conn:
             try:
-                self._conn.execute(
+                cursor = self._conn.execute(
                     """
                     INSERT INTO drive_adjustments(id, drive, delta, reason, source_event_id, created_at, dedupe_key)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -105,6 +105,8 @@ class AutonomyStore:
                         item.created_at.isoformat(), item.dedupe_key,
                     ),
                 )
+                if self.backend.capabilities.name == "postgres-candidate":
+                    return cursor.rowcount == 1
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise
@@ -171,7 +173,7 @@ class AutonomyStore:
         decision = result.decision
         with self._lock, self._conn:
             try:
-                self._conn.execute(
+                cursor = self._conn.execute(
                     """
                     INSERT INTO autonomy_decisions(
                         id, outcome, selected_intention_id, previous_intention_id,
@@ -189,6 +191,8 @@ class AutonomyStore:
                         decision.created_at.isoformat(), decision.dedupe_key,
                     ),
                 )
+                if self.backend.capabilities.name == "postgres-candidate":
+                    return cursor.rowcount == 1
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise
