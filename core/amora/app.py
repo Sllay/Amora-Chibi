@@ -178,7 +178,12 @@ class AmoraCore:
             memory_store_class(paths.database, active_clock, identities, backend=storage),
             active_clock,
         )
-        world_store = WorldStore(paths.database, active_clock, backend=storage)
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.world.postgres_store import PostgresWorldStore
+            world_store_class = PostgresWorldStore
+        else:
+            world_store_class = WorldStore
+        world_store = world_store_class(paths.database, active_clock, backend=storage)
         world = WorldModelService(world_store, active_clock)
         self_model = SelfModelService(world_store, active_clock)
         self_model.ensure_core_identity()
