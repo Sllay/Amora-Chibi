@@ -7,7 +7,9 @@ policy. A structural pass is NOT authorization to serve production traffic.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import Counter
 
+from .postgres_v18_lab_schema import _checks
 from .postgres_runtime_connection import PostgresTargetPolicy, PostgresRuntimeError
 from .postgres_v18_manifest import build_manifest
 
@@ -123,17 +125,61 @@ def inspect_prepared_postgres(
                 blockers.append("PG_PREFLIGHT_FTS_INDEX_MISSING")
             else:
                 checks.append("fts_lookup_index")
+            # All canonical explicit indexes must exist, not just the FTS
+            # lookup. A valid schema can still have silently missing indexes.
+            canonical_indexes = {item["name"] for item in manifest["indexes"]}
+            canonical_indexes.add("amora_v18_memory_search_gin")
+            if not canonical_indexes.issubset(indexes):
+                blockers.append("PG_PREFLIGHT_CANONICAL_INDEX_MISSING")
+            else:
+                checks.append("canonical_indexes")
 
-            invalid_constraints = raw.execute(
-                "SELECT count(*) FROM pg_catalog.pg_constraint c "
-                "JOIN pg_catalog.pg_namespace n ON n.oid=c.connamespace "
-                "WHERE n.nspname=%s AND c.contype IN ('f','c') "
-                "AND NOT c.convalidated", (schema,),
-            ).fetchone()
-            if invalid_constraints is None or invalid_constraints[0] != 0:
+
+            # Validate *presence* as well as validation state. Counting only
+            # unvalidated constraints would accept a database with every FK
+            # silently removed (zero remaining constraints is not safe).
+            constraint_rows = raw.execute(
+                "SELECT t.relname,c.conname,c.contype,c.convalidated "
+                "FROM pg_catalog.pg_constraint c "
+                "JOIN pg_catalog.pg_class t ON t.oid=c.conrelid "
+                "JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace "
+                "WHERE n.nspname=%s AND c.contype IN ('f','c')",
+                (schema,),
+            ).fetchall()
+            invalid = any(not row[3] for row in constraint_rows)
+            if invalid:
                 blockers.append("PG_PREFLIGHT_CONSTRAINTS_UNVALIDATED")
             else:
                 checks.append("validated_constraints")
+            actual_fks = {
+                (table, name) for table, name, kind, _ in constraint_rows
+                if kind == "f"
+            }
+            expected_fks = {
+                (table["name"], f"fk_{table['name']}_{ordinal}")
+                for table in manifest["tables"]
+                if table["kind"] == "ordinary"
+                for ordinal, _ in enumerate(table["foreign_keys"])
+            }
+            if not expected_fks.issubset(actual_fks):
+                blockers.append("PG_PREFLIGHT_FOREIGN_KEY_MISSING")
+            else:
+                checks.append("canonical_foreign_keys")
+            actual_checks = Counter(
+                table for table, _, kind, _ in constraint_rows if kind == "c"
+            )
+            expected_checks = {
+                table["name"]: len(_checks(table["sqlite_create_sql"]))
+                for table in manifest["tables"]
+                if table["kind"] == "ordinary"
+            }
+            if any(
+                actual_checks[name] < minimum
+                for name, minimum in expected_checks.items()
+            ):
+                blockers.append("PG_PREFLIGHT_CHECK_CONSTRAINT_MISSING")
+            else:
+                checks.append("canonical_check_constraints")
 
             if "schema_migrations" in tables:
                 # The sole identifier interpolation is a *validated* policy
