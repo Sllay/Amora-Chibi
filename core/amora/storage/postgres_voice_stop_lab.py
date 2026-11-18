@@ -40,18 +40,23 @@ def _time(now: datetime) -> str:
     return now.isoformat()
 
 
+def speech_stop_schema_ddl() -> str:
+    """Shared schema for one-way durable speech-turn cancellation."""
+    return """
+        CREATE TABLE amora_pg_v18_lab.speech_turn_stops (
+            turn_id TEXT PRIMARY KEY,
+            cancelled BIGINT NOT NULL DEFAULT 0 CHECK(cancelled IN (0,1)),
+            reason TEXT NOT NULL DEFAULT '',
+            cancelled_at TEXT
+        )
+    """
+
+
 def install_stop_table(conn) -> None:
     """Extra isolated lab schema object, not one of the canonical 51."""
     ensure_local_lab(conn)
     with conn.transaction():
-        conn.execute("""
-            CREATE TABLE amora_pg_v18_lab.speech_turn_stops (
-                turn_id TEXT PRIMARY KEY,
-                cancelled BIGINT NOT NULL DEFAULT 0 CHECK(cancelled IN (0,1)),
-                reason TEXT NOT NULL DEFAULT '',
-                cancelled_at TEXT
-            )
-        """)
+        conn.execute(speech_stop_schema_ddl())
 
 
 def _lock_turn(conn, turn: str):
