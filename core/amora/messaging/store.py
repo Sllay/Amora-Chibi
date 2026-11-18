@@ -61,7 +61,7 @@ class MessagingStore:
         )
         with trace_lock(self.database._lock):
             try:
-                execute_atomic_statement(
+                cursor = execute_atomic_statement(
                     self.database.backend,
                     self.database._conn,
                     """INSERT INTO messaging_audit(
@@ -73,6 +73,8 @@ class MessagingStore:
                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     values,
                 )
+                if self.database.backend.capabilities.name == "postgres-candidate":
+                    return cursor.rowcount == 1
                 return True
             except Exception as exc:
                 if "UNIQUE" not in str(exc).upper() and "DUPLICATE" not in str(exc).upper():
