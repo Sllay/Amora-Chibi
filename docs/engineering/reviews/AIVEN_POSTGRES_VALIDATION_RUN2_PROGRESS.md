@@ -41,3 +41,16 @@ The PG18 lab, perception, provider/capability, cloud-container and security gate
 7. External Aiven is not being used as a validation target; production remains unchanged.
 
 **No merge to main, Aiven writes, Turso migration, production deployment or environment cutover.**
+
+## Run 2 continuation — coherence, recovery and broader integration
+
+- **PostgreSQL memory-only revision fence:** opt-in `postgres_memory_epoch_lab.py` installs transactional revision triggers over memory, search and disclosure dependencies, and an explicit operator-controlled epoch rotation primitive after restore. `PostgresMemoryStore.record_verified_access` now verifies the memory stamp under an exclusive epoch-row lock, returns access counters only after commit, and rolls back on missing/duplicate hit IDs. Combined-scope and absent-epoch access deliberately fail closed. `test_postgres_run2_replica_epoch.py` passed in disposable PG18. **This is not a connected native remote-replica implementation or Aiven production certification.**
+- **Native PG18 recovery test:** `test_postgres_run2_native_backup_restore.py` runs PostgreSQL 18's own `pg_dump`/`pg_restore` inside the isolated CI service, verifies typed record/index/optional sensory schema recovery, and requires a rotated epoch before reopening reads. Passed in PG18. This is NOT real Aiven PITR/retention, not a private-source import and not a production rollback.
+- **Actual sensory job repository:** `test_postgres_run2_episode_worker.py` passed against disposable PG18, including enqueue, lease expiry/recovery, stale worker refusal, atomic episode creation and invalidation of already-created derived memory. The v19 tables and scheduler remain candidate-only.
+- **Historical retrieval bound:** widened exact owner-scoped indexed and fallback scan pages to 512 records, up to 131,072 candidates per path; any cap or early stop must be explicitly reported as incomplete. A stronger regression places the only text match after 2,200 newer tag-only distractors. Candidate search remains bounded; this is not a claim of unbounded search.
+- **Full Discord flows:** `test_postgres_run2_discord_pipeline.py` and `test_postgres_run2_discord_core.py` (parallel contribution) test real Core inbound, identity, duplicate recovery, edit invalidation, outbound ACK and restart using invented messages and no real Discord provider. These are in the latest CI matrix; completion requires a green head.
+- **Source parity under volume:** `test_postgres_run2_scaled_import.py` validates the existing guarded synthetic importer against 2,400 invented memory records, privacy scopes, FTS documents, binary avatar data and 49 related ordinary tables. This is not a tool for reading private PCS.4C backups or connecting to production Aiven.
+
+### External cutover gates (not performed in Run 2)
+
+Real Aiven credentials, real archived-user data, host-level native backups/PITR, restoration drills, actual Discord transport and any production schema promotion require separate operator-approved cutover validation. Green disposable PG18 is meaningful correctness evidence for the candidate but **cannot certify those external gates**. The integration PR stays draft, and no `main` merge or production modification is permitted by this report.
