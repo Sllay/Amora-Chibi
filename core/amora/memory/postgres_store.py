@@ -167,9 +167,9 @@ class PostgresMemoryStore(MemoryStore):
         after = query.after.isoformat() if query.after else None
         before = query.before.isoformat() if query.before else None
         return (
-            bool(query.include_archived),now,kinds,kinds,
+            int(query.include_archived),now,kinds,kinds,
             after,after,before,before,
-            bool(query.projection_public_only),bool(query.projection_remote_only),
+            int(query.projection_public_only),int(query.projection_remote_only),
             recipient,recipient,recipient,recipient,
         )
 
@@ -199,8 +199,8 @@ class PostgresMemoryStore(MemoryStore):
         # Existing rank() applied all privacy, recipient and topic filters
         # to records before calling _text_rank. Restrict by that exact set.
         no_scope = (
-            True,now,None,None,None,None,None,None,
-            False,False,None,None,None,None,
+            1,now,None,None,None,None,None,None,
+            0,0,None,None,None,None,
         )
         with self._lock:
             rows = self._conn.execute(
@@ -380,29 +380,53 @@ class PostgresMemoryStore(MemoryStore):
         limit = max(1,min(5,int(limit)))
         stamp = self.clock.now().isoformat()
         selected: list = []
+        seen: set[str] = set()
         complete = False
+
+        def collect(row) -> None:
+            if str(row["id"]) in seen:
+                return
+            if not generic and not terms <= topic_terms(
+                str(row["content"])+" "+str(row["summary"] or ""),
+            ):
+                return
+            if share_only:
+                # Full canonical disclosure eligibility is checked *before*
+                # consuming the result cap, including source invalidations.
+                row = self._conn.execute(q.SHAREABLE_OWNER,(
+                    owner_id,stamp,stamp,str(row["id"]),
+                )).fetchone()
+                if row is None:
+                    return
+            seen.add(str(row["id"]))
+            selected.append(row)
+
         with self._lock:
+            if not generic:
+                # FTS postings search all eligible owner records before the
+                # cap: a memory from years ago must not be hidden by 512 new
+                # unrelated memories. Exact topic semantics remain in Python.
+                indexed_terms = normalized_fts5_terms(" ".join(sorted(terms)))
+                if indexed_terms:
+                    indexed = self._conn.execute(q.OWNER_RECALL_FTS,(
+                        indexed_terms,owner_id,stamp,stamp,int(public_only),
+                    )).fetchall()
+                    for row in indexed:
+                        collect(row)
+                        if len(selected) >= limit:
+                            return list(self._hydrate_many(selected[:limit]).values()),(
+                                len(indexed)<129
+                            )
+            # Fallback for legacy documents without postings and for cases
+            # where FTS tokens differ from the canonical topic_terms parser.
+            # Bound the scan and report incomplete rather than falsely
+            # claiming full-corpus coverage.
             for page in range(8):
                 rows = self._conn.execute(q.OWNER_RECALL,(
-                    owner_id,stamp,stamp,public_only,64,page*64,
+                    owner_id,stamp,stamp,int(public_only),64,page*64,
                 )).fetchall()
                 for row in rows:
-                    if not generic and not terms <= topic_terms(
-                        str(row["content"])+" "+str(row["summary"] or ""),
-                    ):
-                        continue
-                    if share_only:
-                        # Check the full persisted disclosure predicate before
-                        # consuming the result cap; unsafe rows never fill the
-                        # top-k and hide later authorized memories.
-                        candidate=self._conn.execute(q.SHAREABLE_OWNER,(
-                            owner_id,stamp,stamp,str(row["id"]),
-                        )).fetchone()
-                        if candidate is None:
-                            continue
-                        selected.append(candidate)
-                    else:
-                        selected.append(row)
+                    collect(row)
                     if len(selected) >= limit:
                         break
                 if len(rows) < 64:
