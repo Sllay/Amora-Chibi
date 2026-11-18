@@ -24,12 +24,13 @@ from .postgres_runtime_avatar import avatar_statements
 from .postgres_runtime_autonomy import autonomy_statements
 from .postgres_runtime_emotion import emotion_statements
 from .postgres_runtime_messaging import messaging_statements
+from .postgres_runtime_generation import generation_statements
 
 
 def compiled_domain_registry() -> dict[str, ReviewedStatement]:
     """Merge identity, event, conversation and voice SQL with no overrides."""
     registry: dict[str, ReviewedStatement] = {}
-    for domain in (identity_statements(), conversation_statements(), memory_statements(), voice_stop_statements(), cognition_statements(), world_statements(), action_statements(), avatar_statements(), autonomy_statements(), emotion_statements(), messaging_statements()):
+    for domain in (identity_statements(), conversation_statements(), memory_statements(), voice_stop_statements(), cognition_statements(), world_statements(), action_statements(), avatar_statements(), autonomy_statements(), emotion_statements(), messaging_statements(), generation_statements()):
         for key, value in domain.items():
             if key in registry:
                 raise PostgresRuntimeError("PG_RUNTIME_DUPLICATE_DOMAIN_SQL")
