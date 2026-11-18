@@ -16,6 +16,11 @@ from amora.storage.postgres_v18_manifest import synthetic_v18_connection
 def fabricated_pair(tmp_path):
     path=tmp_path/"private-fixture.db"
     with closing(synthetic_v18_connection()) as source:
+        # The canonical synthetic v18 fixture may retain an open write
+        # transaction after inserting schema history. sqlite3.backup()
+        # waits indefinitely for that source to commit. Close the write
+        # transaction before taking a consistent read-only backup.
+        source.commit()
         with closing(sqlite3.connect(path)) as target:
             source.backup(target)
     with zipfile.ZipFile(str(path)+".avatar.zip","w") as archive:
