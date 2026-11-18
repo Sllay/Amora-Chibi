@@ -456,17 +456,18 @@ class PostgresMemoryStore(MemoryStore):
                 if indexed_terms:
                     # FTS indexes tags as well as content. A result can match
                     # only its tags while failing canonical topic_terms(text).
-                    # Page the whole owner-scoped index, not just its first
-                    # 129 candidates, before falling back to legacy scans.
-                    for index_page in range(16):
+                    # Page the owner-scoped index before fallback. A hard
+                    # 131k-row safety cap prevents unbounded remote reads;
+                    # incomplete scans always report complete=False.
+                    for index_page in range(256):
                         indexed=self._conn.execute(q.OWNER_RECALL_FTS,(
                             indexed_terms,owner_id,stamp,stamp,
-                            int(public_only),index_page*129,
+                            int(public_only),index_page*512,
                         )).fetchall()
                         for row in indexed:
                             collect(row)
                             if len(selected) >= limit:
-                                indexed_exhausted=len(indexed)<129
+                                indexed_exhausted=len(indexed)<512
                                 unindexed=self._conn.execute(
                                     q.OWNER_RECALL_UNINDEXED,(
                                         owner_id,stamp,stamp,int(public_only),
@@ -477,21 +478,22 @@ class PostgresMemoryStore(MemoryStore):
                                     and unindexed[0] is False
                                 )
                                 return list(self._hydrate_many(selected[:limit]).values()),complete
-                        if len(indexed)<129:
+                        if len(indexed)<512:
                             break
             # Fallback for legacy documents without postings and for cases
             # where FTS tokens differ from the canonical topic_terms parser.
-            # Bound the scan and report incomplete rather than falsely
-            # claiming full-corpus coverage.
-            for page in range(8):
+            # Scan a finite, generous 131k-row candidate window. Return
+            # complete=False if the corpus is larger or the limit stops us;
+            # never claim an unverified exhaustive search.
+            for page in range(256):
                 rows = self._conn.execute(q.OWNER_RECALL,(
-                    owner_id,stamp,stamp,int(public_only),64,page*64,
+                    owner_id,stamp,stamp,int(public_only),512,page*512,
                 )).fetchall()
                 for row in rows:
                     collect(row)
                     if len(selected) >= limit:
                         break
-                if len(rows) < 64:
+                if len(rows) < 512:
                     complete = True
                     break
                 if len(selected) >= limit:
