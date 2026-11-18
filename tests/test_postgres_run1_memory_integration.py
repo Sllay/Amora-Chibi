@@ -154,13 +154,13 @@ def test_pg_owner_recall_finds_old_indexed_memory_beyond_512_newer_rows(tmp_path
                                 (NOW-timedelta(seconds=i)).isoformat(),
                                 (NOW-timedelta(seconds=i)).isoformat(),
                             )
-                            for i in range(540)
+                            for i in range(2320)
                         ])
-                        # 270 newer documents contain the topic only in
+                        # 2200 newer documents contain the topic only in
                         # TAGS, not in their content. They must not hide an
-                        # older true content match behind one 129-row page.
+                        # older true content match behind the former 2064-row cap.
                         indexed_ids=[
-                            f"synthetic-noise-{i:04d}" for i in range(270)
+                            f"synthetic-noise-{i:04d}" for i in range(2200)
                         ]
                         cursor.executemany(
                             "INSERT INTO amora_pg_v18_lab.memory_tags"
@@ -191,7 +191,7 @@ def test_pg_owner_recall_finds_old_indexed_memory_beyond_512_newer_rows(tmp_path
                                 )
                             ],
                         )
-                assert memory.count() >= 541
+                assert memory.count() >= 2321
                 recalled, complete = memory.recall_owner_records(
                     owner,"zeldoino77",limit=3,
                 )
