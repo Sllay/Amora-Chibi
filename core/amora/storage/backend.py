@@ -122,7 +122,15 @@ def backend_from_environment():
     raise ValueError("AMORA_STORAGE_BACKEND must be sqlite or libsql")
 
 
-def is_duplicate_error(exc: sqlite3.IntegrityError) -> bool:
+def is_duplicate_error(exc: Exception) -> bool:
+    """Detect only UNIQUE/primary-key violations across supported DB drivers.
+
+    psycopg3's SQLSTATE 23505 is the PostgreSQL equivalent of the two
+    SQLite extended constraint codes. Never match by generic message
+    substring: CHECK/FK errors and connectivity failures must propagate.
+    """
+    if getattr(exc, "sqlstate", None) == "23505":
+        return True
     return getattr(exc, "sqlite_errorcode", None) in {
         sqlite3.SQLITE_CONSTRAINT_UNIQUE,
         sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY,
