@@ -127,6 +127,10 @@ def verified_aiven_readonly_connection(
                     application_name=application_name,
                     options="-c default_transaction_read_only=on",
                 )
+            except AivenPreflightError:
+                # The explicitly audited optional transport probe can return
+                # a fixed SQLSTATE-derived reason without exposing psycopg text.
+                raise
             except Exception:
                 # Only socket/TLS/authentication failures are connection errors.
                 # Driver exception text may include secrets; never log/chain it.
