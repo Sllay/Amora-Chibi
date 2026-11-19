@@ -49,7 +49,8 @@ def _fingerprint(path: Path) -> str:
 
 def _run(archive: Path, folder: Path) -> dict[str, object]:
     import psycopg
-    from amora.storage.postgres_run3_snapshot_preflight import inspect_private_snapshot
+    from amora.storage.postgres_run3_snapshot_preflight import inspect_private_snapshot, Run3SnapshotError
+    from amora.storage.pcs4_recovery import verify_snapshot
     from amora.storage.postgres_staging_schema_prepare import prepare_empty_staging_schema
     from amora.storage.postgres_private_staging_import import import_private_staging_v18
     from amora.storage.postgres_run3_preflight import inspect_prepared_postgres
@@ -60,8 +61,23 @@ def _run(archive: Path, folder: Path) -> dict[str, object]:
     snapshot = _extract(archive, folder)
     sidecar = Path(str(snapshot) + ".avatar.zip")
     before = (_fingerprint(snapshot), _fingerprint(sidecar))
-    print("AMORA_RESTORE_STAGE source_integrity", flush=True)
-    verified = inspect_private_snapshot(snapshot)
+    print("AMORA_RESTORE_STAGE pcs4c_verify", flush=True)
+    try:
+        report = verify_snapshot(snapshot, expected_schema=18)
+        if report["status"] != "ok":
+            raise RehearsalFailure("PCS4C_VERIFICATION_BLOCKED")
+    except RehearsalFailure:
+        raise
+    except Exception:
+        raise RehearsalFailure("PCS4C_VERIFICATION_BLOCKED") from None
+    print("AMORA_RESTORE_STAGE source_canonical_ddl", flush=True)
+    try:
+        verified = inspect_private_snapshot(snapshot)
+    except Run3SnapshotError as exc:
+        code = str(exc)
+        if re.fullmatch(r"RUN3_[A-Z_]{10,80}", code) is None:
+            code = "RUN3_SOURCE_CERTIFICATION_BLOCKED"
+        raise RehearsalFailure(code) from None
     if verified["status"] != "verified_offline":
         raise RehearsalFailure("SOURCE_AUDIT_BLOCKED")
     target = PostgresTargetPolicy(host="127.0.0.1", port=5432,
