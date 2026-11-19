@@ -665,7 +665,34 @@ async def _command_numes_probe(core: Any, args: list[str]) -> dict[str, Any]:
     return {"kind": "numes_probe", "summary": "Sonda sintética Numes sem gravação", "data": result}
 
 
+async def _command_numes_catalogue_audit(core: Any, args: list[str]) -> dict[str, Any]:
+    """Account-specific GET to Numes; no generation or private content."""
+    if args:
+        raise AdminCommandError("COMMAND_ARGUMENT_INVALID", "use providers numes audit")
+    provider = core.cognition._providers.get("numes")
+    if provider is None:
+        raise AdminCommandError("NUMES_NOT_AVAILABLE", "Numes não configurada")
+    try:
+        report = await asyncio.wait_for(provider.audit_endpoint_catalogue(), timeout=15.0)
+    except asyncio.TimeoutError:
+        report = {"success": False, "error_type": "catalogue_timeout",
+                  "private_data_sent": False}
+    except Exception as exc:
+        from amora.cognition.providers import ProviderError
+        report = {"success": False, "error_type": type(exc).__name__,
+                  "http_status": exc.status_code if isinstance(exc, ProviderError) else None,
+                  "private_data_sent": False}
+    return {
+        "kind": "numes_catalogue_audit",
+        "summary": "Catálogo Numes consultado sem enviar conversas, prompts ou memórias",
+        "data": report,
+    }
+
+
 _COMMANDS: tuple[RegisteredCommand, ...] = (
+    RegisteredCommand(("providers", "numes", "audit"), "providers numes audit",
+                      "Inspeciona só o catálogo da chave Numes; não gera texto nem lê memórias.", 20.0,
+                      _command_numes_catalogue_audit, exclusive=True),
     RegisteredCommand(("providers", "numes", "probe"), "providers numes probe",
                       "Sonda SSE sintética com as mesmas restrições de rota, sem memória.", 85.0,
                       _command_numes_probe, exclusive=True),
