@@ -1,0 +1,52 @@
+name: Aiven PostgreSQL 18 native backup tool image (no deployment)
+
+on:
+  push:
+    branches:
+      - ops/aiven-native-pg18-backup-image-20261119
+    paths:
+      - .github/workflows/amora-aiven-native-backup-image.yml
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact reviewed image candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ff729708f24160b06be56bf5760211d6ed0e8248
+          persist-credentials: false
+      - name: Build as non-root without secrets
+        run: |
+          set -euo pipefail
+          image='ghcr.io/sllay/amora-chibi-aiven-native-backup:pg18-ff72970'
+          docker build -f deploy/Dockerfile.aiven-native-pg18-backup -t "$image" .
+          test "$(docker inspect --format '{{.Config.User}}' "$image")" = '10001:10001'
+      - name: Check PostgreSQL 18 tools and safe missing-approval refusal
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='ghcr.io/sllay/amora-chibi-aiven-native-backup:pg18-ff72970'
+          docker run --rm --network none --entrypoint pg_dump "$image" --version | grep -E 'pg_dump \(PostgreSQL\) 18'
+          set +e
+          output="$(docker run --rm --network none "$image" 2>&1)"
+          rc=$?
+          set -e
+          test "$rc" -eq 2
+          printf '%s\n' "$output" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read().split("AIVEN_NATIVE_BACKUP ",1)[1]); assert d["reason"]=="PG_BACKUP_OPERATOR_CONFIRMATION_REQUIRED"; assert d["production_cutover_authorized"] is False'
+      - name: Publish to GHCR only
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          docker push ghcr.io/sllay/amora-chibi-aiven-native-backup:pg18-ff72970
+          docker logout ghcr.io >/dev/null
+          echo 'BACKUP_IMAGE_NO_PRIVATE_DATA true'
+          echo 'BACKUP_IMAGE_NORTHFLANK_UNCHANGED true'
