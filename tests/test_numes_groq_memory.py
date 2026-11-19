@@ -26,6 +26,12 @@ def configure(monkeypatch, tmp_path):
     monkeypatch.setenv("AMORA_NUMES_DIALOGUE_MODEL", NumesCognitiveProvider.DEFAULT_MODEL)
 
 
+def test_n umes_free_route_public_catalog_id(monkeypatch):
+    monkeypatch.delenv("AMORA_NUMES_DIALOGUE_MODEL", raising=False)
+    assert NumesCognitiveProvider.DEFAULT_MODEL == "dealignai/deepseek-v4.1-flash-uncensored-fp8:free"
+    assert NumesCognitiveProvider.DEFAULT_MODEL.endswith(":free")
+
+
 def test_opt_in_provider_configuration_and_scope(tmp_path, monkeypatch):
     configure(monkeypatch, tmp_path)
     core = AmoraCore.bootstrap(clock=SimulatedClock())
