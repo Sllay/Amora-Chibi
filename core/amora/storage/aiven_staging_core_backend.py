@@ -30,6 +30,15 @@ def staging_core_backend_from_environment() -> PostgresBackendCandidate:
     """
     if os.getenv("AMORA_PG_STAGING_APPROVAL", "") != _APPROVAL:
         raise PostgresRuntimeError("PG_STAGING_OPERATOR_APPROVAL_REQUIRED")
+    return _tls_pinned_aiven_backend("amora-staging-core-guarded")
+
+
+def _tls_pinned_aiven_backend(application_name: str) -> PostgresBackendCandidate:
+    """Shared staging/production TLS, endpoint and PG18 policy; no fallback."""
+    if application_name not in {
+        "amora-staging-core-guarded", "amora-pg18-production-guarded",
+    }:
+        raise PostgresRuntimeError("PG_CORE_APPLICATION_NAME_BLOCKED")
 
     dsn = os.getenv("AMORA_POSTGRES_DSN", "")
     ca_file = os.getenv("AMORA_POSTGRES_CA_FILE", "")
@@ -67,7 +76,7 @@ def staging_core_backend_from_environment() -> PostgresBackendCandidate:
             connection = psycopg.connect(
                 dsn, sslmode="verify-full", sslrootcert=ca_file,
                 connect_timeout=8, autocommit=True,
-                application_name="amora-staging-core-guarded",
+                application_name=application_name,
                 options="-c search_path=pg_catalog",
             )
         except Exception:
