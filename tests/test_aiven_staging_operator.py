@@ -229,3 +229,44 @@ def test_expected_endpoint_pin_required_before_network():
             mode="inspect", dsn=_DSN, ca_pem=_CA, connect=forbidden,
             **{**_PIN, "expected_port": 9999},
         )
+
+
+def test_readonly_verify_preimport_structure_without_recreating_schema(monkeypatch):
+    raw = FakeRaw(schemas=1, tables=53)
+    seen = []
+    monkeypatch.setattr(
+        operator, "inspect_prepared_postgres",
+        lambda conn, policy, **kw: type("Result", (), {
+            "status": "preimport_structural_pass",
+        })(),
+    )
+    report = operator.inspect_or_prepare(
+        mode="verify", dsn=_DSN, ca_pem=_CA,
+        connect=_fake_connector(raw, seen), **_PIN,
+    )
+    assert report["status"] == "staging_structure_verified"
+    assert report["structural_state"] == "preimport_structural_pass"
+    assert report["private_row_parity_independently_verified"] is False
+    assert report["aiven_import_performed"] is False
+    assert report["production_cutover_authorized"] is False
+    assert seen[0][0]["options"] == "-c default_transaction_read_only=on"
+    assert all(sql.startswith("SELECT ") for sql, _ in raw.queries)
+    assert raw.closed
+
+
+def test_readonly_verify_rejects_unreviewed_structure(monkeypatch):
+    raw = FakeRaw(schemas=1, tables=53)
+    monkeypatch.setattr(
+        operator, "inspect_prepared_postgres",
+        lambda conn, policy, **kw: type("Result", (), {
+            "status": "blocked",
+        })(),
+    )
+    with pytest.raises(
+        operator.AivenStagingOperatorError,
+        match="PG_STAGING_STRUCTURE_NOT_VERIFIED",
+    ):
+        operator.inspect_or_prepare(
+            mode="verify", dsn=_DSN, ca_pem=_CA,
+            connect=_fake_connector(raw, []), **_PIN,
+        )
