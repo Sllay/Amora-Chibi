@@ -34,11 +34,11 @@ In Northflank, create a new Manual Job dedicated to staging, e.g.
    `python -m amora.storage.aiven_staging_operator inspect`, read-only.
 4. Manual run only; scheduling, CD and 'run on image change' OFF; no retries or
    overlapping executions. UID is 10001; do not run as root.
-5. Only the Aiven `AMORA_POSTGRES_DSN` secret and the pre-existing
+5. Independently pin three NONSECRET destination settings from Aiven Console:\n   `AMORA_STAGING_EXPECTED_HOST`, `AMORA_STAGING_EXPECTED_PORT`, and\n   `AMORA_STAGING_EXPECTED_DATABASE`. Use the actual Aiven service host,\n   PostgreSQL port and database, NOT a guessed value. The operator compares\n   these against the DSN before any socket. Never share the DSN or password.\n6. Only the Aiven `AMORA_POSTGRES_DSN` secret and the pre-existing
    `AMORA_POSTGRES_CA_FILE` secret-file mount (or
    `AMORA_POSTGRES_CA_PEM`), using the reviewed certificate location.
    Do not add Turso, Discord, provider keys or any `/private` volume.
-6. Running default CMD should print `AIVEN_STAGING_OPERATOR` JSON with
+7. Running default CMD should print `AIVEN_STAGING_OPERATOR` JSON with
    `status=staging_preparation_possible`, no user tables, no schema and no
    import. Copy only the sanitized JSON, never secrets/DSNs/certificates.
 
@@ -67,7 +67,7 @@ the persistent CMD and never run this command on the small Aiven preflight image
 
 All four booleans are human attestations, **NOT** independent technical proof.
 The executor refuses the write before connecting if any one is absent.
-It forces verified TLS, pinned endpoint/database/major18, and checks the
+It forces verified TLS, independently pinned endpoint/database/major18, and checks the
 staging schema and all user tables are absent, including again inside the
 DDL transaction. DDL is bounded by 5s lock and 60s statement timeouts.
 It prepares canonical 49 relational tables and auxiliary search/memory tables
