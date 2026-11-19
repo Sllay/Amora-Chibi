@@ -40,6 +40,7 @@ class NumesConnectionLiveness:
     def __init__(self, *, clock=perf_counter):
         self.clock = clock
         self.http_ok = False
+        self.request_id = None
         self.last_signal = None
         self.keepalives = 0
         self.progress_deltas = 0
