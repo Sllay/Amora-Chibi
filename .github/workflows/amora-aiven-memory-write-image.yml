@@ -1,0 +1,60 @@
+name: Amora PG18 real-staging memory write test image — no deploy
+on:
+  push:
+    branches:
+      - ops/aiven-real-memory-write-image-20261119
+    paths:
+      - .github/workflows/amora-aiven-memory-write-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: aiven-memory-write-staging-image
+  cancel-in-progress: false
+
+jobs:
+  build-publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[publish-aiven-memory-write]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: 5b6ea4c7dc6ca0dc5cdc3423c29c62094c9489e9
+          persist-credentials: false
+      - name: Build a future Core image without keys, private data or Aiven connectivity
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/sllay/amora-chibi-aiven-core:pg18-memory-write-5b6ea4c"
+          docker build -f Dockerfile \
+            --label "org.opencontainers.image.source=https://github.com/Sllay/Amora-Chibi" \
+            --label "org.opencontainers.image.revision=5b6ea4c7dc6ca0dc5cdc3423c29c62094c9489e9" \
+            -t "$image" .
+          test "$(docker inspect --format '{{.Config.User}}' "$image")" = '10001:10001'
+      - name: Prove missing operator confirmation blocks before network
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/sllay/amora-chibi-aiven-core:pg18-memory-write-5b6ea4c"
+          docker run --rm --network none "$image" python -c 'from amora.storage.aiven_memory_write_probe import main; assert callable(main)'
+          set +e
+          output="$(docker run --rm --network none "$image" python -m amora.storage.aiven_memory_write_probe 2>&1)"
+          rc=$?
+          set -e
+          test "$rc" -eq 2
+          printf "%s\n" "$output" | python3 -c 'import sys,json; data=json.loads(sys.stdin.read().split("AIVEN_MEMORY_WRITE_TEST ",1)[1]); assert data["reason"]=="PG_WRITE_PROBE_CONFIRMATION_REQUIRED"; assert data["production_cutover_authorized"] is False'
+      - name: Publish image only; never deploy Northflank service
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          docker push ghcr.io/sllay/amora-chibi-aiven-core:pg18-memory-write-5b6ea4c
+          docker logout ghcr.io >/dev/null
+          echo 'AIVEN_MEMORY_WRITE_IMAGE_NO_PRIVATE_CONTENT true'
+          echo 'AIVEN_MEMORY_WRITE_NORTHFLANK_DEPLOYED false'
