@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from amora.storage.backend import backend_from_environment, execute_atomic_statement
+from amora.storage.postgres_runtime_connection import PostgresRuntimeError
 from amora.storage.postgres_atomic_index_lab import put_synthetic_memory
 from amora.storage.postgres_fts_bm25_lab import install_bm25_lab
 from amora.storage.postgres_memory_lab import ensure_local_lab
@@ -205,7 +206,8 @@ def test_remote_and_prod_environment_selection_refused(monkeypatch):
     with pytest.raises(ValueError, match="POSTGRES_LAB_LOCAL_DB_REQUIRED"):
         PostgresLabConnection(Remote())
     monkeypatch.setenv("AMORA_STORAGE_BACKEND", "postgres")
-    with pytest.raises(ValueError, match="sqlite or libsql"):
+    monkeypatch.delenv("AMORA_PG_PRODUCTION_APPROVAL", raising=False)
+    with pytest.raises(PostgresRuntimeError, match="PG_PRODUCTION_CUTOVER_APPROVAL_REQUIRED"):
         backend_from_environment()
 
 
