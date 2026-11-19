@@ -5,11 +5,9 @@ import path from 'node:path';
 const token = process.env.NF_BACKUP_API_TOKEN;
 if (!token) throw new Error('Missing NF_BACKUP_API_TOKEN');
 
-const teamId = 'mejorberrys-team';
 const projectId = 'default';
 const jobId = 'pcs4c-recovery';
-const baseUrl = 'https://api.northflank.com/v1/teams/' + teamId +
-  '/projects/' + projectId + '/jobs/' + jobId;
+const baseUrl = 'https://api.northflank.com/v1/projects/' + projectId + '/jobs/' + jobId;
 const dir = '/tmp/amora-export-ci/source';
 const files = [
   'amora-pre-pcs4c.db',
@@ -60,7 +58,7 @@ async function transferFile(filename) {
     try {
       await rm(localPath, { force: true });
       const result = await client.download.job.files(
-        { teamId, projectId, jobId },
+        { projectId, jobId },
         { localPath, remotePath },
       );
       if (result?.error) throw new Error('Northflank download failed');
