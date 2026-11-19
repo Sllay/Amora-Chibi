@@ -39,7 +39,7 @@ def run() -> dict:
                 # object originates from a public static migration.
                 normalized_a, normalized_b = normalize(a[key]), normalize(b[key])
                 tokens = lambda sql: re.findall(
-                    r"(?i)[a-z_][a-z_0-9]*|\\d+|[^\\s]", sql
+                    r"(?i)[a-z_][a-z_0-9]*|\d+|[^\s]", sql
                 )
                 ta, tb = tokens(normalized_a), tokens(normalized_b)
                 import difflib
@@ -64,6 +64,21 @@ def run() -> dict:
                     ) else "different"
                 mismatches.append({
                     "canonical_ordinal": ordinal,
+                    # Public canonical fixture name only; never print a value
+                    # found only in the private source.
+                    "canonical_fixture_object": key,
+                    "expected_static_sql_insertions": [
+                        " ".join(tb[b1:b2])[:140]
+                        for tag, a1, a2, b1, b2 in edits if tag == "insert"
+                    ][:5],
+                    "check_keyword_count_equal": (
+                        len(re.findall(r"\\bCHECK\\b", normalized_a, re.I))
+                        == len(re.findall(r"\\bCHECK\\b", normalized_b, re.I))
+                    ),
+                    "unique_keyword_count_equal": (
+                        len(re.findall(r"\\bUNIQUE\\b", normalized_a, re.I))
+                        == len(re.findall(r"\\bUNIQUE\\b", normalized_b, re.I))
+                    ),
                     "object_kind": expected_kind if expected_kind in ("table","index","trigger","view") else "other",
                     "normalized_sql_equal": normalized_a == normalized_b,
                     "lexical_edit_count": len(edits),
