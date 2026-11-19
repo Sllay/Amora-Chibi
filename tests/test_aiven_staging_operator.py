@@ -14,6 +14,11 @@ _DSN = (
     "synthetic-project.f.aivencloud.com:14600/defaultdb?sslmode=require"
 )
 _CA = "-----BEGIN CERTIFICATE-----\nDUMMY_ONLY\n-----END CERTIFICATE-----"
+_PIN = {
+    "expected_host": "synthetic-project.f.aivencloud.com",
+    "expected_port": 14600,
+    "expected_database": "defaultdb",
+}
 
 
 class FakeRaw:
@@ -68,6 +73,7 @@ def _prepare_kwargs():
         "external_backup_restore_attested": True,
         "isolated_target_attested": True,
         "free_plan_capacity_attested": True,
+        **_PIN,
     }
 
 
@@ -76,6 +82,7 @@ def test_inspect_connects_readonly_and_executes_no_ddl():
     seen = []
     report = operator.inspect_or_prepare(
         mode="inspect", dsn=_DSN, ca_pem=_CA,
+        **_PIN,
         connect=_fake_connector(raw, seen),
     )
     assert report["status"] == "staging_preparation_possible"
@@ -115,7 +122,7 @@ def test_invalid_dsn_rejected_without_network():
     ):
         operator.inspect_or_prepare(
             mode="inspect", dsn=_DSN.replace("aivencloud.com", "example.invalid"),
-            ca_pem=_CA, connect=forbidden,
+            ca_pem=_CA, connect=forbidden, **_PIN,
         )
 
 
@@ -198,6 +205,27 @@ def test_connection_exception_is_not_logged_or_exposed(capsys):
     ) as exc:
         operator.inspect_or_prepare(
             mode="inspect", dsn=_DSN, ca_pem=_CA, connect=broken,
+            **_PIN,
         )
     assert exc.value.__cause__ is None
     assert "NEVER_PRINT_TEST_SECRET" not in str(exc.value)
+
+
+def test_expected_endpoint_pin_required_before_network():
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Must never connect to unpinned endpoint")
+    with pytest.raises(
+        operator.AivenStagingOperatorError,
+        match="PG_STAGING_ENDPOINT_PIN_REQUIRED",
+    ):
+        operator.inspect_or_prepare(
+            mode="inspect", dsn=_DSN, ca_pem=_CA, connect=forbidden,
+        )
+    with pytest.raises(
+        operator.AivenStagingOperatorError,
+        match="PG_STAGING_ENDPOINT_PIN_MISMATCH",
+    ):
+        operator.inspect_or_prepare(
+            mode="inspect", dsn=_DSN, ca_pem=_CA, connect=forbidden,
+            **{**_PIN, "expected_port": 9999},
+        )
