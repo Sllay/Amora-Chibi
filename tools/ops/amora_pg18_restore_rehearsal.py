@@ -56,9 +56,11 @@ def _run(archive: Path, folder: Path) -> dict[str, object]:
     from amora.storage.postgres_runtime_connection import PostgresTargetPolicy, PostgresBackendCandidate
     from amora.storage.postgres_runtime_registry import compiled_domain_registry
 
+    print("AMORA_RESTORE_STAGE archive_decrypt", flush=True)
     snapshot = _extract(archive, folder)
     sidecar = Path(str(snapshot) + ".avatar.zip")
     before = (_fingerprint(snapshot), _fingerprint(sidecar))
+    print("AMORA_RESTORE_STAGE source_integrity", flush=True)
     verified = inspect_private_snapshot(snapshot)
     if verified["status"] != "verified_offline":
         raise RehearsalFailure("SOURCE_AUDIT_BLOCKED")
@@ -71,14 +73,17 @@ def _run(archive: Path, folder: Path) -> dict[str, object]:
             password="synthetic_only", autocommit=True, connect_timeout=8)
 
     with closing(connect()) as raw:
+        print("AMORA_RESTORE_STAGE pg18_prepare", flush=True)
         prepared = prepare_empty_staging_schema(raw, target,
             confirmation="PREPARE_EMPTY_PG18_ISOLATED_STAGING_ONLY")
         if prepared["status"] != "empty_staging_schema_prepared":
             raise RehearsalFailure("PG_SCHEMA_PREPARATION_BLOCKED")
+        print("AMORA_RESTORE_STAGE pg18_import", flush=True)
         imported = import_private_staging_v18(snapshot, raw, target,
             confirmation="IMPORT_VERIFIED_V18_TO_EMPTY_ISOLATED_STAGING")
         if imported["status"] != "staged_import_completed" or imported["typed_row_parity"] is not True:
             raise RehearsalFailure("ROW_PARITY_BLOCKED")
+        print("AMORA_RESTORE_STAGE pg18_structure", flush=True)
         structural = inspect_prepared_postgres(raw, target, require_memory_epoch=True)
         if structural.status != "structural_pass":
             raise RehearsalFailure("POST_IMPORT_STRUCTURE_BLOCKED")
@@ -87,6 +92,7 @@ def _run(archive: Path, folder: Path) -> dict[str, object]:
         raise RehearsalFailure("SOURCE_CHANGED")
     # On a disposable clone, run the existing Core bootstrap with no remote
     # providers, Discord connection or production credentials.
+    print("AMORA_RESTORE_STAGE core_import", flush=True)
     from amora.app import AmoraCore
     from amora.time import SimulatedClock
     os.environ["AMORA_MODE"] = "local"
@@ -95,6 +101,7 @@ def _run(archive: Path, folder: Path) -> dict[str, object]:
     backend = PostgresBackendCandidate(
         connect, compiled_domain_registry(), target=target, max_connections=8,
     )
+    print("AMORA_RESTORE_STAGE core_bootstrap", flush=True)
     boot = "blocked"
     try:
         core = AmoraCore.bootstrap(
