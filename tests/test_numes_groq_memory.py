@@ -26,6 +26,30 @@ def configure(monkeypatch, tmp_path):
     monkeypatch.setenv("AMORA_NUMES_DIALOGUE_MODEL", NumesCognitiveProvider.DEFAULT_MODEL)
 
 
+
+def test_numes_canonical_free_model_and_legacy_env(monkeypatch):
+    legacy = "dealignai/deepseek-v4.1-flash-uncensored-fp8"
+    canonical = legacy + ":free"
+    assert NumesCognitiveProvider.DEFAULT_MODEL == canonical
+
+    class Secrets:
+        def get(self, key):
+            return "synthetic-key" if key == "NUMES_API_KEY" else None
+
+    monkeypatch.delenv("AMORA_NUMES_DIALOGUE_MODEL", raising=False)
+    assert NumesCognitiveProvider(Secrets()).model == canonical
+
+    # The historic Northflank configuration must resolve to the free route.
+    monkeypatch.setenv("AMORA_NUMES_DIALOGUE_MODEL", legacy)
+    assert NumesCognitiveProvider(Secrets()).model == canonical
+    assert NumesCognitiveProvider(Secrets(), model=legacy).model == canonical
+
+    # An intentionally selected different model must not be overwritten.
+    custom = "different/model:free"
+    monkeypatch.setenv("AMORA_NUMES_DIALOGUE_MODEL", custom)
+    assert NumesCognitiveProvider(Secrets()).model == custom
+
+
 def test_opt_in_provider_configuration_and_scope(tmp_path, monkeypatch):
     configure(monkeypatch, tmp_path)
     core = AmoraCore.bootstrap(clock=SimulatedClock())
