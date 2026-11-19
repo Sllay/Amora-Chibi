@@ -21,6 +21,7 @@ on:
       - 'core/amora/storage/postgres_conversation_read_lab.py'
       - 'core/amora/storage/postgres_runtime_connection.py'
       - 'core/amora/storage/aiven_staging_core_backend.py'
+      - 'tests/test_aiven_staging_readiness.py'
       - 'tests/test_aiven_staging_core_selector.py'
       - 'Dockerfile'
       - 'core/amora/storage/postgres_runtime_registry.py'
@@ -197,6 +198,7 @@ jobs:
             tests/test_postgres_conversation_read_lab.py \
             tests/test_postgres_runtime_connection.py \
             tests/test_aiven_staging_core_selector.py \
+            tests/test_aiven_staging_readiness.py \
             tests/test_postgres_run1_end_to_end.py \
             tests/test_postgres_run1_memory_integration.py \
             tests/test_postgres_run2_core_bootstrap.py \
