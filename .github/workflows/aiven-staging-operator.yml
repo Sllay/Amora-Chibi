@@ -1,0 +1,46 @@
+name: Aiven one-shot staging operator image (secret-free CI)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/aiven-staging-operator.yml'
+      - 'deploy/Dockerfile.aiven-staging-operator'
+      - 'core/amora/storage/aiven_staging_operator.py'
+      - 'core/amora/storage/postgres_staging_schema_prepare.py'
+      - 'core/amora/storage/postgres_runtime_connection.py'
+      - 'core/amora/storage/postgres_v18_lab_schema.py'
+      - 'core/amora/storage/postgres_v18_manifest.py'
+      - 'core/amora/storage/aiven_preflight.py'
+      - 'tests/test_aiven_staging_operator.py'
+      - 'deploy/python.lock'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build operator-only image
+        run: |
+          docker build -f deploy/Dockerfile.aiven-staging-operator -t amora-aiven-staging:check .
+      - name: Dry-run image must fail closed without credentials and offline
+        run: |
+          set +e
+          output="$(docker run --rm --network none amora-aiven-staging:check 2>&1)"
+          code="$?"
+          set -e
+          [ "$code" -eq 2 ]
+          printf '%s\n' "$output" | python -c 'import json,sys; line=sys.stdin.read().strip(); assert line.startswith("AIVEN_STAGING_OPERATOR "); r=json.loads(line.split(" ",1)[1]); assert r["status"]=="blocked"; assert r["reason"]=="PG_STAGING_CONFIGURATION_INVALID"; assert r["aiven_import_performed"] is False; assert r["production_cutover_authorized"] is False'
+      - name: Write-mode without every confirmation must fail before network
+        run: |
+          set +e
+          output="$(docker run --rm --network none amora-aiven-staging:check python -m amora.storage.aiven_staging_operator prepare 2>&1)"
+          code="$?"
+          set -e
+          [ "$code" -eq 2 ]
+          printf '%s\n' "$output" | python -c 'import json,sys; line=sys.stdin.read().strip(); assert line.startswith("AIVEN_STAGING_OPERATOR "); r=json.loads(line.split(" ",1)[1]); assert r["reason"]=="PG_STAGING_OPERATOR_GATES_REQUIRED"; assert r["core_storage_switched"] is False'

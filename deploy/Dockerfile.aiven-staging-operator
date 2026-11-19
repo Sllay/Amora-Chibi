@@ -1,0 +1,31 @@
+# Manual, isolated schema operator. NOT the Core server or PCS4C recovery image.
+# No private volume, no Turso secrets, no automatic deployment/cutover.
+# Default command performs READ-ONLY metadata inspection; preparing an empty
+# schema requires a separate explicit one-shot manual command and four gates.
+ARG PYTHON_BASE=python:3.12.15-alpine3.24@sha256:b658b05ce9c4eb97ec6fc19424818a1f31993659c2b505a532f470e83807815d
+FROM ${PYTHON_BASE} AS builder
+WORKDIR /build
+COPY pyproject.toml ./
+COPY deploy/python.lock ./deploy/python.lock
+COPY core ./core
+RUN --mount=type=secret,id=proxy_ca \
+    set -eu; \
+    PIP_CERT="${PIP_CERT:-/etc/ssl/certs/ca-certificates.crt}"; \
+    if [ -f /run/secrets/proxy_ca ]; then PIP_CERT=/run/secrets/proxy_ca; fi; \
+    export PIP_CERT; \
+    python -m pip install --only-binary=:all: --no-cache-dir pip==26.2.2 setuptools==83.0.0 wheel==0.46.2 && \
+    python -m pip wheel --no-cache-dir --no-deps --no-build-isolation -w /tmp/wheels . && \
+    python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --only-binary=:all: --no-cache-dir -c deploy/python.lock /tmp/wheels/amora_chibi*.whl 'psycopg[binary]==3.3.9' && \
+    /opt/venv/bin/python -m pip uninstall -y pip
+
+FROM ${PYTHON_BASE} AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    PATH=/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /opt/amora
+RUN apk upgrade --no-cache krb5-libs && \
+    addgroup -g 10001 amora && adduser -D -u 10001 -G amora amora && \
+    python -m pip uninstall -y pip
+COPY --from=builder /opt/venv /opt/venv
+USER 10001:10001
+CMD ["python", "-m", "amora.storage.aiven_staging_operator", "inspect"]
