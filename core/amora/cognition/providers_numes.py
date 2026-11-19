@@ -35,7 +35,13 @@ class NumesCognitiveProvider:
 
     def __init__(self, secrets, *, model=None, timeout_seconds=90.0):
         self.secrets = secrets
-        self.model = model or os.getenv("AMORA_NUMES_DIALOGUE_MODEL", self.DEFAULT_MODEL)
+        selected = str(model or os.getenv("AMORA_NUMES_DIALOGUE_MODEL", self.DEFAULT_MODEL)).strip()
+        # The previously deployed bare identifier is no longer the published
+        # free-model ID. Normalize just that historical value, even when it is
+        # explicitly configured in Northflank; never switch to a paid route.
+        if selected == "dealignai/deepseek-v4.1-flash-uncensored-fp8":
+            selected = self.DEFAULT_MODEL
+        self.model = selected or self.DEFAULT_MODEL
         self.timeout_seconds = timeout_seconds
         self._http_client = None
         self._http_loop = None
