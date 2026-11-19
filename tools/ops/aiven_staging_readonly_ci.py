@@ -52,6 +52,7 @@ def unwrap(value):
 
 
 def job_id():
+    print("AMORA_NF_PHASE discover_job", flush=True)
     data = unwrap(api(ROOT))
     choices = data.get("jobs", data.get("items", data.get("results", [])))
     if isinstance(choices, dict):
@@ -66,7 +67,9 @@ def job_id():
 
 
 def verify_config(base):
+    print("AMORA_NF_PHASE get_job", flush=True)
     doc = unwrap(api(base))
+    print("AMORA_NF_PHASE get_deployment", flush=True)
     dep = unwrap(api(base + "/deployment"))
     if doc.get("jobType") != "manual":
         raise RuntimeError("JOB_NOT_MANUAL")
@@ -83,6 +86,7 @@ def verify_config(base):
     docker = obj(obj(dep.get("deployment", dep)).get("docker"))
     if docker.get("configType") != "default":
         raise RuntimeError("PERSISTENT_COMMAND_NOT_DEFAULT")
+    print("AMORA_NF_PHASE list_runs", flush=True)
     runs = unwrap(api(base + "/runs?per_page=20")).get("runs", [])
     if not isinstance(runs, list):
         raise RuntimeError("RUN_STATE_UNKNOWN")
@@ -137,6 +141,7 @@ def main():
         jid = job_id()
         base = ROOT + "/" + jid
         verify_config(base)
+        print("AMORA_NF_PHASE start_inspect", flush=True)
         run = unwrap(api(base + "/runs", "POST", {
             "deployment": {"docker": {
                 "configType": "customCommand",
@@ -146,9 +151,11 @@ def main():
         rid = run.get("id")
         if not isinstance(rid, str) or not UUID.fullmatch(rid):
             raise RuntimeError("RUN_ID_UNEXPECTED")
+        print("AMORA_NF_PHASE monitor_run", flush=True)
         for step in range(90):
             status = read_status(base, rid)
             if status in {"SUCCESS", "FAILED"}:
+                print("AMORA_NF_PHASE inspect_report", flush=True)
                 result = sanitized_log(base, rid)
                 report(stage="inspect", run_status=status, **result,
                        aiven_writes=False, core_changed=False)
