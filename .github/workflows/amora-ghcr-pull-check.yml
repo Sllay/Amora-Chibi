@@ -1,0 +1,23 @@
+name: Amora PCS4C - verify anonymous GHCR pull
+on:
+  push:
+    branches:
+      - ops/pcs4c-ghcr-bridge-20261119
+    paths:
+      - .github/workflows/amora-ghcr-pull-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  anonymous-pull:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Pull published image without registry credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull ghcr.io/sllay/amora-chibi-pcs4c-bridge:pg18-e6d65f8
+          echo "AMORA_BRIDGE_ANONYMOUS_PULL verified"
+          docker inspect --format='image_user={{.Config.User}}' ghcr.io/sllay/amora-chibi-pcs4c-bridge:pg18-e6d65f8

@@ -1,0 +1,85 @@
+name: Amora PCS4C - bridge image via GHCR
+
+on:
+  push:
+    branches:
+      - ops/pcs4c-ghcr-bridge-20261119
+    paths:
+      - .github/workflows/amora-pcs4c-bridge-ghcr.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: amora-pcs4c-bridge-image
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[publish-pcs4c-bridge]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout immutable integration commit with tested v18 source parity
+        uses: actions/checkout@v4
+        with:
+          ref: e6d65f8e2327198248b2129a48fd668f0d86c6eb
+          persist-credentials: false
+
+      - name: Build separate bridge image without source backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/sllay/amora-chibi-pcs4c-bridge:pg18-e6d65f8"
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/Sllay/Amora-Chibi" \
+            --label "org.opencontainers.image.revision=e6d65f8e2327198248b2129a48fd668f0d86c6eb" \
+            -f deploy/Dockerfile.aiven-private-pcs4c-bridge \
+            -t "$image" .
+          test "$(docker inspect --format '{{.Config.User}}' "$image")" = "10001:10001"
+
+      - name: Verify image fails closed without a private volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/sllay/amora-chibi-pcs4c-bridge:pg18-e6d65f8"
+          set +e
+          output="$(docker run --rm --network none "$image" 2>&1)"
+          status=$?
+          set -e
+          if [ "$status" -ne 2 ]; then
+            echo "::error::Offline inspect must block without mounted private volume."
+            exit 1
+          fi
+          printf "%s\n" "$output" | python3 -c 'import json,sys; r=json.loads(sys.stdin.read().split("AIVEN_PRIVATE_BRIDGE ",1)[1]); assert r["status"]=="blocked"; assert r["reason"]=="PG_PRIVATE_DURABLE_MOUNT_REQUIRED"; assert r["private_import_performed"] is False; assert r["production_cutover_authorized"] is False'
+
+      - name: Verify import is blocked without explicit attestations
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/sllay/amora-chibi-pcs4c-bridge:pg18-e6d65f8"
+          set +e
+          output="$(docker run --rm --network none "$image" python -m amora.storage.aiven_private_import_operator import 2>&1)"
+          status=$?
+          set -e
+          if [ "$status" -ne 2 ]; then
+            echo "::error::Import must fail closed without explicit flags."
+            exit 1
+          fi
+          printf "%s\n" "$output" | python3 -c 'import json,sys; r=json.loads(sys.stdin.read().split("AIVEN_PRIVATE_BRIDGE ",1)[1]); assert r["status"]=="blocked"; assert r["reason"]=="PG_PRIVATE_OPERATOR_GATES_REQUIRED"; assert r["production_cutover_authorized"] is False'
+
+      - name: Publish image to GitHub Container Registry
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          docker push ghcr.io/sllay/amora-chibi-pcs4c-bridge:pg18-e6d65f8
+          docker logout ghcr.io >/dev/null
+          echo "BRIDGE_IMAGE_PUBLISHED ghcr.io/sllay/amora-chibi-pcs4c-bridge:pg18-e6d65f8"
+          echo "BRIDGE_IMAGE_CONTAINS_PRIVATE_DATA false"
+          echo "BRIDGE_IMAGE_NORTHFLANK_UPDATED false"
+          echo "BRIDGE_IMAGE_CORE_CHANGED false"
