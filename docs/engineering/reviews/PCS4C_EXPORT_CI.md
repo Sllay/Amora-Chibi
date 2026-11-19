@@ -2,6 +2,8 @@
 
 ## Estado
 
+Execucao manual solicitada pelo operador apos configurar os dois secrets em 2026-11-19. O token sera usado exclusivamente no runner GitHub Actions; nenhuma credencial entra no repositorio.
+
 Implementação isolada em `ops/backup-export-ci-20261119`. Nao altera o runtime,
 migracao, jobs permanentes ou banco de producao. O job do GitHub Actions so
 efetua transferencia quando ativado por commit com marcador
@@ -12,7 +14,7 @@ na branch padrao, `Run workflow` permite acionamento manual.
 
 1. Em GitHub > `Sllay/Amora-Chibi` > Settings > Secrets and variables >
    Actions > Repository secrets, criar:
-   - `NF_BACKUP_API_TOKEN`: token Northflank do time `mejorberrys-team`,
+   - `NF_BACKUP_API_TOKEN`: token Northflank do time autenticado pelo token,
      limitado ao Job `default/pcs4c-recovery`, com permissoes necessarias
      para iniciar run temporario, acesso a container e download dos arquivos.
      Para encerrar o run antecipadamente, o token pode precisar de permissao
