@@ -69,7 +69,7 @@ def encrypt_and_verify() -> None:
             raise RuntimeError('Arquivos internos inesperados no ZIP criptografado')
         for name, original_digest in original_digests.items():
             info = archive.getinfo(name)
-            if not (info.flag_bits & 1) or info.compress_type != 99:
+            if not (info.flag_bits & 1) or info.wz_aes_strength != 3 or info.wz_aes_version != 2:
                 raise RuntimeError('Arquivo nao protegido com ZIP AES')
             verified_digest = hashlib.sha256()
             with archive.open(name) as stream:
