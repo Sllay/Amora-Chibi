@@ -1,0 +1,140 @@
+name: Amora real PG18 backup — full Core boot and restart (isolated)
+on:
+  push:
+    branches:
+      - ops/aiven-restored-real-core-smoke-20261119
+    paths:
+      - .github/workflows/amora-aiven-restored-core-smoke.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: amora-aiven-restored-core-sandbox
+  cancel-in-progress: false
+
+jobs:
+  isolated-restored-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout smoke operator only
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Obtain encrypted backup artifact (no Northflank or Aiven access)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/amora-restored-private
+          chmod 0700 /tmp/amora-restored-private
+          gh run download 44519763376 --repo Sllay/Amora-Chibi \
+            --name amora-aiven-pg18-native-encrypted-verified \
+            --dir /tmp/amora-restored-private
+          test -s /tmp/amora-restored-private/amora-aiven-pg18-backup-encrypted.zip
+      - name: Decrypt inside ephemeral runner — never echo bytes
+        shell: bash
+        env:
+          AMORA_BACKUP_PASSPHRASE: ${{ secrets.AMORA_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --quiet pyzipper==0.4.0
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import pyzipper
+          base=Path("/tmp/amora-restored-private")
+          secret=os.environ.get("AMORA_BACKUP_PASSPHRASE","")
+          if len(secret)<32:
+              raise SystemExit("PG_RESTORED_BACKUP_PASSPHRASE_UNAVAILABLE")
+          with pyzipper.AESZipFile(base/"amora-aiven-pg18-backup-encrypted.zip") as z:
+              z.setpassword(secret.encode())
+              info=z.infolist()
+              if len(info)!=1 or info[0].filename!="amora-aiven-pg18-v18-prewrite.dump" or info[0].wz_aes_strength!=3:
+                  raise SystemExit("PG_RESTORED_BACKUP_FORMAT_BLOCKED")
+              out=base/info[0].filename
+              with out.open("xb") as stream,z.open(info[0]) as original:
+                  while data:=original.read(1024*1024):
+                      stream.write(data)
+          out.chmod(0o600)
+          if out.stat().st_size!=7106757:
+              raise SystemExit("PG_RESTORED_BACKUP_SIZE_MISMATCH")
+          print("PG_RESTORED_AES256_DECRYPTION_VERIFIED true")
+          PY
+      - name: Restore real PG18 snapshot into local disposable database
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name amora-restored-core-pg18 \
+            -e POSTGRES_USER=amora_ci \
+            -e POSTGRES_PASSWORD=synthetic_only \
+            -e POSTGRES_DB=amora_pg_synthetic \
+            -p 127.0.0.1:5432:5432 \
+            postgres:18-alpine >/dev/null
+          for i in $(seq 1 40); do
+            if docker exec amora-restored-core-pg18 pg_isready -U amora_ci -d amora_pg_synthetic >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          docker cp /tmp/amora-restored-private/amora-aiven-pg18-v18-prewrite.dump \
+            amora-restored-core-pg18:/tmp/backup.dump
+          docker exec amora-restored-core-pg18 pg_restore \
+            -U amora_ci -d amora_pg_synthetic \
+            --no-owner --no-acl --exit-on-error /tmp/backup.dump >/dev/null 2>&1 || \
+            { echo "PG_RESTORED_SANDBOX_RESTORE_FAILED"; exit 1; }
+          test "$(docker exec amora-restored-core-pg18 psql -XAtq -U amora_ci \
+            -d amora_pg_synthetic -c "SELECT COUNT(*) FROM amora_pg_v18_lab.memory_records")" = "88"
+          echo "PG_RESTORED_SANDBOX_RESTORE_PASS true"
+      - name: Boot real Core twice, load memories and API against restored sandbox only
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='ghcr.io/sllay/amora-chibi-aiven-core@sha256:a66c4d24fc946b7c60cef10330832364fa7c49bc9b03e9f0487c5138f9a9f763'
+          docker pull "$image" >/dev/null
+          # Core output is captured and stripped. A test failure may otherwise
+          # embed private source data in SQL tracebacks or debug logging.
+          set +e
+          docker run --rm --network host --cap-drop ALL \
+            -e AMORA_RESTORED_SANDBOX_ONLY=1 \
+            -v "$PWD/tools/ops/aiven_restored_core_smoke.py:/tmp/amora_smoke.py:ro" \
+            "$image" python /tmp/amora_smoke.py \
+            >/tmp/amora-restored-private/core-stdout-private.log 2>&1
+          rc=$?
+          set -e
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          raw=Path("/tmp/amora-restored-private/core-stdout-private.log").read_text(errors="replace")
+          matches=re.findall(r"^AIVEN_RESTORED_CORE (.+)$",raw,re.M)
+          if len(matches)!=1:
+              raise SystemExit("AIVEN_RESTORED_CORE_REPORT_MISSING")
+          try:
+              data=json.loads(matches[0])
+          except Exception:
+              raise SystemExit("AIVEN_RESTORED_CORE_REPORT_INVALID") from None
+          allowed={
+              "status","schema_version","historical_memories","history_events",
+              "identities","core_started_twice",
+              "historical_memory_hydrated_after_restart",
+              "core_conversation_state_loaded","api_factory_created",
+              "backend_connections_released","live_aiven_touched",
+              "discord_connected","production_cutover_authorized","reason",
+          }
+          if set(data)-allowed:
+              raise SystemExit("AIVEN_RESTORED_CORE_UNSAFE_REPORT")
+          print("AIVEN_RESTORED_CORE "+json.dumps(data,sort_keys=True))
+          if data.get("status")!="isolated_restored_full_core_bootstrap_pass":
+              raise SystemExit("AIVEN_RESTORED_CORE_TEST_BLOCKED")
+          PY
+          test "$rc" -eq 0
+      - name: Destroy disposable database and plaintext backup
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f amora-restored-core-pg18 >/dev/null 2>&1 || true
+          rm -rf /tmp/amora-restored-private
+          echo 'AIVEN_LIVE_DATABASE_CHANGED false'
+          echo 'AIVEN_NORTHFLANK_CHANGED false'
+          echo 'AIVEN_PRODUCTION_CUTOVER false'
