@@ -90,6 +90,10 @@ def inspect(*, connection_factory=None) -> dict[str, object]:
 
     with closing(connection_factory()) as raw:
         target.verify(raw)
+        if raw.execute(
+            "SELECT current_setting('default_transaction_read_only')"
+        ).fetchone()[0] != "on":
+            raise AivenReadOnlyProbeError("PG_READONLY_NOT_ENFORCED")
         report = inspect_prepared_postgres(
             raw, target, require_memory_epoch=True,
             allow_empty_migrations_for_import=False,
