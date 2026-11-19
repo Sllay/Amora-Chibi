@@ -39,7 +39,11 @@ from .postgres_v18_lab_schema import LAB_SCHEMA
 
 
 class PrivateBridgeError(RuntimeError):
-    """Fixed error code only; never include private material or raw exceptions."""
+    """Fixed no-secret reason code plus whether destination needs inspection."""
+
+    def __init__(self, code: str, *, target_requires_review: bool = False):
+        super().__init__(code)
+        self.target_requires_review = target_requires_review
 
 
 _IMPORT_CONFIRM = "IMPORT_VERIFIED_V18_TO_EMPTY_ISOLATED_STAGING"
@@ -197,15 +201,19 @@ def inspect_or_import(
                         or migrated.get("typed_row_parity") is not True
                         or migrated.get("production_cutover_authorized") is not False):
                     raise PrivateBridgeError("PG_PRIVATE_IMPORT_REPORT_INVALID")
-            except PrivateBridgeError:
-                raise
+            except PrivateBridgeError as exc:
+                raise PrivateBridgeError(
+                    str(exc), target_requires_review=True,
+                ) from None
             except PrivateStagingImportError as exc:
                 code = str(exc)
                 if not _SAFE_CODE.fullmatch(code):
                     code = "PG_PRIVATE_IMPORT_REVIEW_REQUIRED"
-                raise PrivateBridgeError(code) from None
+                raise PrivateBridgeError(code, target_requires_review=True) from None
             except Exception:
-                raise PrivateBridgeError("PG_PRIVATE_IMPORT_REVIEW_REQUIRED") from None
+                raise PrivateBridgeError(
+                    "PG_PRIVATE_IMPORT_REVIEW_REQUIRED", target_requires_review=True,
+                ) from None
             return {
                 **migrated,
                 "operation": "one_shot_private_staging_import",
@@ -251,7 +259,9 @@ def main(argv: list[str] | None = None) -> int:
             free_plan_capacity_attested=args.free_plan_capacity_attested,
         )
     except PrivateBridgeError as exc:
-        result = _blocked(str(exc))
+        result = _blocked(
+            str(exc), target_requires_review=exc.target_requires_review,
+        )
     except AivenPreflightError as exc:
         code = str(exc)
         result = _blocked(code if _SAFE_CODE.fullmatch(code)
