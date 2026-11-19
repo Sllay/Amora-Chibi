@@ -11,6 +11,9 @@ on:
       - 'core/amora/storage/postgres_run3_snapshot_preflight.py'
       - 'core/amora/storage/pcs4_recovery.py'
       - 'tests/test_aiven_private_import_operator.py'
+      - 'tests/test_pcs4c_drive_backup.py'
+      - 'tests/test_pcs4c_drive_browser_oauth.py'
+      - 'core/amora/storage/pcs4c_drive_backup.py'
       - 'deploy/python.lock'
       - 'pyproject.toml'
   workflow_dispatch:
@@ -27,6 +30,13 @@ jobs:
       - name: Build nonroot private bridge image with no mounted user data
         run: |
           docker build -f deploy/Dockerfile.aiven-private-pcs4c-bridge -t amora-private-bridge:check .
+      - name: Synthetic encrypted backup tests (no live Google API or user data)
+        run: |
+          python -m pip install -c deploy/python.lock -e . 'pytest>=8.3,<10' 'cryptography==46.0.4'
+          python -m pytest tests/test_pcs4c_drive_backup.py tests/test_pcs4c_drive_browser_oauth.py -q
+      - name: Pinned crypto is present in the nonroot image
+        run: |
+          docker run --rm --network none amora-private-bridge:check python -c 'import cryptography; assert cryptography.__version__ == "46.0.4"'
       - name: Default inspect fails safely without a mounted private volume
         run: |
           set +e
