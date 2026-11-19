@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from amora.storage import postgres_runtime_sql_audit as audit
+from amora.storage.postgres_runtime_connection import PostgresRuntimeError
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -117,13 +118,14 @@ def test_unsafe_source_cannot_be_counted_as_empty(tmp_path):
         audit.scan_repository(tmp_path)
 
 
-def test_no_postgres_activation_while_core_dialect_unreviewed(monkeypatch):
+def test_legacy_sql_inventory_remains_uncertified_and_unapproved_postgres_blocked(monkeypatch):
     from amora.storage.backend import backend_from_environment
 
     with pytest.raises(RuntimeError, match="CORE_POSTGRES_SQL_DIALECT_NOT_CERTIFIED"):
         audit.require_postgres_serving_ready(audit.report(_ROOT))
     monkeypatch.setenv("AMORA_STORAGE_BACKEND", "postgres")
-    with pytest.raises(ValueError, match="sqlite or libsql"):
+    monkeypatch.delenv("AMORA_PG_PRODUCTION_APPROVAL", raising=False)
+    with pytest.raises(PostgresRuntimeError, match="PG_PRODUCTION_CUTOVER_APPROVAL_REQUIRED"):
         backend_from_environment()
 
 
