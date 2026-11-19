@@ -496,8 +496,15 @@ class AmoraCore:
                 return {"status": "not_ready", "error_code": "AUTH_NOT_CONFIGURED"}
             if self.database.schema_version() != self.database.expected_schema_version:
                 return {"status": "not_ready", "error_code": "SCHEMA_NOT_CURRENT"}
-            with self.database._lock, self.database._conn:
-                self.database._conn.execute("UPDATE schema_migrations SET version=version WHERE version=(SELECT MAX(version) FROM schema_migrations)")
+            if self.database.backend.capabilities.name == "postgres-candidate":
+                # The existing SQLite update is not a PostgreSQL liveness
+                # check. A staging-only Aiven PG18 backend must pass the same
+                # read-only structural/transport probe used by /health.
+                if self.database.integrity_check() != "ok":
+                    return {"status": "not_ready", "error_code": "STORAGE_UNAVAILABLE"}
+            else:
+                with self.database._lock, self.database._conn:
+                    self.database._conn.execute("UPDATE schema_migrations SET version=version WHERE version=(SELECT MAX(version) FROM schema_migrations)")
             return {"status": "ready", "storage": self.database.backend.capabilities.name}
         except Exception:
             return {"status": "not_ready", "error_code": "STORAGE_UNAVAILABLE"}
