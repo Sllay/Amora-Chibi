@@ -1,0 +1,62 @@
+name: Amora Aiven Core actual-memory probe image (no deployment)
+
+on:
+  push:
+    branches:
+      - ops/aiven-core-continuity-probe-image-20261119
+    paths:
+      - .github/workflows/amora-aiven-core-continuity-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: amora-aiven-core-continuity-20261119
+  cancel-in-progress: false
+
+jobs:
+  publish-readonly-probe-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out reviewed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: a698cf1517ccf62563f228dd39873f3ce478b333
+          persist-credentials: false
+      - name: Build pinned Core image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='ghcr.io/sllay/amora-chibi-aiven-core:pg18-continuity-a698cf1'
+          docker build --file Dockerfile \
+            --label 'org.opencontainers.image.source=https://github.com/Sllay/Amora-Chibi' \
+            --label 'org.opencontainers.image.revision=a698cf1517ccf62563f228dd39873f3ce478b333' \
+            -t "$image" .
+          test "$(docker inspect --format '{{.Config.User}}' "$image")" = '10001:10001'
+      - name: Test safe binary entrypoint with network disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='ghcr.io/sllay/amora-chibi-aiven-core:pg18-continuity-a698cf1'
+          docker run --rm --network none "$image" python -c 'import psycopg; from amora.storage.aiven_core_readonly_probe import main; assert callable(main)'
+          set +e
+          output="$(docker run --rm --network none "$image" python -m amora.storage.aiven_core_readonly_probe 2>&1)"
+          code=$?
+          set -e
+          test "$code" -eq 2
+          printf '%s\n' "$output" | python3 -c 'import json,sys; s=sys.stdin.read(); d=json.loads(s.split("AIVEN_CORE_CONTINUITY ",1)[1]); assert d["status"]=="blocked"; assert d["writes_performed"] is False; assert d["production_cutover_authorized"] is False'
+      - name: Publish to GHCR without service changes
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          docker push ghcr.io/sllay/amora-chibi-aiven-core:pg18-continuity-a698cf1
+          docker logout ghcr.io >/dev/null
+          echo 'AIVEN_CONTINUITY_IMAGE_CONTAINS_PRIVATE_DATA false'
+          echo 'AIVEN_CONTINUITY_IMAGE_NORTHFLANK_CHANGED false'
+          echo 'AIVEN_CONTINUITY_IMAGE_PRODUCTION_CUTOVER false'
