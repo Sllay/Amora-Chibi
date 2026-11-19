@@ -43,11 +43,27 @@ def _count(row) -> int:
     return value
 
 
+def _read_scalar(cursor, sql: str, *, stage: str, parameters=None):
+    """Execute only static reviewed SQL, return one scalar row.
+
+    The stage code is from our internal allowlist, never the server's message,
+    SQLSTATE payload, a DSN, or user content.
+    """
+    try:
+        if parameters is None:
+            cursor.execute(sql)
+        else:
+            cursor.execute(sql, parameters)
+        return cursor.fetchone()
+    except Exception:
+        raise AivenInventoryError(stage) from None
+
+
 def inspect_aiven_readonly(dsn: str, ca_pem: str, *, connect=None) -> dict[str, object]:
     """Read metadata ONLY after verified TLS and read-only session checks.
 
-    The source and target object counts are estimates of *schema objects*,
-    not row-level data or a guarantee that a PostgreSQL import will fit.
+    A connection failure and each metadata query failure return DIFFERENT,
+    fixed sanitized codes. No private table is queried.
     """
     try:
         with verified_aiven_readonly_connection(
@@ -55,34 +71,48 @@ def inspect_aiven_readonly(dsn: str, ca_pem: str, *, connect=None) -> dict[str, 
             application_name="amora-aiven-capacity-inventory",
         ) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SHOW transaction_read_only")
-                if cursor.fetchone() != ("on",):
+                readonly = _read_scalar(
+                    cursor, "SHOW transaction_read_only",
+                    stage="AIVEN_INVENTORY_READONLY_QUERY_FAILED",
+                )
+                if readonly != ("on",):
                     raise AivenInventoryError("AIVEN_INVENTORY_NOT_READ_ONLY")
-                cursor.execute("SHOW server_version_num")
-                major = _count(cursor.fetchone()) // 10000
+                major = _count(_read_scalar(
+                    cursor, "SHOW server_version_num",
+                    stage="AIVEN_INVENTORY_VERSION_QUERY_FAILED",
+                )) // 10000
                 if major != _EXPECTED_MAJOR:
                     raise AivenInventoryError("AIVEN_INVENTORY_PG18_REQUIRED")
 
-                cursor.execute("SHOW max_connections")
-                connection_limit = _count(cursor.fetchone())
-                cursor.execute("SELECT pg_database_size(current_database())")
-                db_bytes = _count(cursor.fetchone())
-                cursor.execute(
+                connection_limit = _count(_read_scalar(
+                    cursor, "SHOW max_connections",
+                    stage="AIVEN_INVENTORY_CONNECTION_LIMIT_QUERY_FAILED",
+                ))
+                db_bytes = _count(_read_scalar(
+                    cursor, "SELECT pg_database_size(current_database())",
+                    stage="AIVEN_INVENTORY_DATABASE_SIZE_QUERY_FAILED",
+                ))
+                target_schema_count = _count(_read_scalar(
+                    cursor,
                     "SELECT COUNT(*) FROM pg_catalog.pg_namespace "
-                    "WHERE nspname = %s", (_STAGING_SCHEMA,),
-                )
-                target_schema_count = _count(cursor.fetchone())
-                cursor.execute(
+                    "WHERE nspname = %s",
+                    stage="AIVEN_INVENTORY_SCHEMA_QUERY_FAILED",
+                    parameters=(_STAGING_SCHEMA,),
+                ))
+                staging_tables = _count(_read_scalar(
+                    cursor,
                     "SELECT COUNT(*) FROM pg_catalog.pg_tables "
-                    "WHERE schemaname = %s", (_STAGING_SCHEMA,),
-                )
-                staging_tables = _count(cursor.fetchone())
-                cursor.execute(
+                    "WHERE schemaname = %s",
+                    stage="AIVEN_INVENTORY_STAGING_TABLES_QUERY_FAILED",
+                    parameters=(_STAGING_SCHEMA,),
+                ))
+                user_tables = _count(_read_scalar(
+                    cursor,
                     "SELECT COUNT(*) FROM pg_catalog.pg_tables "
                     "WHERE schemaname NOT IN ('pg_catalog','information_schema') "
-                    "AND schemaname NOT LIKE 'pg_toast%'"
-                )
-                user_tables = _count(cursor.fetchone())
+                    "AND schemaname NOT LIKE 'pg_toast%'",
+                    stage="AIVEN_INVENTORY_USER_TABLES_QUERY_FAILED",
+                ))
 
         if target_schema_count > 1 or staging_tables > user_tables:
             raise AivenInventoryError("AIVEN_INVENTORY_INCONSISTENT_METADATA")
@@ -105,10 +135,12 @@ def inspect_aiven_readonly(dsn: str, ca_pem: str, *, connect=None) -> dict[str, 
             "aiven_import_performed": False,
             "production_cutover_authorized": False,
         }
-    except (AivenPreflightError, AivenInventoryError):
+    except AivenPreflightError:
         raise
     except Exception:
-        raise AivenInventoryError("AIVEN_INVENTORY_QUERY_FAILED") from None
+        # Cursor construction, closure or unexpected local errors. Never
+        # expose driver diagnostics which may include user credentials.
+        raise AivenInventoryError("AIVEN_INVENTORY_READONLY_OPERATION_FAILED") from None
 
 
 def main() -> int:

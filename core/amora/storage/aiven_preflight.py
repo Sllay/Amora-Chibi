@@ -118,20 +118,28 @@ def verified_aiven_readonly_connection(
             destination.write(ca_pem)
         connection = None
         try:
-            connection = connect(
-                dsn,
-                sslmode="verify-full",
-                sslrootcert=str(ca_path),
-                connect_timeout=8,
-                application_name=application_name,
-                options="-c default_transaction_read_only=on",
-            )
-            yield connection
-        except AivenPreflightError:
-            raise
-        except Exception:
-            # libpq errors may contain hostnames, DSNs and credentials.
-            raise AivenPreflightError("AIVEN_CONNECTION_FAILED") from None
+            try:
+                connection = connect(
+                    dsn,
+                    sslmode="verify-full",
+                    sslrootcert=str(ca_path),
+                    connect_timeout=8,
+                    application_name=application_name,
+                    options="-c default_transaction_read_only=on",
+                )
+            except Exception:
+                # Only socket/TLS/authentication failures are connection errors.
+                # Driver exception text may include secrets; never log/chain it.
+                raise AivenPreflightError("AIVEN_CONNECTION_FAILED") from None
+
+            try:
+                yield connection
+            except AivenPreflightError:
+                raise
+            except Exception:
+                # The connection was established. A query/cursor/metadata
+                # failure must NOT masquerade as a network/DSN problem.
+                raise AivenPreflightError("AIVEN_READONLY_OPERATION_FAILED") from None
         finally:
             if connection is not None:
                 try:

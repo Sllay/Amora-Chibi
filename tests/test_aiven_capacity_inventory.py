@@ -138,12 +138,44 @@ def test_invalid_metadata_blocks_without_exposing_results(rows, expected):
     assert conn.closed
 
 
-def test_db_errors_redacted():
-    conn = FakeConnection(FakeCursor(fail_at="SHOW max_connections"))
-    with pytest.raises(AivenPreflightError) as e:
+@pytest.mark.parametrize("sql,code", [
+    (_QUERIES[0], "AIVEN_INVENTORY_READONLY_QUERY_FAILED"),
+    (_QUERIES[1], "AIVEN_INVENTORY_VERSION_QUERY_FAILED"),
+    (_QUERIES[2], "AIVEN_INVENTORY_CONNECTION_LIMIT_QUERY_FAILED"),
+    (_QUERIES[3], "AIVEN_INVENTORY_DATABASE_SIZE_QUERY_FAILED"),
+    (_QUERIES[4], "AIVEN_INVENTORY_SCHEMA_QUERY_FAILED"),
+    (_QUERIES[5], "AIVEN_INVENTORY_STAGING_TABLES_QUERY_FAILED"),
+    (_QUERIES[6], "AIVEN_INVENTORY_USER_TABLES_QUERY_FAILED"),
+])
+def test_each_query_failure_has_distinct_redacted_stage(sql, code):
+    conn = FakeConnection(FakeCursor(fail_at=sql))
+    with pytest.raises(AivenInventoryError, match="^" + code + "$") as error:
         inspect_aiven_readonly(_DSN, _CA, connect=lambda *args, **kw: conn)
+    assert str(error.value) == code
+    assert "PRIVATE_FAKE_TEST" not in str(error.value)
+    assert conn.closed and conn.rolled_back
+
+
+def test_connect_failure_stays_connection_failure_and_redacts_dsn():
+    def forbidden_connect(dsn, **options):
+        raise RuntimeError("PRIVATE_FAKE_TEST connect failure: " + dsn)
+
+    with pytest.raises(AivenPreflightError, match="^AIVEN_CONNECTION_FAILED$") as e:
+        inspect_aiven_readonly(_DSN, _CA, connect=forbidden_connect)
     assert "PRIVATE_FAKE_TEST" not in str(e.value)
-    assert str(e.value) == "AIVEN_CONNECTION_FAILED"
+
+
+def test_unexpected_cursor_exception_not_misclassified_as_connection():
+    class BrokenCursorConnection(FakeConnection):
+        def cursor(self):
+            raise RuntimeError("PRIVATE_FAKE_TEST broken cursor")
+
+    conn = BrokenCursorConnection()
+    with pytest.raises(
+        AivenPreflightError, match="^AIVEN_READONLY_OPERATION_FAILED$",
+    ) as e:
+        inspect_aiven_readonly(_DSN, _CA, connect=lambda *a, **k: conn)
+    assert "PRIVATE_FAKE_TEST" not in str(e.value)
     assert conn.closed
 
 
