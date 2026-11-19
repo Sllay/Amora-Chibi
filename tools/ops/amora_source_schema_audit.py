@@ -72,12 +72,12 @@ def run() -> dict:
                         for tag, a1, a2, b1, b2 in edits if tag == "insert"
                     ][:5],
                     "check_keyword_count_equal": (
-                        len(re.findall(r"\\bCHECK\\b", normalized_a, re.I))
-                        == len(re.findall(r"\\bCHECK\\b", normalized_b, re.I))
+                        len(re.findall(r"\bCHECK\b", normalized_a, re.I))
+                        == len(re.findall(r"\bCHECK\b", normalized_b, re.I))
                     ),
                     "unique_keyword_count_equal": (
-                        len(re.findall(r"\\bUNIQUE\\b", normalized_a, re.I))
-                        == len(re.findall(r"\\bUNIQUE\\b", normalized_b, re.I))
+                        len(re.findall(r"\bUNIQUE\b", normalized_a, re.I))
+                        == len(re.findall(r"\bUNIQUE\b", normalized_b, re.I))
                     ),
                     "object_kind": expected_kind if expected_kind in ("table","index","trigger","view") else "other",
                     "normalized_sql_equal": normalized_a == normalized_b,
