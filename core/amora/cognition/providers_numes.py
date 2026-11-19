@@ -30,12 +30,17 @@ from .realization import realization_instruction
 
 
 class NumesCognitiveProvider:
-    DEFAULT_MODEL = "dealignai/deepseek-v4.1-flash-uncensored-fp8"
+    DEFAULT_MODEL = "dealignai/deepseek-v4.1-flash-uncensored-fp8:free"
     API_URL = "https://api.numes.ai/api/v1/chat/completions"
 
     def __init__(self, secrets, *, model=None, timeout_seconds=90.0):
         self.secrets = secrets
-        self.model = model or os.getenv("AMORA_NUMES_DIALOGUE_MODEL", self.DEFAULT_MODEL)
+        selected = str(model or os.getenv("AMORA_NUMES_DIALOGUE_MODEL", self.DEFAULT_MODEL)).strip()
+        # Numes exposes this model through the explicit free route. Keep historical
+        # Northflank settings working without changing a custom model selection.
+        if selected == "dealignai/deepseek-v4.1-flash-uncensored-fp8":
+            selected = self.DEFAULT_MODEL
+        self.model = selected or self.DEFAULT_MODEL
         self.timeout_seconds = timeout_seconds
         self._http_client = None
         self._http_loop = None
