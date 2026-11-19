@@ -5,6 +5,7 @@ on:
       - ops/aiven-restored-real-core-smoke-20261119
     paths:
       - .github/workflows/amora-aiven-restored-core-smoke.yml
+      - tools/ops/aiven_restored_core_smoke.py
 
 permissions:
   contents: read
