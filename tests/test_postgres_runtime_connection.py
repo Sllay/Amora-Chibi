@@ -266,9 +266,10 @@ def test_database_migration_uses_pg_readiness_guard_not_sqlite_ddl(tmp_path):
     database.close()
 
 
-def test_existing_production_selector_still_rejects_postgres(monkeypatch):
+def test_production_selector_fails_closed_without_independent_approval(monkeypatch):
     monkeypatch.setenv("AMORA_STORAGE_BACKEND", "postgres")
-    with pytest.raises(ValueError, match="sqlite or libsql"):
+    monkeypatch.delenv("AMORA_PG_PRODUCTION_APPROVAL", raising=False)
+    with pytest.raises(PostgresRuntimeError, match="PG_PRODUCTION_CUTOVER_APPROVAL_REQUIRED"):
         backend_from_environment()
 
 

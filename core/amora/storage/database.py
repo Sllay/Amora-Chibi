@@ -437,9 +437,19 @@ class AmoraDatabase:
                 # synthetic candidate remains unverified, including in CI.
                 self._conn.verify_prepared_schema(self.expected_schema_version)
                 import os
-                if (os.getenv("AMORA_STORAGE_BACKEND") != "postgres-staging"
-                        or os.getenv("AMORA_PG_STAGING_APPROVAL")
-                        != "ALLOW_ONLY_ISOLATED_AIVEN_STAGING_CORE"):
+                selection = os.getenv("AMORA_STORAGE_BACKEND")
+                staging_approved = (
+                    selection == "postgres-staging"
+                    and os.getenv("AMORA_PG_STAGING_APPROVAL")
+                    == "ALLOW_ONLY_ISOLATED_AIVEN_STAGING_CORE"
+                )
+                production_approved = (
+                    selection == "postgres"
+                    and os.getenv("AMORA_PG_PRODUCTION_APPROVAL")
+                    == "AUTHORIZE_VERIFIED_AIVEN_PG18_CORE_CUTOVER"
+                    and not os.getenv("AMORA_PG_STAGING_APPROVAL")
+                )
+                if not (staging_approved or production_approved):
                     return "postgres-candidate-unverified"
                 from .postgres_run3_preflight import inspect_prepared_postgres
                 target = self._conn._target
