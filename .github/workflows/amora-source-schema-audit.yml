@@ -36,3 +36,5 @@ jobs:
         run: python tools/ops/amora_source_schema_audit.py
       - if: always()
         run: rm -rf "${{ runner.temp }}/amora-rehearsal-artifact"
+
+# Classificacao por categoria de objeto e metadados PRAGMA, sem SQL privado.
