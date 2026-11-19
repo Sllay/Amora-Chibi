@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 import json
 import logging
 import os
-from uuid import uuid4
+from uuid import UUID, uuid4
 from time import perf_counter
 
 import httpx
@@ -22,7 +22,7 @@ from amora.models import ProviderClass, ProviderDescriptor, TaskClass
 from .context_budget import fit_provider_payload
 from .payload_metrics import log_payload_metrics
 from .models import CognitiveContext
-from .numes_stream_diagnostics import NumesStreamDiagnostics
+from .numes_stream_diagnostics import NumesStreamDiagnostics, ACTIVE_NUMES_LIVENESS
 from .providers import ProviderError
 from .providers_identity import _identity_history
 from .prompt_frame import render_current_turn, render_trusted_protocol
@@ -153,8 +153,11 @@ class NumesCognitiveProvider:
         log_payload_metrics("numes", self.API_URL, payload, phase=phase)
         started = perf_counter()
         diagnostics = NumesStreamDiagnostics()
+        liveness = ACTIVE_NUMES_LIVENESS.get()
         parsed = None
         request_id = str(uuid4())
+        if liveness is not None:
+            liveness.request_id = request_id
         metrics = {"request_id": request_id, "phase": phase, "provider": "numes",
                    "model": self.model, "headers_ms": None, "first_event_ms": None,
                    "first_reasoning_ms": None, "first_content_ms": None,
@@ -181,8 +184,18 @@ class NumesCognitiveProvider:
                         json=payload, extensions={"trace": diagnostics.http_trace}) as response:
                     metrics["headers_ms"] = elapsed()
                     metrics["status_code"] = response.status_code
+                    if liveness is not None:
+                        liveness.headers(response.status_code)
                     metrics["stage"] = "waiting_first_event"
                     response_headers = response.headers
+                    # A validated UUID helps reconcile usage on cancelled
+                    # streams using the Numes generation record, if supplied.
+                    generation_header = response.headers.get("x-generation-id")
+                    if generation_header:
+                        try:
+                            metrics["generation_id"] = str(UUID(generation_header))
+                        except (ValueError, AttributeError):
+                            pass
                     event("numes_stream_headers")
                     if response.status_code >= 400:
                         raise ProviderError(f"Numes request failed (HTTP {response.status_code})",
@@ -191,6 +204,14 @@ class NumesCognitiveProvider:
                     if "text/event-stream" not in response.headers.get("content-type", "").lower():
                         raise ProviderError("Numes did not return SSE", status_code=response.status_code)
                     async for line in response.aiter_lines():
+                        # Numes emits non-billable SSE comments while an upstream
+                        # model waits. They keep the socket alive but are NOT tokens.
+                        if line.startswith(":"):
+                            if line[1:].strip().lower() == "keepalive":
+                                diagnostics.keepalive()
+                                if liveness is not None:
+                                    liveness.keepalive()
+                            continue
                         if not line.startswith("data:"):
                             continue
                         data = line[5:].strip()
@@ -223,6 +244,8 @@ class NumesCognitiveProvider:
                                 raise ProviderError("Numes invalid SSE delta")
                             if delta.get("reasoning") or delta.get("reasoning_content") or delta.get("reasoning_details"):
                                 diagnostics.reasoning(delta)
+                                if liveness is not None:
+                                    liveness.progress()
                                 if metrics["first_reasoning_ms"] is None:
                                     metrics["first_reasoning_ms"] = elapsed()
                                     if metrics["first_content_ms"] is None:
@@ -231,6 +254,8 @@ class NumesCognitiveProvider:
                             content = delta.get("content")
                             if isinstance(content, str) and content:
                                 diagnostics.content(content)
+                                if liveness is not None:
+                                    liveness.progress()
                                 if metrics["first_content_ms"] is None:
                                     metrics["first_content_ms"] = elapsed()
                                     metrics["stage"] = "visible_partial"
@@ -286,6 +311,11 @@ class NumesCognitiveProvider:
             })
         parsed["_usage"] = {
             "input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+            "reasoning_tokens": observed.get("reasoning_tokens_reported"),
+            "cached_tokens": observed.get("cached_tokens_reported"),
+            "token_count_basis": observed.get("token_count_basis"),
+            "cost": observed.get("cost_reported"),
             "status_code": metrics["status_code"], "latency_ms": metrics["elapsed_ms"],
             "remaining_requests": response_headers.get("x-ratelimit-remaining-requests"),
             "remaining_tokens": response_headers.get("x-ratelimit-remaining-tokens"),

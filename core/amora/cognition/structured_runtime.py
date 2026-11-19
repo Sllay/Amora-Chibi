@@ -17,10 +17,60 @@ from .production import CognitiveEngine as ProductionCognitiveEngine
 from .proposals import CognitiveProposalBundle
 from .providers import ProviderError
 from .providers_nvidia import NvidiaStreamTimeout
+from .numes_stream_diagnostics import ACTIVE_NUMES_LIVENESS, NumesConnectionLiveness
 from .providers_structured import GeminiCognitiveProvider
 from .realization import RealizationError, RealizationValidator, ValidatedRealization, response_semantic_filter_enabled
 from .speech import SpeechSegmenter
 from .service import SegmentSink
+
+
+async def _await_numes_adaptive(
+    awaitable, *, timeout: float, available_seconds: float,
+    grace_cap_seconds: float = 12.0, reserve_seconds: float = 5.0,
+):
+    """One bounded extra window only for a verifiably live Numes stream.
+
+    The ordinary 75s attempt budget is unchanged. On expiry, an active Numes
+    heartbeat can grant a small part of the existing 90s total budget. Actual
+    model progress takes precedence over fallback; keepalive-only traffic
+    reserves time for another provider. Neither can reset the hard ceiling.
+    All cancellation joins the same task before any failover can start.
+    """
+    liveness = NumesConnectionLiveness()
+    marker = ACTIVE_NUMES_LIVENESS.set(liveness)
+    try:
+        task = asyncio.create_task(awaitable)
+    finally:
+        ACTIVE_NUMES_LIVENESS.reset(marker)
+    try:
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError:
+            if task.done():
+                # A completion racing the timer must never be discarded.
+                return task.result()
+            if not liveness.healthy():
+                raise
+            reserve = 0.75 if liveness.progress_deltas else reserve_seconds
+            grace = min(grace_cap_seconds, max(0.0, available_seconds - timeout - reserve))
+            if grace <= 0:
+                raise
+            logging.getLogger("amora.cognition.numes").info(
+                "numes_adaptive_grace",
+                extra={
+                    "request_id": liveness.request_id,
+                    "heartbeat_count": liveness.keepalives,
+                    "progress_deltas": liveness.progress_deltas,
+                    "base_timeout_seconds": timeout,
+                    "grace_seconds": round(grace, 3),
+                    "reason": "model_progress" if liveness.progress_deltas else "keepalive_only",
+                },
+            )
+            return await asyncio.wait_for(asyncio.shield(task), timeout=grace)
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 class CognitiveEngine(ProductionCognitiveEngine):
@@ -323,7 +373,15 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 if remaining_budget is not None:
                     timeout = min(timeout, remaining_budget) if timeout is not None else remaining_budget
                 if timeout is not None:
-                    raw_result = await asyncio.wait_for(timed_realize(realize), timeout=max(0.05, timeout))
+                    if (descriptor.name == "numes"
+                            and request.metadata.get("surface") == "platform_messaging"
+                            and remaining_budget is not None):
+                        raw_result = await _await_numes_adaptive(
+                            timed_realize(realize), timeout=max(0.05, timeout),
+                            available_seconds=remaining_budget,
+                        )
+                    else:
+                        raw_result = await asyncio.wait_for(timed_realize(realize), timeout=max(0.05, timeout))
                 else:
                     raw_result = await timed_realize(realize)
                 raw = dict(raw_result)
