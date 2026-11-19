@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 import json
 import logging
 import os
-from uuid import uuid4
+from uuid import UUID, uuid4
 from time import perf_counter
 
 import httpx
@@ -156,6 +156,8 @@ class NumesCognitiveProvider:
         liveness = ACTIVE_NUMES_LIVENESS.get()
         parsed = None
         request_id = str(uuid4())
+        if liveness is not None:
+            liveness.request_id = request_id
         metrics = {"request_id": request_id, "phase": phase, "provider": "numes",
                    "model": self.model, "headers_ms": None, "first_event_ms": None,
                    "first_reasoning_ms": None, "first_content_ms": None,
@@ -186,6 +188,14 @@ class NumesCognitiveProvider:
                         liveness.headers(response.status_code)
                     metrics["stage"] = "waiting_first_event"
                     response_headers = response.headers
+                    # A validated UUID helps reconcile usage on cancelled
+                    # streams using the Numes generation record, if supplied.
+                    generation_header = response.headers.get("x-generation-id")
+                    if generation_header:
+                        try:
+                            metrics["generation_id"] = str(UUID(generation_header))
+                        except (ValueError, AttributeError):
+                            pass
                     event("numes_stream_headers")
                     if response.status_code >= 400:
                         raise ProviderError(f"Numes request failed (HTTP {response.status_code})",
