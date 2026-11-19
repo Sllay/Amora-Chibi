@@ -265,12 +265,18 @@ class AmoraCore:
         if groq_cognition.descriptor.available:
             memory_model = os.getenv("AMORA_GROQ_MEMORY_MODEL", "").strip()
             if social_primary == "numes":
-                # Numes owns dialogue; Groq must never receive the social
-                # envelope as an implicit fallback in this configuration.
-                cognition.register_provider(GroqMemoryProvider(
-                    secrets, model=groq_cognition.model, name="groq", primary=False))
-            else:
-                cognition.register_provider(groq_cognition)
+                # The social failover order is Numes, Groq/Qwen, then other
+                # eligible providers. This spoken-surface provider is distinct
+                # from the GPT-OSS source-only memory specialist below.
+                from dataclasses import replace
+                groq_cognition.descriptor = replace(
+                    groq_cognition.descriptor,
+                    metadata={
+                        **groq_cognition.descriptor.metadata,
+                        "social_secondary_preference": True,
+                    },
+                )
+            cognition.register_provider(groq_cognition)
             if memory_model:
                 cognition.register_provider(GroqMemoryProvider(secrets, model=memory_model))
 
