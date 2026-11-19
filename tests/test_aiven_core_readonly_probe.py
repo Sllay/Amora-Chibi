@@ -69,3 +69,85 @@ def test_probe_error_report_never_echoes_credentials(tmp_path, monkeypatch, caps
     assert info["production_cutover_authorized"] is False
     assert "private-test-secret" not in raw
     assert "fictional.aivencloud.com" not in raw
+
+
+@pytest.mark.skipif(
+    __import__("os").getenv("AMORA_PG_SYNTHETIC_LAB") != "1",
+    reason="Disposable PostgreSQL 18 is required",
+)
+def test_readonly_probe_original_core_store_can_recall_imported_memory(
+    tmp_path, monkeypatch,
+):
+    """Run the same Core query registry against isolated PG18 with invented data."""
+    from contextlib import closing
+    from datetime import datetime, timezone
+    from pathlib import Path
+    from uuid import UUID
+
+    from amora.app import AmoraCore
+    from amora.events import PrivacyScope
+    from amora.memory.models import (
+        MemoryKind, MemoryProvenance, MemoryRecord, ProvenanceKind,
+    )
+    from amora.storage.postgres_runtime_connection import PostgresTargetPolicy
+    from amora.storage.postgres_runtime_registry import synthetic_core_backend
+    from amora.storage.postgres_runtime_synthetic_setup import prepare_disposable_core_v18
+    from amora.time import SimulatedClock
+
+    psycopg = pytest.importorskip("psycopg")
+
+    def local():
+        return psycopg.connect(
+            host="127.0.0.1", port=5432, dbname="amora_pg_synthetic",
+            user="amora_ci", password="synthetic_only",
+            connect_timeout=5, autocommit=True,
+        )
+
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "synthetic-home"))
+    monkeypatch.setenv("AMORA_MODE", "local")
+    monkeypatch.setattr(
+        probe, "_settings", lambda: ("", "", PostgresTargetPolicy()),
+    )
+    now = datetime(2026, 11, 17, tzinfo=timezone.utc)
+    with closing(local()) as manager:
+        manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
+        try:
+            prepare_disposable_core_v18(manager)
+            backend = synthetic_core_backend(local, max_connections=16)
+            core = AmoraCore.bootstrap(
+                clock=SimulatedClock(now), storage=backend,
+            )
+            try:
+                historical = MemoryRecord(
+                    id=UUID(int=2026111901),
+                    kind=MemoryKind.EPISODIC,
+                    content="lavandulaoito memoria velha inventada",
+                    provenance=MemoryProvenance(
+                        kind=ProvenanceKind.OBSERVATION,
+                        source="synthetic-readonly-probe",
+                        actor_id="PERSON_BK",
+                    ),
+                    privacy_scope=PrivacyScope.PRIVATE,
+                    owner_entity_id="PERSON_BK",
+                    remote_processing_allowed=False,
+                    created_at=now, updated_at=now,
+                    importance=0.9, gate_score=0.9,
+                )
+                assert core.memory.store.put(historical, insert_only=True) is True
+            finally:
+                core.close()
+            assert backend.opened_connections == 0
+
+            result = probe.inspect(connection_factory=local)
+            assert result["status"] == "real_staging_read_only_core_continuity_pass"
+            assert result["historical_memory_hydrated"] is True
+            assert result["private_recall"] == (
+                "owner_recall_allowed_other_principal_denied"
+            )
+            assert result["memories"] >= 1
+            assert result["identities"] >= 1
+            assert result["read_only_session"] is True
+            assert result["writes_performed"] is False
+            assert result["discord_connected"] is False
+        finally:
+            manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
