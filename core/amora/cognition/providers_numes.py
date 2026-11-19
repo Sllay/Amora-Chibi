@@ -14,6 +14,7 @@ import logging
 import os
 from uuid import uuid4
 from time import perf_counter
+from urllib.parse import quote
 
 import httpx
 
@@ -27,6 +28,34 @@ from .providers import ProviderError
 from .providers_identity import _identity_history
 from .prompt_frame import render_current_turn, render_trusted_protocol
 from .realization import realization_instruction
+
+_NUMES_ERROR_TYPES = frozenset({
+    "provider_unavailable", "provider_overloaded", "rate_limited",
+    "service_unavailable", "routing_unavailable", "catalogue_unavailable",
+    "authentication_unavailable", "rate_limit_unavailable",
+    "interception_unavailable", "verified_email_required",
+    "invalid_request", "not_found", "unauthorized",
+    "insufficient_credits", "funding_held", "timeout", "cancelled",
+})
+
+
+def _safe_numes_error_type(root):
+    """Bounded error metadata only; never provider messages or prompts."""
+    error = root.get("error") if isinstance(root, dict) else None
+    if not isinstance(error, dict):
+        return "unknown"
+    metadata = error.get("metadata")
+    value = metadata.get("error_type") if isinstance(metadata, dict) else None
+    if not isinstance(value, str):
+        value = error.get("code")
+    return value if isinstance(value, str) and value in _NUMES_ERROR_TYPES else "unknown"
+
+
+def _parse_numes_json(data):
+    try:
+        return json.loads(data)
+    except (ValueError, TypeError, UnicodeError):
+        return None
 
 
 class NumesCognitiveProvider:
@@ -129,6 +158,56 @@ class NumesCognitiveProvider:
         _, payload = fit_provider_payload(projected, build, ceiling=12000)
         return await self._complete_stream(payload, key=key, phase="realization")
 
+    async def audit_endpoint_catalogue(self) -> dict[str, object]:
+        """Read-only account-scoped endpoints; no prompts or private memories.
+
+        Endpoint-specific privacy data terms are NOT present in this route:
+        unknown policy remains unknown, never certified by parameter counts.
+        """
+        key = self.secrets.get("NUMES_API_KEY")
+        if not key:
+            raise ProviderError("NUMES_API_KEY is not configured")
+        url = "https://api.numes.ai/api/v1/models/" + quote(self.model, safe="/:-._") + "/endpoints"
+        async with self._client_scope() as client:
+            response = await client.get(url, headers={
+                "Authorization": f"Bearer {key}", "Accept": "application/json",
+            })
+        if response.status_code != 200:
+            return {
+                "success": False, "http_status": response.status_code,
+                "model_free_route": self.model.endswith(":free"),
+                "error_type": _safe_numes_error_type(_parse_numes_json(response.content[:8192])),
+                "private_data_sent": False,
+            }
+        root = _parse_numes_json(response.content[:262144])
+        data = root.get("data") if isinstance(root, dict) else None
+        endpoints = data.get("endpoints") if isinstance(data, dict) else None
+        if not isinstance(endpoints, list):
+            return {"success": False, "http_status": 200,
+                    "error_type": "invalid_catalogue_shape", "private_data_sent": False}
+        strict_candidates, max_output_candidates = 0, 0
+        for endpoint in endpoints[:256]:
+            if not isinstance(endpoint, dict):
+                continue
+            raw = endpoint.get("supported_parameters")
+            params = set(x for x in raw if isinstance(x, str)) if isinstance(raw, list) else set()
+            if {"max_tokens", "temperature"}.issubset(params) and (
+                "response_format" in params or "structured_outputs" in params
+            ):
+                strict_candidates += 1
+            cap = endpoint.get("max_completion_tokens")
+            if isinstance(cap, int) and cap >= 1200:
+                max_output_candidates += 1
+        return {
+            "success": True, "http_status": 200,
+            "model_free_route": self.model.endswith(":free"),
+            "endpoint_count": len(endpoints),
+            "strict_parameter_declared_endpoints": strict_candidates,
+            "max_output_1200_eligible_endpoints": max_output_candidates,
+            "privacy_policy_assessed": False,
+            "private_data_sent": False,
+        }
+
     async def probe(self):
         """Synthetic diagnostic: same route/JSON controls, no conversation or writes."""
         key = self.secrets.get("NUMES_API_KEY")
@@ -186,9 +265,20 @@ class NumesCognitiveProvider:
                     response_headers = response.headers
                     event("numes_stream_headers")
                     if response.status_code >= 400:
-                        raise ProviderError(f"Numes request failed (HTTP {response.status_code})",
-                                            status_code=response.status_code,
-                                            retry_after=response.headers.get("retry-after"))
+                        # No provider text ever goes into the error, journal or logs.
+                        error_bytes = bytearray()
+                        async for part in response.aiter_bytes():
+                            if len(error_bytes) < 8192:
+                                error_bytes.extend(part[:8192 - len(error_bytes)])
+                        category = _safe_numes_error_type(_parse_numes_json(error_bytes))
+                        metrics["error_type"] = category
+                        event("numes_stream_http_error")
+                        raise ProviderError(
+                            f"Numes request failed (HTTP {response.status_code})",
+                            status_code=response.status_code,
+                            retry_after=response.headers.get("retry-after"),
+                            diagnostics={"provider_error_category": category},
+                        )
                     if "text/event-stream" not in response.headers.get("content-type", "").lower():
                         raise ProviderError("Numes did not return SSE", status_code=response.status_code)
                     async for line in response.aiter_lines():
@@ -213,7 +303,11 @@ class NumesCognitiveProvider:
                             code = error.get("code") if isinstance(error, dict) else None
                             code = code if isinstance(code, int) and 400 <= code <= 599 else None
                             metrics["status_code"] = code or metrics["status_code"]
-                            raise ProviderError("Numes in-band stream error", status_code=code)
+                            category = _safe_numes_error_type(chunk)
+                            metrics["error_type"] = category
+                            event("numes_stream_inband_error")
+                            raise ProviderError("Numes in-band stream error", status_code=code,
+                                                diagnostics={"provider_error_category": category})
                         if isinstance(chunk.get("usage"), dict):
                             usage = chunk["usage"]
                         for choice in chunk.get("choices") or []:
