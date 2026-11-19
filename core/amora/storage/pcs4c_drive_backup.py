@@ -212,8 +212,9 @@ def _http(method: str, url: str, *, body: bytes | None = None, headers=None,
         try:
             response = opener.open(request, timeout=35)
         except HTTPError as err:
-            # 308 Resume Incomplete carries confirmed Google server offsets.
-            if err.code != 308:
+            # OAuth device polling uses HTTP 400 while consent is pending;
+            # Drive resumable chunks use HTTP 308 for confirmed offsets.
+            if err.code not in (400, 308):
                 raise CloudBackupError("PCS4C_DRIVE_HTTP_REQUEST_FAILED") from None
             response = err
         with response:
@@ -440,7 +441,7 @@ def backup_to_drive(passphrase: str, client_id: str, *, http=_http,
     from .aiven_snapshot_audit import DEFAULT_SNAPSHOT
     snapshot = DEFAULT_SNAPSHOT
     sidecar = Path(str(snapshot) + ".avatar.zip")
-    if len(passphrase) < 20:
+    if len(passphrase) < 20 or len(passphrase) > 1024:
         raise CloudBackupError("PCS4C_DRIVE_STRONG_PASSPHRASE_REQUIRED")
     if not _OAUTH_ID.fullmatch(client_id):
         raise CloudBackupError("PCS4C_DRIVE_CLIENT_ID_INVALID")
