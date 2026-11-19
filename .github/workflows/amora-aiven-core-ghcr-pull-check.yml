@@ -1,0 +1,28 @@
+name: Amora Aiven Core GHCR anonymous pull check
+
+on:
+  push:
+    branches:
+      - ops/aiven-core-image-20261119
+    paths:
+      - .github/workflows/amora-aiven-core-ghcr-pull-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  unauthenticated-pull:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Verify Northflank can pull same image without a GitHub token
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          image='ghcr.io/sllay/amora-chibi-aiven-core@sha256:b973cffbb030c3982931183a3f0f54f190ddc62624b7aec4a05c860a8928352d'
+          docker pull "$image"
+          test "$(docker inspect --format '{{.Config.User}}' "$image")" = '10001:10001'
+          docker run --rm --network none "$image" python -c 'import psycopg; from amora.app import AmoraCore; assert callable(AmoraCore.bootstrap)'
+          echo 'AIVEN_CORE_ANONYMOUS_PULL ok'
+          echo 'AIVEN_CORE_NORTHFLANK_SWITCH performed=false'
