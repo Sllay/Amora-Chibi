@@ -71,3 +71,5 @@ jobs:
 # Contrato correto de verify_snapshot: dicionario sem campo status.
 
 # Diagnostico do Core: apenas classe de excecao e nome de funcao.
+
+# Ensaio com budget 16 (mesmo limite dos testes de Core).
