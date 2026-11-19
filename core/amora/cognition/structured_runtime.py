@@ -55,6 +55,7 @@ async def _await_numes_adaptive(
             logging.getLogger("amora.cognition.numes").info(
                 "numes_adaptive_grace",
                 extra={
+                    "request_id": liveness.request_id,
                     "heartbeat_count": liveness.keepalives,
                     "progress_deltas": liveness.progress_deltas,
                     "base_timeout_seconds": timeout,
