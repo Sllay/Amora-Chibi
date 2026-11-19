@@ -112,6 +112,95 @@ async def test_numes_chat_contract_and_zero_token_price(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_numes_catalogue_audit_is_readonly_and_does_not_assume_zdr(tmp_path, monkeypatch):
+    configure(monkeypatch, tmp_path)
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        calls = []
+        def handler(req):
+            calls.append(req)
+            assert req.method == "GET"
+            assert req.url.host == "api.numes.ai"
+            assert req.url.path.endswith(
+                "/models/dealignai/deepseek-v4.1-flash-uncensored-fp8:free/endpoints"
+            )
+            assert "synthetic-numes-key" == req.headers["authorization"].split()[-1]
+            assert not req.content
+            return httpx.Response(200, json={"data": {"endpoints": [
+                {"supported_parameters": ["max_tokens", "temperature", "response_format"],
+                 "max_completion_tokens": 4096},
+                {"supported_parameters": ["max_tokens"],
+                 "max_completion_tokens": 512},
+            ]}})
+        fake_http(monkeypatch, handler)
+        result = await NumesCognitiveProvider(core.secrets).audit_endpoint_catalogue()
+        assert result == {
+            "success": True,
+            "http_status": 200,
+            "model_free_route": True,
+            "endpoint_count": 2,
+            "strict_parameter_declared_endpoints": 1,
+            "max_output_1200_eligible_endpoints": 1,
+            "privacy_policy_assessed": False,
+            "private_data_sent": False,
+        }
+        assert len(calls) == 1
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_numes_catalogue_rejects_legacy_id_and_never_echoes_body(tmp_path, monkeypatch):
+    configure(monkeypatch, tmp_path)
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        fake_http(monkeypatch, lambda _req: httpx.Response(
+            404, json={"error": {"metadata": {"error_type": "not_found"},
+                                 "message": MARKER}},
+        ))
+        result = await NumesCognitiveProvider(core.secrets).audit_endpoint_catalogue()
+        assert result["http_status"] == 404
+        assert result["error_type"] == "not_found"
+        assert result["private_data_sent"] is False
+        assert MARKER not in json.dumps(result)
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_numes_503_reports_canonical_error_type_without_provider_body(
+    tmp_path, monkeypatch, caplog,
+):
+    import logging
+    configure(monkeypatch, tmp_path)
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        ctx = core.cognition.compiler.compile(CognitiveRequest(
+            text="Pergunta fictícia sem memórias", speaker_id="PERSON_BK",
+            remote_processing_allowed=True,
+        ))
+        fake_http(monkeypatch, lambda _req: httpx.Response(
+            503, json={"error": {
+                "code": 503,
+                "metadata": {"error_type": "provider_unavailable"},
+                "message": MARKER,
+            }},
+        ))
+        with caplog.at_level(logging.INFO, logger="amora.cognition.numes"):
+            with pytest.raises(ProviderError) as exc:
+                await NumesCognitiveProvider(core.secrets).realize(ctx)
+        assert exc.value.status_code == 503
+        assert exc.value.diagnostics == {
+            "provider_error_category": "provider_unavailable",
+        }
+        assert MARKER not in str(exc.value)
+        assert MARKER not in caplog.text
+        assert "numes_stream_http_error" in caplog.text
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [413, 429, 503])
 async def test_numes_errors_are_safe_and_keep_status(tmp_path, monkeypatch, status):
     configure(monkeypatch, tmp_path)
