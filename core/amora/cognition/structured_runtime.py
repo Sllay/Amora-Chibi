@@ -46,7 +46,10 @@ async def _await_numes_adaptive(
         try:
             return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
         except asyncio.TimeoutError:
-            if task.done() or not liveness.healthy():
+            if task.done():
+                # A completion racing the timer must never be discarded.
+                return task.result()
+            if not liveness.healthy():
                 raise
             reserve = 0.75 if liveness.progress_deltas else reserve_seconds
             grace = min(grace_cap_seconds, max(0.0, available_seconds - timeout - reserve))
