@@ -19,19 +19,19 @@ jobs:
       - name: Checkout exact reviewed image candidate
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ff729708f24160b06be56bf5760211d6ed0e8248
+          ref: 6c857d62b97fa3150206329617107ebbadf3114b
           persist-credentials: false
       - name: Build as non-root without secrets
         run: |
           set -euo pipefail
-          image='ghcr.io/sllay/amora-chibi-aiven-core:pg18-native-backup-ff72970'
+          image='ghcr.io/sllay/amora-chibi-aiven-core:pg18-native-backup-6c857d6'
           docker build -f deploy/Dockerfile.aiven-native-pg18-backup -t "$image" .
           test "$(docker inspect --format '{{.Config.User}}' "$image")" = '10001:10001'
       - name: Check PostgreSQL 18 tools and safe missing-approval refusal
         shell: bash
         run: |
           set -euo pipefail
-          image='ghcr.io/sllay/amora-chibi-aiven-core:pg18-native-backup-ff72970'
+          image='ghcr.io/sllay/amora-chibi-aiven-core:pg18-native-backup-6c857d6'
           docker run --rm --network none --entrypoint pg_dump "$image" --version | grep -E 'pg_dump \(PostgreSQL\) 18'
           set +e
           output="$(docker run --rm --network none "$image" 2>&1)"
@@ -46,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
-          docker push ghcr.io/sllay/amora-chibi-aiven-core:pg18-native-backup-ff72970
+          docker push ghcr.io/sllay/amora-chibi-aiven-core:pg18-native-backup-6c857d6
           docker logout ghcr.io >/dev/null
           echo 'BACKUP_IMAGE_NO_PRIVATE_DATA true'
           echo 'BACKUP_IMAGE_NORTHFLANK_UNCHANGED true'
