@@ -120,7 +120,9 @@ def test_readonly_probe_original_core_store_can_recall_imported_memory(
     with closing(local()) as manager:
         manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
         try:
-            prepare_disposable_core_v18(manager)
+            prepare_disposable_core_v18(
+                manager, include_memory_epoch_candidate=True,
+            )
             backend = synthetic_core_backend(local, max_connections=16)
             core = AmoraCore.bootstrap(
                 clock=SimulatedClock(now), storage=backend,
