@@ -1,0 +1,75 @@
+name: Amora - restauracao descartavel PostgreSQL 18
+
+on:
+  push:
+    branches: [ops/amora-restore-rehearsal-20261119]
+    paths: [.github/workflows/amora-pg18-restore-rehearsal.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  isolated-restore:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[amora-restore-test]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: amora_pg_synthetic
+          POSTGRES_USER: amora_ci
+          POSTGRES_PASSWORD: synthetic_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U amora_ci -d amora_pg_synthetic"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Recuperar somente artifact AES-256 de execucao anterior
+        uses: actions/download-artifact@v4
+        with:
+          name: amora-backup-encrypted
+          run-id: 44481631875
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/amora-rehearsal-artifact
+
+      - name: Instalar dependencias de teste, sem conectar servicos Amora
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check --quiet -e .
+          python -m pip install --disable-pip-version-check --quiet "psycopg[binary]==3.3.9" "pyzipper==0.4.0" "pytest>=8.3,<10"
+
+      - name: Revalidar que a regra lexical rejeita alteracoes estruturais
+        run: python -m pytest -q tests/test_pcs4c_ddl_whitespace_gate.py tests/test_postgres_run3_snapshot_preflight.py
+
+      - name: Restaurar em PG18 isolado e testar bootstrap do Core
+        env:
+          AMORA_BACKUP_PASSPHRASE: ${{ secrets.AMORA_BACKUP_PASSPHRASE }}
+          RUNNER_TEMP: ${{ runner.temp }}
+          AMORA_MODE: local
+        run: python tools/ops/amora_pg18_restore_rehearsal.py
+
+      - name: Eliminar artifact do runner
+        if: always()
+        shell: bash
+        run: rm -rf "${{ runner.temp }}/amora-rehearsal-artifact"
+
+# Reteste com checkpoints sanitizados por etapa.
+
+# Reteste de auditoria do snapshot antes do DDL.
+
+# Contrato correto de verify_snapshot: dicionario sem campo status.
+
+# Diagnostico do Core: apenas classe de excecao e nome de funcao.
+
+# Ensaio com budget 16 (mesmo limite dos testes de Core).
