@@ -103,6 +103,14 @@ def test_readonly_probe_original_core_store_can_recall_imported_memory(
             connect_timeout=5, autocommit=True,
         )
 
+    def local_readonly():
+        return psycopg.connect(
+            host="127.0.0.1", port=5432, dbname="amora_pg_synthetic",
+            user="amora_ci", password="synthetic_only",
+            connect_timeout=5, autocommit=True,
+            options="-c default_transaction_read_only=on -c search_path=pg_catalog",
+        )
+
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / "synthetic-home"))
     monkeypatch.setenv("AMORA_MODE", "local")
     monkeypatch.setattr(
@@ -138,7 +146,7 @@ def test_readonly_probe_original_core_store_can_recall_imported_memory(
                 core.close()
             assert backend.opened_connections == 0
 
-            result = probe.inspect(connection_factory=local)
+            result = probe.inspect(connection_factory=local_readonly)
             assert result["status"] == "real_staging_read_only_core_continuity_pass"
             assert result["historical_memory_hydrated"] is True
             assert result["private_recall"] == (
