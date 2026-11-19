@@ -1,0 +1,108 @@
+name: Amora Aiven PG18 encrypted backup + independent restore
+
+on:
+  push:
+    branches:
+      - ops/aiven-native-pg18-offsite-export-20261119
+    paths:
+      - .github/workflows/amora-aiven-pg18-offsite-export.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: amora-aiven-pg18-native-offsite-export
+  cancel-in-progress: false
+
+jobs:
+  encrypted-native-backup:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[export-aiven-pg18]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NF_BACKUP_API_TOKEN: ${{ secrets.NF_BACKUP_API_TOKEN }}
+      AMORA_BACKUP_PASSPHRASE: ${{ secrets.AMORA_BACKUP_PASSPHRASE }}
+    steps:
+      - name: Checkout isolated operator branch
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Verify existing secret identifiers without displaying them
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$NF_BACKUP_API_TOKEN" || { echo 'PG_EXPORT_NF_TOKEN_MISSING'; exit 1; }
+          test ${#AMORA_BACKUP_PASSPHRASE} -ge 32 || { echo 'PG_EXPORT_PASSPHRASE_MISSING'; exit 1; }
+      - name: Install restricted export dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/amora-aiven-pg18-export
+          npm install --prefix /tmp/amora-aiven-pg18-export --no-audit --no-fund @northflank/js-client
+          cp tools/ops/export_northflank_aiven_pg18.mjs /tmp/amora-aiven-pg18-export/export.mjs
+          python3 -m pip install --disable-pip-version-check --quiet pyzipper==0.4.0
+      - name: Fetch native dump from existing Northflank volume using temporary read-only Job run
+        shell: bash
+        run: |
+          set -euo pipefail
+          node /tmp/amora-aiven-pg18-export/export.mjs
+      - name: Independent restore into isolated PostgreSQL 18 Docker container
+        shell: bash
+        run: |
+          set -euo pipefail
+          backup='/tmp/amora-aiven-pg18-export/amora-aiven-pg18-v18-prewrite.dump'
+          docker run -d --name amora-aiven-pg18-restore \
+            -e POSTGRES_USER=amora_ci \
+            -e POSTGRES_PASSWORD=synthetic_only \
+            -e POSTGRES_DB=amora_pg18_restore_sandbox \
+            postgres:18-alpine >/dev/null
+          for i in $(seq 1 50); do
+            if docker exec amora-aiven-pg18-restore pg_isready -U amora_ci -d amora_pg18_restore_sandbox >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker cp "$backup" amora-aiven-pg18-restore:/tmp/staging.dump
+          if ! docker exec amora-aiven-pg18-restore pg_restore \
+            -U amora_ci -d amora_pg18_restore_sandbox \
+            --no-owner --no-acl --exit-on-error /tmp/staging.dump >/dev/null 2>&1; then
+            echo 'PG_RESTORE_INDEPENDENTLY_FAILED'
+            exit 1
+          fi
+          check_count() {
+            local label="$1" query="$2" expected="$3"
+            local actual
+            actual="$(docker exec amora-aiven-pg18-restore psql -XAtq \
+              -U amora_ci -d amora_pg18_restore_sandbox -c "$query")"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "PG_RESTORE_PARITY_BLOCKED $label"
+              exit 1
+            fi
+            echo "PG_RESTORE_PARITY_OK $label"
+          }
+          check_count schema_version "SELECT COUNT(*)::text || ':' || MAX(version)::text FROM amora_pg_v18_lab.schema_migrations" '18:18'
+          check_count identities 'SELECT COUNT(*) FROM amora_pg_v18_lab.entities' '6'
+          check_count history_events 'SELECT COUNT(*) FROM amora_pg_v18_lab.events' '11388'
+          check_count historical_memories 'SELECT COUNT(*) FROM amora_pg_v18_lab.memory_records' '88'
+          check_count fts_documents 'SELECT COUNT(*) FROM amora_pg_v18_lab.fts_doc_tokens' '88'
+          check_count fts_postings 'SELECT COUNT(*) FROM amora_pg_v18_lab.fts_term_postings' '3064'
+          check_count schema_tables "SELECT COUNT(*) FROM pg_catalog.pg_tables WHERE schemaname='amora_pg_v18_lab'" '54'
+          echo 'AIVEN_PG18_NATIVE_RESTORE_INDEPENDENTLY_VERIFIED true'
+      - name: Encrypt only verified native dump (WinZip AES256) and validate decryption hash
+        shell: bash
+        run: python3 tools/ops/protect_aiven_pg18_native_backup.py
+      - name: Upload ENCRYPTED ZIP only; never upload plaintext
+        uses: actions/upload-artifact@v4
+        with:
+          name: amora-aiven-pg18-native-encrypted-verified
+          path: /tmp/amora-aiven-pg18-export/output/amora-aiven-pg18-backup-encrypted.zip
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+      - name: Dispose of plaintext from ephemeral runner
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f amora-aiven-pg18-restore >/dev/null 2>&1 || true
+          rm -rf /tmp/amora-aiven-pg18-export
