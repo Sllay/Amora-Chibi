@@ -82,3 +82,64 @@ def test_api_host_is_pinned():
             "GET", "https://different.example.invalid/request",
             allow_host="www.googleapis.com",
         )
+
+
+def test_downloaded_ciphertext_is_authenticated_and_restored_before_success(tmp_path, monkeypatch):
+    source, sidecar = _fixture(tmp_path)
+    cipher = tmp_path / "original.agcm"
+    password = "test-long-random-backup-passphrase-123"
+    hashes = backup.encrypt_pair(source, sidecar, cipher, password)
+    size = cipher.stat().st_size
+    with cipher.open("rb") as handle:
+        import hashlib
+        md5sum = hashlib.file_digest(handle, "md5").hexdigest()
+
+    monkeypatch.setattr(
+        backup, "verify_snapshot",
+        lambda path, **kwargs: {"database_sha256": backup._sha(path)},
+    )
+
+    def fake_http(method, url, *, headers, allow_host, stream_to=None, **kwargs):
+        if stream_to is None:
+            return 200, {}, json.dumps({
+                "id": "test-file-54321", "name": cipher.name,
+                "size": str(size), "md5Checksum": md5sum,
+            }).encode()
+        assert method == "GET"
+        assert url.endswith("?alt=media")
+        stream_to.write_bytes(cipher.read_bytes())
+        return 200, {}, b""
+
+    backup._verify_remote(
+        cipher, tmp_path / "download.agcm", "synthetic-grant", "test-file-54321",
+        hashes, password, http=fake_http,
+    )
+    assert (tmp_path / "restored" / "amora-pre-pcs4c.db").read_bytes() == source.read_bytes()
+
+
+def test_downloaded_ciphertext_changed_is_never_accepted(tmp_path):
+    source, sidecar = _fixture(tmp_path)
+    cipher = tmp_path / "original.agcm"
+    password = "test-long-random-backup-passphrase-123"
+    hashes = backup.encrypt_pair(source, sidecar, cipher, password)
+    with cipher.open("rb") as handle:
+        import hashlib
+        md5sum = hashlib.file_digest(handle, "md5").hexdigest()
+
+    def fake_http(method, url, *, headers, allow_host, stream_to=None, **kwargs):
+        if stream_to is None:
+            return 200, {}, json.dumps({
+                "id": "test-file-54321", "name": cipher.name,
+                "size": str(cipher.stat().st_size), "md5Checksum": md5sum,
+            }).encode()
+        stream_to.write_bytes(cipher.read_bytes()[:-1] + b"x")
+        return 200, {}, b""
+
+    with pytest.raises(
+        backup.CloudBackupError, match="DOWNLOADED_CIPHERTEXT_MISMATCH",
+    ):
+        backup._verify_remote(
+            cipher, tmp_path / "download.agcm", "synthetic-grant",
+            "test-file-54321", hashes, password, http=fake_http,
+        )
+    assert not (tmp_path / "restored").exists()
