@@ -47,7 +47,10 @@ jobs:
         shell: bash
         run: |
           python -m pip install --disable-pip-version-check --quiet -e .
-          python -m pip install --disable-pip-version-check --quiet "psycopg[binary]==3.3.9" "pyzipper==0.4.0"
+          python -m pip install --disable-pip-version-check --quiet "psycopg[binary]==3.3.9" "pyzipper==0.4.0" "pytest>=8.3,<10"
+
+      - name: Revalidar que a regra lexical rejeita alteracoes estruturais
+        run: python -m pytest -q tests/test_pcs4c_ddl_whitespace_gate.py tests/test_postgres_run3_snapshot_preflight.py
 
       - name: Restaurar em PG18 isolado e testar bootstrap do Core
         env:
