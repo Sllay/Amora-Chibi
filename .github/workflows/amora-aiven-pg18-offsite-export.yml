@@ -65,12 +65,36 @@ jobs:
             sleep 1
           done
           docker cp "$backup" amora-aiven-pg18-restore:/tmp/staging.dump
+          # Keep raw pg_restore output private inside the disposable runner.
+          # Some database errors can include row values; NEVER echo it.
+          restore_log="$(mktemp)"
+          chmod 0600 "$restore_log"
           if ! docker exec amora-aiven-pg18-restore pg_restore \
             -U amora_ci -d amora_pg18_restore_sandbox \
-            --no-owner --no-acl --exit-on-error /tmp/staging.dump >/dev/null 2>&1; then
+            --no-owner --no-acl --exit-on-error /tmp/staging.dump >"$restore_log" 2>&1; then
+            python3 - "$restore_log" <<'PY'
+          import pathlib,sys
+          raw=pathlib.Path(sys.argv[1]).read_text(errors="replace").lower()
+          markers={
+              "missing_extension":"extension" in raw or "operator class" in raw,
+              "missing_dependency":"does not exist" in raw,
+              "role_missing":"role" in raw and "does not exist" in raw,
+              "duplicate_object":"already exists" in raw,
+              "permission":"permission denied" in raw or "must be owner" in raw,
+              "unsupported_statement":"syntax error" in raw or "unrecognized" in raw,
+              "invalid_data":"invalid input syntax" in raw or "invalid byte sequence" in raw,
+              "archive_failure":"unsupported version" in raw or "end of file" in raw,
+          }
+          print("PG_RESTORE_DIAGNOSTIC " + " ".join(k+"="+str(v).lower() for k,v in markers.items()))
+          PY
+            docker exec amora-aiven-pg18-restore psql -XAtq \
+              -U amora_ci -d amora_pg18_restore_sandbox \
+              -c "SELECT 'PG_RESTORE_CREATED_TABLES ' || COUNT(*) FROM pg_catalog.pg_tables WHERE schemaname='amora_pg_v18_lab'" || true
             echo 'PG_RESTORE_INDEPENDENTLY_FAILED'
+            rm -f "$restore_log"
             exit 1
           fi
+          rm -f "$restore_log"
           check_count() {
             local label="$1" query="$2" expected="$3"
             local actual
