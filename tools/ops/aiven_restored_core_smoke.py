@@ -14,7 +14,12 @@ import secrets
 import sys
 
 
+_STAGE = "entry"
+
+
 def run() -> dict[str, object]:
+    global _STAGE
+    _STAGE = "sandbox_confirmation"
     if os.environ.get("AMORA_RESTORED_SANDBOX_ONLY") != "1":
         raise RuntimeError("SANDBOX_OPERATOR_APPROVAL_REQUIRED")
 
@@ -31,6 +36,7 @@ def run() -> dict[str, object]:
             autocommit=True, connect_timeout=5,
         )
 
+    _STAGE = "restored_record_counters"
     with closing(database()) as before:
         num, identities, events, memories = before.execute(
             "SELECT "
@@ -54,9 +60,11 @@ def run() -> dict[str, object]:
     os.environ.pop("AMORA_SECRET_NUMES_API_KEY", None)
     os.environ.pop("AMORA_SECRET_GROQ_API_KEY", None)
 
+    _STAGE = "first_core_bootstrap"
     backend = synthetic_core_backend(database, max_connections=16)
     first = AmoraCore.bootstrap(storage=backend)
     try:
+        _STAGE = "first_core_memory_identity"
         if first.database.schema_version() != 18:
             raise RuntimeError("RESTORED_CORE_SCHEMA_FAILED")
         if len(first.identities.entities) != identities:
@@ -68,9 +76,11 @@ def run() -> dict[str, object]:
             raise RuntimeError("RESTORED_CORE_MEMORIES_CHANGED")
         if first.database.event_count() != events:
             raise RuntimeError("RESTORED_CORE_EVENTS_CHANGED")
+        _STAGE = "first_core_conversation_state"
         state = first.conversation.state()
         if state is None:
             raise RuntimeError("RESTORED_CORE_CONVERSATION_MISSING")
+        _STAGE = "first_core_api_factory"
         from amora.api import create_api
         api = create_api(first, own_core=False)
         if api is None:
@@ -80,8 +90,10 @@ def run() -> dict[str, object]:
     if backend.opened_connections != 0:
         raise RuntimeError("RESTORED_CORE_CONNECTION_LEAK")
 
+    _STAGE = "second_core_bootstrap"
     second = AmoraCore.bootstrap(storage=backend)
     try:
+        _STAGE = "second_core_history_recovery"
         if second.memory.store.get(first_id) is None:
             raise RuntimeError("RESTORED_CORE_MEMORY_LOST_AFTER_RESTART")
         if second.memory.store.count(include_archived=True) != memories:
@@ -121,6 +133,7 @@ def main() -> int:
         result = {
             "status": "blocked",
             "reason": "RESTORED_CORE_BOOTSTRAP_NEEDS_REVIEW",
+            "phase": _STAGE,
             "live_aiven_touched": False,
             "production_cutover_authorized": False,
         }
