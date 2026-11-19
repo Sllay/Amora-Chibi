@@ -1,0 +1,77 @@
+name: "Amora - exportar backup do Northflank"
+
+on:
+  # Mantido fora da main. A exportação só executa quando a mensagem
+  # de commit contém [export-amora-backup].
+  push:
+    branches:
+      - ops/backup-export-ci-20261119
+  # Disponível como botão Run workflow quando o arquivo estiver na main.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: amora-pcs4c-backup-export
+  cancel-in-progress: false
+
+jobs:
+  export-encrypted-backup:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[export-amora-backup]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NF_BACKUP_API_TOKEN: ${{ secrets.NF_BACKUP_API_TOKEN }}
+      AMORA_BACKUP_PASSPHRASE: ${{ secrets.AMORA_BACKUP_PASSPHRASE }}
+    steps:
+      - name: Obter fonte da branch
+        uses: actions/checkout@v4
+
+      - name: Verificar credenciais sem exibi-las
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$NF_BACKUP_API_TOKEN" ]]; then
+            echo "::error::Configure o secret NF_BACKUP_API_TOKEN."
+            exit 1
+          fi
+          if [[ ${#AMORA_BACKUP_PASSPHRASE} -lt 32 ]]; then
+            echo "::error::Configure AMORA_BACKUP_PASSPHRASE com pelo menos 32 caracteres aleatorios."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Instalar cliente oficial Northflank e ZIP AES-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/amora-export-ci
+          cp tools/ops/export_northflank_pcs4c.mjs /tmp/amora-export-ci/export.mjs
+          npm install --prefix /tmp/amora-export-ci --no-audit --no-fund @northflank/js-client
+          python3 -m pip install --disable-pip-version-check --quiet pyzipper==0.3.6
+
+      - name: Copiar dois backups do volume via Job temporario
+        shell: bash
+        run: node /tmp/amora-export-ci/export.mjs
+
+      - name: Validar origem, criptografar ZIP e verificar
+        shell: bash
+        run: python3 tools/ops/protect_pcs4c_backup.py
+
+      - name: Publicar somente o ZIP criptografado
+        uses: actions/upload-artifact@v4
+        with:
+          name: amora-backup-encrypted
+          path: /tmp/amora-export-ci/output/amora-backup.zip
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Apagar arquivos temporarios do runner
+        if: always()
+        shell: bash
+        run: rm -rf /tmp/amora-export-ci
