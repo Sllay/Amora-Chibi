@@ -1,0 +1,31 @@
+name: Amora Aiven - staging target preflight (read only)
+
+on:
+  push:
+    branches: [ops/aiven-staging-inspect-ci-20261119]
+    paths: [.github/workflows/amora-aiven-inspect.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: amora-aiven-staging-operator
+  cancel-in-progress: false
+
+jobs:
+  inspect-aiven:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[aiven-inspect]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Inspect existing Aiven manual job, no database writes
+        env:
+          NF_BACKUP_API_TOKEN: ${{ secrets.NF_BACKUP_API_TOKEN }}
+        run: python tools/ops/aiven_staging_readonly_ci.py
+
+# Endpoint-only diagnostic without secret or raw log output.
