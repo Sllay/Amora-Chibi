@@ -69,3 +69,5 @@ jobs:
 # Reteste de auditoria do snapshot antes do DDL.
 
 # Contrato correto de verify_snapshot: dicionario sem campo status.
+
+# Diagnostico do Core: apenas classe de excecao e nome de funcao.
