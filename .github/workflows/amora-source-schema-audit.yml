@@ -1,0 +1,38 @@
+name: Amora - auditoria de schema do backup
+on:
+  push:
+    branches: [ops/amora-restore-rehearsal-20261119]
+    paths: [.github/workflows/amora-source-schema-audit.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  offline-compare:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[amora-schema-audit]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: amora-backup-encrypted
+          run-id: 44481631875
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/amora-rehearsal-artifact
+      - name: Instalar somente dependencias locais
+        run: |
+          python -m pip install --disable-pip-version-check --quiet -e .
+          python -m pip install --disable-pip-version-check --quiet pyzipper==0.4.0
+      - name: Comparar schemas sem exibir nomes nem dados privados
+        env:
+          AMORA_BACKUP_PASSPHRASE: ${{ secrets.AMORA_BACKUP_PASSPHRASE }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: python tools/ops/amora_source_schema_audit.py
+      - if: always()
+        run: rm -rf "${{ runner.temp }}/amora-rehearsal-artifact"
