@@ -1,0 +1,12 @@
+# Dedicated, read-only PostgreSQL 18 client for a one-shot native snapshot.
+# Does NOT contain private data, service credentials, tokens or Aiven CA.
+FROM postgres:18-alpine
+
+RUN apk add --no-cache python3 && \
+    addgroup -S -g 10001 amora && \
+    adduser -S -D -u 10001 -G amora amora
+COPY tools/ops/aiven_pg18_native_backup.py /opt/amora/aiven_pg18_native_backup.py
+RUN chown -R 10001:10001 /opt/amora && chmod 0555 /opt/amora/aiven_pg18_native_backup.py
+USER 10001:10001
+ENTRYPOINT ["python3", "/opt/amora/aiven_pg18_native_backup.py"]
+CMD []
