@@ -52,7 +52,7 @@ jobs:
           mkdir -p /tmp/amora-export-ci
           cp tools/ops/export_northflank_pcs4c.mjs /tmp/amora-export-ci/export.mjs
           npm install --prefix /tmp/amora-export-ci --no-audit --no-fund @northflank/js-client
-          python3 -m pip install --disable-pip-version-check --quiet pyzipper==0.3.6
+          python3 -m pip install --disable-pip-version-check --quiet pyzipper==0.4.0
 
       - name: Copiar dois backups do volume via Job temporario
         shell: bash
