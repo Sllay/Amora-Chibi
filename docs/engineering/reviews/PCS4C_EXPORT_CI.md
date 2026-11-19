@@ -62,3 +62,5 @@ Documentacao oficial:
 - https://northflank.com/docs/v1/api/project/jobs/run-job
 - https://northflank.com/docs/v1/api/copy-files
 - https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts
+
+Reexecucao solicitada em 2026-11-19 apos revisar a versao corrigida de pyzipper e a verificacao de criptografia AE-2.
