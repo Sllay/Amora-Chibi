@@ -64,3 +64,5 @@ jobs:
 # Reteste com checkpoints sanitizados por etapa.
 
 # Reteste de auditoria do snapshot antes do DDL.
+
+# Contrato correto de verify_snapshot: dicionario sem campo status.
