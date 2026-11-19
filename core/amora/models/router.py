@@ -121,6 +121,7 @@ class ModelRouter:
                 candidates,
                 key=lambda item: (
                     bool(item.metadata.get("primary_social_preference", False)),
+                    bool(item.metadata.get("social_secondary_preference", False)),
                     self._score(item),
                 ),
                 reverse=True,
