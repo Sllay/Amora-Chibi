@@ -28,6 +28,48 @@ def run() -> dict:
                 return " ".join(sql.split()).strip().casefold() if sql else ""
             normalized_diffs = sum(normalize(a[key]) != normalize(b[key]) for key in shared)
             table_parity = _tables(source) == _tables(reference)
+            mismatches = []
+            for ordinal, key in enumerate(sorted(shared), 1):
+                if a[key] == b[key]:
+                    continue
+                expected_kind = reference.execute(
+                    "SELECT type FROM sqlite_schema WHERE name=?", (key,)
+                ).fetchone()[0]
+                # Object name and DDL remain private, even if the expected
+                # object originates from a public static migration.
+                normalized_a, normalized_b = normalize(a[key]), normalize(b[key])
+                tokens = lambda sql: re.findall(
+                    r"(?i)[a-z_][a-z_0-9]*|\\d+|[^\\s]", sql
+                )
+                ta, tb = tokens(normalized_a), tokens(normalized_b)
+                import difflib
+                edits = [
+                    (tag, a1, a2, b1, b2)
+                    for tag, a1, a2, b1, b2 in difflib.SequenceMatcher(
+                        None, ta, tb, autojunk=False
+                    ).get_opcodes() if tag != "equal"
+                ]
+                pragma_parity = "not_applicable"
+                if expected_kind == "table":
+                    checks = ("table_xinfo", "foreign_key_list", "index_list")
+                    pragma_parity = "equal" if all(
+                        source.execute(f'PRAGMA {p}("{key}")').fetchall()
+                        == reference.execute(f'PRAGMA {p}("{key}")').fetchall()
+                        for p in checks
+                    ) else "different"
+                elif expected_kind == "index":
+                    pragma_parity = "equal" if (
+                        source.execute(f'PRAGMA index_xinfo("{key}")').fetchall()
+                        == reference.execute(f'PRAGMA index_xinfo("{key}")').fetchall()
+                    ) else "different"
+                mismatches.append({
+                    "canonical_ordinal": ordinal,
+                    "object_kind": expected_kind if expected_kind in ("table","index","trigger","view") else "other",
+                    "normalized_sql_equal": normalized_a == normalized_b,
+                    "lexical_edit_count": len(edits),
+                    "edit_shapes": [e[0] for e in edits][:8],
+                    "pragma_metadata": pragma_parity,
+                })
         strict_reason = "ok"
         try:
             inspect_private_snapshot(path)
@@ -46,6 +88,7 @@ def run() -> dict:
             "ddl_extra_objects_count": source_only,
             "ddl_exact_differences_count": exact_diffs,
             "ddl_normalized_differences_count": normalized_diffs,
+            "ddl_mismatch_classification": mismatches,
             "strict_gate": strict_reason,
             "aiven_modified": False,
             "cutover_authorized": False,
