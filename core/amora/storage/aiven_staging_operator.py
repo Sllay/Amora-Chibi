@@ -22,6 +22,7 @@ from .aiven_preflight import (
     AivenPreflightError, load_aiven_ca_certificate, validate_aiven_settings,
 )
 from .postgres_runtime_connection import PostgresTargetPolicy
+from .postgres_run3_preflight import inspect_prepared_postgres
 from .postgres_staging_schema_prepare import (
     StagingSchemaError, prepare_empty_staging_schema,
 )
@@ -60,7 +61,7 @@ def inspect_or_prepare(
     connect=None,
 ) -> dict[str, object]:
     """A single bounded manual connection to the exact configured Aiven DB."""
-    if mode not in {"inspect", "prepare"}:
+    if mode not in {"inspect", "prepare", "verify"}:
         raise AivenStagingOperatorError("PG_STAGING_UNREVIEWED_MODE")
     if mode == "prepare" and (
         confirmation != _CONFIRM
@@ -113,7 +114,7 @@ def inspect_or_prepare(
                 connect_timeout=8,
                 application_name="amora-staging-schema-operator",
                 options=("-c default_transaction_read_only=on"
-                         if mode == "inspect"
+                         if mode in {"inspect", "verify"}
                          else "-c default_transaction_read_only=off"),
                 autocommit=True,
             )
@@ -141,6 +142,39 @@ def inspect_or_prepare(
                 ).fetchone()[0])
             except Exception:
                 raise AivenStagingOperatorError("PG_STAGING_METADATA_QUERY_FAILED") from None
+
+            if mode == "verify":
+                # A post-DDL audit, including after an uncertain write exit.
+                # This is read-only and never repeats schema creation.
+                try:
+                    checked = inspect_prepared_postgres(
+                        raw, policy, require_memory_epoch=True,
+                        allow_empty_migrations_for_import=True,
+                    )
+                except Exception:
+                    raise AivenStagingOperatorError(
+                        "PG_STAGING_READONLY_VERIFY_FAILED"
+                    ) from None
+                if checked.status not in {
+                    "preimport_structural_pass", "structural_pass",
+                }:
+                    raise AivenStagingOperatorError(
+                        "PG_STAGING_STRUCTURE_NOT_VERIFIED"
+                    )
+                return {
+                    "status": "staging_structure_verified",
+                    "operation": "read_only_structural_verify",
+                    "structural_state": checked.status,
+                    "schema_version_target": 18,
+                    "database_user_tables": user_tables,
+                    "database_size_bytes": database_bytes,
+                    "capacity_independently_verified": False,
+                    "private_row_parity_independently_verified": False,
+                    "external_backup_and_restore_independently_verified": False,
+                    "aiven_import_performed": False,
+                    "core_storage_switched": False,
+                    "production_cutover_authorized": False,
+                }
 
             if exists or user_tables:
                 raise AivenStagingOperatorError("PG_STAGING_DESTINATION_NOT_EMPTY")
@@ -189,7 +223,7 @@ def inspect_or_prepare(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("inspect", "prepare"))
+    parser.add_argument("mode", choices=("inspect", "prepare", "verify"))
     parser.add_argument("--confirm", default="")
     parser.add_argument("--snapshot-attested", action="store_true")
     parser.add_argument("--external-backup-restore-attested", action="store_true")
@@ -225,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
     print("AIVEN_STAGING_OPERATOR " + json.dumps(result, sort_keys=True), flush=True)
     return 0 if result["status"] in {
         "staging_preparation_possible", "empty_staging_schema_prepared",
+        "staging_structure_verified",
     } else 2
 
 
