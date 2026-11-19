@@ -85,11 +85,26 @@ jobs:
               "invalid_data":"invalid input syntax" in raw or "invalid byte sequence" in raw,
               "archive_failure":"unsupported version" in raw or "end of file" in raw,
           }
+          markers["connection_closed"]="server closed the connection" in raw or "connection unexpectedly" in raw
+          markers["fatal_signal"]="signal" in raw and "terminat" in raw
           print("PG_RESTORE_DIAGNOSTIC " + " ".join(k+"="+str(v).lower() for k,v in markers.items()))
           PY
-            docker exec amora-aiven-pg18-restore psql -XAtq \
-              -U amora_ci -d amora_pg18_restore_sandbox \
-              -c "SELECT 'PG_RESTORE_CREATED_TABLES ' || COUNT(*) FROM pg_catalog.pg_tables WHERE schemaname='amora_pg_v18_lab'" || true
+            docker inspect --format 'PG_RESTORE_CONTAINER state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' amora-aiven-pg18-restore || true
+            docker logs amora-aiven-pg18-restore > /tmp/amora-pg18-service-private.log 2>&1 || true
+            python3 - <<'PY'
+          from pathlib import Path
+          logs=Path("/tmp/amora-pg18-service-private.log").read_text(errors="replace").lower()
+          markers={
+            "oom":"out of memory" in logs or "killed process" in logs,
+            "signal_crash":"signal 11" in logs or "segmentation fault" in logs,
+            "abort":"signal 6" in logs or "aborted" in logs,
+            "disk_full":"no space left on device" in logs,
+            "unexpected_shutdown":"server process" in logs and "terminated" in logs,
+            "startup_failed":"database system is not ready" in logs,
+          }
+          print("PG_RESTORE_SERVER_DIAGNOSTIC " + " ".join(k+"="+str(v).lower() for k,v in markers.items()))
+          PY
+            df -h /tmp | tail -1 | awk '{print "PG_RESTORE_RUNNER_DISK_USED " $5}'
             echo 'PG_RESTORE_INDEPENDENTLY_FAILED'
             rm -f "$restore_log"
             exit 1
