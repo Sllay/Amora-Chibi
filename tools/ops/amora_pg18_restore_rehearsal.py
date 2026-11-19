@@ -157,7 +157,7 @@ def main() -> int:
         return 0 if result["core_bootstrap"] == "bootstrapped" else 2
     except RehearsalFailure as exc:
         reason = str(exc)
-        if re.fullmatch(r"[A-Z_]{8,80}", reason) is None:
+        if re.fullmatch(r"[A-Z0-9_]{8,80}", reason) is None:
             reason = "REHEARSAL_FAILED"
     except Exception:
         reason = "REHEARSAL_FAILED"
