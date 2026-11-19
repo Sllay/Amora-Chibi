@@ -31,7 +31,7 @@ def test_postgres_staging_never_selected_without_explicit_approval(monkeypatch, 
     with pytest.raises(PostgresRuntimeError, match="PG_STAGING_OPERATOR_APPROVAL_REQUIRED"):
         backend_from_environment()
     monkeypatch.setenv("AMORA_STORAGE_BACKEND", "postgres")
-    with pytest.raises(ValueError, match="sqlite or libsql"):
+    with pytest.raises(PostgresRuntimeError, match="PG_PRODUCTION_CUTOVER_APPROVAL_REQUIRED"):
         backend_from_environment()
 
 
