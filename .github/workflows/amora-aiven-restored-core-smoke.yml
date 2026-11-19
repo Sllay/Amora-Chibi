@@ -149,7 +149,7 @@ jobs:
               "historical_memory_hydrated_after_restart",
               "core_conversation_state_loaded","api_factory_created",
               "backend_connections_released","live_aiven_touched",
-              "discord_connected","production_cutover_authorized","reason",
+              "discord_connected","production_cutover_authorized","reason","phase",
           }
           if set(data)-allowed:
               raise SystemExit("AIVEN_RESTORED_CORE_UNSAFE_REPORT")
