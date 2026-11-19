@@ -119,6 +119,10 @@ def backend_from_environment():
             os.getenv("AMORA_LIBSQL_URL", ""),
             os.getenv("AMORA_SECRET_LIBSQL_AUTH_TOKEN", ""),
         )
+    if choice == "postgres-staging":
+        from .aiven_staging_core_backend import staging_core_backend_from_environment
+
+        return staging_core_backend_from_environment()
     raise ValueError("AMORA_STORAGE_BACKEND must be sqlite or libsql")
 
 
