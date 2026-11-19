@@ -56,6 +56,7 @@ def run() -> dict[str, object]:
     os.environ["AMORA_HOME"] = "/tmp/amora-restored-core-only"
     os.environ["AMORA_SECRET_LOCAL_API_TOKEN"] = secrets.token_hex(32)
     os.environ["AMORA_SOCIAL_PRIMARY"] = "groq"
+    os.environ["AMORA_PUBLIC_ORIGINS"] = "https://amora-restored-sandbox.invalid"
     os.environ.pop("AMORA_POSTGRES_DSN", None)
     os.environ.pop("AMORA_SECRET_NUMES_API_KEY", None)
     os.environ.pop("AMORA_SECRET_GROQ_API_KEY", None)
