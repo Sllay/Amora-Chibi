@@ -22,6 +22,8 @@ on:
       - 'core/amora/storage/postgres_runtime_connection.py'
       - 'core/amora/storage/aiven_staging_core_backend.py'
       - 'core/amora/storage/aiven_core_readonly_probe.py'
+      - 'core/amora/storage/aiven_memory_write_probe.py'
+      - 'tests/test_aiven_memory_write_probe.py'
       - 'tools/ops/aiven_pg18_native_backup.py'
       - 'deploy/Dockerfile.aiven-native-pg18-backup'
       - 'tests/test_aiven_pg18_native_backup.py'
@@ -204,6 +206,7 @@ jobs:
             tests/test_postgres_runtime_connection.py \
             tests/test_aiven_staging_core_selector.py \
             tests/test_aiven_core_readonly_probe.py \
+            tests/test_aiven_memory_write_probe.py \
             tests/test_aiven_pg18_native_backup.py \
             tests/test_aiven_staging_readiness.py \
             tests/test_postgres_run1_end_to_end.py \
