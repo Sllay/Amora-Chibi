@@ -6,6 +6,8 @@ No raw reasoning, generated text, headers or usage objects are retained.
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
+import math
 from time import perf_counter
 
 
@@ -28,6 +30,44 @@ def _reasoning_chars(delta):
                if isinstance(value, str))
 
 
+class NumesConnectionLiveness:
+    """Per-attempt, transient metadata used by the bounded caller watchdog.
+
+    Heartbeats mean only that the HTTP stream is alive; they never imply model
+    output or permit unbounded deadline resets. No user content is stored.
+    """
+
+    def __init__(self, *, clock=perf_counter):
+        self.clock = clock
+        self.http_ok = False
+        self.request_id = None
+        self.last_signal = None
+        self.keepalives = 0
+        self.progress_deltas = 0
+
+    def headers(self, status):
+        self.http_ok = status == 200
+
+    def keepalive(self):
+        self.last_signal = self.clock()
+        self.keepalives += 1
+
+    def progress(self):
+        self.last_signal = self.clock()
+        self.progress_deltas += 1
+
+    def healthy(self, *, max_silence_seconds=23.0):
+        elapsed = self.clock() - self.last_signal if self.last_signal is not None else None
+        return (self.http_ok and elapsed is not None
+                and 0 <= elapsed <= max_silence_seconds
+                and (self.keepalives > 0 or self.progress_deltas > 0))
+
+
+ACTIVE_NUMES_LIVENESS: ContextVar[NumesConnectionLiveness | None] = ContextVar(
+    "amora_numes_connection_liveness", default=None,
+)
+
+
 class NumesStreamDiagnostics:
     """Numeric-only per-attempt observations and bounded loop-lag sampling."""
 
@@ -36,6 +76,7 @@ class NumesStreamDiagnostics:
         self.started = clock()
         self.metrics = {
             "sse_data_events": 0, "sse_max_gap_ms": 0.0,
+            "keepalive_count": 0, "keepalive_max_gap_ms": 0.0,
             "reasoning_deltas": 0, "reasoning_chars": 0,
             "content_deltas": 0, "content_chars": 0,
             "content_max_gap_ms": 0.0, "loop_samples": 0,
@@ -48,6 +89,7 @@ class NumesStreamDiagnostics:
         self.metrics.update(http_trace_events=0, tcp_connect_attempts=0, tls_attempts=0,
                             tcp_connect_ms=0.0, tls_ms=0.0)
         self._last_event = None
+        self._last_keepalive = None
         self._last_content = None
         self._loop = None
         self._handle = None
@@ -70,6 +112,16 @@ class NumesStreamDiagnostics:
                 start = self._connect_started.pop(label, None)
                 if start is not None:
                     self.metrics[label + "_ms"] += max(0.0, self.elapsed() - start)
+
+    def keepalive(self):
+        now = self.elapsed()
+        if self._last_keepalive is not None:
+            self.metrics["keepalive_max_gap_ms"] = max(
+                self.metrics["keepalive_max_gap_ms"], now - self._last_keepalive)
+        self._last_keepalive = now
+        self.metrics["keepalive_count"] += 1
+        self.metrics.setdefault("first_keepalive_ms", now)
+        self.metrics["last_keepalive_ms"] = now
 
     def data_event(self, *, done=False):
         now = self.elapsed()
@@ -153,13 +205,24 @@ class NumesStreamDiagnostics:
         reasoning = _token_count(details.get("reasoning_tokens"))
         if reasoning is None:
             reasoning = _token_count(usage.get("reasoning_tokens"))
+        prompt_details = usage.get("prompt_tokens_details")
+        prompt_details = prompt_details if isinstance(prompt_details, dict) else {}
         for name, value in (
             ("prompt_tokens_reported", _token_count(usage.get("prompt_tokens"))),
             ("completion_tokens_reported", _token_count(usage.get("completion_tokens"))),
+            ("total_tokens_reported", _token_count(usage.get("total_tokens"))),
             ("reasoning_tokens_reported", reasoning),
+            ("cached_tokens_reported", _token_count(prompt_details.get("cached_tokens"))),
         ):
             if value is not None:
                 m[name] = value
+        basis = usage.get("token_count_basis")
+        if isinstance(basis, str) and basis in {"provider_native", "gateway_estimate"}:
+            m["token_count_basis"] = basis
+        cost = usage.get("cost")
+        if type(cost) in (float, int) and math.isfinite(cost) and cost >= 0:
+            # Currency is account-key dependent (USD or BTC satoshis).
+            m["cost_reported"] = cost
         # Count only the raw model's structured surface text, not final Discord
         # rendering. Do not retain or emit any of the strings.
         if isinstance(parsed, dict) and isinstance(parsed.get("moves"), list):
