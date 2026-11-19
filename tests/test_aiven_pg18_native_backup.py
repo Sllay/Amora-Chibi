@@ -5,7 +5,14 @@ import json
 
 import pytest
 
-from tools.ops import aiven_pg18_native_backup as backup
+import importlib.util
+from pathlib import Path
+
+_SOURCE = Path(__file__).resolve().parents[1] / "tools/ops/aiven_pg18_native_backup.py"
+_SPEC = importlib.util.spec_from_file_location("aiven_pg18_native_backup", _SOURCE)
+assert _SPEC and _SPEC.loader
+backup = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(backup)
 
 
 def _env(monkeypatch, tmp_path):
