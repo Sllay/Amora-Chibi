@@ -8,5 +8,5 @@ RUN apk add --no-cache python3 && \
 COPY tools/ops/aiven_pg18_native_backup.py /opt/amora/aiven_pg18_native_backup.py
 RUN chown -R 10001:10001 /opt/amora && chmod 0555 /opt/amora/aiven_pg18_native_backup.py
 USER 10001:10001
-ENTRYPOINT ["python3", "/opt/amora/aiven_pg18_native_backup.py"]
-CMD []
+ENTRYPOINT []
+CMD ["python3", "/opt/amora/aiven_pg18_native_backup.py"]
