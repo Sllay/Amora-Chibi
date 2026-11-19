@@ -117,6 +117,8 @@ def _run(archive: Path, folder: Path) -> dict[str, object]:
     )
     print("AMORA_RESTORE_STAGE core_bootstrap", flush=True)
     boot = "blocked"
+    bootstrap_error = "none"
+    bootstrap_origin = "none"
     try:
         core = AmoraCore.bootstrap(
             clock=SimulatedClock(datetime(2026, 11, 19, tzinfo=timezone.utc)),
@@ -126,8 +128,24 @@ def _run(archive: Path, folder: Path) -> dict[str, object]:
             boot = "bootstrapped"
         finally:
             core.close()
-    except Exception:
+    except Exception as exc:
         boot = "blocked"
+        candidate = str(exc)
+        bootstrap_error = (
+            candidate if re.fullmatch(r"PG_[A-Z0-9_]{6,90}", candidate)
+            else type(exc).__name__
+            if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,60}", type(exc).__name__)
+            else "UNCLASSIFIED"
+        )
+        frame = exc.__traceback__
+        while frame is not None and frame.tb_next is not None:
+            frame = frame.tb_next
+        if frame is not None:
+            origin = frame.tb_frame.f_code.co_name
+            bootstrap_origin = (
+                origin if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,60}", origin)
+                else "UNCLASSIFIED"
+            )
 
     return {
         "status": "verified_ephemeral_pg18_restore",
@@ -139,6 +157,8 @@ def _run(archive: Path, folder: Path) -> dict[str, object]:
         "schema": 18,
         "structural_pass": True,
         "core_bootstrap": boot,
+        "core_bootstrap_error": bootstrap_error,
+        "core_bootstrap_origin": bootstrap_origin,
         "source_unchanged": True,
         "production_aiven_changed": False,
         "production_cutover_authorized": False,
