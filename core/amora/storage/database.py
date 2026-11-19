@@ -433,11 +433,26 @@ class AmoraDatabase:
     def integrity_check(self) -> str:
         with trace_lock(self._lock):
             if self.backend.capabilities.name == "postgres-candidate":
-                # SQLite PRAGMA cannot attest a PostgreSQL database. Verify
-                # prepared structural prerequisites, then report explicitly
-                # *uncertified* until full PG semantic/data-integrity gates.
+                # SQLite PRAGMA is never valid against PostgreSQL. An injected
+                # synthetic candidate remains unverified, including in CI.
                 self._conn.verify_prepared_schema(self.expected_schema_version)
-                return "postgres-candidate-unverified"
+                import os
+                if (os.getenv("AMORA_STORAGE_BACKEND") != "postgres-staging"
+                        or os.getenv("AMORA_PG_STAGING_APPROVAL")
+                        != "ALLOW_ONLY_ISOLATED_AIVEN_STAGING_CORE"):
+                    return "postgres-candidate-unverified"
+                from .postgres_run3_preflight import inspect_prepared_postgres
+                target = self._conn._target
+                # Explicitly require the same Aiven TLS-pinned policy used by
+                # the staging-only factory. No localhost test fixture can
+                # acquire a misleading "ok" readiness report.
+                if not target.require_tls or not target.host.endswith(".aivencloud.com"):
+                    return "postgres-candidate-unverified"
+                report = inspect_prepared_postgres(
+                    self._conn._raw, target, require_memory_epoch=True,
+                    allow_empty_migrations_for_import=False,
+                )
+                return "ok" if report.status == "structural_pass" else "postgres-candidate-unverified"
             row = self._conn.execute("PRAGMA integrity_check").fetchone()
             return str(row[0]) if row else "unknown"
 
