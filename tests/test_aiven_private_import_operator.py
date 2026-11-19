@@ -149,9 +149,7 @@ def test_drifted_backup_certification_fails_closed_without_connection():
         bridge.PrivateBridgeError, match="PG_PRIVATE_SOURCE_CERTIFICATION_DRIFT",
     ):
         bridge.inspect_or_import(
-            mode="import", **{
-                **_import_args(), **source, "connect": forbidden,
-            },
+            **{**_import_args(), **source, "connect": forbidden},
         )
 
 
