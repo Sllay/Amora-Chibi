@@ -113,7 +113,7 @@ def _run(archive: Path, folder: Path) -> dict[str, object]:
     os.environ["AMORA_HOME"] = str(folder / "core-home")
     os.environ.pop("AMORA_SECRET_LOCAL_API_TOKEN", None)
     backend = PostgresBackendCandidate(
-        connect, compiled_domain_registry(), target=target, max_connections=8,
+        connect, compiled_domain_registry(), target=target, max_connections=16,
     )
     print("AMORA_RESTORE_STAGE core_bootstrap", flush=True)
     boot = "blocked"
