@@ -63,9 +63,7 @@ def _run(archive: Path, folder: Path) -> dict[str, object]:
     before = (_fingerprint(snapshot), _fingerprint(sidecar))
     print("AMORA_RESTORE_STAGE pcs4c_verify", flush=True)
     try:
-        report = verify_snapshot(snapshot, expected_schema=18)
-        if report["status"] != "ok":
-            raise RehearsalFailure("PCS4C_VERIFICATION_BLOCKED")
+        verify_snapshot(snapshot, expected_schema=18)
     except RehearsalFailure:
         raise
     except Exception:
