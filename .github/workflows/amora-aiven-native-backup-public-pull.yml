@@ -1,0 +1,27 @@
+name: Aiven PG18 native backup image anonymous-pull certification
+
+on:
+  push:
+    branches:
+      - ops/aiven-native-pg18-backup-image-20261119
+    paths:
+      - .github/workflows/amora-aiven-native-backup-public-pull.yml
+
+permissions:
+  contents: read
+
+jobs:
+  anonymous-pull:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Verify Northflank external image can be pulled without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          image='ghcr.io/sllay/amora-chibi-aiven-core@sha256:c1d76f8e34ee00a1d8d05bc5053c721f315bbfbf268441ca5c329e4787cdbd13'
+          docker pull "$image" >/dev/null
+          test "$(docker inspect --format '{{.Config.User}}' "$image")" = '10001:10001'
+          docker run --rm --network none --entrypoint pg_dump "$image" --version | grep -E 'pg_dump \(PostgreSQL\) 18'
+          echo 'AIVEN_NATIVE_BACKUP_ANONYMOUS_PULL_PASS true'
