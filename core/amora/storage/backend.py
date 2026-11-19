@@ -123,7 +123,11 @@ def backend_from_environment():
         from .aiven_staging_core_backend import staging_core_backend_from_environment
 
         return staging_core_backend_from_environment()
-    raise ValueError("AMORA_STORAGE_BACKEND must be sqlite or libsql")
+    if choice == "postgres":
+        from .aiven_production_core_backend import production_core_backend_from_environment
+
+        return production_core_backend_from_environment()
+    raise ValueError("AMORA_STORAGE_BACKEND must be sqlite, libsql, postgres-staging or postgres")
 
 
 def is_duplicate_error(exc: Exception) -> bool:
