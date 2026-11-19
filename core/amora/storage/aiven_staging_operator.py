@@ -54,6 +54,9 @@ def inspect_or_prepare(
     external_backup_restore_attested: bool = False,
     isolated_target_attested: bool = False,
     free_plan_capacity_attested: bool = False,
+    expected_host: str = "",
+    expected_port: int = 0,
+    expected_database: str = "",
     connect=None,
 ) -> dict[str, object]:
     """A single bounded manual connection to the exact configured Aiven DB."""
@@ -76,6 +79,11 @@ def inspect_or_prepare(
         if (not host or not port or not database or "/" in database
                 or "%" in database or "\x00" in database):
             raise AivenStagingOperatorError("PG_STAGING_INVALID_ENDPOINT")
+        if not expected_host or not expected_port or not expected_database:
+            raise AivenStagingOperatorError("PG_STAGING_ENDPOINT_PIN_REQUIRED")
+        if (host != expected_host or port != expected_port
+                or database != expected_database):
+            raise AivenStagingOperatorError("PG_STAGING_ENDPOINT_PIN_MISMATCH")
         policy = PostgresTargetPolicy(
             host=host, port=port, database=database,
             schema=LAB_SCHEMA, server_major=18, require_tls=True,
@@ -203,6 +211,9 @@ def main(argv: list[str] | None = None) -> int:
             external_backup_restore_attested=args.external_backup_restore_attested,
             isolated_target_attested=args.isolated_target_attested,
             free_plan_capacity_attested=args.free_plan_capacity_attested,
+            expected_host=os.environ.get("AMORA_STAGING_EXPECTED_HOST", ""),
+            expected_port=int(os.environ.get("AMORA_STAGING_EXPECTED_PORT", "0")),
+            expected_database=os.environ.get("AMORA_STAGING_EXPECTED_DATABASE", ""),
         )
     except (AivenStagingOperatorError, AivenPreflightError) as exc:
         code = str(exc)
