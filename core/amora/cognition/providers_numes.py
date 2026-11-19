@@ -30,7 +30,7 @@ from .realization import realization_instruction
 
 
 class NumesCognitiveProvider:
-    DEFAULT_MODEL = "dealignai/deepseek-v4.1-flash-uncensored-fp8"
+    DEFAULT_MODEL = "dealignai/deepseek-v4.1-flash-uncensored-fp8:free"
     API_URL = "https://api.numes.ai/api/v1/chat/completions"
 
     def __init__(self, secrets, *, model=None, timeout_seconds=90.0):
