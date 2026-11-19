@@ -261,7 +261,11 @@ class AmoraCore:
             if mistral_cognition.descriptor.available:
                 cognition.register_provider(mistral_cognition)
 
-        groq_cognition = GroqCognitiveProvider(secrets)
+        # Qwen is the explicitly agreed social second route for Numes.
+        # The separate Groq memory model remains GPT-OSS (see below).
+        groq_cognition = GroqCognitiveProvider(
+            secrets, model="qwen/qwen3.8-27b" if social_primary == "numes" else None,
+        )
         if groq_cognition.descriptor.available:
             memory_model = os.getenv("AMORA_GROQ_MEMORY_MODEL", "").strip()
             if social_primary == "numes":
