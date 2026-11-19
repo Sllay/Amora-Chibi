@@ -1,0 +1,26 @@
+name: Amora Aiven private-memory write image — anonymous pull check
+on:
+  push:
+    branches:
+      - ops/aiven-real-memory-write-image-20261119
+    paths:
+      - .github/workflows/amora-aiven-memory-write-public-pull.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Test anonymous GitHub Container Registry pull
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          image="ghcr.io/sllay/amora-chibi-aiven-core@sha256:a66c4d24fc946b7c60cef10330832364fa7c49bc9b03e9f0487c5138f9a9f763"
+          docker pull "$image" >/dev/null
+          test "$(docker inspect --format '{{.Config.User}}' "$image")" = '10001:10001'
+          docker run --rm --network none "$image" python -c 'from amora.storage.aiven_memory_write_probe import main; assert callable(main)'
+          echo "AIVEN_MEMORY_WRITE_ANONYMOUS_PULL_PASS true"
