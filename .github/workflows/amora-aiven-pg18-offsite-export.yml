@@ -87,7 +87,15 @@ jobs:
           }
           markers["connection_closed"]="server closed the connection" in raw or "connection unexpectedly" in raw
           markers["fatal_signal"]="signal" in raw and "terminat" in raw
+          import re
+          errors=re.findall(r"error:\\s*(.{0,240})",raw)
+          joined=" ".join(errors)
+          for kind in ("schema","function","type","relation","column","operator","collation","extension","index","sequence","domain","table","view"):
+              markers["missing_"+kind]=any(re.search(r"\\b"+kind+r"\\b.{0,150}does not exist",line) for line in errors)
+          # Names/values never leave the runner, even when the error points
+          # to a foreign relation or a memory row with private text.
           print("PG_RESTORE_DIAGNOSTIC " + " ".join(k+"="+str(v).lower() for k,v in markers.items()))
+          print("PG_RESTORE_ERROR_COUNT " + str(len(errors)))
           PY
             docker inspect --format 'PG_RESTORE_CONTAINER state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' amora-aiven-pg18-restore || true
             docker logs amora-aiven-pg18-restore > /tmp/amora-pg18-service-private.log 2>&1 || true
