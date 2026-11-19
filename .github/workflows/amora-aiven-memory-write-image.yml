@@ -23,23 +23,23 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: 5b6ea4c7dc6ca0dc5cdc3423c29c62094c9489e9
+          ref: 69a4cb7b23c6439dc0e9e9019f52e69031a65f3f
           persist-credentials: false
       - name: Build a future Core image without keys, private data or Aiven connectivity
         shell: bash
         run: |
           set -euo pipefail
-          image="ghcr.io/sllay/amora-chibi-aiven-core:pg18-memory-write-5b6ea4c"
+          image="ghcr.io/sllay/amora-chibi-aiven-core:pg18-memory-write-69a4cb7"
           docker build -f Dockerfile \
             --label "org.opencontainers.image.source=https://github.com/Sllay/Amora-Chibi" \
-            --label "org.opencontainers.image.revision=5b6ea4c7dc6ca0dc5cdc3423c29c62094c9489e9" \
+            --label "org.opencontainers.image.revision=69a4cb7b23c6439dc0e9e9019f52e69031a65f3f" \
             -t "$image" .
           test "$(docker inspect --format '{{.Config.User}}' "$image")" = '10001:10001'
       - name: Prove missing operator confirmation blocks before network
         shell: bash
         run: |
           set -euo pipefail
-          image="ghcr.io/sllay/amora-chibi-aiven-core:pg18-memory-write-5b6ea4c"
+          image="ghcr.io/sllay/amora-chibi-aiven-core:pg18-memory-write-69a4cb7"
           docker run --rm --network none "$image" python -c 'from amora.storage.aiven_memory_write_probe import main; assert callable(main)'
           set +e
           output="$(docker run --rm --network none "$image" python -m amora.storage.aiven_memory_write_probe 2>&1)"
@@ -54,7 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
-          docker push ghcr.io/sllay/amora-chibi-aiven-core:pg18-memory-write-5b6ea4c
+          docker push ghcr.io/sllay/amora-chibi-aiven-core:pg18-memory-write-69a4cb7
           docker logout ghcr.io >/dev/null
           echo 'AIVEN_MEMORY_WRITE_IMAGE_NO_PRIVATE_CONTENT true'
           echo 'AIVEN_MEMORY_WRITE_NORTHFLANK_DEPLOYED false'
