@@ -27,3 +27,5 @@ jobs:
         env:
           NF_BACKUP_API_TOKEN: ${{ secrets.NF_BACKUP_API_TOKEN }}
         run: python tools/ops/aiven_staging_readonly_ci.py
+
+# Endpoint-only diagnostic without secret or raw log output.
