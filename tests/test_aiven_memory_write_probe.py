@@ -52,7 +52,7 @@ def test_fictional_private_memory_survives_reconnect_and_is_archived(
         manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
         try:
             prepare_disposable_core_v18(manager)
-            backend = synthetic_core_backend(raw, max_connections=6)
+            backend = synthetic_core_backend(raw, max_connections=16)
             core = AmoraCore.bootstrap(
                 clock=SimulatedClock(now), storage=backend,
             )
