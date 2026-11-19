@@ -216,7 +216,7 @@ class NumesStreamDiagnostics:
             if value is not None:
                 m[name] = value
         basis = usage.get("token_count_basis")
-        if basis in {"provider_native", "gateway_estimate"}:
+        if isinstance(basis, str) and basis in {"provider_native", "gateway_estimate"}:
             m["token_count_basis"] = basis
         cost = usage.get("cost")
         if type(cost) in (float, int) and math.isfinite(cost) and cost >= 0:
