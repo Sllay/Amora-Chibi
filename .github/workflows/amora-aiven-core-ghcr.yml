@@ -1,0 +1,87 @@
+name: Amora — isolated Aiven PG18 Core image (no deploy)
+
+on:
+  push:
+    branches:
+      - ops/aiven-core-image-20261119
+    paths:
+      - .github/workflows/amora-aiven-core-ghcr.yml
+      - docs/engineering/reviews/AIVEN_CORE_IMAGE_OPERATOR.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: amora-aiven-core-20261119
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[publish-aiven-core]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout immutable Core staging candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: 2bb2e37ecadcdd6f65ad0595fe324e643e313dd7
+          persist-credentials: false
+
+      - name: Build production-shaped Core image with reviewed PostgreSQL driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='ghcr.io/sllay/amora-chibi-aiven-core:pg18-2bb2e37'
+          docker build \
+            --label 'org.opencontainers.image.source=https://github.com/Sllay/Amora-Chibi' \
+            --label 'org.opencontainers.image.revision=2bb2e37ecadcdd6f65ad0595fe324e643e313dd7' \
+            --file Dockerfile -t "$image" .
+          test "$(docker inspect --format '{{.Config.User}}' "$image")" = '10001:10001'
+
+      - name: Prove packaged psycopg and staging factory are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='ghcr.io/sllay/amora-chibi-aiven-core:pg18-2bb2e37'
+          docker run --rm --network none "$image" python -c '
+          import psycopg
+          from amora.storage.aiven_staging_core_backend import staging_core_backend_from_environment
+          from amora.storage.backend import backend_from_environment
+          from amora.app import AmoraCore
+          assert callable(staging_core_backend_from_environment)
+          assert callable(AmoraCore.bootstrap)
+          assert psycopg.__version__.startswith("3.3.")
+          '
+
+      - name: Prove no credentials means no staging startup and no fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='ghcr.io/sllay/amora-chibi-aiven-core:pg18-2bb2e37'
+          docker run --rm --network none \
+            -e AMORA_STORAGE_BACKEND=postgres-staging "$image" \
+            python -c '
+          from amora.storage.backend import backend_from_environment
+          from amora.storage.postgres_runtime_connection import PostgresRuntimeError
+          try:
+              backend_from_environment()
+          except PostgresRuntimeError as exc:
+              assert str(exc) == "PG_STAGING_OPERATOR_APPROVAL_REQUIRED"
+          else:
+              raise AssertionError("Staging without explicit approval must fail")
+          '
+
+      - name: Publish image without touching Northflank
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          docker push ghcr.io/sllay/amora-chibi-aiven-core:pg18-2bb2e37
+          docker logout ghcr.io >/dev/null
+          echo 'AIVEN_CORE_IMAGE_CONTAINS_PRIVATE_MEMORIES false'
+          echo 'AIVEN_CORE_IMAGE_NORTHFLANK_DEPLOYED false'
+          echo 'AIVEN_CORE_IMAGE_PRODUCTION_CUTOVER false'
