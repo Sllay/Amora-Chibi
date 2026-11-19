@@ -60,3 +60,5 @@ jobs:
         if: always()
         shell: bash
         run: rm -rf "${{ runner.temp }}/amora-rehearsal-artifact"
+
+# Reteste com checkpoints sanitizados por etapa.
