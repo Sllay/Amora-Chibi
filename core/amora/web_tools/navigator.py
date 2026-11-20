@@ -16,6 +16,7 @@ from html.parser import HTMLParser
 import http.client
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
@@ -34,6 +35,7 @@ MAX_SOURCE_TEXT = 2400
 MAX_HOPS = 3
 ALLOWED_PORTS = frozenset({80, 443, 8080, 8443})
 USER_AGENT = "AmoraWeb/1.0 (read-only source retrieval; no automated login)"
+_LOG = logging.getLogger("amora.web")
 
 _LINK_RE = re.compile(r"https?://[^\s<>\"'\x60]+", re.IGNORECASE)
 _SCREENSHOT_FOLLOW_RE = re.compile(
@@ -815,6 +817,12 @@ class WebNavigator:
         )
         if contextual_search:
             search_topic = self.current_delivery(session_id).get("focus", "")
+            # Safe diagnostic event only: never log the subject, URL,
+            # Discord conversation, user content or session identifier.
+            _LOG.info(
+                "WEB_SEARCH_CONTEXT_RESOLVED" if search_topic
+                else "WEB_SEARCH_CONTEXT_MISSING"
+            )
         # Navigating to a new URL/search invalidates prior attachment retries.
         self.last_capture_requests.pop(session_id, None)
         # A failed NEW navigation must never use a previous turn's links.
