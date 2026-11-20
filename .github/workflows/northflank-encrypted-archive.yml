@@ -4,10 +4,8 @@ on:
   schedule:
     - cron: '17 6 * * *'
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ops/logs/collect.request
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
@@ -18,15 +16,22 @@ concurrency:
 
 jobs:
   archive:
+    # The public issue trigger may only be used by the repository owner.
+    # The body is never interpolated into a shell, and this does not run on PR.
     if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name != 'push' ||
-       contains(github.event.head_commit.message, '[logs-collect]'))
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.number == 342 &&
+       github.event.comment.user.login == 'Sllay' &&
+       github.event.comment.body == '/amora logs collect')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
+          fetch-depth: 0
           persist-credentials: true
       - name: Read-only Northflank fetch, zip and encrypt inside ephemeral runner
         shell: bash
@@ -45,7 +50,7 @@ jobs:
           scratch="$(mktemp -d "$RUNNER_TEMP/northflank-archive.XXXXXXXX")"
           trap 'rm -rf -- "$scratch"' EXIT
           # No stdout/stderr log contents, unredacted files or artifacts leave
-          # the runner. A partial collection fails closed instead of publishing.
+          # the runner. A failed total collection preserves the older archive.
           python tools/ops/northflank_log_collector.py --output "$scratch/collected"
           python tools/ops/northflank_log_archive.py pack \
             --input "$scratch/collected" --output "$scratch/archive.zip"
@@ -53,17 +58,19 @@ jobs:
             --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
             --symmetric --cipher-algo AES256 --s2k-mode 3 \
             --s2k-digest-algo SHA512 --s2k-count 65011712 \
-            --output "$scratch/latest.zip.gpg" "$scratch/archive.zip"
-          mkdir -p ops/logs
-          install -m 600 "$scratch/latest.zip.gpg" ops/logs/northflank-latest.zip.gpg
-      - name: Commit ciphertext only
+            --output "$RUNNER_TEMP/northflank-latest.zip.gpg" "$scratch/archive.zip"
+      - name: Commit ciphertext only to isolated archive branch (never main)
         shell: bash
         run: |
           set -euo pipefail
+          git fetch origin refs/heads/ops/northflank-log-archive:refs/remotes/origin/ops/northflank-log-archive
+          git switch --detach refs/remotes/origin/ops/northflank-log-archive
+          mkdir -p ops/logs
+          install -m 600 "$RUNNER_TEMP/northflank-latest.zip.gpg" ops/logs/northflank-latest.zip.gpg
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -f -- ops/logs/northflank-latest.zip.gpg
           if ! git diff --cached --quiet; then
             git commit -m 'chore(ops): rotate encrypted Northflank six-run snapshot [skip ci]'
-            git push origin HEAD:main
+            git push origin HEAD:ops/northflank-log-archive
           fi
