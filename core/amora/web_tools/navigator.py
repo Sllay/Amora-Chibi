@@ -356,7 +356,8 @@ def _clean_search_query(raw: str, match: re.Match[str]) -> str:
         "", subject,
     )
     subject = re.sub(
-        r"(?i)^\s*(?:(?:mais\s+)?detalhes|"
+        r"(?i)^\s*(?:(?:mais\s+)?detalhes(?:\s+sobre\s+(?:isso|isto|"
+        r"esse\s+site|essa\s+p[aá]gina))?|"
         r"(?:mais\s+)?(?:sobre\s+)?(?:isso|isto|esse\s+site|"
         r"essa\s+p[aá]gina|o\s+mesmo\s+assunto))"
         r"(?:\s+de\s+novo)?\s*$",
