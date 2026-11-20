@@ -74,3 +74,10 @@ jobs:
             git commit -m 'chore(ops): rotate encrypted Northflank six-run snapshot [skip ci]'
             git push origin HEAD:ops/northflank-log-archive
           fi
+
+  diagnose:
+    # A reusable workflow is guaranteed to run after the encrypted archive
+    # was successfully pushed, without depending on workflow_run event delivery.
+    needs: archive
+    uses: ./.github/workflows/northflank-encrypted-diagnosis.yml
+    secrets: inherit
