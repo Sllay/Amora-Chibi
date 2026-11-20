@@ -8,6 +8,8 @@ from __future__ import annotations
 from .postgres_runtime_connection import ReviewedStatement
 
 HISTORY = "PG_COGNITION_SCOPED_HISTORY"
+OWNER_DAY_INPUTS = "PG_COGNITION_OWNER_DAY_INPUTS"
+OWNER_DAY_REPLIES = "PG_COGNITION_OWNER_DAY_REPLIES"
 LATEST_USAGE = "PG_COGNITION_LATEST_USAGE"
 MERGE_METADATA = "PG_COGNITION_MERGE_MESSAGE_METADATA"
 
@@ -68,6 +70,46 @@ def cognition_statements() -> dict[str,ReviewedStatement]:
           )
         ORDER BY cm.started_at DESC LIMIT %s
     """,8,500)
+    # Historical owner recall: source scope and revision invalidations are
+    # enforced *inside* the reviewed PG SQL, before returning any private text.
+    # Use timestamptz casts and JSONB, never an unreviewed SQLite expression.
+    add(OWNER_DAY_INPUTS, """
+        SELECT m.* FROM amora_pg_v18_lab.conversation_messages m
+        WHERE m.speaker_id=%s AND m.addressee_id='ENTITY_AMORA'
+          AND m.dedupe_key='cognitive-input:' || m.turn_id
+          AND m.session_id IS NOT NULL AND m.status='received'
+          AND m.privacy_scope IN ('PERSONAL','PRIVATE')
+          AND m.metadata_json::jsonb ->> 'surface'='platform_messaging'
+          AND m.metadata_json::jsonb ->> 'platform'='discord'
+          AND m.metadata_json::jsonb ->> 'channel_type'='dm'
+          AND COALESCE(m.metadata_json::jsonb ->> 'test_mode','0') NOT IN ('1','true')
+          AND COALESCE(m.metadata_json::jsonb ->> 'observed_only','0') NOT IN ('1','true')
+          AND NOT EXISTS (
+              SELECT 1 FROM amora_pg_v18_lab.memory_reflection_invalidations x
+              WHERE x.session_id=m.session_id
+                AND x.native_message_hash=m.metadata_json::jsonb ->> 'native_message_id_hash'
+                AND x.invalidated_through>=COALESCE(
+                    (m.metadata_json::jsonb ->> 'transport_revision')::bigint,1)
+          )
+          AND (
+            (m.started_at::timestamptz >= %s::timestamptz
+             AND m.started_at::timestamptz < %s::timestamptz)
+            OR (NULLIF(m.metadata_json::jsonb ->> 'platform_sent_at','')::timestamptz >= %s::timestamptz
+                AND NULLIF(m.metadata_json::jsonb ->> 'platform_sent_at','')::timestamptz < %s::timestamptz)
+          )
+        ORDER BY m.started_at::timestamptz,m.id LIMIT %s
+    """,6,513)
+    # UUIDs are read from validated internal turn identifiers and encoded into
+    # JSON. A bound jsonb array is a single reviewed query, never dynamic SQL.
+    add(OWNER_DAY_REPLIES, """
+        SELECT account_scope,conversation_id,text,metadata_json
+        FROM amora_pg_v18_lab.messaging_outbound_queue
+        WHERE platform='discord' AND target_entity_id=%s AND status='sent'
+          AND metadata_json::jsonb ->> 'cognitive_turn_id' IN (
+              SELECT jsonb_array_elements_text(%s::jsonb))
+        ORDER BY created_at,id
+    """,2,64)
+
     add("SELECT 1 FROM memory_reflection_invalidations WHERE session_id=? AND native_message_hash=? AND invalidated_through>=?",
         """SELECT 1 FROM amora_pg_v18_lab.memory_reflection_invalidations
         WHERE session_id=%s AND native_message_hash=%s
