@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { collectDiscordIncomingImage, IncomingImageError, MAX_INBOUND_IMAGE_BYTES, MAX_NATIVE_IMAGE_BYTES } from '../workers/discord/incoming-image.mjs';
-import { ImageTransformError, transcodeOversizedImage } from '../workers/discord/incoming-image-transform.mjs';
+import { ImageTransformError, transcodeOversizedImage, compositeTransparentImage } from '../workers/discord/incoming-image-transform.mjs';
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -217,4 +217,92 @@ test('image-only overlimit still passes an explicit error code to authenticated 
   } finally {
     globalThis.fetch = oldFetch;
   }
+});
+
+
+// The PNG header marks an RGBA stream; a spy decoder replaces the native
+// libvips stage in unit tests. The container smoke separately verifies bytes.
+const alphaPng = () => {
+  const bytes = Buffer.alloc(35, 0);
+  PNG.subarray(0, 8).copy(bytes, 0);
+  bytes.writeUInt32BE(13, 8);
+  bytes.write('IHDR', 12, 4, 'ascii');
+  bytes[25] = 6; // color type RGBA
+  return bytes;
+};
+
+test('transparent artwork uses opaque preview, never original alpha URL', async () => {
+  const original = alphaPng();
+  const uploaded = message();
+  uploaded.attachments[0].size = original.length;
+  let composites = 0;
+  const prepared = await collectDiscordIncomingImage(uploaded, {
+    fetchImpl: async () => response(original),
+    compositeImpl: async (bytes, mime) => {
+      composites += 1;
+      assert.deepEqual(bytes, original);
+      assert.equal(mime, 'image/png');
+      return { mime: 'image/webp', bytes: WEBP };
+    },
+  });
+  assert.equal(composites, 1);
+  assert.equal(prepared.content_mime, 'image/webp');
+  assert.deepEqual(Buffer.from(prepared.content_base64, 'base64'), WEBP);
+  assert.equal(prepared.source_url, undefined);
+});
+
+test('transparent oversized original URL is not leaked to image model', async () => {
+  const original = Buffer.alloc(MAX_INBOUND_IMAGE_BYTES + 50, 11);
+  alphaPng().copy(original);
+  const uploaded = message();
+  uploaded.attachments[0].size = original.length;
+  const prepared = await collectDiscordIncomingImage(uploaded, {
+    fetchImpl: async () => response(original),
+    convertImpl: async () => ({ bytes: WEBP, mime: 'image/webp' }),
+    compositeImpl: async () => ({ bytes: WEBP, mime: 'image/webp' }),
+  });
+  assert.equal(prepared.source_url, undefined);
+});
+
+test('failed transparent preview retains the accompanying caption in Core', async () => {
+  const savedFetch = globalThis.fetch;
+  const recorded = [];
+  globalThis.fetch = async () => response(alphaPng());
+  try {
+    const worker = new DiscordWorker({
+      token: 'test-token', remoteProcessingAllowed: true,
+      core: { inbound: async (body) => {
+        recorded.push(body);
+        return { decision: { action: 'context_only' }, outbound: [] };
+      } },
+    });
+    worker.botUserId = '555555555555555555';
+    worker.referencedAuthorId = async () => null;
+    worker.beginTypingProgress = () => () => {};
+    const textAndImage = message();
+    textAndImage.content = 'Amora, esse é o coelho do nosso mapa?';
+    textAndImage.attachments[0].size = alphaPng().length;
+    await worker.deliverNormalized(textAndImage);
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0].text, textAndImage.content);
+    assert.equal(recorded[0].incoming_image, undefined);
+    assert.match(recorded[0].incoming_image_status, /^IMAGE_TRANSFORM_/);
+  } finally { globalThis.fetch = savedFetch; }
+});
+
+test('RGB flatten stage is bounded and erases disposable image files', async () => {
+  const paths = [];
+  const result = await compositeTransparentImage(alphaPng(), 'image/png', {
+    run: async (args) => {
+      assert.deepEqual(args.slice(0, 1), ['flatten']);
+      assert.equal(args[3], '--background');
+      assert.equal(args[4], '230');
+      paths.push(args[1]);
+      await writeFile(args[2].split('[')[0], WEBP);
+    },
+  });
+  assert.equal(result.mime, 'image/webp');
+  assert.deepEqual(result.bytes, WEBP);
+  assert.ok(paths.length === 1);
+  assert.equal(existsSync(dirname(paths[0])), false);
 });
