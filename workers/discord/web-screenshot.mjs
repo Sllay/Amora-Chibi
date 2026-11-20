@@ -34,10 +34,13 @@ function publicScreenshotCdn(value) {
   try {
     const u = new URL(value);
     const host = u.hostname.toLowerCase();
+    // The official Microlink API also uses this specific S3 bucket for
+    // screenshots. Never allow generic S3 endpoints or arbitrary buckets.
+    const trustedAssetHost = /^(?:cdn|[a-z]{3}|[a-z]{3}\d)\.microlink\.io$/.test(host)
+      || host === 'microlink-cdn.s3.amazonaws.com';
     return (
       u.protocol === 'https:' && !u.username && !u.password
-      && !u.port && /^(?:cdn|[a-z]{3}|[a-z]{3}\d)\.microlink\.io$/.test(host)
-      && u.toString().length <= 2500
+      && !u.port && trustedAssetHost && u.toString().length <= 2500
     ) ? u.toString() : null;
   } catch {
     return null;

@@ -248,3 +248,42 @@ test('Microlink regional CDN host iad.microlink.io is supported', async () => {
   assert.ok(photo);
   assert.equal(requested[1], regional);
 });
+
+
+test('Microlink official S3 screenshot bucket is accepted without permitting generic S3', async () => {
+  // Official Microlink docs show screenshot assets at this exact bucket.
+  const official = 'https://microlink-cdn.s3.amazonaws.com/s/sample/screenshot.jpg';
+  const calls = [];
+  const capture = new WebScreenshotService({
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return calls.length === 1
+        ? new Response(JSON.stringify({
+          status: 'success', data: { screenshot: { url: official } },
+        }), { status: 200 })
+        : imageResponse();
+    },
+  });
+  assert.ok(await capture.capture('https://godotengine.org/'));
+  assert.equal(calls[1], official);
+
+  for (const untrusted of [
+    'https://other-bucket.s3.amazonaws.com/s/screenshot.jpg',
+    'https://s3.amazonaws.com/microlink-cdn/s/screenshot.jpg',
+    'https://microlink-cdn.s3.amazonaws.com.attacker.test/s/screenshot.jpg',
+    'http://microlink-cdn.s3.amazonaws.com/s/screenshot.jpg',
+    'https://user:password@microlink-cdn.s3.amazonaws.com/s/screenshot.jpg',
+  ]) {
+    const seen = [];
+    const renderer = new WebScreenshotService({
+      fetchImpl: async (url) => {
+        seen.push(url);
+        return new Response(JSON.stringify({
+          status: 'success', data: { screenshot: { url: untrusted } },
+        }), { status: 200 });
+      },
+    });
+    assert.equal(await renderer.capture('https://godotengine.org/'), null, untrusted);
+    assert.equal(seen.length, 1, 'Must not follow untrusted CDN URL');
+  }
+});
