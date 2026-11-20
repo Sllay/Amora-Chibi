@@ -232,3 +232,19 @@ test('Discord image upload 400 degrades to the same verified links as JSON', asy
   assert.match(calls[1].body.content, /godotengine\.org/);
   assert.equal(calls[1].body.nonce, JSON.parse(calls[0].multipart.get('payload_json')).nonce);
 });
+
+test('Microlink regional CDN host iad.microlink.io is supported', async () => {
+  const regional = 'https://iad.microlink.io/example-screenshot.jpg';
+  const requested = [];
+  const service = new WebScreenshotService({
+    fetchImpl: async (url) => {
+      requested.push(url);
+      return requested.length === 1
+        ? new Response(JSON.stringify({ status: 'success', data: { screenshot: { url: regional } } }), { status: 200 })
+        : imageResponse();
+    },
+  });
+  const photo = await service.capture('https://godotengine.org/');
+  assert.ok(photo);
+  assert.equal(requested[1], regional);
+});
