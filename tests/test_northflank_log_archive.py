@@ -133,6 +133,18 @@ class NorthflankLogArchiveTests(unittest.TestCase):
         assert "vars.NORTHFLANK_TEAM_ID || 'mejorberrys-team'" in workflow
         assert "secrets.NORTHFLANK_API_TOKEN" not in workflow
 
+    def test_collector_chains_reusable_diagnosis_without_event_dependency(self):
+        root = Path(__file__).resolve().parents[1] / ".github/workflows"
+        archive = (root / "northflank-encrypted-archive.yml").read_text()
+        diagnosis = (root / "northflank-encrypted-diagnosis.yml").read_text()
+        self.assertIn("needs: archive", archive)
+        self.assertIn("uses: ./.github/workflows/northflank-encrypted-diagnosis.yml", archive)
+        self.assertIn("archive_fresh: true", archive)
+        self.assertIn("secrets: inherit", archive)
+        self.assertIn("workflow_call:", diagnosis)
+        self.assertIn("inputs.archive_fresh == true", diagnosis)
+        self.assertNotIn("github.event.workflow_run", diagnosis)
+
     def test_failure_report_is_safe_when_decryptor_exits_early(self):
         workflow = (
             Path(__file__).resolve().parents[1]
