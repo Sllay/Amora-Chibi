@@ -153,7 +153,7 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
         if is_memory_only(context):
             payload["messages"] = [{"role": "system", "content": memory_instructions()},
                                    {"role": "user", "content": memory_input(context)}]
-            payload["max_completion_tokens"] = 1200
+            payload["max_completion_tokens"] = 1800 if len(context.user_text) >= 650 else 1200
             if self.model == "qwen/qwen3.8-27b":
                 payload["reasoning_effort"] = "none"
             from .context_budget import ensure_payload
