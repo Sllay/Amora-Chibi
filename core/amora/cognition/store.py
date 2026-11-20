@@ -230,17 +230,16 @@ class CognitiveStore:
         return rows
 
     def _owner_day_outbound_rows(self, owner_id, turn_ids):
-            placeholders = ",".join("?" for _ in turn_ids)
-            with trace_lock(self._lock):
-                reply_rows = self._conn.execute(
-                    "SELECT account_scope,conversation_id,text,metadata_json "
-                    "FROM messaging_outbound_queue "
-                    "WHERE platform='discord' AND target_entity_id=? AND status='sent' "
-                    "AND json_extract(metadata_json,'$.cognitive_turn_id') IN (" + placeholders + ") "
-                    "ORDER BY created_at,id",
-                    (owner_id, *turn_ids),
-                ).fetchall()
-
+        placeholders = ",".join("?" for _ in turn_ids)
+        with trace_lock(self._lock):
+            reply_rows = self._conn.execute(
+                "SELECT account_scope,conversation_id,text,metadata_json "
+                "FROM messaging_outbound_queue "
+                "WHERE platform='discord' AND target_entity_id=? AND status='sent' "
+                "AND json_extract(metadata_json,'$.cognitive_turn_id') IN (" + placeholders + ") "
+                "ORDER BY created_at,id",
+                (owner_id, *turn_ids),
+            ).fetchall()
         return reply_rows
 
     def source_invalidated(self, session_id, native_message_hash, revision):
