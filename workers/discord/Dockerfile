@@ -5,8 +5,8 @@ WORKDIR /opt/amora
 
 # libvips provides bounded native artwork resizing without bringing an npm
 # image-decoder dependency into the long-running Discord worker.
-RUN apk add --no-cache vips-tools && \
-    command -v vipsthumbnail && \
+RUN apk add --no-cache vips-tools ffmpeg && \
+    command -v vipsthumbnail && command -v ffmpeg && \
     addgroup -g 10001 amora && adduser -D -u 10001 -G amora amora
 
 COPY --chown=10001:10001 workers/common ./workers/common
