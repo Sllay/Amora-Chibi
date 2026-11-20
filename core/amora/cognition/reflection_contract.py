@@ -28,6 +28,11 @@ class MemoryExtractionItem(BaseModel):
     # Only an explicit instruction/preference or correction about Amora's
     # interaction style; it never carries authority over system policy.
     behavioral_signal: Literal["none", "speech_preference", "behavioral_correction"] = "none"
+    behavioral_topic: Literal[
+        "none", "question_repetition", "response_length", "initiative_frequency",
+        "address_style", "humor", "sticker_usage", "other"
+    ] = "none"
+    behavioral_scope: Literal["general", "contextual"] = "contextual"
     content: str = Field(min_length=1, max_length=1400)
     summary: str = Field(max_length=450)
     confidence: float = Field(ge=0, le=1)
@@ -64,6 +69,11 @@ def memory_schema() -> dict:
         "behavioral_signal": {"type": "string", "enum": [
             "none", "speech_preference", "behavioral_correction"
         ]},
+        "behavioral_topic": {"type": "string", "enum": [
+            "none", "question_repetition", "response_length", "initiative_frequency",
+            "address_style", "humor", "sticker_usage", "other"
+        ]},
+        "behavioral_scope": {"type": "string", "enum": ["general", "contextual"]},
         "content": {"type": "string", "minLength": 1, "maxLength": 1400},
         "summary": {"type": "string", "maxLength": 450},
         **{name: {"type": "number", "minimum": 0, "maximum": 1} for name in _SCORE_FIELDS},
@@ -90,7 +100,13 @@ def memory_instructions(*, repair: bool = False) -> str:
         "Para cada candidato defina behavioral_signal: none por padrão; speech_preference "
         "SOMENTE quando o usuário declarar expressamente como prefere que Amora converse, "
         "e behavioral_correction SOMENTE quando ele corrigir explicitamente como Amora "
-        "respondeu ou agiu. Uma reclamação vaga não define uma regra permanente; "
+        "respondeu ou agiu. Quando houver sinal, behavioral_topic deve ser: "
+        "question_repetition (repetir perguntas), response_length (tamanho da resposta), "
+        "initiative_frequency (frequência de contato), address_style (tratamento/apelidos), "
+        "humor, sticker_usage ou other (tema não listado); use none se não houver sinal. "
+        "behavioral_scope deve ser general somente se o usuário indicar uma regra "
+        "estável que se aplica de modo geral; use contextual para um caso específico. "
+        "Uma reclamação vaga não define uma regra permanente; "
         "não crie ordens não ditas. Quando marcado, kind deve ser semantic e a memória "
         "deve descrever somente a preferência/correção concreta relatada, incluindo "
         "contexto e limites, sem generalizar uma exceção para toda conversa. "
@@ -99,7 +115,8 @@ def memory_instructions(*, repair: bool = False) -> str:
         "Preserve nomes de projetos, datas, quantidades, metas, decisões, limitações, "
         "mudanças de planos e estado atual sem exagerar nem simplificar demais. "
         "Nunca confunda algo planejado com algo concluído. "
-        "Todas as propostas exigem kind, behavioral_signal, content, summary e todos os nove escores "
+        "Todas as propostas exigem kind, behavioral_signal, behavioral_topic, behavioral_scope, "
+        "content, summary e todos os nove escores "
         "numéricos de zero a um. Use a língua da mensagem; seja conciso. "
         "kind: episodic, semantic ou relational. confidence mede fidelidade ao relato, "
         "importance relevância futura, novelty novidade do relato, emotional_weight carga "
