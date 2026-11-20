@@ -762,6 +762,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     for item in (context.web_research.get("sources") or [])[:2]
                     if item.get("status") == "opened"
                 ] if context is not None and context.web_research else [],
+                "web_search_references": [
+                    str(item.get("url") or "") for item in
+                    (context.web_research.get("references") or [])[:3]
+                ] if context is not None and context.web_research
+                and context.web_research.get("action") == "search" else [],
             "dialogue_plan_semantically_enforced": "RESPONSE_SEMANTIC_FILTER_DISABLED" not in validated.reason_codes,
                 "candidate_index": usage.get("candidate_index"),
                 "cues": [cue.value for cue in speech_plan.cues],
