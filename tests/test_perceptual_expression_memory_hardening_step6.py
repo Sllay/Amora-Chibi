@@ -200,3 +200,51 @@ def test_stale_record_is_not_autonomously_selected_until_fresh_enrichment(tmp_pa
         assert decision.expressions == []
     finally:
         core.close()
+
+
+def test_received_sticker_is_known_but_never_sendable_without_guild_catalog(tmp_path, monkeypatch):
+    core = _core(tmp_path, monkeypatch)
+    try:
+        sticker = _sticker()
+        message = _message(sticker, message_id="no-catalog", inbound=True).model_copy(
+            update={"available_expressions": []})
+        learned = core.messaging.expression_memory.observe_relevant(message, _decision())
+        assert learned.expressions[0].known_to_amora
+        decision = core.messaging.response_modality.select(learned, "hehe, papis")
+        assert decision.expressions == []
+        assert decision.modality == ResponseModality.TEXT
+
+        # A received sticker cannot cause a DM to send a guild asset, even
+        # if a malformed envelope accidentally contains guild catalog data.
+        fake_dm = learned.model_copy(update={
+            "channel_type": ChannelType.DM,
+            "guild_or_group_id": None,
+            "available_expressions": [sticker.model_copy(update={
+                "known_to_amora": True, "semantic_profile": _profile(),
+            })],
+        })
+        assert core.messaging.response_modality.select(fake_dm, "hehe papis").expressions == []
+    finally:
+        core.close()
+
+
+def test_sendable_sticker_requires_matching_current_guild_scope(tmp_path, monkeypatch):
+    core = _core(tmp_path, monkeypatch)
+    try:
+        sticker = _sticker().model_copy(update={
+            "known_to_amora": True, "semantic_profile": _profile(),
+        })
+        message = _message(sticker, message_id="catalog", inbound=False)
+        decision = core.messaging.response_modality.select(message, "hehe papis")
+        assert decision.expressions and decision.expressions[0].native_id == sticker.native_id
+
+        wrong_scope = message.model_copy(update={
+            "available_expressions": [sticker.model_copy(update={"guild_or_group_id": "other-guild"})],
+        })
+        assert core.messaging.response_modality.select(wrong_scope, "hehe papis").expressions == []
+        unknown_scope = message.model_copy(update={
+            "available_expressions": [sticker.model_copy(update={"guild_or_group_id": None})],
+        })
+        assert core.messaging.response_modality.select(unknown_scope, "hehe papis").expressions == []
+    finally:
+        core.close()
