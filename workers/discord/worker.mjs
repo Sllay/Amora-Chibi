@@ -836,11 +836,13 @@ export class DiscordWorker {
     if (!chunks.length) throw new Error('EMPTY_OUTBOUND');
     // The Core minted this flag after verified owner DM consent. A user/LLM
     // cannot smuggle screenshot destinations into the worker's text path.
-    const screenshotRequested = item?.metadata?.web_capture_requested === true
-      && item?.platform === 'discord';
-    const authorizedScreenshot = screenshotRequested
-      && item?.metadata?.web_capture_owner_verified === true
+    // Backward-compatible with a previous Core during independent deploys:
+    // its verified screenshot source already implies an explicit owner request.
+    const verifiedSource = item?.metadata?.web_capture_owner_verified === true
       && typeof item?.metadata?.web_capture_source === 'string';
+    const screenshotRequested = item?.platform === 'discord'
+      && (item?.metadata?.web_capture_requested === true || verifiedSource);
+    const authorizedScreenshot = screenshotRequested && verifiedSource;
     const screenshot = authorizedScreenshot
       ? await this.webScreenshots.capture(item.metadata.web_capture_source)
       : null;
