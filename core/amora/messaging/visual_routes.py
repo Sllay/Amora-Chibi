@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .groq_vision import GroqQwenVisionAnalyzer
 from .models import MessagingPlatform
@@ -23,6 +25,14 @@ class VisualAssetKey(BaseModel):
 class VisualContentRequest(VisualAssetKey):
     content_mime: str = Field(min_length=3, max_length=100)
     content_base64: str = Field(min_length=4, max_length=1_398_104)
+    temporal_kind: Literal["gif", "apng"] | None = None
+    temporal_storyboard_base64: str | None = Field(default=None, min_length=4, max_length=1_398_104)
+
+    @model_validator(mode="after")
+    def temporal_pair(self):
+        if (self.temporal_kind is None) != (self.temporal_storyboard_base64 is None):
+            raise ValueError("temporal kind and storyboard must be supplied together")
+        return self
 
 
 class VisualDeferRequest(VisualAssetKey):
@@ -99,6 +109,8 @@ def register_visual_enrichment_routes(app, core, require_auth) -> None:
                 claim_token=payload.claim_token,
                 content_mime=payload.content_mime,
                 content_base64=payload.content_base64,
+                temporal_kind=payload.temporal_kind,
+                temporal_storyboard_base64=payload.temporal_storyboard_base64,
             )
         except VisualEnrichmentError as exc:
             if exc.code in {
@@ -117,6 +129,7 @@ def register_visual_enrichment_routes(app, core, require_auth) -> None:
                 "INVALID_VISUAL_SIZE",
                 "INVALID_VISUAL_CONTENT",
                 "UNSUPPORTED_VISUAL_MIME",
+                "INVALID_TEMPORAL_STORYBOARD",
             }:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
