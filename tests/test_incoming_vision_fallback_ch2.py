@@ -223,3 +223,34 @@ async def test_fast_transient_retry_obeys_remaining_visual_budget(monkeypatch):
         await cascade.analyze(payload())
     assert error.value.code == "INCOMING_VISION_TRANSPORT_FAILED"
     assert groq.calls == 1  # less than 5 seconds left: no retry
+
+
+
+@pytest.mark.asyncio
+async def test_cdn_failure_retries_inline_verified_pixels_in_same_groq_provider(monkeypatch):
+    monkeypatch.delenv("AMORA_VISION_NVIDIA_FALLBACK", raising=False)
+    class FlakySource(MockVisual):
+        def __init__(self):
+            super().__init__()
+            self.urls = []
+        async def analyze(self, image, user_text):
+            self.calls += 1
+            self.urls.append(image.source_url)
+            if self.calls == 1:
+                raise GroqVisionError(
+                    "INCOMING_VISION_EMPTY_RESPONSE", "provider gave no visual observation",
+                )
+            assert image.source_url is None
+            assert image.content_base64 == initial.content_base64
+            assert user_text == "Essa é a mesma imagem?"
+            return observation()
+    initial = payload().model_copy(update={
+        "source_url": "https://cdn.discordapp.com/attachments/"
+                      "123456789012345678/987654321098765432/imagem.png"
+                      "?ex=abcd&is=ef01&hm=ffee",
+    })
+    groq = FlakySource()
+    cascade = IncomingVisionCascade(groq, MockVisual())
+    assert await cascade.analyze(initial, "Essa é a mesma imagem?") == observation()
+    assert groq.urls == [initial.source_url, None]
+    assert groq.calls == 2
