@@ -152,23 +152,34 @@ class PlatformMessagingService(BasePlatformMessagingService):
         else:
             failure_reason = "processing_failed"
         if self.incoming_vision is None or not self.incoming_vision.available:
+            logging.getLogger("amora.incoming_vision").info(
+                "incoming_image_unavailable reason=unconfigured"
+            )
             return unavailable_visual_observation("unconfigured")
         if message.incoming_image is None:
             logging.getLogger("amora.incoming_vision").info(
                 "incoming_image_unavailable reason=%s", failure_reason,
             )
             return unavailable_visual_observation(failure_reason)
+        vision_started = asyncio.get_running_loop().time()
         try:
             # Inbound timeout includes this analysis; avoid blocking social reply
             # for a model outage. Never fall back to imagined pixels.
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self.incoming_vision.analyze(message.incoming_image, message.text),
                 timeout=27,
             )
+            logging.getLogger("amora.incoming_vision").info(
+                "incoming_image_analysis_result outcome=%s elapsed_ms=%d",
+                result.get("status", "unknown"),
+                max(0, round((asyncio.get_running_loop().time() - vision_started) * 1000)),
+            )
+            return result
         except Exception as exc:
             logging.getLogger("amora.incoming_vision").warning(
-                "incoming_image_analysis_failed code=%s",
+                "incoming_image_analysis_failed code=%s elapsed_ms=%d",
                 str(getattr(exc, "code", type(exc).__name__))[:80],
+                max(0, round((asyncio.get_running_loop().time() - vision_started) * 1000)),
             )
             return unavailable_visual_observation("provider_failed")
 

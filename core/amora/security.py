@@ -171,8 +171,11 @@ def http_processing_deadline_seconds(path: str, method: str, *, worker: bool) ->
     if not worker and path == "/v1/web/utterance/stream" and method == "POST":
         return 270
     if path == "/v1/messaging/worker/inbound" and method == "POST":
-        # Discord: 75s attempt, 90s total provider, 105s cognition, 120s client.
-        return 130
+        # The owner-DM image path can spend up to 27s perceiving an image
+        # *before* the unchanged 105s cognition timeout starts. Keep the
+        # Core guard above the image worker's 160s client window. Plain-text
+        # turns still use the worker's existing 120s client limit.
+        return 175
     return 90
 
 

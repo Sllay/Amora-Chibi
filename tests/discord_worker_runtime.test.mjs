@@ -132,6 +132,16 @@ test('Core inbound transport budget outlives the Core cognition hard timeout', a
     await client.inbound({ message_id: 'budget-probe' });
     assert.equal(capturedTimeoutMs, 120_000);
     assert.ok(capturedTimeoutMs > 105_000);
+    // Image perception occurs before Core cognition. A 120s worker cap
+    // could cancel 27s vision + 105s dialogue before Core can respond.
+    await client.inbound({
+      message_id: 'image-budget-probe',
+      incoming_image: { content_mime: 'image/png', content_base64: 'AAAA' },
+    });
+    assert.equal(capturedTimeoutMs, 160_000);
+    await client.inbound({ message_id: 'failed-image-probe',
+      incoming_image_status: 'IMAGE_TRANSFORM_FAILED' });
+    assert.equal(capturedTimeoutMs, 160_000);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;

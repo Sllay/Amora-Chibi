@@ -249,6 +249,13 @@ class IncomingVisionCascade:
     """
 
     _TRUE = frozenset({"1", "true", "yes", "on"})
+    _PRIMARY_RETRYABLE = frozenset({
+        "INCOMING_VISION_TRANSPORT_FAILED",
+        "INCOMING_VISION_TRUNCATED",
+        "INCOMING_VISION_EMPTY_RESPONSE",
+        "INCOMING_VISION_JSON_INVALID",
+        "INCOMING_VISION_ENVELOPE_INVALID",
+    })
     _FALLBACK_ELIGIBLE = frozenset({
         "INCOMING_VISION_TRANSPORT_FAILED",
         "INCOMING_VISION_TRUNCATED",
@@ -293,7 +300,45 @@ class IncomingVisionCascade:
         valid_image_bytes(image)
         enabled = self._fallback_available
         if not enabled:
-            return await self.primary.analyze(image, user_text)
+            # Transient Groq failures can make the SAME valid photo succeed
+            # once and be "invisible" on another turn. Keep the existing 26s
+            # visual budget; retry a quick, recoverable failed response once
+            # without contacting a second provider. Never retry 429: repeated
+            # requests would worsen a quota/rate-limit incident.
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self.total_timeout_seconds
+            try:
+                return await asyncio.wait_for(
+                    self.primary.analyze(image, user_text),
+                    timeout=max(0.05, self.total_timeout_seconds - 0.5),
+                )
+            except GroqVisionError as exc:
+                recoverable = (
+                    exc.code in self._PRIMARY_RETRYABLE
+                    or exc.code.startswith("INCOMING_VISION_HTTP_5")
+                )
+                remaining = deadline - loop.time()
+                if not recoverable or remaining < 5.0:
+                    raise
+                logging.getLogger("amora.incoming_vision").info(
+                    "incoming_visual_primary_retry code=%s remaining_budget_floor=%d",
+                    exc.code, max(0, int(remaining)),
+                )
+                # When the first attempt used an expiring Discord CDN URL,
+                # retry with the already validated, bounded inline preview.
+                # Repeating the same signed URL can reproduce the same outage.
+                retry_image = (
+                    image.model_copy(update={"source_url": None})
+                    if image.source_url else image
+                )
+                return await asyncio.wait_for(
+                    self.primary.analyze(retry_image, user_text),
+                    timeout=max(0.05, remaining - 0.2),
+                )
+            except asyncio.TimeoutError as exc:
+                raise GroqVisionError(
+                    "INCOMING_VISION_TIMEOUT", "primary vision request timed out"
+                ) from exc
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.total_timeout_seconds

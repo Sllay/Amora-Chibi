@@ -288,6 +288,29 @@ def realization_instruction(context: CognitiveContext) -> str:
             "Não inclua self_choices se o plano deste turno não ofereceu essa "
             "possibilidade; opiniões passageiras não são identidade consolidada. "
         )
+    # The social model never receives pixels directly. It receives a bounded
+    # specialist observation, while the accompanying caption remains the real
+    # user utterance. Explicitly combine the two rather than answering the
+    # image as if it were a separate message.
+    visual_cue = ""
+    if isinstance(context.visual_observation, dict):
+        if context.visual_observation.get("status") == "analyzed":
+            visual_cue = (
+                " A pessoa enviou UMA mensagem com texto e imagem. Responda "
+                "ao pedido literal dela usando a observação visual permitida "
+                "como evidência, sem ignorar a legenda ou inventar detalhes "
+                "além da observação. Não diga que os pixels ficaram pretos "
+                "sem evidência específica do sensor. "
+            )
+        elif context.visual_observation.get("status") == "unavailable":
+            visual_cue = (
+                " A pessoa anexou uma imagem, mas o Core informa que a visão "
+                "deste turno está INDISPONÍVEL. Se há texto na mensagem, "
+                "responda normalmente ao texto e explique brevemente que "
+                "não conseguiu visualizar a imagem; nunca alegue ter visto "
+                "pixels pretos, pessoas ou objetos. Se não há texto, diga "
+                "que não conseguiu acessar a foto. "
+            )
     specialist = ""
     if context.specialist_support:
         specialist = (
@@ -302,6 +325,7 @@ def realization_instruction(context: CognitiveContext) -> str:
         "Formato: {\"moves\":[{\"kind\":\"...\",\"text\":\"...\"}],\"closing\":\"none|statement|question\"}; "
         "quando autorizado, acrescente \"self_choices\":[{\"key\":\"...\",\"value\":\"...\"}]. "
         + choice_instructions
+        + visual_cue
         + f"Os únicos valores permitidos para moves[].kind neste turno são: {allowed}. "
         "Você está realizando A FALA DA AMORA, em primeira pessoa, como uma personagem presente naquela conversa; "
         "não fale sobre a Amora de fora e não use voz de assistente, atendente, relatório ou tutorial genérico. "
