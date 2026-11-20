@@ -13,8 +13,10 @@ deve depender da fala do modelo.
 - Os URLs só vêm do WebNavigator/verificação do Core, nunca de links fabricados
   pelo modelo de linguagem. `CognitiveEngine` continua dono da busca e
   `MessagingService` dono da mensagem de saída.
-- Quando o modelo da conversa cai em fallback, as referências mais recentes
-  da sessão privada ainda são visíveis pelo Core, em vez de serem perdidas.
+- Quando o modelo da conversa cai em fallback **ou em timeout duro após
+  recuperar páginas**, o Core ainda anexa as URLs ao outbound. Essa entrega é
+  realizada fora do try/except da geração, evitando perda das fontes.
+  Se a busca em si falhar, nenhum link anterior é reaproveitado.
   Para cada nova busca a lista anterior é limpa **antes** de pesquisar,
   evitando citações de resultados desatualizados.
 - A numeração original é mantida para `abre o link 2`. Uma página aberta pode
