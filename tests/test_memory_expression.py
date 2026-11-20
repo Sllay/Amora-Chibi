@@ -91,7 +91,11 @@ async def test_discord_natural_recall_and_disclosure_keep_authority_and_literal_
         assert private.text.startswith("Lembro sim! Você me contou que")
         assert "O falante" not in private.text
         group = (await core.messaging.receive(_group(core, "natural-group"))).outbound[0]
-        assert group.text == private.text
+        # A group receives only the separately authorized, literal memory
+        # excerpt. Owner-only source dialogue appended in DM stays private.
+        assert private.text.startswith(group.text)
+        assert "No histórico original:" in private.text
+        assert "No histórico original:" not in group.text
         assert group.metadata["cognitive_reason_codes"] == ["MEMORY_DISCLOSURE_AUTHORIZED"]
         assert group.metadata["memory_disclosure"]["source_excerpt"] == ORQ
         mid = group.metadata["memory_disclosure"]["record_id"]
