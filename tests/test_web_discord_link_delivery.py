@@ -409,7 +409,8 @@ def test_search_command_excludes_delivery_instructions(text, expected):
 
 
 @pytest.mark.asyncio
-async def test_anaphoric_search_uses_recent_opened_godot_page_not_description_words():
+async def test_anaphoric_search_uses_recent_opened_godot_page_not_description_words(caplog):
+    caplog.set_level("INFO", logger="amora.web")
     queries = []
     def search(query):
         queries.append(query)
@@ -436,6 +437,11 @@ async def test_anaphoric_search_uses_recent_opened_godot_page_not_description_wo
     assert followup["query"] == "Godot Engine"
     assert all(word not in queries[0].lower() for word in ("descrição", "manda", "novo"))
     assert nav.current_delivery("owner-dm")["focus"] == "Godot Engine"
+    web_events = [record.message for record in caplog.records
+                  if record.name == "amora.web"]
+    assert web_events == ["WEB_SEARCH_CONTEXT_RESOLVED"]
+    assert not any("godotengine.org" in line or "mim manda" in line
+                   for line in web_events)
 
 
 @pytest.mark.asyncio
