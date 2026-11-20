@@ -1065,6 +1065,34 @@ class PlatformMessagingService:
                         "reason_codes": [*decision.reason_codes, "CONFIDENTIAL_OUTPUT_SUPPRESSED"],
                     }))
                 text = render_memory_reply(excerpts, generic=intent.generic)
+                if not shared:
+                    # A memory summary alone can lose context. Reattach the
+                    # verified owner DM utterance and the *sent* Amora answer.
+                    # Unsent drafts, edited sources and third parties never
+                    # qualify. Historical evidence is fetched locally only.
+                    turn_ids = [item.metadata.get("turn_id") for item in records
+                                if item.metadata.get("turn_id")]
+                    episodes = self.cognition.store.owner_turn_conversations(
+                        OWNER_ENTITY_ID, turn_ids) if turn_ids else {}
+                    if episodes:
+                        from amora.cognition.temporal import conversation_zone
+                        zone = conversation_zone()
+                        lines = []
+                        for row in list(episodes.values())[:3]:
+                            at = row["at"].astimezone(zone).strftime("%d/%m/%Y %H:%M")
+                            original = " ".join(row["user_text"].split())
+                            reply = " ".join((row["reply_text"] or "").split())
+                            lines.append(
+                                f"Na conversa de {at}, você disse: "
+                                f"“{original[:200]}{'…' if len(original)>200 else ''}”"
+                            )
+                            if reply:
+                                lines.append(
+                                    f"Eu respondi: “{reply[:250]}{'…' if len(reply)>250 else ''}”"
+                                )
+                        text += "\n\nNo histórico original:\n" + "\n".join(lines)
+                        if len(text) > 1900:
+                            text = text[:1899] + "…"
                 reason = "MEMORY_RECALL_PUBLIC_FOUND" if shared else "MEMORY_RECALL_PERSISTENT_FOUND"
             elif shared:
                 reason = "MEMORY_RECALL_SHARED_SCOPE_RESTRICTED"

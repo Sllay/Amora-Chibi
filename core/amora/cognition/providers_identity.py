@@ -150,7 +150,8 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
                 "instructions": memory_instructions(repair=bool(attempt)),
                 "input": [{"role": "user", "content": memory_input(context)}],
                 "stream": False, "temperature": 0.15, "top_p": 0.8,
-                "max_output_tokens": 1200, "store": False,
+                "max_output_tokens": 1800 if len(context.user_text) >= 650 else 1200,
+                "store": False,
                 "text": {"format": {"type": "json_schema", "name": "amora_memory_extraction",
                                     "schema": memory_schema()}},
             }

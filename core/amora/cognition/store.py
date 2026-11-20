@@ -242,6 +242,82 @@ class CognitiveStore:
             ).fetchall()
         return reply_rows
 
+    @trace_stage("history_read")
+    def owner_turn_conversations(self, owner_id: str, turn_ids) -> dict[str, dict]:
+        """Join an eligible memory's source turn to delivered DM speech.
+
+        Uses the original, never rewritten, persisted user utterance and sent
+        outbound. Returns only validated owner-private sources. No inference,
+        remote provider, or storage side effect is involved.
+        """
+        from uuid import UUID
+        from amora.cognition.temporal import observed_timestamp
+        from amora.messaging.session_identity import messaging_session_ref
+
+        if not owner_id:
+            return {}
+        valid = set()
+        for value in tuple(turn_ids)[:12]:
+            try:
+                valid.add(str(UUID(str(value))))
+            except (ValueError, TypeError, AttributeError):
+                continue
+        turns = tuple(sorted(valid))[:6]
+        if not turns:
+            return {}
+        source_rows = self._owner_turn_source_rows(owner_id, turns)
+        matches = {}
+        for row in source_rows:
+            message = self._message_from_row(row)
+            instant, _ = observed_timestamp(message)
+            content = (message.raw_text or message.normalized_text or "").strip()
+            if not content or instant is None:
+                continue
+            matches[str(message.turn_id)] = {
+                "at": instant,
+                "user_text": content,
+                "session_id": message.session_id,
+                "reply_text": None,
+            }
+        if matches:
+            reply_rows = self._owner_day_outbound_rows(owner_id, tuple(matches))
+            for reply in reply_rows:
+                metadata = json.loads(reply["metadata_json"] or "{}")
+                found = matches.get(str(metadata.get("cognitive_turn_id") or ""))
+                if (found is not None and found["reply_text"] is None
+                        and found["session_id"] == messaging_session_ref(
+                            "discord", reply["account_scope"], reply["conversation_id"])
+                        and reply["text"] and reply["text"].strip()):
+                    found["reply_text"] = reply["text"].strip()
+        return matches
+
+    def _owner_turn_source_rows(self, owner_id, turn_ids):
+        marks = ",".join("?" for _ in turn_ids)
+        sql = """
+            SELECT m.* FROM conversation_messages m
+            WHERE m.speaker_id=? AND m.addressee_id='ENTITY_AMORA'
+              AND m.turn_id IN (""" + marks + """)
+              AND m.dedupe_key='cognitive-input:' || m.turn_id
+              AND m.session_id IS NOT NULL AND m.status='received'
+              AND m.privacy_scope IN ('PERSONAL','PRIVATE')
+              AND json_extract(m.metadata_json,'$.surface')='platform_messaging'
+              AND json_extract(m.metadata_json,'$.platform')='discord'
+              AND json_extract(m.metadata_json,'$.channel_type')='dm'
+              AND COALESCE(json_extract(m.metadata_json,'$.test_mode'),0)=0
+              AND COALESCE(json_extract(m.metadata_json,'$.observed_only'),0)=0
+              AND NOT EXISTS (
+                SELECT 1 FROM memory_reflection_invalidations x
+                WHERE x.session_id=m.session_id
+                  AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash')
+                  AND x.invalidated_through>=COALESCE(
+                      json_extract(m.metadata_json,'$.transport_revision'),1)
+              )
+            ORDER BY m.started_at,m.id LIMIT 6
+        """
+        with trace_lock(self._lock):
+            return self._conn.execute(sql, (owner_id, *turn_ids)).fetchall()
+
+
     def source_invalidated(self, session_id, native_message_hash, revision):
         with trace_lock(self._lock):
             row = self._conn.execute(

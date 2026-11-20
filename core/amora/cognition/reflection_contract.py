@@ -25,8 +25,8 @@ _SCORE_FIELDS = (
 class MemoryExtractionItem(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     kind: Literal["episodic", "semantic", "relational"]
-    content: str = Field(min_length=1, max_length=1000)
-    summary: str = Field(max_length=300)
+    content: str = Field(min_length=1, max_length=1400)
+    summary: str = Field(max_length=450)
     confidence: float = Field(ge=0, le=1)
     importance: float = Field(ge=0, le=1)
     novelty: float = Field(ge=0, le=1)
@@ -47,7 +47,7 @@ class MemoryExtractionItem(BaseModel):
 
 class MemoryExtraction(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    memory_candidates: list[MemoryExtractionItem] = Field(max_length=3)
+    memory_candidates: list[MemoryExtractionItem] = Field(max_length=5)
 
 
 def is_memory_only(context: CognitiveContext) -> bool:
@@ -58,13 +58,13 @@ def memory_schema() -> dict:
     # Inline schema: no dynamic maps, arbitrary objects or optional properties.
     fields = {
         "kind": {"type": "string", "enum": ["episodic", "semantic", "relational"]},
-        "content": {"type": "string", "minLength": 1, "maxLength": 1000},
-        "summary": {"type": "string", "maxLength": 300},
+        "content": {"type": "string", "minLength": 1, "maxLength": 1400},
+        "summary": {"type": "string", "maxLength": 450},
         **{name: {"type": "number", "minimum": 0, "maximum": 1} for name in _SCORE_FIELDS},
     }
     return {
         "type": "object",
-        "properties": {"memory_candidates": {"type": "array", "maxItems": 3,
+        "properties": {"memory_candidates": {"type": "array", "maxItems": 5,
             "items": {"type": "object", "properties": fields, "required": list(fields),
                       "additionalProperties": False}}},
         "required": ["memory_candidates"], "additionalProperties": False,
@@ -79,7 +79,14 @@ def memory_instructions(*, repair: bool = False) -> str:
         "não como fatos verificados. Não invente identidade, relações, eventos ou sentimentos; "
         "não transforme perguntas, brincadeiras, cumprimentos ou hipóteses em fatos. "
         "Se não houver informação durável, retorne {\"memory_candidates\":[]}. "
-        "No máximo três propostas, todas com kind, content, summary e todos os nove escores "
+        "No máximo cinco propostas SE houver fatos diferentes, e zero se nada for durável. "
+        "Para mensagens curtas, use no máximo três; não invente fatos para preencher a lista. "
+        "Diferencie: episodic para acontecimentos com contexto/decisão; semantic para fatos "
+        "estáveis sobre projetos e preferências; relational só para relações realmente relatadas. "
+        "Preserve nomes de projetos, datas, quantidades, metas, decisões, limitações, "
+        "mudanças de planos e estado atual sem exagerar nem simplificar demais. "
+        "Nunca confunda algo planejado com algo concluído. "
+        "Todas as propostas exigem kind, content, summary e todos os nove escores "
         "numéricos de zero a um. Use a língua da mensagem; seja conciso. "
         "kind: episodic, semantic ou relational. confidence mede fidelidade ao relato, "
         "importance relevância futura, novelty novidade do relato, emotional_weight carga "

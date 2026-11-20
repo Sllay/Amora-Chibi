@@ -9,6 +9,7 @@ from amora.storage.backend import StorageBackend
 from amora.storage.postgres_runtime_connection import PostgresRuntimeError
 from amora.storage.postgres_runtime_cognition import (
     HISTORY, LATEST_USAGE, MERGE_METADATA, OWNER_DAY_INPUTS, OWNER_DAY_REPLIES,
+    OWNER_EPISODE_SOURCES,
 )
 from amora.time import Clock
 
@@ -74,5 +75,12 @@ class PostgresCognitiveStore(CognitiveStore):
         with self._lock:
             return self._conn.execute(
                 OWNER_DAY_REPLIES,
+                (owner_id, json.dumps(list(turn_ids), separators=(",", ":"))),
+            ).fetchall()
+
+    def _owner_turn_source_rows(self, owner_id, turn_ids):
+        with self._lock:
+            return self._conn.execute(
+                OWNER_EPISODE_SOURCES,
                 (owner_id, json.dumps(list(turn_ids), separators=(",", ":"))),
             ).fetchall()
