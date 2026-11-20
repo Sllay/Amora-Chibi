@@ -174,7 +174,8 @@ export class MessagingCoreClient {
     return this.request(`/v1/messaging/worker/visual?${query}`);
   }
 
-  submitVisualContent(work, { contentMime, contentBase64 }) {
+  submitVisualContent(work, { contentMime, contentBase64,
+    temporalKind = null, temporalStoryboardBase64 = null }) {
     return this.request('/v1/messaging/worker/visual/content', {
       method: 'POST',
       timeoutMs: VISUAL_CONTENT_TIMEOUT_MS,
@@ -188,6 +189,10 @@ export class MessagingCoreClient {
         claim_token: work.claim_token,
         content_mime: contentMime,
         content_base64: contentBase64,
+        ...(temporalKind && temporalStoryboardBase64 ? {
+          temporal_kind: temporalKind,
+          temporal_storyboard_base64: temporalStoryboardBase64,
+        } : {}),
       },
     });
   }
