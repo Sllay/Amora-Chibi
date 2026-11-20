@@ -604,6 +604,10 @@ class WebNavigator:
             if rendered is not None:
                 return rendered
         if page is not None:
+            # A JavaScript shell / anti-bot interstitial is not article text.
+            # If remote rendering failed, never claim it was read successfully.
+            if self._needs_browser(page):
+                raise WebFetchError("WEB_PAGE_CONTENT_UNAVAILABLE")
             return page
         if original_error is not None:
             raise original_error
@@ -812,7 +816,11 @@ class WebNavigator:
                     *, force_browser: bool = False) -> dict[str, Any]:
         page = await self._read_page(url, force_browser=force_browser)
         refs = page.get("links", []) if page.get("status") == "opened" else []
-        self._save_refs(session_id, refs)
+        # A result page with zero extracted links must not erase the previous
+        # numbered search list. The user may still ask "abre o link 3" after
+        # reading result 2. A new explicit URL resets the list normally.
+        if refs or action != "follow":
+            self._save_refs(session_id, refs)
         source = {key: page.get(key, "") for key in (
             "url", "title", "text", "fetched_at", "status")}
         if page.get("retrieval"):
