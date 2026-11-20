@@ -717,7 +717,8 @@ class PlatformMessagingService:
                 "attention_score": decision.score,
                 "transport_revision": message.transport_revision,
                 "delivery_message_id": message.message_id,
-                **({"web_capture_source": web_capture_source} if web_capture_source else {}),
+                **({"web_capture_source": web_capture_source,
+                    "web_capture_owner_verified": True} if web_capture_source and web_owner_verified else {}),
             },
             reason_codes=["CORE_OUTBOUND_ENQUEUED", *cognitive_reasons],
         )
