@@ -2,7 +2,7 @@
  * Only the native Discord CDN is accessed. No arbitrary URL, redirects, disk
  * cache, attachment metadata as instructions, or unbounded response bodies.
  */
-import { transcodeOversizedImage, ImageTransformError } from './incoming-image-transform.mjs';
+import { transcodeOversizedImage, compositeTransparentImage, ImageTransformError } from './incoming-image-transform.mjs';
 
 const ALLOWED_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
 const CORE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
@@ -60,6 +60,32 @@ function safeMediaUrl(attachment, message, field = 'url') {
     throw new IncomingImageError('IMAGE_ATTACHMENT_ID_MISMATCH');
   }
   return url.toString();
+}
+
+function hasTransparentAlpha(bytes, mime) {
+  if (mime === 'image/png' && bytes.length >= 26
+      && bytes.subarray(12, 16).toString('ascii') === 'IHDR') {
+    // PNG IHDR color types 4 and 6 contain alpha channels.
+    if (bytes[25] === 4 || bytes[25] === 6) return true;
+    if (bytes[25] === 3) {
+      // Palette PNG's tRNS transparency: scan chunk headers, never scan
+      // compressed pixel data for misleading string matches.
+      let pos = 8;
+      for (let i = 0; i < 32 && pos + 12 <= bytes.length; i++) {
+        const size = bytes.readUInt32BE(pos);
+        if (size > bytes.length - pos - 12) break;
+        const tag = bytes.subarray(pos + 4, pos + 8).toString('ascii');
+        if (tag === 'tRNS') return true;
+        if (tag === 'IDAT' || tag === 'IEND') break;
+        pos += size + 12;
+      }
+    }
+  }
+  if (mime === 'image/webp' && bytes.length >= 21
+      && bytes.subarray(12, 16).toString('ascii') === 'VP8X') {
+    return (bytes[20] & 0x10) !== 0;
+  }
+  return false;
 }
 
 function mimeFromSignature(bytes) {
@@ -123,6 +149,7 @@ export async function collectDiscordIncomingImage(message, {
   fetchImpl = fetch,
   timeoutMs = MAX_TIMEOUT_MS,
   convertImpl = transcodeOversizedImage,
+  compositeImpl = compositeTransparentImage,
   onStage = () => {},
 } = {}) {
   if (!message?.id || !snowflake(message?.channel_id) || message.guild_id) return null;
@@ -173,7 +200,7 @@ export async function collectDiscordIncomingImage(message, {
       // Discord CDN is eligible for direct visual reading only if its bytes
       // and native MIME passed all the checks above. The signed URL never
       // enters conversation memory, logs or a generic URL-fetch tool.
-      const sourceUrl = (
+      let sourceUrl = (
         field === 'url' && CORE_MIMES.has(mime)
         && source.length > MAX_INBOUND_IMAGE_BYTES
         && source.length <= MAX_GROQ_URL_IMAGE_BYTES
@@ -191,6 +218,20 @@ export async function collectDiscordIncomingImage(message, {
         bytes = converted.bytes;
         outputMime = converted.mime;
         onStage('transcode_completed');
+      }
+      if (hasTransparentAlpha(source, mime)) {
+        onStage('alpha_composite_started');
+        const composed = await compositeImpl(bytes, outputMime);
+        if (!composed || !Buffer.isBuffer(composed.bytes)
+            || !composed.bytes.length || composed.bytes.length > MAX_INBOUND_IMAGE_BYTES
+            || composed.mime !== 'image/webp'
+            || composed.mime !== mimeFromSignature(composed.bytes)) {
+          throw new IncomingImageError('IMAGE_ALPHA_COMPOSITE_INVALID');
+        }
+        bytes = composed.bytes;
+        outputMime = composed.mime;
+        sourceUrl = null; // Always send normalized RGB pixels, not native alpha URL.
+        onStage('alpha_composite_ready');
       }
       onStage('ready');
       return {
