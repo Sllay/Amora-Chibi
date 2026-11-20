@@ -169,3 +169,18 @@ test('expression worker can deliver expression-only modality', async () => {
   assert.equal(requests[0].init.body.content, undefined);
   assert.deepEqual(requests[0].init.body.sticker_ids, ['smile-1']);
 });
+
+
+test('expired catalog with Discord failure is not reusable for sticker sending', async () => {
+  const worker = new DiscordExpressionWorker({
+    token: 'test-token', core: {},
+    rest: { request: async () => { throw Object.assign(new Error('503'), { status: 503 }); } },
+    runtime: {},
+  });
+  worker.guildStickerCatalogs.set('guild-1', {
+    fetchedAt: Date.now() - 10 * 60 * 1000,
+    items: [{ id: 'cached-sticker', name: 'old', format_type: 1 }],
+  });
+  assert.deepEqual(await worker.guildStickerCatalog('guild-1'), []);
+  assert.equal(worker.guildStickerCatalogs.has('guild-1'), false);
+});
