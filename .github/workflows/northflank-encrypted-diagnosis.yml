@@ -2,6 +2,10 @@ name: Northflank encrypted log diagnosis
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ops/logs/diagnose.request
   workflow_run:
     workflows:
       - Northflank encrypted log archive
@@ -18,7 +22,10 @@ jobs:
   diagnose:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
+      (github.event_name == 'push' &&
+       contains(github.event.head_commit.message, '[logs-diagnose]')) ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
