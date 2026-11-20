@@ -215,8 +215,11 @@ class ContextCompiler:
             reasons.append("COGNITIVE_REFLECTION")
         elif mode == "autonomous_initiation":
             reasons.append("AUTONOMOUS_INITIATION")
+        elif mode == "scheduled_reminder":
+            reasons.append("SCHEDULED_REMINDER")
         acir: dict[str, Any] | None = None
-        compile_acir = request.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET} and mode != "autonomous_initiation"
+        compile_acir = (request.privacy_scope not in {PrivacyScope.AUTH, PrivacyScope.SECRET}
+                        and mode not in {"autonomous_initiation", "scheduled_reminder"})
         if not compile_acir:
             reasons.append("ACIR_REDACTED_PRIVATE_SCOPE")
 
