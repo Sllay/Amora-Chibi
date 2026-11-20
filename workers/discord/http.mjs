@@ -42,6 +42,7 @@ export class DiscordRestClient {
   async request(path, {
     method = 'GET',
     body,
+    multipart = null,
     timeoutMs = 15_000,
     auth = true,
     maxAttempts = this.maxAttempts,
@@ -57,9 +58,11 @@ export class DiscordRestClient {
           redirect: 'error',
           headers: {
             ...(auth ? { Authorization: `Bot ${this.token}` } : {}),
-            ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+            ...(body === undefined || multipart ? {} : { 'Content-Type': 'application/json' }),
           },
-          body: body === undefined ? undefined : JSON.stringify(body),
+          // Native FormData writes the multipart boundary. Sending a JSON
+          // Content-Type here would silently break Discord image uploads.
+          body: multipart || (body === undefined ? undefined : JSON.stringify(body)),
           signal: controller.signal,
         });
         const text = await response.text();
