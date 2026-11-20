@@ -73,7 +73,11 @@ export class DiscordExpressionWorker extends DiscordWorker {
       return items;
     } catch (error) {
       safeLog('STICKER_CATALOG_FETCH_FAILED', error?.code || error?.status || error?.name || 'Error');
-      return cached?.items || [];
+      // An expired catalog is not proof that a sticker is sendable.
+      // Received stickers remain perceptual evidence, but failed guild lookups
+      // cannot authorize outbound sticker_ids.
+      this.guildStickerCatalogs.delete(key);
+      return [];
     }
   }
 
