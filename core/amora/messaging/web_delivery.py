@@ -26,6 +26,34 @@ def screenshot_requested(text: str) -> bool:
     return bool(_SCREENSHOT_REQUEST.search(str(text or "")[:1600]))
 
 
+_SCREENSHOT_DELIVERY_CLAIM = re.compile(
+    r"\b(?:enviei|mandei|anexei|tirei|capturei|foi\s+enviad[oa]|"
+    r"j[aá]\s+(?:enviei|mandei|anexei)|print\s+enviado|"
+    r"segue\s+(?:o\s+)?(?:print|screenshot|anexo))\b",
+    re.IGNORECASE,
+)
+_SCREENSHOT_TERMS = re.compile(
+    r"\b(?:print|screenshot|captura|foto|imagem|anexo)\b", re.IGNORECASE
+)
+
+
+def neutralize_screenshot_claims(text: str) -> str:
+    """Remove model-generated claims that only the Discord worker can verify.
+
+    Retain substantive research results and URLs, changing only sentences
+    that falsely assert screenshot generation/delivery.
+    """
+    pieces = re.split(r"(?<=[.!?\n])", str(text or ""))
+    clean = []
+    for piece in pieces:
+        if (_SCREENSHOT_TERMS.search(piece) and
+                _SCREENSHOT_DELIVERY_CLAIM.search(piece)):
+            clean.append("A entrega do print depende do anexo no Discord. ")
+        else:
+            clean.append(piece)
+    return "".join(clean).strip()
+
+
 def _public_urls(values: Iterable[object], *, max_items: int) -> list[str]:
     urls: list[str] = []
     for value in values:
@@ -60,6 +88,10 @@ def compose_web_delivery(
     """
     content = str(text or "").strip()
     if not owner_verified or intent is None:
+        return content, None
+    # This request only asks for the previous page's image; old references
+    # must not be presented as newly fetched web evidence.
+    if intent.action == "capture":
         return content, None
     opened = _public_urls(sources or [], max_items=2)
     refs = _public_urls(references or session_references or [], max_items=5)
@@ -114,7 +146,7 @@ def requested_screenshot_source(
     if not owner_verified or not screenshot_requested(request_text) or intent is None:
         return None
     candidates = _public_urls(sources or [], max_items=2)
-    if not candidates and intent.action in {"search", "follow"}:
+    if not candidates and intent.action in {"search", "follow", "capture"}:
         candidates = _public_urls(
             references or session_references or [], max_items=1
         )
