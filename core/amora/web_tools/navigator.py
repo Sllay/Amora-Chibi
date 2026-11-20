@@ -46,6 +46,11 @@ _FOLLOW_RE = re.compile(
     r".{0,35}?\b(?:link|resultado|refer[eê]ncia)\s*(?:n[ºo°.]?\s*)?(\d{1,2})\b",
     re.IGNORECASE | re.DOTALL,
 )
+_CAPTURE_CURRENT_RE = re.compile(
+    r"\b(?:tira|tirar|manda|mande|envia|enviar|mostra|mostre|faz|quero)\b"
+    r".{0,48}?\b(?:print|screenshot|captura(?:\s+de\s+tela)?)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _SEARCH_RE = re.compile(
     r"\b(?:pesquis[ae]|pesquise|buscar?|busque|procur[ae]|procure|"
     r"investig[ae]|investigue|busca\s+na\s+(?:web|internet)|"
@@ -326,6 +331,13 @@ def _clean_search_query(raw: str, match: re.Match[str]) -> str:
         r"(?i)\s+e\s+(?:me\s+)?(?:diz|diga|fala|fale|mostra|mostre|envia|mande)\b",
         subject, maxsplit=1,
     )[0]
+    # Screenshot delivery is a separate transport instruction, never part of
+    # the semantic search query (e.g. "Godot Android manda print").
+    subject = re.split(
+        r"(?i)\s+(?:e\s+)?(?:me\s+)?(?:tira|tirar|manda|mande|envia|enviar)"
+        r"\s+(?:um\s+|uma\s+|o\s+|a\s+)?(?:print|screenshot|captura)\b",
+        subject, maxsplit=1,
+    )[0]
     words = re.findall(r'"[^"\n]+"|[\w][\w.+#-]*', subject, flags=re.UNICODE)
     terms = [word for word in words if word.casefold() not in _SEARCH_FILLERS]
     return " ".join(terms[:28])[:240].strip()
@@ -408,6 +420,8 @@ def parse_web_intent(text: str) -> WebIntent | None:
         # Do not send greetings, 'Okay', user instructions or Amora's name
         # ahead of the actual subject to search engines.
         return WebIntent("search", _clean_search_query(raw, search))
+    if _CAPTURE_CURRENT_RE.search(raw):
+        return WebIntent("capture", "current")
     return None
 
 
@@ -590,6 +604,10 @@ class WebNavigator:
             if rendered is not None:
                 return rendered
         if page is not None:
+            # A JavaScript shell / anti-bot interstitial is not article text.
+            # If remote rendering failed, never claim it was read successfully.
+            if self._needs_browser(page):
+                raise WebFetchError("WEB_PAGE_CONTENT_UNAVAILABLE")
             return page
         if original_error is not None:
             raise original_error
@@ -674,7 +692,18 @@ class WebNavigator:
         if not session_id:
             return {"action": intent.action, "status": "unavailable", "reason": "WEB_SESSION_REQUIRED",
                     "sources": [], "references": []}
-        # A failed next action must NEVER serve the previous turn's links.
+        if intent.action == "capture":
+            # A screenshot-only follow-up must use the last actual page/result
+            # from the same verified DM. No old link is claimed as freshly read,
+            # and this does not launch a new web request.
+            previous = self.current_delivery(session_id)
+            if previous["sources"] or previous["references"]:
+                return {"action": "capture", "status": "capture_pending",
+                        "sources": [], "references": []}
+            return {"action": "capture", "status": "failed",
+                    "reason": "WEB_SCREENSHOT_NO_PAGE",
+                    "sources": [], "references": []}
+        # A failed NEW navigation must never use a previous turn's links.
         self.last_delivery.pop(session_id, None)
         try:
             if intent.action == "follow":
@@ -787,7 +816,11 @@ class WebNavigator:
                     *, force_browser: bool = False) -> dict[str, Any]:
         page = await self._read_page(url, force_browser=force_browser)
         refs = page.get("links", []) if page.get("status") == "opened" else []
-        self._save_refs(session_id, refs)
+        # A result page with zero extracted links must not erase the previous
+        # numbered search list. The user may still ask "abre o link 3" after
+        # reading result 2. A new explicit URL resets the list normally.
+        if refs or action != "follow":
+            self._save_refs(session_id, refs)
         source = {key: page.get(key, "") for key in (
             "url", "title", "text", "fetched_at", "status")}
         if page.get("retrieval"):

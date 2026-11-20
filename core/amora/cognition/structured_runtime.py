@@ -245,7 +245,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
             if evidence is not None:
                 context.web_research = evidence
                 context.reason_codes.append(
-                    "WEB_SOURCE_RETRIEVED" if evidence.get("sources")
+                    "WEB_CAPTURE_PENDING" if evidence.get("status") == "capture_pending"
+                    else "WEB_SOURCE_RETRIEVED" if evidence.get("sources")
                     else "WEB_RETRIEVAL_UNAVAILABLE"
                 )
         estimated_tokens = max(1, len(context.model_dump_json()) // 4)

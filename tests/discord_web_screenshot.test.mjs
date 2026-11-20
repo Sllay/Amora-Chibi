@@ -140,7 +140,10 @@ test('Discord worker attaches screenshot ONLY for verified Core owner metadata',
     rest: {
       request: async (path, options) => {
         calls.push(options);
-        return { id: 'sent', channel_id: 'chan' };
+        return { id: 'sent', channel_id: 'chan',
+          attachments: options.multipart
+            ? [{ id: 'screenshot-id', filename: 'amora-web-print.jpg' }]
+            : [] };
       },
     },
     runtime: { rememberBotMessage() {} },
@@ -165,7 +168,8 @@ test('Discord worker attaches screenshot ONLY for verified Core owner metadata',
 
   await worker.sendOutbound({
     ...base,
-    metadata: { ...base.metadata, web_capture_owner_verified: true },
+    metadata: { ...base.metadata, web_capture_owner_verified: true,
+      web_capture_requested: true },
   });
   assert.deepEqual(screenshots, ['https://godotengine.org/article/android']);
   assert.ok(calls[1].multipart instanceof FormData);
@@ -191,7 +195,7 @@ test('failed external screenshot never prevents sending research links', async (
   await worker.sendOutbound({
     id: '12345678-abcd-abcd-abcd-1234567890ab', platform: 'discord',
     conversation_id: 'chan', text: 'https://godotengine.org/article/android',
-    metadata: { web_capture_owner_verified: true,
+    metadata: { web_capture_owner_verified: true, web_capture_requested: true,
                 web_capture_source: 'https://godotengine.org/article/android' },
   });
   assert.ok(calls[0].body);
@@ -223,7 +227,7 @@ test('Discord image upload 400 degrades to the same verified links as JSON', asy
   const id = await worker.sendOutbound({
     id: '12345678-abcd-abcd-abcd-1234567890ab', platform: 'discord',
     conversation_id: 'chan', text: 'https://godotengine.org/article/android',
-    metadata: { web_capture_owner_verified: true,
+    metadata: { web_capture_owner_verified: true, web_capture_requested: true,
       web_capture_source: 'https://godotengine.org/article/android' },
   });
   assert.equal(id, 'sent');
@@ -286,4 +290,92 @@ test('Microlink official S3 screenshot bucket is accepted without permitting gen
     assert.equal(await renderer.capture('https://godotengine.org/'), null, untrusted);
     assert.equal(seen.length, 1, 'Must not follow untrusted CDN URL');
   }
+});
+
+
+test('verified screenshot upload requires explicit capture request metadata', async () => {
+  const calls = [];
+  const worker = new DiscordWorker({
+    token: 'test', core: {},
+    rest: {
+      request: async (path, options) => {
+        calls.push(options);
+        return { id: 'sent', channel_id: 'chan' };
+      },
+    },
+    runtime: { rememberBotMessage() {} },
+  });
+  let captures = 0;
+  worker.webScreenshots = { capture: async () => { captures += 1; return null; } };
+  await worker.sendOutbound({
+    id: '12345678-abcd-abcd-abcd-1234567890ab',
+    platform: 'discord', conversation_id: 'chan',
+    text: 'Pesquisa concluída.',
+    metadata: { web_capture_requested: true },
+  });
+  assert.equal(captures, 0);
+  assert.match(calls[0].body.content, /Nenhum anexo foi enviado/i);
+});
+
+test('missing attachment in a successful Discord response gets an explicit non-delivery notice', async () => {
+  const calls = [];
+  const worker = new DiscordWorker({
+    token: 'test', core: {},
+    rest: {
+      request: async (path, options) => {
+        calls.push(options);
+        return { id: 'sent-' + calls.length, channel_id: 'chan', attachments: [] };
+      },
+    },
+    runtime: { rememberBotMessage() {} },
+  });
+  worker.webScreenshots = {
+    capture: async () => ({
+      bytes: IMAGE_BYTES, mime: 'image/jpeg', filename: 'amora-web-print.jpg',
+    }),
+  };
+  await worker.sendOutbound({
+    id: '12345678-abcd-abcd-abcd-1234567890ab',
+    platform: 'discord', conversation_id: 'chan', text: 'Link público consultado.',
+    metadata: {
+      web_capture_requested: true,
+      web_capture_owner_verified: true,
+      web_capture_source: 'https://godotengine.org/',
+    },
+  });
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].multipart instanceof FormData);
+  assert.match(calls[1].body.content, /não consegui confirmar o anexo/i);
+  assert.notEqual(calls[1].body.nonce,
+    JSON.parse(calls[0].multipart.get('payload_json')).nonce);
+});
+
+
+test('verified screenshot source from previous Core remains supported during rolling deploy', async () => {
+  const sent = [];
+  const worker = new DiscordWorker({
+    token: 'test', core: {},
+    rest: {
+      request: async (_, options) => {
+        sent.push(options);
+        return { id: 'sent', channel_id: 'chan',
+          attachments: options.multipart
+            ? [{ id: 'image', filename: 'amora-web-print.jpg' }] : [] };
+      },
+    },
+    runtime: { rememberBotMessage() {} },
+  });
+  worker.webScreenshots = { capture: async () => ({
+    bytes: IMAGE_BYTES, mime: 'image/jpeg', filename: 'amora-web-print.jpg',
+  }) };
+  await worker.sendOutbound({
+    id: '12345678-abcd-abcd-abcd-1234567890ab',
+    platform: 'discord', conversation_id: 'chan', text: 'Segue a fonte.',
+    metadata: {
+      web_capture_owner_verified: true,
+      web_capture_source: 'https://godotengine.org/',
+    },
+  });
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].multipart instanceof FormData);
 });

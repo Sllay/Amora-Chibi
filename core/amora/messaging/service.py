@@ -569,6 +569,7 @@ class PlatformMessagingService:
         cognitive_turn_id = str(request.turn_id)
         generation_started = self.clock.monotonic()
         web_capture_source: str | None = None
+        web_capture_requested = False
         plan = None
         set_ms("messaging_pre_cognition_ms", elapsed_ms(ingress_started))
         set_value("_critical_phase", "cognition")
@@ -622,6 +623,7 @@ class PlatformMessagingService:
         if web_owner_verified and text and "CONFIDENTIAL_OUTPUT_SUPPRESSED" not in cognitive_reasons:
             from amora.messaging.web_delivery import (
                 compose_web_delivery, requested_screenshot_source,
+                screenshot_requested, neutralize_screenshot_claims,
             )
             core_nav = getattr(self.cognition, "_owner_web_navigator", None)
             core_delivery = (
@@ -629,6 +631,7 @@ class PlatformMessagingService:
                 if core_nav is not None else {"sources": [], "references": []}
             )
             intent = parse_web_intent(message.text)
+            web_capture_requested = screenshot_requested(message.text)
             plan_meta = plan.metadata if plan is not None else {}
             sources = (plan_meta.get("web_sources") or core_delivery["sources"])[:2]
             references = plan_meta.get("web_references") or core_delivery["references"]
@@ -641,6 +644,22 @@ class PlatformMessagingService:
                 message.text, intent, sources=sources, references=references,
                 session_references=core_delivery["references"], owner_verified=True,
             )
+            if web_capture_requested:
+                if intent is not None and intent.action == "capture":
+                    # Screenshot-only command: the language model has no
+                    # authority to claim capture/upload success. Discord is
+                    # the sole transport receipt.
+                    text = (
+                        "Solicitei a captura da última página pública desta "
+                        "conversa. O print só está entregue se aparecer como "
+                        "anexo nesta mensagem."
+                        if web_capture_source else
+                        "Não encontrei uma página recente nesta conversa "
+                        "para capturar. Abra um link ou faça uma pesquisa e "
+                        "solicite o print novamente."
+                    )
+                else:
+                    text = neutralize_screenshot_claims(text)
 
         set_ms("messaging_cognition_ms", elapsed_ms(cognition_started))
         set_value("_critical_phase", "delivery")
@@ -720,6 +739,7 @@ class PlatformMessagingService:
                 "attention_score": decision.score,
                 "transport_revision": message.transport_revision,
                 "delivery_message_id": message.message_id,
+                **({"web_capture_requested": True} if web_capture_requested else {}),
                 **({"web_capture_source": web_capture_source,
                     "web_capture_owner_verified": True} if web_capture_source and web_owner_verified else {}),
             },

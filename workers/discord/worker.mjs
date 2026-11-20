@@ -836,16 +836,24 @@ export class DiscordWorker {
     if (!chunks.length) throw new Error('EMPTY_OUTBOUND');
     // The Core minted this flag after verified owner DM consent. A user/LLM
     // cannot smuggle screenshot destinations into the worker's text path.
-    const authorizedScreenshot = item?.metadata?.web_capture_owner_verified === true
-      && typeof item?.metadata?.web_capture_source === 'string'
-      && item?.platform === 'discord';
+    // Backward-compatible with a previous Core during independent deploys:
+    // its verified screenshot source already implies an explicit owner request.
+    const verifiedSource = item?.metadata?.web_capture_owner_verified === true
+      && typeof item?.metadata?.web_capture_source === 'string';
+    const screenshotRequested = item?.platform === 'discord'
+      && (item?.metadata?.web_capture_requested === true || verifiedSource);
+    const authorizedScreenshot = screenshotRequested && verifiedSource;
     const screenshot = authorizedScreenshot
       ? await this.webScreenshots.capture(item.metadata.web_capture_source)
       : null;
-    if (authorizedScreenshot && !screenshot) {
-      safeLog('WEB_SCREENSHOT_UNAVAILABLE', 'reason=provider_or_quota');
-      const note = '\n\n(Não consegui capturar o print desta página. Os links seguem acima.)';
+    if (screenshotRequested && !screenshot) {
+      safeLog('WEB_SCREENSHOT_UNAVAILABLE', authorizedScreenshot
+        ? 'reason=provider_or_quota' : 'reason=no_authorized_public_page');
+      const note = authorizedScreenshot
+        ? '\n\n(Não consegui capturar o print desta página. Os links continuam disponíveis.)'
+        : '\n\n(Não existe uma página pública autorizada para este print. Nenhum anexo foi enviado.)';
       if (chunks[0].length + note.length <= 2000) chunks[0] += note;
+      else chunks.push(note.trim());
     }
     let firstMessageId = null;
     for (let index = 0; index < chunks.length; index += 1) {
@@ -856,6 +864,7 @@ export class DiscordWorker {
       });
       const messagePath = `/channels/${encodeURIComponent(item.conversation_id)}/messages`;
       let created;
+      let imageUploadRejected = false;
       try {
         created = await this.rest.request(messagePath, {
           method: 'POST',
@@ -870,11 +879,41 @@ export class DiscordWorker {
         // the message: let the existing nonce/ack recovery own retry.
         if (!(index === 0 && screenshot && error?.retryable === false
             && [400, 413, 415, 422].includes(Number(error?.status)))) throw error;
-        safeLog('WEB_SCREENSHOT_UPLOAD_REJECTED', `status=${error.status}`);
-        created = await this.rest.request(messagePath, { method: 'POST', body: payload });
+        imageUploadRejected = true;
+        safeLog('WEB_SCREENSHOT_UPLOAD_REJECTED', 'status=' + error.status);
+        const note = '\n\n(O Discord recusou o anexo do print. A captura não foi entregue.)';
+        const fallbackPayload = {
+          ...payload,
+          content: (payload.content + note).slice(0, 2000),
+        };
+        created = await this.rest.request(messagePath, {
+          method: 'POST', body: fallbackPayload,
+        });
       }
       if (created?.id && created?.channel_id) this.runtime.rememberBotMessage(created);
       if (!firstMessageId) firstMessageId = created?.id || null;
+      if (index === 0 && screenshot && !imageUploadRejected && !created?.attachments?.some(
+        (entry) => entry?.id && entry?.filename === screenshot.filename
+      )) {
+        // Accepted text is not proof of an attached image. Never retry the
+        // uncertain image request: send a clearly labeled status instead.
+        safeLog('WEB_SCREENSHOT_ATTACHMENT_NOT_CONFIRMED');
+        const correction = discordReplyPayload(
+          'Não consegui confirmar o anexo do print na resposta do Discord. ' +
+          'Considere que a captura não foi entregue; os links continuam válidos.',
+          { nonce: discordNonce(item.id, chunks.length), firstChunk: true },
+        );
+        try {
+          const notice = await this.rest.request(messagePath, {
+            method: 'POST', body: correction,
+          });
+          if (notice?.id && notice?.channel_id) this.runtime.rememberBotMessage(notice);
+        } catch (noticeError) {
+          safeLog('WEB_SCREENSHOT_RECEIPT_NOTICE_FAILED', errorLabel(noticeError));
+        }
+      } else if (index === 0 && screenshot && !imageUploadRejected) {
+        safeLog('WEB_SCREENSHOT_ATTACHMENT_CONFIRMED');
+      }
     }
     return firstMessageId;
   }
