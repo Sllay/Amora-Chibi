@@ -277,6 +277,8 @@ class CognitiveStore:
                 "at": instant,
                 "user_text": content,
                 "session_id": message.session_id,
+                "remote_processing_allowed": bool(message.remote_processing_allowed),
+                "privacy_scope": message.privacy_scope.value,
                 "reply_text": None,
             }
         if matches:
