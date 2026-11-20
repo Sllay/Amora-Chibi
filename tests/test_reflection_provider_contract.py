@@ -68,7 +68,7 @@ def fake_http(monkeypatch, handler):
 
 def test_memory_schema_matches_validation_and_does_not_accept_fabricated_state():
     schema = memory_schema()
-    assert schema["properties"]["memory_candidates"]["maxItems"] == 3
+    assert schema["properties"]["memory_candidates"]["maxItems"] == 5
     assert set(schema["properties"]["memory_candidates"]["items"]["required"]) == set(item())
     assert validate_memory_extraction({"memory_candidates": [item()]})["memory_candidates"]
     assert validate_memory_extraction({"memory_candidates": []}) == {"memory_candidates": []}
@@ -76,7 +76,7 @@ def test_memory_schema_matches_validation_and_does_not_accept_fabricated_state()
                     {"memory_candidates": [dict(item(), confidence="0.8")]},
                     {"memory_candidates": [dict(item(), content="   ")]},
                     {"memory_candidates": [], "accepted_memory_ids": ["untrusted"]},
-                    {"memory_candidates": [item()] * 4}):
+                    {"memory_candidates": [item()] * 6}):
         with pytest.raises(ReflectionSchemaError):
             validate_memory_extraction(invalid)
     with pytest.raises(ReflectionSchemaError) as raised:
