@@ -21,10 +21,15 @@ class PerceptualResponseModalitySelector(ResponseModalitySelector):
     @staticmethod
     def _eligible_assets(message: InboundMessage) -> list[ExpressionRef]:
         result: list[ExpressionRef] = []
-        for item in [*message.available_expressions, *message.expressions]:
+        # A received sticker proves OBSERVATION, not sendability. The native
+        # Discord adapter marks only current-guild catalog assets as available;
+        # a DM has no catalog and therefore no sticker send authority.
+        for item in message.available_expressions:
             if item.kind.value != "sticker":
                 continue
-            if message.guild_or_group_id and item.guild_or_group_id not in {None, message.guild_or_group_id}:
+            if (message.channel_type.value != "group"
+                    or not message.guild_or_group_id
+                    or item.guild_or_group_id != message.guild_or_group_id):
                 continue
             curated_profile = (
                 item.semantic_profile is not None
