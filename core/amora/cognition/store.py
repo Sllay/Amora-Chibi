@@ -160,7 +160,43 @@ class CognitiveStore:
             raise ValueError("INVALID_OWNER_DAY_QUERY")
         limit = max(1, min(6, int(limit)))
         scan_limit = max(limit, min(512, int(scan_limit)))
-        start, end = start_utc.isoformat(), end_utc.isoformat()
+        rows = self._owner_day_source_rows(
+            owner_id, start_utc.isoformat(), end_utc.isoformat(), scan_limit,
+        )
+        scanned_complete = len(rows) <= scan_limit
+        selected = []
+        for row in rows[:scan_limit]:
+            message = self._message_from_row(row)
+            instant, _ = observed_timestamp(message)
+            if instant is None or not start_utc <= instant < end_utc:
+                continue
+            text = (message.raw_text or message.normalized_text or "").strip()
+            if not text or (terms and not terms <= topic_terms(text)):
+                continue
+            selected.append({
+                "turn_id": str(message.turn_id),
+                "session_id": message.session_id,
+                "at": instant,
+                "user_text": text,
+                "reply_text": None,
+            })
+        # Never describe a queued, cancelled or failed draft as "she said".
+        visible = selected[:limit]
+        if visible:
+            by_turn = {entry["turn_id"]: entry for entry in visible}
+            reply_rows = self._owner_day_outbound_rows(owner_id, tuple(by_turn))
+            for reply in reply_rows:
+                metadata = json.loads(reply["metadata_json"] or "{}")
+                entry = by_turn.get(str(metadata.get("cognitive_turn_id") or ""))
+                if (entry is not None and entry["reply_text"] is None
+                        and entry["session_id"] == messaging_session_ref(
+                            "discord", reply["account_scope"], reply["conversation_id"])
+                        and reply["text"] and reply["text"].strip()):
+                    entry["reply_text"] = reply["text"].strip()
+        return visible, scanned_complete
+
+
+    def _owner_day_source_rows(self, owner_id, start, end, scan_limit):
         sql = """
             SELECT m.* FROM conversation_messages m
             WHERE m.speaker_id=? AND m.addressee_id='ENTITY_AMORA'
@@ -190,28 +226,11 @@ class CognitiveStore:
             rows = self._conn.execute(
                 sql, (owner_id, start, end, start, end, scan_limit + 1),
             ).fetchall()
-        scanned_complete = len(rows) <= scan_limit
-        selected = []
-        for row in rows[:scan_limit]:
-            message = self._message_from_row(row)
-            instant, _ = observed_timestamp(message)
-            if instant is None or not start_utc <= instant < end_utc:
-                continue
-            text = (message.raw_text or message.normalized_text or "").strip()
-            if not text or (terms and not terms <= topic_terms(text)):
-                continue
-            selected.append({
-                "turn_id": str(message.turn_id),
-                "session_id": message.session_id,
-                "at": instant,
-                "user_text": text,
-                "reply_text": None,
-            })
-        # Never describe a queued, cancelled or failed draft as "she said".
-        visible = selected[:limit]
-        if visible:
-            by_turn = {entry["turn_id"]: entry for entry in visible}
-            placeholders = ",".join("?" for _ in by_turn)
+
+        return rows
+
+    def _owner_day_outbound_rows(self, owner_id, turn_ids):
+            placeholders = ",".join("?" for _ in turn_ids)
             with trace_lock(self._lock):
                 reply_rows = self._conn.execute(
                     "SELECT account_scope,conversation_id,text,metadata_json "
@@ -219,18 +238,10 @@ class CognitiveStore:
                     "WHERE platform='discord' AND target_entity_id=? AND status='sent' "
                     "AND json_extract(metadata_json,'$.cognitive_turn_id') IN (" + placeholders + ") "
                     "ORDER BY created_at,id",
-                    (owner_id, *by_turn),
+                    (owner_id, *turn_ids),
                 ).fetchall()
-            for reply in reply_rows:
-                metadata = json.loads(reply["metadata_json"] or "{}")
-                entry = by_turn.get(str(metadata.get("cognitive_turn_id") or ""))
-                if (entry is not None and entry["reply_text"] is None
-                        and entry["session_id"] == messaging_session_ref(
-                            "discord", reply["account_scope"], reply["conversation_id"])
-                        and reply["text"] and reply["text"].strip()):
-                    entry["reply_text"] = reply["text"].strip()
-        return visible, scanned_complete
 
+        return reply_rows
 
     def source_invalidated(self, session_id, native_message_hash, revision):
         with trace_lock(self._lock):
