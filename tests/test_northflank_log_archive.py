@@ -56,6 +56,24 @@ class NorthflankLogArchiveTests(unittest.TestCase):
             self.assertNotIn("deploy-6",
                              "\n".join(path.read_text() for path in root.rglob("index.json")))
 
+    def test_expired_old_logs_keep_other_snapshots_and_mark_failed(self):
+        class MissingOldLogs(FakeNorthflank):
+            def logs(self, kind, resource_id, version_id):
+                if version_id == "deploy-6":
+                    from tools.ops.northflank_log_collector import CollectionError
+                    raise CollectionError("northflank_http_404")
+                return super().logs(kind, resource_id, version_id)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = collect(MissingOldLogs(), Path(tmp))
+            self.assertEqual(result["error_count"], 2)
+            self.assertEqual(result["readable_snapshots"], 10)
+            index_data = [json.loads(p.read_text()) for p in Path(tmp).rglob("index.json")
+                          if p != Path(tmp) / "index.json"]
+            self.assertEqual(
+                sum(row["collection_status"] == "failed"
+                    for index in index_data for row in index["versions"]), 2
+            )
+
     def test_zip_contains_subfolders_but_reports_only_fixed_event_codes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
