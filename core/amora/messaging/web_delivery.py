@@ -71,21 +71,18 @@ def compose_web_delivery(
     paragraphs = [content] if content else []
     if opened:
         paragraphs.append("Fontes consultadas:\n" + "\n".join(opened))
-    unvisited = [link for link in refs if link not in opened]
-    if unvisited:
+    if refs:
         label = (
-            "Resultados da busca (páginas não necessariamente lidas):"
+            "Resultados da busca (nem todos lidos):"
             if intent.action == "search"
-            else "Links encontrados (ainda não necessariamente abertos):"
+            else "Links encontrados nesta página (nem todos abertos):"
         )
+        # Preserve the exact reference numbers exposed by WebNavigator:
+        # omitting already opened refs here would shift 'abre o link 2'.
         paragraphs.append(label + "\n" + "\n".join(
-            f"{index}. {url}" for index, url in enumerate(unvisited, 1)
+            f"{index}. {url}" for index, url in enumerate(refs, 1)
         ))
-    target: str | None = None
-    if screenshot_requested(content) or False:
-        # The assistant's generated words cannot opt in on behalf of the user.
-        pass
-    return "\n\n".join(paragraphs), target
+    return "\n\n".join(paragraphs), None
 
 
 def requested_screenshot_source(
