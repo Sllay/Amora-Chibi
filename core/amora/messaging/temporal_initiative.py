@@ -218,7 +218,7 @@ class TemporalInitiative:
                 pass
 
     async def tick(self):
-        """At most one generation attempt per scheduler tick; no fake inbound."""
+        """One bounded owner-DM opportunity, never a fake user request or a schedule."""
         if not initiative_enabled() or self.core.messaging._inflight:
             return None
         db = self.core.database
@@ -234,11 +234,25 @@ class TemporalInitiative:
             anchor = read_anchor(db._conn, now=now)
             if anchor is None:
                 return None
-            opportunity = opportunity_state(now, anchor.user_at, anchor.reply_at, anchor.reply_text)
+            # BDI is trusted persistent Core state. The model may choose how
+            # to express interest or remain silent, but cannot grant itself a DM.
+            intention = self.core.autonomy.store.current_intention()
+            intent_data = intention.model_dump(mode="json") if intention is not None else None
+            opportunity = opportunity_state(
+                now, anchor.user_at, anchor.reply_at, anchor.reply_text,
+                intention=intent_data,
+            )
             if opportunity is None:
                 return None
-            # One attempt per short/long phase, and no more than one per hour.
-            phase = "long" if opportunity["state"] == "long_absence" else "short"
+            # A silent decision must not permanently disable initiative until
+            # the six-hour window. Allow one further chance after 90 minutes,
+            # still with the durable one-hour cooldown and the same DM fences.
+            if opportunity["state"] == "long_absence":
+                phase = "long"
+            elif (now - anchor.reply_at).total_seconds() >= 90 * 60:
+                phase = "late_short"
+            else:
+                phase = "short"
             key = f"amora:temporal-initiative:v1:{anchor.audit_id}:{phase}"
             event_id = uuid5(NAMESPACE_URL, key)
             if db._conn.execute("SELECT 1 FROM events WHERE dedupe_key=?", (key,)).fetchone():
