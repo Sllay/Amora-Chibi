@@ -44,8 +44,8 @@ class ContextCompiler(BaseContextCompiler):
     def _finish_context(self, request, context):
         mode = str(request.metadata.get("cognitive_mode") or "reply")
         mode_code: str | None = None
-        if mode == "autonomous_initiation":
-            mode_code = "AUTONOMOUS_INITIATION"
+        if mode in {"autonomous_initiation", "scheduled_reminder"}:
+            mode_code = "SCHEDULED_REMINDER" if mode == "scheduled_reminder" else "AUTONOMOUS_INITIATION"
             # In this mode request.text is an internal objective, not an
             # observed utterance. Do not mislabel it as received-speech ACIR.
             context.acir = None
@@ -54,7 +54,10 @@ class ContextCompiler(BaseContextCompiler):
                 for code in context.reason_codes
                 if code not in {"ACIR_COMPILED", "ACIR_BOUND_TO_DIALOGUE_PLAN"}
             ]
-            context.reason_codes.append("ACIR_NOT_APPLICABLE_AUTONOMOUS_INITIATION")
+            context.reason_codes.append(
+                "ACIR_NOT_APPLICABLE_SCHEDULED_REMINDER" if mode == "scheduled_reminder"
+                else "ACIR_NOT_APPLICABLE_AUTONOMOUS_INITIATION"
+            )
         elif mode == "reflection":
             mode_code = "COGNITIVE_REFLECTION"
 
