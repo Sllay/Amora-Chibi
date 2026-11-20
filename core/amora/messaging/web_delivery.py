@@ -69,8 +69,27 @@ def compose_web_delivery(
     # Search result links are useful even when language generation failed.
     # Never silently turn links-only into 'sources consulted'.
     paragraphs = [content] if content else []
-    if opened:
-        paragraphs.append("Fontes consultadas:\n" + "\n".join(opened))
+    # OutboundMessage.text is capped at 12k; reserve headroom for formatting.
+    # Long URLs must not turn a valid answer into a failed Discord outbound.
+    available = max(0, 11700 - len(content))
+
+    def append_lines(label: str, numbered: list[tuple[int, str]]) -> None:
+        nonlocal available
+        if not numbered or available <= len(label) + 6:
+            return
+        lines: list[str] = []
+        used = len(label) + 2
+        for index, url in numbered:
+            row = f"{index}. {url}" if index > 0 else url
+            if used + len(row) + 1 > available:
+                break
+            lines.append(row)
+            used += len(row) + 1
+        if lines:
+            paragraphs.append(label + "\\n" + "\\n".join(lines))
+            available -= used + 2
+
+    append_lines("Fontes consultadas:", [(0, url) for url in opened])
     if refs:
         label = (
             "Resultados da busca (nem todos lidos):"
@@ -79,10 +98,8 @@ def compose_web_delivery(
         )
         # Preserve the exact reference numbers exposed by WebNavigator:
         # omitting already opened refs here would shift 'abre o link 2'.
-        paragraphs.append(label + "\n" + "\n".join(
-            f"{index}. {url}" for index, url in enumerate(refs, 1)
-        ))
-    return "\n\n".join(paragraphs), None
+        append_lines(label, list(enumerate(refs, 1)))
+    return "\\n\\n".join(paragraphs), None
 
 
 def requested_screenshot_source(
