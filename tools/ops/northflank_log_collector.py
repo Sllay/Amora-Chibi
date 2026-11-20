@@ -190,6 +190,8 @@ def collect(api: Northflank, output: Path) -> dict:
     collected = utc_now()
     results = {"collected_at": collected, "project": api.project, "services": [], "jobs": []}
     total_errors = 0
+    readable_snapshots = 0
+    expected_snapshots = 0
 
     for kind in ("services", "jobs"):
         resources = api.list_resources(kind)
@@ -209,6 +211,7 @@ def collect(api: Northflank, output: Path) -> dict:
                 continue
             keep = set()
             entries = []
+            expected_snapshots += len(versions)
             for row in versions:
                 if not isinstance(row, dict):
                     raise CollectionError("invalid_version_entry")
@@ -231,6 +234,7 @@ def collect(api: Northflank, output: Path) -> dict:
                     logs = api.logs(kind, resource_id, version)
                     text = snapshot_text(logs, kind + "/" + resource_id, version, collected)
                     (folder / filename).write_text(text, encoding="utf-8")
+                    readable_snapshots += 1
                     meta["lines_returned"] = len(logs)
                     meta["collection_status"] = "ok" if logs else "empty"
                 except CollectionError as error:
@@ -252,6 +256,8 @@ def collect(api: Northflank, output: Path) -> dict:
             })
     save_json(output / "index.json", results)
     results["error_count"] = total_errors
+    results["readable_snapshots"] = readable_snapshots
+    results["expected_snapshots"] = expected_snapshots
     return results
 
 
@@ -271,7 +277,10 @@ def main() -> int:
         result = collect(Northflank(token, project, team), destination)
         print("northflank_archive resources=", len(result["services"]) + len(result["jobs"]),
               "failures=", result["error_count"])
-        return 0 if result["error_count"] == 0 else 2
+        # A single old deployment can have expired provider logs. Preserve
+        # the usable snapshots and keep an explicit failed index entry; only
+        # refuse an update when EVERY requested log read failed.
+        return 2 if result["error_count"] and not result["readable_snapshots"] else 0
     except CollectionError as error:
         print("northflank_archive_failed:", str(error), file=sys.stderr)
         return 1
