@@ -52,6 +52,9 @@ REASONS = (
 )
 SYMBOLS = re.compile(r"(?<![A-Z0-9_])(" + "|".join(map(re.escape, EVENT_CODES)) + r")(?![A-Z0-9_])")
 REASON = re.compile(r"\breason=(" + "|".join(map(re.escape, REASONS)) + r")\b")
+DISPATCH = re.compile(r"\brequested=(true|false)\s+authorized=(true|false)\b")
+UPLOAD_HTTP = re.compile(r"\bstatus=(400|401|403|413|415|422|429)\b")
+PIPELINE = re.compile(r"\bversion=(20261120-r2)\b")
 SAFE_NAME = re.compile(r"[^a-zA-Z0-9_.-]")
 
 
@@ -113,6 +116,9 @@ def diagnostic_report(archive: Path, ciphertext: Path) -> dict:
                 continue
             events = Counter()
             failures = Counter()
+            dispatch_states = Counter()
+            upload_http_statuses = Counter()
+            pipeline_versions = Counter()
             with source.open(member) as fp:
                 for raw in fp:
                     # The line content never enters the public report.
@@ -125,12 +131,28 @@ def diagnostic_report(archive: Path, ciphertext: Path) -> dict:
                             reason = REASON.search(line)
                             if reason:
                                 failures[reason.group(1)] += 1
+                        elif event == "WEB_SCREENSHOT_DISPATCH":
+                            state = DISPATCH.search(line)
+                            if state:
+                                dispatch_states["requested_" + state.group(1) +
+                                                "_authorized_" + state.group(2)] += 1
+                        elif event == "WEB_SCREENSHOT_UPLOAD_REJECTED":
+                            status = UPLOAD_HTTP.search(line)
+                            if status:
+                                upload_http_statuses[status.group(1)] += 1
+                        elif event == "WEB_SCREENSHOT_PIPELINE_READY":
+                            version = PIPELINE.search(line)
+                            if version:
+                                pipeline_versions[version.group(1)] += 1
             resource = SAFE_NAME.sub("-", parts[1])[:75]
             version = SAFE_NAME.sub("-", Path(member.filename).stem)[:75]
             overview["resources"].append({
                 "kind": parts[0], "name": resource,
                 "version": version, "events": dict(events.most_common(MAX_DIAGNOSTIC_EVENTS)),
                 "screenshot_failure_reasons": dict(failures),
+                "screenshot_dispatch_states": dict(dispatch_states),
+                "screenshot_upload_http_statuses": dict(upload_http_statuses),
+                "screenshot_pipeline_versions": dict(pipeline_versions),
             })
     overview["summary_events"] = dict(all_events.most_common(MAX_DIAGNOSTIC_EVENTS))
     return overview
