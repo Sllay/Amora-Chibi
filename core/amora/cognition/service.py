@@ -530,8 +530,8 @@ class CognitiveEngine:
 
     @trace_stage("record_input")
     def _record_input(self, request: CognitiveRequest) -> None:
-        if request.metadata.get("cognitive_mode") == "autonomous_initiation" and request.metadata.get("temporal_initiative") is True:
-            return  # Internal initiative is not a user utterance.
+        if request.metadata.get("cognitive_mode") in {"autonomous_initiation", "scheduled_reminder"}:
+            return  # Internal initiative/reminder is not a user utterance.
         dedupe = self._input_dedupe(request)
         existing = self.store.get_message_by_dedupe(dedupe)
         if existing is None:
@@ -540,7 +540,7 @@ class CognitiveEngine:
 
     @trace_stage("record_input")
     async def _record_input_async(self, request: CognitiveRequest) -> None:
-        if request.metadata.get("cognitive_mode") == "autonomous_initiation" and request.metadata.get("temporal_initiative") is True:
+        if request.metadata.get("cognitive_mode") in {"autonomous_initiation", "scheduled_reminder"}:
             return
         if not self._async_storage_enabled(request):
             self._record_input(request)
