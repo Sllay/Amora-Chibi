@@ -594,6 +594,15 @@ class PlatformMessagingService:
                 ]
                 if source_lines:
                     text += "\n\nFontes consultadas:\n" + "\n".join(source_lines)
+            elif (not fallback_used and message.channel_type == ChannelType.DM
+                    and plan.metadata.get("web_search_references")):
+                # Search listings are not page reads: label them honestly.
+                search_links = [
+                    url for url in plan.metadata["web_search_references"]
+                    if isinstance(url, str) and url.startswith(("https://", "http://"))
+                ][:3]
+                if search_links:
+                    text += "\n\nResultados encontrados (páginas não verificadas):\n" + "\n".join(search_links)
             if "CONFIDENTIAL_OUTPUT_SUPPRESSED" in cognitive_reasons:
                 text = ""
             elif message.channel_type != ChannelType.GROUP or (
