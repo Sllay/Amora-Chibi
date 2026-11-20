@@ -268,3 +268,40 @@ def test_screenshot_current_does_not_represent_old_page_as_new_source():
         owner_verified=True,
     )
     assert text == "Captura solicitada."
+
+
+
+@pytest.mark.asyncio
+async def test_numbered_search_results_survive_opening_a_leaf_page():
+    entries = [
+        {"url": f"https://example.org/godot-{n}",
+         "title": f"Godot Android release {n}",
+         "snippet": "Godot Android release article"}
+        for n in range(1, 4)
+    ]
+    def read(url):
+        return {"status": "opened", "url": url, "title": "Article",
+                "text": "Godot Android official release content.",
+                "fetched_at": "2026-11-20T19:00:00+00:00",
+                "links": []}
+    nav = WebNavigator(fetch_page=read, search=lambda q: entries)
+    search = await nav.research("pesquise Godot Android", "owner-dm")
+    assert search["status"] == "opened"
+    followed2 = await nav.research("abre o link 2", "owner-dm")
+    assert followed2["sources"][0]["url"] == entries[1]["url"]
+    followed3 = await nav.research("abre o link 3", "owner-dm")
+    assert followed3["sources"][0]["url"] == entries[2]["url"]
+
+
+@pytest.mark.asyncio
+async def test_browser_interstitial_is_not_counted_as_a_read_page():
+    from amora.web_tools.navigator import WebFetchError
+    nav = WebNavigator(fetch_page=lambda url: {
+        "status": "opened", "url": url, "title": "Blocked",
+        "text": "Just a moment... Checking your browser before proceeding.",
+        "fetched_at": "2026-11-20T19:00:00+00:00", "links": [],
+    })
+    result = await nav.research("abre https://example.org/blocked", "owner-dm")
+    assert result["status"] == "failed"
+    assert result["reason"] == "WEB_PAGE_CONTENT_UNAVAILABLE"
+    assert nav.current_delivery("owner-dm")["sources"] == []
