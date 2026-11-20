@@ -404,6 +404,13 @@ class MemoryStore:
         # Preserve the exact candidate/ranking semantics while loading both child
         # collections in two bounded bulk reads.
         records = self._hydrate_many(rows)
+        if query.required_tags:
+            # Filter only hydrated, authorized-tag candidates. Tags cannot
+            # grant read permission, and this path uses the canonical ranking.
+            records = {key: item for key, item in records.items()
+                       if query.required_tags.issubset(item.tags)}
+            if not records:
+                return []
         # Apply projection permissions before scoring/MMR, not after top-k.
         if query.projection_recipient_id or query.projection_public_only or query.projection_remote_only:
             from amora.events import PrivacyScope
