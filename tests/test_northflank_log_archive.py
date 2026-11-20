@@ -133,6 +133,17 @@ class NorthflankLogArchiveTests(unittest.TestCase):
         assert "vars.NORTHFLANK_TEAM_ID || 'mejorberrys-team'" in workflow
         assert "secrets.NORTHFLANK_API_TOKEN" not in workflow
 
+    def test_failure_report_is_safe_when_decryptor_exits_early(self):
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github/workflows/northflank-encrypted-diagnosis.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("id: diagnose", workflow)
+        self.assertIn("if: always()", workflow)
+        self.assertIn("DIAGNOSIS_STEP_OUTCOME", workflow)
+        self.assertIn('"reason":"decrypt_or_scan_failed"', workflow)
+        self.assertNotIn('echo "$ARCHIVE_PASSPHRASE"', workflow)
+
     def test_redaction_of_credentials_precedes_any_public_diagnostics(self):
         self.assertEqual(
             safe_log('Authorization: Bearer token-super-secret'),
