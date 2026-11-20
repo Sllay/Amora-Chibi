@@ -10,16 +10,16 @@ The source repository is PUBLIC. Only **AES-256 encrypted** ZIP bytes belong in 
 
 Do not claim that ChatGPT can read the full encrypted ZIP directly. For richer support, expand an explicit allowlist of diagnostic event codes in source, review and test it, then regenerate the report.
 
-## Required one-time GitHub configuration
+## Existing GitHub configuration (Sllay/Amora-Chibi)
 
-In the GitHub repository, open **Settings → Secrets and variables → Actions**.
+The workflow now reuses the existing **Actions Secrets** visible in the repository:
 
-- Add a **Repository secret** `NORTHFLANK_API_TOKEN` with a dedicated **read-only** Northflank API token scoped to the project. Grant service/job listing, history and observability log *read* only, and avoid secret/environment read/write permissions.
-- Add a **Repository secret** `AMORA_LOG_ARCHIVE_PASSPHRASE` containing a long random passphrase (ideally 32+ bytes). Never add the passphrase to git, a variable, a chat message or a file.
-- Add a **Repository variable** `NORTHFLANK_PROJECT_ID` with the project ID.
-- If the Northflank token is team/org-scoped, add a **Repository variable** `NORTHFLANK_TEAM_ID` with its API team ID. Leave unset for a project/user-scoped token.
+- `NF_BACKUP_API_TOKEN`: forwarded to the collector process as `NORTHFLANK_API_TOKEN`, used exclusively for authenticated **GET** calls. No new token is required. The existing backup token may have broader permissions; for least privilege consider a separate observability read-only token when practical. It must have service/job listing, run/deployment history and log viewing rights.
+- `AMORA_LOG_ARCHIVE_PASSPHRASE`: used for AES-256 ZIP encryption/decryption. The workflow requires **at least 32 characters**; GitHub never exposes a stored secret's value for verification, so only a real workflow run can confirm this check.
+- Project: `default` (built-in fallback, override optionally via the Actions variable `NORTHFLANK_PROJECT_ID`).
+- Team: `mejorberrys-team` (known project team from the existing read-only audit tool; override optionally via the Actions variable `NORTHFLANK_TEAM_ID`).
 
-The Northflank key already used by the runtime service is NOT implicitly available to GitHub Actions; copy or create a scoped token separately. The Actions workflows will fail cleanly with a missing-configuration label until configured.
+**No new variable is required for the current Northflank project.** The key values are never copied into workflows, log files or diagnostics. If a Northflank 403 occurs, check whether the existing backup token includes *View Observability* access rather than expanding the collector to a write API.
 
 Run **Actions → Northflank encrypted log archive → Run workflow**, then check the encrypted ZIP exists on the archive branch. The second workflow runs automatically afterward; its code-only report appears at `ops/logs/diagnostics.json` on the archive branch. Run the diagnostic workflow manually at any time to reprocess the last encrypted snapshot without contacting Northflank.
 
