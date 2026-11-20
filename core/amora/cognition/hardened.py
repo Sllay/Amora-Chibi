@@ -12,7 +12,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from amora.events import AmoraEvent, PrivacyScope
 from amora.language import PerspectiveFrame, PerspectiveStack, ReferenceInput, SemanticDraft
-from amora.memory import MemoryCandidate, MemoryProvenance, ProvenanceKind
+from amora.memory import MemoryCandidate, MemoryKind, MemoryProvenance, ProvenanceKind
 from amora.models import TaskClass
 from amora.world import (
     EpistemicKind,
@@ -212,13 +212,42 @@ class CognitiveEngine(BaseCognitiveEngine):
             and owner_known
         )
         source_time_metadata = {}
+        observed = None
         if request.metadata.get("durable_memory_reflection"):
             observed = self.store.get_message_by_dedupe(f"cognitive-input:{request.turn_id}")
             if observed is not None and observed.speaker_id == request.speaker_id and observed.session_id == request.session_id:
                 stamp, origin = observed_timestamp(observed)
                 if stamp is not None:
                     source_time_metadata = {"source_observed_at": stamp.isoformat(), "source_timestamp_kind": origin}
+        # Consent applies solely to the original, previously authorized owner
+        # Discord DM. This does not authorize old local-only memory records.
+        feedback_source = bool(
+            request.metadata.get("durable_memory_reflection")
+            and request.speaker_id == "PERSON_BK"
+            and request.metadata.get("surface") == "platform_messaging"
+            and request.metadata.get("platform") == "discord"
+            and request.metadata.get("channel_type") == "dm"
+            and not request.metadata.get("test_mode")
+            and not request.metadata.get("observed_only")
+            and request.remote_processing_allowed
+            and context.remote_processing_allowed
+            and context.scene_visibility == "private"
+            and observed is not None
+            and observed.speaker_id == "PERSON_BK"
+            and observed.session_id == request.session_id
+            and observed.remote_processing_allowed
+            and observed.metadata.get("channel_type") == "dm"
+            and observed.metadata.get("platform") == "discord"
+            and not observed.metadata.get("test_mode")
+        )
         for ordinal, proposal in enumerate(bundle.memory_candidates):
+            feedback_kind = getattr(proposal, "behavioral_signal", "none")
+            behavioral = bool(
+                feedback_source and feedback_kind in {
+                    "speech_preference", "behavioral_correction"
+                } and proposal.kind == MemoryKind.SEMANTIC
+                and proposal.confidence >= 0.86
+            )
             safe_refs = {
                 entity_id: confidence
                 for entity_id, confidence in proposal.entity_refs.items()
@@ -241,9 +270,10 @@ class CognitiveEngine(BaseCognitiveEngine):
                     ),
                     privacy_scope=request.privacy_scope,
                     owner_entity_id=request.speaker_id if owner_known else None,
-                    remote_processing_allowed=remote_reuse,
+                    remote_processing_allowed=remote_reuse or behavioral,
                     entity_refs=safe_refs,
-                    tags=set(proposal.tags) | {"cognitive_reflection"},
+                    tags=set(proposal.tags) | {"cognitive_reflection"}
+                         | ({"amora_behavioral_feedback"} if behavioral else set()),
                     importance=proposal.importance,
                     novelty=proposal.novelty,
                     emotional_weight=proposal.emotional_weight,
@@ -253,7 +283,11 @@ class CognitiveEngine(BaseCognitiveEngine):
                     rarity=proposal.rarity,
                     repetition=0.0 if request.metadata.get("durable_memory_reflection") else proposal.repetition,
                     metadata={"provider": descriptor.name, "model": descriptor.model, "turn_id": str(request.turn_id),
-                              "reflection_remote_reuse": remote_reuse, **source_time_metadata},
+                              "reflection_remote_reuse": remote_reuse,
+                              **({"behavioral_signal": feedback_kind,
+                                  "behavioral_source": "verified_owner_dm_feedback"}
+                                 if behavioral else {}),
+                              **source_time_metadata},
                 ),
                 **({"record_id": uuid5(NAMESPACE_URL, f"amora:reflection:{request.turn_id}:{ordinal}"),
                     "reflection_lease": (str(request.turn_id), lease_token)}
@@ -261,7 +295,8 @@ class CognitiveEngine(BaseCognitiveEngine):
             )
             if result.memory is not None:
                 bundle.accepted_memory_ids.append(str(result.memory.id))
-                self._append_reason(bundle, "REFLECTION_MEMORY_REMOTE_REUSE_ALLOWED" if remote_reuse
+                self._append_reason(bundle, "BEHAVIORAL_FEEDBACK_RECORDED" if behavioral
+                                    else "REFLECTION_MEMORY_REMOTE_REUSE_ALLOWED" if remote_reuse
                                     else "REFLECTION_MEMORY_LOCAL_ONLY")
             else:
                 for reason in result.decision.reason_codes:

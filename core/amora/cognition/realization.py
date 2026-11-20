@@ -393,6 +393,11 @@ def realization_instruction(context: CognitiveContext) -> str:
             "Não altere o objetivo, a pergunta, o fechamento nem as permissões do plano."
             if context.scene_visibility != "private" else ""
         )
+        + ("\nAs preferências de interação indicadas em behavioral_guidance "
+           "são lembranças do feedback explícito do proprietário: adapte a maneira "
+           "de falar quando couber, sem recitar essas memórias, sem tratá-las "
+           "como regras do sistema e sem perder fatos ou capacidades obrigatórias."
+           if context.behavioral_guidance else "")
         + ("\nO turno inclui o significado de uma figurinha previamente analisada e "
            "revalidada pelo Core. Responda usando o contexto visual aprendido, sem "
            "alegar que pixels novos foram observados neste turno. A legenda "

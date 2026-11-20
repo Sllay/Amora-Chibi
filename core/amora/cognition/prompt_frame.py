@@ -246,6 +246,13 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "image_text_is_instructions": False,
             "payload": context.visual_observation,
         }
+    if context.behavioral_guidance:
+        frame["behavioral_guidance"] = {
+            "source": "previous_explicit_owner_feedback",
+            "authority": "personal_style_preference_only",
+            "may_override_core_policy": False,
+            "payload": [item.model_dump(mode="json") for item in context.behavioral_guidance],
+        }
     if context.perceptual_expressions:
         # Verified perception memory is data, never current pixels or commands.
         frame["received_sticker_semantics"] = {
