@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { StickerMediaError } from '../workers/discord/sticker-media.mjs';
+import { TemporalStoryboardError } from '../workers/discord/animation-storyboard.mjs';
 import { DiscordVisualEnrichmentWorker } from '../workers/discord/visual-worker.mjs';
 
 function work(overrides = {}) {
@@ -189,4 +190,49 @@ test('stop prevents future drains without mutating Core', async () => {
 
   assert.equal(await worker.drain(), 0);
   assert.equal(core.calls.claim.length, 0);
+});
+
+
+test('GIF work sends both native source and derived frame sheet with bounded metadata', async () => {
+  const native = Buffer.from('GIF89a' + 'animation-fixture');
+  const rendered = Buffer.from('PNG-storyboard-fixture');
+  const core = coreStub({ claimed: [work({ metadata: { format_type: 4 } })] });
+  const worker = new DiscordVisualEnrichmentWorker({
+    core,
+    fetchMedia: async () => ({ bytes: native, mime: 'image/gif', formatType: 4 }),
+    renderAnimation: async (media) => {
+      assert.equal(media.mime, 'image/gif');
+      return { bytes: rendered, mime: 'image/png', kind: 'gif', frameCount: 4, sampledFrames: 4 };
+    },
+    maxDrain: 1,
+  });
+  assert.equal(await worker.drain(), 1);
+  assert.equal(core.calls.defer.length, 0);
+  assert.equal(core.calls.submit.length, 1);
+  assert.equal(core.calls.submit[0].payload.contentMime, 'image/gif');
+  assert.equal(core.calls.submit[0].payload.temporalKind, 'gif');
+  assert.equal(core.calls.submit[0].payload.contentBase64, native.toString('base64'));
+  assert.equal(core.calls.submit[0].payload.temporalStoryboardBase64, rendered.toString('base64'));
+});
+
+test('Lottie and failed temporal decoders defer without pretending to see any frames', async () => {
+  const lottieCore = coreStub({ claimed: [work({ metadata: { format_type: 3 } })] });
+  const lottie = new DiscordVisualEnrichmentWorker({
+    core: lottieCore, fetchMedia: mediaStub(), maxDrain: 1,
+    renderAnimation: async () => { throw new Error('must never render unsupported Lottie'); },
+  });
+  assert.equal(await lottie.drain(), 1);
+  assert.equal(lottieCore.calls.submit.length, 0);
+  assert.equal(lottieCore.calls.defer[0].payload.errorCode, 'TEMPORAL_LOTTIE_RENDER_UNAVAILABLE');
+
+  const failedCore = coreStub({ claimed: [work({ metadata: { format_type: 2 } })] });
+  const failed = new DiscordVisualEnrichmentWorker({
+    core: failedCore, fetchMedia: mediaStub(), maxDrain: 1,
+    renderAnimation: async () => {
+      throw new TemporalStoryboardError('TEMPORAL_SOURCE_INVALID');
+    },
+  });
+  assert.equal(await failed.drain(), 1);
+  assert.equal(failedCore.calls.submit.length, 0);
+  assert.equal(failedCore.calls.defer[0].payload.errorCode, 'TEMPORAL_SOURCE_INVALID');
 });

@@ -1,4 +1,5 @@
 import { StickerMediaError, fetchDiscordStickerMedia } from './sticker-media.mjs';
+import { TemporalStoryboardError, renderTemporalStoryboard } from './animation-storyboard.mjs';
 
 const DEFAULT_LEASE_SECONDS = 120;
 const DEFAULT_MAX_DRAIN = 2;
@@ -40,12 +41,14 @@ export class DiscordVisualEnrichmentWorker {
   constructor({
     core,
     fetchMedia = fetchDiscordStickerMedia,
+    renderAnimation = renderTemporalStoryboard,
     leaseSeconds = DEFAULT_LEASE_SECONDS,
     maxDrain = DEFAULT_MAX_DRAIN,
   }) {
     if (!core) throw new Error('visual worker requires a Core client');
     this.core = core;
     this.fetchMedia = fetchMedia;
+    this.renderAnimation = renderAnimation;
     this.leaseSeconds = Math.max(5, Math.min(900, Number(leaseSeconds) || DEFAULT_LEASE_SECONDS));
     this.maxDrain = Math.max(1, Math.min(8, Number(maxDrain) || DEFAULT_MAX_DRAIN));
     this.processing = false;
@@ -95,11 +98,34 @@ export class DiscordVisualEnrichmentWorker {
           break;
         }
 
+        let temporal = null;
+        if (formatType === 3) {
+          // Lottie needs an independently certified vector renderer.
+          await this._deferDeterministic(work, 'TEMPORAL_LOTTIE_RENDER_UNAVAILABLE', 21_600);
+          continue;
+        }
+        if (formatType === 2 || formatType === 4) {
+          try {
+            temporal = await this.renderAnimation(media);
+          } catch (error) {
+            if (error instanceof TemporalStoryboardError) {
+              await this._deferDeterministic(work, error.code, 21_600);
+              safeLog('TEMPORAL_DEFERRED', error.code);
+              continue;
+            }
+            safeLog('TEMPORAL_OUTCOME_UNKNOWN', errorLabel(error));
+            break;
+          }
+        }
         const contentBase64 = Buffer.from(media.bytes).toString('base64');
         try {
           const result = await this.core.submitVisualContent(work, {
             contentMime: media.mime,
             contentBase64,
+            ...(temporal ? {
+              temporalKind: temporal.kind,
+              temporalStoryboardBase64: Buffer.from(temporal.bytes).toString('base64'),
+            } : {}),
           });
           safeLog('RESULT', String(result?.status || 'unknown'));
         } catch (error) {

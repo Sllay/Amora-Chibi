@@ -179,10 +179,37 @@ class VisualExpressionEnrichmentService:
         claim_token: str,
         content_mime: str,
         content_base64: str,
+        temporal_kind: str | None = None,
+        temporal_storyboard_base64: str | None = None,
     ) -> VisualEnrichmentResult:
         content = self._decode_content(content_base64)
         mime = self._normalize_and_validate_media(content_mime, content)
+        # Identity always covers the ORIGINAL sticker bytes, not whichever
+        # frames a renderer chose to sample. Thus stale/reused work still
+        # compares against the true Discord asset content SHA.
         content_sha = hashlib.sha256(content).hexdigest()
+        analysis_content = content
+        analysis_mime = mime
+        if temporal_kind is not None or temporal_storyboard_base64 is not None:
+            if (kind != "sticker" or temporal_kind not in {"gif", "apng"}
+                    or not temporal_storyboard_base64):
+                raise VisualEnrichmentError(
+                    "INVALID_TEMPORAL_STORYBOARD", "invalid animated sticker envelope")
+            if (temporal_kind == "gif" and mime != "image/gif") or (
+                    temporal_kind == "apng" and (
+                        mime != "image/png" or not self._has_apng_control(content)
+                    )):
+                raise VisualEnrichmentError(
+                    "INVALID_TEMPORAL_STORYBOARD", "animated source signature mismatch")
+            derived = self._decode_content(temporal_storyboard_base64)
+            if (self._normalize_and_validate_media("image/png", derived) != "image/png"
+                    or len(derived) < 33
+                    or int.from_bytes(derived[16:20], "big") != 480
+                    or int.from_bytes(derived[20:24], "big") != 480):
+                raise VisualEnrichmentError(
+                    "INVALID_TEMPORAL_STORYBOARD", "unexpected storyboard dimensions")
+            analysis_content = derived
+            analysis_mime = "image/png"
 
         needs_analysis = self.memory.record_visual_content(
             platform=platform,
@@ -243,7 +270,7 @@ class VisualExpressionEnrichmentService:
                 reason_code="VISUAL_ANALYZER_UNAVAILABLE",
             )
 
-        if not analyzer.supports_mime(mime):
+        if not analyzer.supports_mime(analysis_mime):
             self._defer(
                 platform=platform,
                 account_scope=account_scope,
@@ -289,11 +316,14 @@ class VisualExpressionEnrichmentService:
 
         try:
             analysis = await analyzer.analyze(
-                content=content,
-                mime=mime,
+                content=analysis_content,
+                mime=analysis_mime,
                 name=record.name,
                 description=record.description,
-                tags=tuple(record.tags),
+                tags=(
+                    *record.tags,
+                    *(( "__amora_temporal_storyboard_v1__",) if temporal_kind else ()),
+                ),
             )
         except Exception as exc:
             self._defer(
@@ -322,7 +352,8 @@ class VisualExpressionEnrichmentService:
             expected_fingerprint=expected_fingerprint,
             claim_token=claim_token,
             content_fingerprint=content_sha,
-            provider=analysis.provider,
+            provider=(analysis.provider[:42] + ":temporal_v1"
+                      if temporal_kind else analysis.provider),
             model=analysis.model,
         )
         if not committed:
@@ -390,6 +421,25 @@ class VisualExpressionEnrichmentService:
         if not content or len(content) > cls.MAX_RAW_BYTES:
             raise VisualEnrichmentError("INVALID_VISUAL_SIZE", "visual payload is empty or too large")
         return content
+
+    @staticmethod
+    def _has_apng_control(content: bytes) -> bool:
+        """Locate a genuine acTL chunk before the first PNG IDAT chunk."""
+        if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+            return False
+        at = 8
+        while at + 12 <= len(content):
+            size = int.from_bytes(content[at:at + 4], "big")
+            end = at + size + 12
+            if size > len(content) or end > len(content):
+                return False
+            name = content[at + 4:at + 8]
+            if name == b"acTL":
+                return size == 8 and int.from_bytes(content[at + 8:at + 12], "big") >= 2
+            if name in {b"IDAT", b"IEND"}:
+                return False
+            at = end
+        return False
 
     @staticmethod
     def _normalize_and_validate_media(mime: str, content: bytes) -> str:
