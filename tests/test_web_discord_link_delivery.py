@@ -465,7 +465,7 @@ async def test_contextual_search_without_recent_same_dm_source_fails_without_web
 async def test_contextual_search_expired_or_different_dm_cannot_leak_topic():
     nav = WebNavigator(fetch_page=lambda url: {
         "status": "opened", "url": url, "title": "Godot Engine",
-        "text": "Official Godot docs", "links": [],
+        "text": "Official Godot documentation and engine details", "links": [],
         "fetched_at": "2026-11-20T00:00:00+00:00",
     }, search=lambda q: (_ for _ in ()).throw(AssertionError("no search")))
     await nav.research("abre https://godotengine.org/", "owner-dm")
