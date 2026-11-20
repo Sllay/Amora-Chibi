@@ -440,6 +440,15 @@ class MemoryStore:
                        if terms and terms <= topic_terms(record.content + " " + (record.summary or ""))}
             if not records:
                 return []
+        supplemental_ids: list[str] = []
+        if query.supplement_tags and query.supplement_limit:
+            supplemental_ids = [
+                memory_id for memory_id, record in sorted(
+                    records.items(),
+                    key=lambda item: (item[1].created_at, item[1].importance),
+                    reverse=True,
+                ) if query.supplement_tags.issubset(record.tags)
+            ][:query.supplement_limit]
         scores: dict[str, float] = {memory_id: 0.0 for memory_id in records}
         reasons: dict[str, set[str]] = {memory_id: set() for memory_id in records}
 
@@ -461,14 +470,16 @@ class MemoryStore:
         self._add_rrf(scores, reasons, importance_rank, 1.0, "IMPORTANCE_RETRIEVABILITY")
 
         if query.text and not text_rank:
+            # No unrelated generic memory is returned when lexical evidence is
+            # missing. Tagged source-grounded preferences may still accompany
+            # ordinary chat without masquerading as a topical memory.
             if not query.allow_entity_fallback or not entity_rank:
-                return []
-            # Explicit recollection requests can recover directly linked memories
-            # without pretending that a lexical match established the requested fact.
-            direct = set(entity_rank)
-            ranked = sorted(direct, key=lambda key: (-scores[key], key))
-            for key in ranked:
-                reasons[key].add("ENTITY_RECALL_NO_TEXT_MATCH")
+                ranked = []
+            else:
+                direct = set(entity_rank)
+                ranked = sorted(direct, key=lambda key: (-scores[key], key))
+                for key in ranked:
+                    reasons[key].add("ENTITY_RECALL_NO_TEXT_MATCH")
         else:
             ranked = sorted(scores, key=scores.get, reverse=True)
         selected = self._mmr_select(ranked, records, scores, query.limit, query.mmr_lambda)
@@ -481,6 +492,15 @@ class MemoryStore:
             )
             for memory_id in selected
         ]
+        included = {str(hit.memory.id): hit for hit in hits}
+        for memory_id in supplemental_ids:
+            if memory_id in included:
+                included[memory_id].reason_codes.append("TAGGED_SUPPLEMENT")
+            else:
+                hits.append(MemoryHit(
+                    memory=records[memory_id], score=0.7,
+                    reason_codes=["TAGGED_SUPPLEMENT"],
+                ))
         return hits
 
     def _finish_access(self, hits: list[MemoryHit], now: datetime) -> list[MemoryHit]:
