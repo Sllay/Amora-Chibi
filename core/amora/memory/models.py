@@ -123,7 +123,7 @@ class MemoryQuery(BaseModel):
     require_topic_match: bool = False
     required_tags: set[str] = Field(default_factory=set, max_length=4)
     supplement_tags: set[str] = Field(default_factory=set, max_length=4)
-    supplement_limit: int = Field(default=0, ge=0, le=3)
+    supplement_limit: int = Field(default=0, ge=0, le=6)
 
     @model_validator(mode="after")
     def validate_window(self) -> "MemoryQuery":
