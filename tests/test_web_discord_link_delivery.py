@@ -505,7 +505,8 @@ async def test_contextual_search_after_results_only_uses_search_subject():
     def search(query):
         queries.append(query)
         return [{"url": "https://godotengine.org/article/update",
-                 "title": "Godot update notes", "snippet": "Godot update"}]
+                 "title": "Godot Android update notes",
+                 "snippet": "Godot Android update"}]
     def blocked(url):
         raise WebFetchError("WEB_HTTP_403")
     nav = WebNavigator(search=search, fetch_page=blocked)
