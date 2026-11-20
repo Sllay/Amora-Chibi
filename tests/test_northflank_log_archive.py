@@ -90,6 +90,9 @@ class NorthflankLogArchiveTests(unittest.TestCase):
                 "2026-11-20 WEB_SCREENSHOT_UNAVAILABLE reason=provider_timeout "
                 "UserName=private https://example.com/account?token=123\n"
                 "2026-11-20 WEB_SCREENSHOT_ATTACHMENT_CONFIRMED\n"
+                "2026-11-20 WEB_SCREENSHOT_PIPELINE_READY version=20261120-r2\n"
+                "2026-11-20 WEB_SCREENSHOT_DISPATCH requested=true authorized=false\n"
+                "2026-11-20 WEB_SCREENSHOT_UPLOAD_REJECTED status=400\n"
                 "2026-11-20 random freeform user message\n"
             )
             archive = root / "archive.zip"
@@ -105,6 +108,9 @@ class NorthflankLogArchiveTests(unittest.TestCase):
             for forbidden in ("UserName", "private", "example.com", "random freeform"):
                 self.assertNotIn(forbidden, document)
             self.assertIn("provider_timeout", document)
+            self.assertIn("requested_true_authorized_false", document)
+            self.assertIn("20261120-r2", document)
+            self.assertIn('"400"', document)
 
     def test_zip_path_traversal_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
