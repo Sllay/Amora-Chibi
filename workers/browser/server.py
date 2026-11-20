@@ -18,7 +18,7 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from .proxy import PinnedProxy, ProxyDenied, validate_authority
@@ -152,6 +152,14 @@ class BrowserRenderer:
                 if len(links) >= MAX_LINKS:
                     break
             text = str(details.get("text") or "")[:MAX_TEXT]
+            challenge = text.strip().casefold()
+            # WAF/CAPTCHA interstitials are not real evidence that the
+            # requested article or page was read successfully.
+            if len(challenge) < 350 and any(cue in challenge for cue in (
+                "just a moment", "verify you are human", "checking your browser",
+                "enable cookies", "captcha", "verifique que você é humano",
+            )):
+                raise ProxyDenied("BROWSER_ACCESS_CHALLENGE")
             return {
                 "status": "opened" if text.strip() else "empty",
                 "url": final_url,
@@ -204,6 +212,21 @@ app = FastAPI(
     title="Amora Browser Worker (private only)", docs_url=None,
     redoc_url=None, openapi_url=None, lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def reject_unauthorized_render_before_parsing_body(request: Request, call_next):
+    if request.url.path == "/render":
+        token = request.headers.get("x-amora-browser-token", "")
+        secret = getattr(app.state, "secret", "")
+        if not secret or not token or not hmac.compare_digest(token, secret):
+            return Response(status_code=403)
+        declared = request.headers.get("content-length", "")
+        if not declared.isdigit() or int(declared) > 4096:
+            return Response(status_code=413)
+        if not request.headers.get("content-type", "").startswith("application/json"):
+            return Response(status_code=415)
+    return await call_next(request)
 
 
 @app.get("/health")
