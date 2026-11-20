@@ -78,9 +78,12 @@ def diagnostic_report(archive: Path, ciphertext: Path) -> dict:
     # ZipFile uses a limited archive and never extracts to disk.
     if archive.stat().st_size > MAX_ZIP_BYTES:
         raise ValueError("archive_size_limit")
+    if ciphertext.stat().st_size > MAX_ZIP_BYTES + 1024:
+        raise ValueError("ciphertext_size_limit")
     overview = {"schema": 1, "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "archive_sha256": hashlib.sha256(ciphertext.read_bytes()).hexdigest(),
-                "resources": [], "summary_events": {}}
+                "resources": [], "summary_events": {},
+                "collection": {"ok": 0, "empty": 0, "failed": 0}}
     all_events = Counter()
     with zipfile.ZipFile(archive) as source:
         members = source.infolist()
@@ -94,6 +97,14 @@ def diagnostic_report(archive: Path, ciphertext: Path) -> dict:
             raise ValueError("archive_uncompressed_limit")
         for member in members:
             if member.filename == "index.json" or member.filename.endswith("/index.json"):
+                # Only fixed status enums reach public metadata; no raw index
+                # text, URLs, job arguments or resource descriptions escape.
+                if member.filename != "index.json":
+                    index = json.loads(source.read(member))
+                    for version in (index.get("versions") or [])[:6]:
+                        code = version.get("collection_status")
+                        if code in overview["collection"]:
+                            overview["collection"][code] += 1
                 continue
             if not member.filename.endswith(".log"):
                 continue
