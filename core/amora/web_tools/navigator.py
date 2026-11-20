@@ -36,6 +36,11 @@ ALLOWED_PORTS = frozenset({80, 443, 8080, 8443})
 USER_AGENT = "AmoraWeb/1.0 (read-only source retrieval; no automated login)"
 
 _LINK_RE = re.compile(r"https?://[^\s<>\"'\x60]+", re.IGNORECASE)
+_SCREENSHOT_FOLLOW_RE = re.compile(
+    r"\b(?:print|screenshot|captura|foto\s+da\s+p[aá]gina)\b"
+    r".{0,40}?\b(?:link|resultado|refer[eê]ncia)\s*(?:n[ºo°.]?\s*)?(\d{1,2})\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _FOLLOW_RE = re.compile(
     r"\b(?:abre|abra|abrir|acessa|acesse|segue|seguir|leia|l[eê])\b"
     r".{0,35}?\b(?:link|resultado|refer[eê]ncia)\s*(?:n[ºo°.]?\s*)?(\d{1,2})\b",
@@ -395,7 +400,7 @@ def parse_web_intent(text: str) -> WebIntent | None:
         while first.endswith(")") and first.count(")") > first.count("("):
             first = first[:-1]
         return WebIntent("open", first)
-    follow = _FOLLOW_RE.search(raw)
+    follow = _FOLLOW_RE.search(raw) or _SCREENSHOT_FOLLOW_RE.search(raw)
     if follow:
         return WebIntent("follow", follow.group(1))
     search = _SEARCH_RE.search(raw)
@@ -623,6 +628,14 @@ class WebNavigator:
         self.sessions.pop(session_id, None)
         return []
 
+    def current_public_references(self, session_id: str) -> list[dict[str, str]]:
+        """Snapshot Core-held URLs for transport; never model invented links.
+
+        Only call after the Discord owner/DM gate. An unsuccessful NEW search
+        clears the old refs so a model fallback cannot cite stale searches.
+        """
+        return [dict(item) for item in self._refs(session_id)[:5]]
+
     async def research(self, text: str, session_id: str | None) -> dict[str, Any] | None:
         intent = parse_web_intent(text)
         if intent is None:
@@ -642,6 +655,8 @@ class WebNavigator:
                 return await self._open(intent.argument, session_id, "open",
                                         force_browser="navegador" in text.casefold()
                                         or "chromium" in text.casefold())
+            # No old links may masquerade as evidence of a new search.
+            self._save_refs(session_id, [])
             if not intent.argument:
                 raise WebFetchError("WEB_SEARCH_QUERY_EMPTY")
             planned_queries = [intent.argument]
