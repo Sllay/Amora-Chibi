@@ -23,6 +23,8 @@ The Northflank key already used by the runtime service is NOT implicitly availab
 
 Run **Actions → Northflank encrypted log archive → Run workflow**, then check the encrypted ZIP is present. The second workflow runs automatically afterward; its code-only report appears at `ops/logs/diagnostics.json`. Run the diagnostic workflow manually at any time to reprocess the last encrypted snapshot without contacting Northflank.
 
+**ChatGPT-triggered collection:** GitHub's connected app does not expose the workflow-dispatch operation, so a controlled push trigger is included instead. After setup, ChatGPT can read and increment `ops/logs/collect.request`, committing with `[logs-collect]`; that automatically runs the encrypted collector on `main`. Similarly, increment `ops/logs/diagnose.request` and commit with `[logs-diagnose]` to run only the decrypt-and-diagnose workflow. No user token or passphrase is ever passed in chat. Ordinary PRs, unrelated commits and changes without the required commit marker cannot trigger those push-mode jobs. The daily schedule and UI manual trigger also remain available.
+
 **Provider limits:** historical Northflank logs may be unavailable. Six snapshots means up to six historical deployment/run IDs per resource, not a guarantee of six complete records. Logs are bounded excerpts, and any unavailable version must be marked rather than fabricated.
 
 ## Security notes and operational limits
