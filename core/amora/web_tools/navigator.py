@@ -293,7 +293,11 @@ def parse_web_intent(text: str) -> WebIntent | None:
     raw = str(text or "")[:12000]
     urls = _LINK_RE.findall(raw)
     if urls:
-        first = urls[0].rstrip(".,;:!?)\u00bb")
+        first = urls[0].rstrip(".,;:!?\u00bb")
+        # Markdown/chat often add an unmatched closing parenthesis after a
+        # URL. Keep legitimate trailing ')' in Wikipedia/article links.
+        while first.endswith(")") and first.count(")") > first.count("("):
+            first = first[:-1]
         return WebIntent("open", first)
     follow = _FOLLOW_RE.search(raw)
     if follow:
