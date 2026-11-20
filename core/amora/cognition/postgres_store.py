@@ -7,7 +7,9 @@ from uuid import UUID
 
 from amora.storage.backend import StorageBackend
 from amora.storage.postgres_runtime_connection import PostgresRuntimeError
-from amora.storage.postgres_runtime_cognition import HISTORY,LATEST_USAGE,MERGE_METADATA
+from amora.storage.postgres_runtime_cognition import (
+    HISTORY, LATEST_USAGE, MERGE_METADATA, OWNER_DAY_INPUTS, OWNER_DAY_REPLIES,
+)
 from amora.time import Clock
 
 from .store_v1 import CognitiveStore
@@ -59,3 +61,18 @@ class PostgresCognitiveStore(CognitiveStore):
                 int(exclude_invalidated),max(1,min(500,int(limit))),
             )).fetchall()
         return [self._message_from_row(row) for row in reversed(rows)]
+
+    def _owner_day_source_rows(self, owner_id, start, end, scan_limit):
+        """Only reviewed PostgreSQL 18 query; never run SQLite text on Aiven."""
+        with self._lock:
+            return self._conn.execute(
+                OWNER_DAY_INPUTS, (owner_id, start, end, start, end, scan_limit + 1),
+            ).fetchall()
+
+    def _owner_day_outbound_rows(self, owner_id, turn_ids):
+        # JSON parameter stays bound; user text cannot form SQL identifiers.
+        with self._lock:
+            return self._conn.execute(
+                OWNER_DAY_REPLIES,
+                (owner_id, json.dumps(list(turn_ids), separators=(",", ":"))),
+            ).fetchall()
