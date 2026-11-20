@@ -324,8 +324,15 @@ class IncomingVisionCascade:
                     "incoming_visual_primary_retry code=%s remaining_budget_floor=%d",
                     exc.code, max(0, int(remaining)),
                 )
+                # When the first attempt used an expiring Discord CDN URL,
+                # retry with the already validated, bounded inline preview.
+                # Repeating the same signed URL can reproduce the same outage.
+                retry_image = (
+                    image.model_copy(update={"source_url": None})
+                    if image.source_url else image
+                )
                 return await asyncio.wait_for(
-                    self.primary.analyze(image, user_text),
+                    self.primary.analyze(retry_image, user_text),
                     timeout=max(0.05, remaining - 0.2),
                 )
             except asyncio.TimeoutError as exc:
