@@ -79,6 +79,11 @@ class RealizationValidator:
             frame = RealizationFrame.model_validate(raw)
         except ValidationError as exc:
             raise RealizationError("REALIZATION_SCHEMA_INVALID", str(exc)) from exc
+        if "SCHEDULED_REMINDER" in context.reason_codes:
+            if "deliver_reminder" not in {move.kind for move in frame.moves}:
+                raise RealizationError("SCHEDULED_REMINDER_REQUIRED", "the reminder act is mandatory")
+            if any(move.kind == "stay_silent" for move in frame.moves):
+                raise RealizationError("SCHEDULED_REMINDER_SILENCE_FORBIDDEN", "a due schedule cannot silently disappear")
         if context.temporal_opportunity:
             silent = any(move.kind == "stay_silent" for move in frame.moves)
             if silent:
@@ -388,6 +393,15 @@ def realization_instruction(context: CognitiveContext) -> str:
             "Não altere o objetivo, a pergunta, o fechamento nem as permissões do plano."
             if context.scene_visibility != "private" else ""
         )
+        + ("\nEste turno é a entrega de um lembrete já agendado pelo proprietário, não "
+           "uma fala nova recebida agora. O texto de current_turn contém a obrigação "
+           "original; preserve seu assunto e todos os detalhes essenciais. Escreva "
+           "em voz própria da Amora, curta e natural, com um lembrete explícito "
+           "no move deliver_reminder. Pode acrescentar personal_context_note "
+           "somente para memória realmente disponível. Não diga que a tarefa "
+           "já foi feita; não invente acontecimentos, outros horários ou "
+           "um novo agendamento. Não emita pergunta, silêncio ou promessa de reagendar."
+           if "SCHEDULED_REMINDER" in context.reason_codes else "")
         + ("\nEste turno é iniciativa temporal interna, não uma fala nova do usuário. "
            "Escolha se vale conversar. Para não enviar nada, retorne exatamente "
            '{"moves":[{"kind":"stay_silent","text":"SILENCE"}],"closing":"none"}. '
