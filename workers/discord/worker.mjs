@@ -17,6 +17,7 @@ import {
 import { DiscordSocialRuntime } from './social-runtime.mjs';
 import { collectDiscordIncomingImage, IncomingImageError } from './incoming-image.mjs';
 import { transcodeOversizedImage } from './incoming-image-transform.mjs';
+import { WebScreenshotService, screenshotMultipart } from './web-screenshot.mjs';
 import { messagingTurnId, startTypingProgress } from './typing-progress.mjs';
 
 const TRUE = new Set(['1', 'true', 'yes', 'on']);
@@ -99,6 +100,11 @@ export class DiscordWorker {
     this.registeredCommandGuild = null;
     this.rest = rest || new DiscordRestClient({ token });
     this.runtime = runtime || new DiscordSocialRuntime();
+    this.webScreenshots = new WebScreenshotService({
+      enabled: enabled('AMORA_WEB_SCREENSHOTS_ENABLED', true),
+      apiKey: process.env.AMORA_WEB_SCREENSHOT_MICROLINK_API_KEY || '',
+      dailyLimit: Number(process.env.AMORA_WEB_SCREENSHOT_DAILY_LIMIT || 4),
+    });
     this.typingProgress = new Map();
     this.socket = null;
     this.ready = false;
@@ -828,17 +834,33 @@ export class DiscordWorker {
   async sendOutbound(item) {
     const chunks = splitDiscordText(item.text, 2000);
     if (!chunks.length) throw new Error('EMPTY_OUTBOUND');
+    // The Core minted this flag after verified owner DM consent. A user/LLM
+    // cannot smuggle screenshot destinations into the worker's text path.
+    const authorizedScreenshot = item?.metadata?.web_capture_owner_verified === true
+      && typeof item?.metadata?.web_capture_source === 'string'
+      && item?.platform === 'discord';
+    const screenshot = authorizedScreenshot
+      ? await this.webScreenshots.capture(item.metadata.web_capture_source)
+      : null;
+    if (authorizedScreenshot && !screenshot) {
+      safeLog('WEB_SCREENSHOT_UNAVAILABLE', 'reason=provider_or_quota');
+      const note = '\n\n(Não consegui capturar o print desta página. Os links seguem acima.)';
+      if (chunks[0].length + note.length <= 2000) chunks[0] += note;
+    }
     let firstMessageId = null;
     for (let index = 0; index < chunks.length; index += 1) {
+      const payload = discordReplyPayload(chunks[index], {
+        replyToMessageId: item.reply_to_message_id,
+        firstChunk: index === 0,
+        nonce: discordNonce(item.id, index),
+      });
       const created = await this.rest.request(
         `/channels/${encodeURIComponent(item.conversation_id)}/messages`,
         {
           method: 'POST',
-          body: discordReplyPayload(chunks[index], {
-            replyToMessageId: item.reply_to_message_id,
-            firstChunk: index === 0,
-            nonce: discordNonce(item.id, index),
-          }),
+          ...(index === 0 && screenshot
+            ? { multipart: screenshotMultipart(payload, screenshot) }
+            : { body: payload }),
         },
       );
       if (created?.id && created?.channel_id) this.runtime.rememberBotMessage(created);
