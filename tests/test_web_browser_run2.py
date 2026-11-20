@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
+import sys
+
+# The production pip package installs Core only. Browser worker lives in a
+# separate Docker image and is imported from the checkout for shared tests.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx
 import pytest
