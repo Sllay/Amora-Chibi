@@ -68,6 +68,13 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
         # user utterance, plan, speaker/addressee, canonical identity or V3.
         if projected.specialist_support is not None:
             projected.specialist_support = None
+        elif projected.web_research and len(projected.web_research.get("sources") or []) > 1:
+            projected.web_research["sources"].pop()
+        elif projected.web_research and (projected.web_research.get("sources") or []):
+            projected.web_research["sources"][0]["text"] = (
+                projected.web_research["sources"][0].get("text") or "")[:600]
+            if len(projected.web_research["sources"][0]["text"]) <= 600:
+                projected.web_research["sources"].clear()
         elif projected.capabilities:
             projected.capabilities.pop()
         elif len(projected.world_claims) > 2:
