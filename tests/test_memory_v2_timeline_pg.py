@@ -74,6 +74,11 @@ def test_pg_historical_owner_date_query_survives_restart(tmp_path: Path):
                 assert rows[0]["user_text"].startswith("Projeto Orquídea")
                 assert rows[0]["reply_text"] is None
                 assert rows[0]["at"] == STAMP.astimezone(timezone.utc)
+                episode = reopened.owner_turn_conversations("PERSON_BK", [str(turn)])
+                assert list(episode) == [str(turn)]
+                assert episode[str(turn)]["user_text"] == message.raw_text
+                assert episode[str(turn)]["reply_text"] is None
+                assert not reopened.owner_turn_conversations("OTHER_OWNER", [str(turn)])
                 assert reopened.owner_day_conversations(
                     "OTHER_OWNER", start, end,
                 )[0] == []
