@@ -212,7 +212,7 @@ async def test_planner_timeout_preserves_original_query():
     def fetch(url):
         return {
             "status": "opened", "url": url,
-            "title": "Godot Android docs", "text": "Godot Android page",
+            "title": "Godot Android docs", "text": "Godot Android release documentation and mobile editor changes.",
             "links": [], "fetched_at": "2026-11-20T16:00:00+00:00",
         }
     navigator = WebNavigator(fetch_page=fetch, search=search, planner=SlowPlanner())
