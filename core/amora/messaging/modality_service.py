@@ -42,6 +42,14 @@ class _CapabilityAwareCognitionProxy:
         return getattr(self._inner, name)
 
     def observe_input(self, request):
+        self._attach_perceptual_context(request)
+        return self._inner.observe_input(request)
+
+    async def observe_input_async(self, request):
+        self._attach_perceptual_context(request)
+        return await self._inner.observe_input_async(request)
+
+    def _attach_perceptual_context(self, request):
         message = _CURRENT_MESSAGE.get()
         if message is not None:
             modalities = ["text", "silence"]
@@ -57,7 +65,42 @@ class _CapabilityAwareCognitionProxy:
                 request.metadata["visual_expression_available"] = False
                 request.metadata["visual_expression_count"] = 0
             request.metadata["available_response_modalities"] = modalities
-        return self._inner.observe_input(request)
+            if (message.channel_type == ChannelType.DM
+                    and message.platform == MessagingPlatform.DISCORD
+                    and message.remote_processing_allowed
+                    and request.remote_processing_allowed
+                    and request.speaker_id == "PERSON_BK"
+                    and request.privacy_scope == PrivacyScope.PERSONAL
+                    and not request.metadata.get("test_mode")):
+                observed = self._verified_current_stickers(message)
+                if observed:
+                    # Never send native sticker IDs or CDNs to the text model.
+                    # This is an existing enriched CPF, not new pixel inference.
+                    request.metadata["known_sticker_perception"] = observed
+
+    @staticmethod
+    def _verified_current_stickers(message: InboundMessage) -> list[dict[str, object]]:
+        result = []
+        for expression in message.expressions:
+            profile = expression.semantic_profile
+            if (expression.kind != ExpressionKind.STICKER
+                    or not expression.known_to_amora
+                    or expression.needs_visual_enrichment
+                    or expression.semantic_revision < 1
+                    or profile is None or profile.source != "visual_perception"):
+                continue
+            result.append({
+                "description": (profile.short_description or "")[:200],
+                "visual_concepts": list(profile.visual_concepts[:8]),
+                "affect_tags": list(profile.affect_tags[:6]),
+                "social_roles": list(profile.social_roles[:6]),
+                "interpretations": list(profile.possible_interpretations[:6]),
+                "confidence": round(profile.confidence, 3),
+                "source": "verified_perceptual_memory",
+            })
+            if len(result) >= 3:
+                break
+        return result
 
     @staticmethod
     def _known_expression_count(message: InboundMessage) -> int:
@@ -108,6 +151,17 @@ class PlatformMessagingService(BasePlatformMessagingService):
             return await super().receive(hydrated)
         finally:
             _CURRENT_MESSAGE.reset(token)
+
+    @staticmethod
+    def _cognitive_text(message: InboundMessage) -> str:
+        # A previously enriched and currently matched sticker is no longer an
+        # opaque attachment. Its meaning is supplied separately as evidence.
+        if (not message.text.strip()
+                and _CapabilityAwareCognitionProxy._verified_current_stickers(message)
+                and message.channel_type == ChannelType.DM
+                and message.remote_processing_allowed):
+            return "[Usuário enviou uma figurinha cujo significado visual já foi aprendido.]"
+        return BasePlatformMessagingService._cognitive_text(message)
 
     async def _incoming_visual_observation(self, message, decision):
         if not (message.platform == MessagingPlatform.DISCORD
