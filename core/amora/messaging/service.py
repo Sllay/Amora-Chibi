@@ -589,14 +589,17 @@ class PlatformMessagingService:
                 compose_web_delivery, requested_screenshot_source,
             )
             core_nav = getattr(self.cognition, "_owner_web_navigator", None)
-            session_links = (
-                core_nav.current_public_references(request.session_id)
+            core_delivery = (
+                core_nav.current_delivery(request.session_id)
                 if web_owner_verified and core_nav is not None
-                else []
+                else {"sources": [], "references": []}
             )
+            session_links = core_delivery["references"]
             intent = parse_web_intent(message.text) if web_owner_verified else None
-            sources = (plan.metadata.get("web_sources") or [])[:2]
-            references = plan.metadata.get("web_references") or []
+            # If the speech provider timed out or returned a fallback, the
+            # last Core search result still owns verified clickable URLs.
+            sources = (plan.metadata.get("web_sources") or core_delivery["sources"])[:2]
+            references = plan.metadata.get("web_references") or core_delivery["references"]
             text, _ = compose_web_delivery(
                 text, intent=intent, sources=sources, references=references,
                 session_references=session_links,
