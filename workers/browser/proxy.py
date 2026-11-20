@@ -38,7 +38,7 @@ def public_ip_answers(addresses) -> list[str]:
                 ip = ip.ipv4_mapped
         except ValueError as exc:
             raise ProxyDenied("DNS_ADDRESS_INVALID") from exc
-        if not ip.is_global:
+        if (not ip.is_global or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
             raise ProxyDenied("PRIVATE_NETWORK_DENIED")
         output.append(str(ip))
     if not output:
@@ -66,7 +66,7 @@ def validate_authority(host: str, port: int) -> tuple[str, int]:
     if literal is not None:
         if isinstance(literal, ipaddress.IPv6Address) and literal.ipv4_mapped:
             literal = literal.ipv4_mapped
-        if not literal.is_global:
+        if (not literal.is_global or literal.is_multicast or literal.is_reserved or literal.is_unspecified):
             raise ProxyDenied("PRIVATE_NETWORK_DENIED")
         return str(literal), port
     try:
