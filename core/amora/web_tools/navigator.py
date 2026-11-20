@@ -74,6 +74,17 @@ def _public_url(url: str) -> tuple[str, str, int, str]:
             raise ValueError
         if host in {"localhost", "metadata.google.internal"} or host.endswith("."):
             raise ValueError
+        # Reject literal private/reserved addresses even in search-result
+        # metadata; DNS-name targets are rechecked and pinned at connection time.
+        try:
+            literal_ip = ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        else:
+            if isinstance(literal_ip, ipaddress.IPv6Address) and literal_ip.ipv4_mapped:
+                literal_ip = literal_ip.ipv4_mapped
+            if not literal_ip.is_global:
+                raise WebFetchError("WEB_PRIVATE_NETWORK_DENIED")
         safe_path = parsed.path or "/"
         # Fragments have no effect on HTTP requests.
         result = urlunsplit((scheme, parsed.netloc, safe_path, parsed.query, ""))
