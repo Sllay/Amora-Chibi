@@ -43,13 +43,16 @@ def parse_reader_output(body: str, original_url: str) -> dict[str, object]:
         raise WebFetchError("WEB_EXTERNAL_READER_EMPTY")
     original = _shareable_public_url(original_url)
     source = SOURCE.search(body[:3500])
-    if source:
-        resolved = _public_url(source.group(1))[0]
-    else:
-        resolved = original
     title_match = TITLE.search(body[:3500])
     separator = BODY_START.search(body)
-    text = body[separator.end():].strip() if separator else body.strip()
+    # Verify the standard Reader envelope. Otherwise a 200 error/interstitial
+    # could be misrepresented as article evidence in Amora's reply.
+    if not source or not separator:
+        raise WebFetchError("WEB_EXTERNAL_READER_RESULT_INVALID")
+    # A vendor-supplied source field must never rewrite the Core's citation URL.
+    # We fetched the user-supplied URL; only that is grounded by this request.
+    resolved = original
+    text = body[separator.end():].strip()
     text = _clean(text, MAX_SOURCE_TEXT)
     challenge = text.casefold()[:400]
     if len(text) < 80 or any(code in challenge for code in (
