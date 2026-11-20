@@ -120,7 +120,7 @@ def test_search_with_only_references_can_capture_first_result_as_a_screenshot():
 
 @pytest.mark.asyncio
 async def test_failed_new_search_invalidates_previous_result_references():
-    ref = {"url": "https://godotengine.org/article/older", "title": "Older"}
+    ref = {"url": "https://godotengine.org/article/older", "title": "Godot Android older update", "snippet": "Godot Android"}
     def finder(query):
         if "Godot" in query:
             return [ref]
