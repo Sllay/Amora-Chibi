@@ -17,7 +17,6 @@ const MAX_INPUT_BYTES = 1024 * 1024;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const MAX_FRAMES = 150;
 const MAX_DIMENSION = 1024;
-const MAX_DURATION_MS = 24_000;
 const TIMEOUT_MS = 6_000;
 
 export class TemporalStoryboardError extends Error {
