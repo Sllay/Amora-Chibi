@@ -212,7 +212,7 @@ def _clean(value: str, maximum: int) -> str:
 
 
 class _HTMLExtractor(HTMLParser):
-    _SKIP = frozenset({"script", "style", "noscript", "template", "svg", "nav", "footer", "aside", "form"})
+    _SKIP = frozenset({"script", "style", "noscript", "template", "svg", "nav", "header", "footer", "aside", "form"})
 
     def __init__(self, base_url: str):
         super().__init__(convert_charrefs=True)
@@ -236,7 +236,7 @@ class _HTMLExtractor(HTMLParser):
             self._skip_depth += 1
         if tag in {"main", "article"}:
             self._main_depth += 1
-        if tag == "a":
+        if tag == "a" and not self._skip_depth:
             href = attrs_map.get("href") or ""
             class_name = attrs_map.get("class") or ""
             self._anchor = {"url": urljoin(self.base_url, href), "text": [], "search": (
