@@ -84,7 +84,7 @@ def _public_url(url: str) -> tuple[str, str, int, str]:
         else:
             if isinstance(literal_ip, ipaddress.IPv6Address) and literal_ip.ipv4_mapped:
                 literal_ip = literal_ip.ipv4_mapped
-            if not literal_ip.is_global:
+            if (not literal_ip.is_global or literal_ip.is_multicast or literal_ip.is_reserved or literal_ip.is_unspecified):
                 raise WebFetchError("WEB_PRIVATE_NETWORK_DENIED")
         safe_path = quote(parsed.path or "/", safe="/%:@!$&'()*+,;=-._~")
         safe_query = quote(parsed.query, safe="=&%:/?+;,@!$'()*-._~")
@@ -116,7 +116,7 @@ def _approved_ip(host: str, port: int) -> str:
             parsed = ipaddress.ip_address(value)
             if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped:
                 parsed = parsed.ipv4_mapped
-            if not parsed.is_global:
+            if (not parsed.is_global or parsed.is_multicast or parsed.is_reserved or parsed.is_unspecified):
                 raise WebFetchError("WEB_PRIVATE_NETWORK_DENIED")
         except ValueError as exc:
             raise WebFetchError("WEB_DNS_FAILED") from exc
