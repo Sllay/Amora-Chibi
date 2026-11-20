@@ -387,6 +387,19 @@ class PlatformMessagingService:
                     "[Usuário enviou uma imagem, porém a percepção visual não "
                     "conseguiu acessá-la. Não descreva conteúdo não observado.]"
                 )
+        # Only the verified owner in their private Discord DM may ask the
+        # Core to retrieve live public-web evidence. Transport message content
+        # cannot grant this capability to another actor or a public channel.
+        from amora.web_tools import parse_web_intent
+        web_owner_verified = bool(
+            decision.action == RoutingAction.RESPOND
+            and message.platform.value == "discord"
+            and message.channel_type == ChannelType.DM
+            and message.remote_processing_allowed
+            and message.privacy_scope.value == "PERSONAL"
+            and parse_web_intent(message.text) is not None
+            and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)
+        )
         request = CognitiveRequest(
             text=cognitive_text,
             speaker_id=actor_id,
@@ -398,6 +411,7 @@ class PlatformMessagingService:
             turn_id=self._turn_id(message),
             metadata={
                 "surface": "platform_messaging",
+                "web_owner_verified": web_owner_verified,
                 "platform": message.platform.value,
                 "channel_type": message.channel_type.value,
                 "conversation_ref": self._conversation_ref(message),
@@ -568,6 +582,18 @@ class PlatformMessagingService:
             cognitive_reasons = list(plan.reason_codes)
             cognitive_turn_id = str(plan.turn_id)
             text = (plan.display_text or plan.speech_text or fallback).strip()
+            # The trusted Core, not a language model, appends verified sources.
+            # Speech remains natural; Discord gets clickable primary URLs.
+            consulted = (plan.metadata.get("web_sources") or [])[:2]
+            if consulted and not fallback_used and message.channel_type == ChannelType.DM:
+                source_lines = [
+                    str(item["url"]) for item in consulted
+                    if isinstance(item, dict)
+                    and isinstance(item.get("url"), str)
+                    and item["url"].startswith(("https://", "http://"))
+                ]
+                if source_lines:
+                    text += "\n\nFontes consultadas:\n" + "\n".join(source_lines)
             if "CONFIDENTIAL_OUTPUT_SUPPRESSED" in cognitive_reasons:
                 text = ""
             elif message.channel_type != ChannelType.GROUP or (
