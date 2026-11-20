@@ -160,6 +160,8 @@ class CognitiveContext(BaseModel):
     drives: dict[str, float] = Field(default_factory=dict)
     active_intention: dict[str, Any] | None = None
     memories: list[ContextMemory] = Field(default_factory=list)
+    # Source-grounded owner correction / speaking preferences, not Core policy.
+    behavioral_guidance: list[ContextMemory] = Field(default_factory=list, max_length=3)
     world_claims: list[dict[str, Any]] = Field(default_factory=list)
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     temporal_context: dict[str, Any] | None = None
