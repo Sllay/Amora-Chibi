@@ -216,18 +216,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
         # A verified owner-DM request can request read-only web retrieval.
         # Evidence is attached *after* canonical compilation: it is not a
         # user-forgeable memory, world claim, identity or action grant.
-        web_eligible = (
-            os.getenv("AMORA_WEB_ENABLED", "1").strip().lower() not in {"0", "false", "off"}
-            and request.speaker_id == "PERSON_BK"
-            and request.metadata.get("web_owner_verified") is True
-            and request.metadata.get("surface") == "platform_messaging"
-            and request.metadata.get("platform") == "discord"
-            and request.metadata.get("channel_type") == "dm"
-            and request.metadata.get("cognitive_mode", "reply") == "reply"
-            and request.privacy_scope == PrivacyScope.PERSONAL
-            and request.remote_processing_allowed
-            and not request.metadata.get("test_mode")
-        )
+        web_eligible = _web_retrieval_allowed(request)
         if web_eligible:
             from amora.web_tools import WebNavigator
             navigator = getattr(self, "_owner_web_navigator", None)
@@ -779,6 +768,22 @@ class CognitiveEngine(ProductionCognitiveEngine):
         else:
             self._finish_plan(request, plan)
         return plan
+
+
+def _web_retrieval_allowed(request: CognitiveRequest) -> bool:
+    """Defense-in-depth gate; adapter has to verify owner before this check."""
+    return bool(
+        os.getenv("AMORA_WEB_ENABLED", "1").strip().lower() not in {"0", "false", "off"}
+        and request.speaker_id == "PERSON_BK"
+        and request.metadata.get("web_owner_verified") is True
+        and request.metadata.get("surface") == "platform_messaging"
+        and request.metadata.get("platform") == "discord"
+        and request.metadata.get("channel_type") == "dm"
+        and request.metadata.get("cognitive_mode", "reply") == "reply"
+        and request.privacy_scope == PrivacyScope.PERSONAL
+        and request.remote_processing_allowed
+        and not request.metadata.get("test_mode")
+    )
 
 
 def _execution_metadata(metadata: dict[str, Any]) -> dict[str, object]:
