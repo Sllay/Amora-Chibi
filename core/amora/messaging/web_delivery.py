@@ -86,7 +86,7 @@ def compose_web_delivery(
             lines.append(row)
             used += len(row) + 1
         if lines:
-            paragraphs.append(label + "\\n" + "\\n".join(lines))
+            paragraphs.append(label + "\n" + "\n".join(lines))
             available -= used + 2
 
     append_lines("Fontes consultadas:", [(0, url) for url in opened])
@@ -99,7 +99,7 @@ def compose_web_delivery(
         # Preserve the exact reference numbers exposed by WebNavigator:
         # omitting already opened refs here would shift 'abre o link 2'.
         append_lines(label, list(enumerate(refs, 1)))
-    return "\\n\\n".join(paragraphs), None
+    return "\n\n".join(paragraphs), None
 
 
 def requested_screenshot_source(
