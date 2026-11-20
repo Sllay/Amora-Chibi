@@ -25,7 +25,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, quote, quote_plus, unquote, urljoin, urlsplit, urlunsplit
 
 MAX_URL_LENGTH = 2048
 MAX_BYTES = 420_000
