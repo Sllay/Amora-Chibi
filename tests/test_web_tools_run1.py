@@ -134,6 +134,15 @@ def test_html_extracts_readable_article_and_follow_links_without_scripts(monkeyp
     assert page["links"] == [{"url": "https://example.com/release", "title": "Detalhes oficiais"}]
 
 
+def test_chat_url_parser_keeps_legitimate_parentheses_but_trims_chat_punctuation():
+    url = "https://en.wikipedia.org/wiki/Function_(mathematics)"
+    intent = parse_web_intent(f"Amora, veja este link: {url}")
+    assert intent is not None and intent.action == "open"
+    assert intent.argument == url
+    wrapped = parse_web_intent(f"({url}), mais detalhes")
+    assert wrapped is not None and wrapped.argument == url
+
+
 def test_external_search_result_is_unwrapped_and_kept_as_a_source(monkeypatch):
     body = b'''<html><a class="result__a"
     href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fpost">Example post</a></html>'''
