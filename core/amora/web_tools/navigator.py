@@ -20,6 +20,7 @@ import os
 import re
 import socket
 import ssl
+import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -372,6 +373,35 @@ def _searx_search(query: str, endpoint: str) -> list[dict[str, str]]:
     return results
 
 
+def _bing_rss_search(query: str) -> list[dict[str, str]]:
+    """Keyless Bing web RSS search; malformed feeds fail closed."""
+    target = "https://www.bing.com/search?format=rss&q=" + quote_plus(query)
+    _, _, _, body = _http_get(target)
+    # Refuse DTDs/entities before parsing XML controlled by a remote site.
+    if b"<!DOCTYPE" in body.upper() or b"<!ENTITY" in body.upper():
+        raise WebFetchError("WEB_SEARCH_RESULT_INVALID")
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError as exc:
+        raise WebFetchError("WEB_SEARCH_RESULT_INVALID") from exc
+    results = []
+    for item in root.findall("./channel/item")[:15]:
+        url = str(item.findtext("link") or "")
+        try:
+            url = _public_url(url)[0]
+        except WebFetchError:
+            continue
+        results.append({
+            "url": url, "title": _clean(item.findtext("title") or "", 160),
+            "snippet": _clean(item.findtext("description") or "", 300),
+        })
+        if len(results) >= 5:
+            break
+    if not results:
+        raise WebFetchError("WEB_SEARCH_UNAVAILABLE")
+    return results
+
+
 def _ddg_search(query: str) -> list[dict[str, str]]:
     target = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
     final_url, _, headers, body = _http_get(target)
@@ -448,15 +478,20 @@ class WebNavigator:
             if intent.action == "open":
                 return await self._open(intent.argument, session_id, "open")
             endpoint = os.getenv("AMORA_WEB_SEARCH_ENDPOINT", "").strip()
-            if self.search_provider is not None:
-                results = await self._call(self.search_provider, intent.argument)
-            elif endpoint:
+            providers = (
+                [(self.search_provider, (intent.argument,))]
+                if self.search_provider is not None else
+                ([( _searx_search, (intent.argument, endpoint))] if endpoint else [])
+                + [(_bing_rss_search, (intent.argument,)), (_ddg_search, (intent.argument,))]
+            )
+            results = []
+            for provider, arguments in providers:
                 try:
-                    results = await self._call(_searx_search, intent.argument, endpoint)
+                    results = await self._call(provider, *arguments)
+                    if results:
+                        break
                 except (WebFetchError, TimeoutError):
-                    results = await self._call(_ddg_search, intent.argument)
-            else:
-                results = await self._call(_ddg_search, intent.argument)
+                    continue
             if not results:
                 raise WebFetchError("WEB_SEARCH_UNAVAILABLE")
             validated: list[dict[str, str]] = []
@@ -470,15 +505,16 @@ class WebNavigator:
             if not validated:
                 raise WebFetchError("WEB_SEARCH_UNAVAILABLE")
             self._save_refs(session_id, validated)
-            sources = []
-            for item in validated[:2]:
-                try:
-                    page = await self._call(self.fetch_page, item["url"])
-                except (WebFetchError, TimeoutError):
-                    continue
-                if page.get("status") == "opened":
-                    sources.append({key: page[key] for key in (
-                        "url", "title", "text", "fetched_at", "status")})
+            # Read two independent sources concurrently under the Core turn
+            # timeout. Only actual opened pages are promoted to citations.
+            fetched = await asyncio.gather(
+                *(self._call(self.fetch_page, item["url"]) for item in validated[:2]),
+                return_exceptions=True,
+            )
+            sources = [
+                {key: page[key] for key in ("url", "title", "text", "fetched_at", "status")}
+                for page in fetched if isinstance(page, dict) and page.get("status") == "opened"
+            ]
             return {"action": "search", "status": "opened" if sources else "results_only",
                     "query": intent.argument[:240], "sources": sources,
                     "references": [{"number": index, "url": item["url"],
