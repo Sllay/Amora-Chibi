@@ -1,6 +1,9 @@
 const DEFAULT_TIMEOUT_MS = 20_000;
-// Above the Core's 105s cognition cap; below its 130s messaging HTTP guard.
+// Ordinary text stays on the certified 120s window.
+// Image turns include a separate 27s vision stage before up to 105s of
+// cognition. The transport must not abandon these legitimate attempts.
 const INBOUND_TIMEOUT_MS = 120_000;
+const IMAGE_INBOUND_TIMEOUT_MS = 160_000;
 const VISUAL_CONTENT_TIMEOUT_MS = 45_000;
 const MIN_PRESENCE_CONTROL_TIMEOUT_MS = 5_000;
 const DEFAULT_OUTBOUND_LEASE_SECONDS = 120;
@@ -93,7 +96,8 @@ export class MessagingCoreClient {
     return this.request('/v1/messaging/worker/inbound', {
       method: 'POST',
       body: message,
-      timeoutMs: INBOUND_TIMEOUT_MS,
+      timeoutMs: message?.incoming_image || message?.incoming_image_status
+        ? IMAGE_INBOUND_TIMEOUT_MS : INBOUND_TIMEOUT_MS,
     });
   }
 
