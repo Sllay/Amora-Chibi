@@ -51,7 +51,7 @@ async def test_named_owner_recall_includes_original_utterance_and_sent_amora_ans
             _dm(restarted, "r2-recall", "Amora, lembra do projeto Orquídea?")
         )).outbound[0]
         assert response.metadata["cognitive_reason_codes"] == ["MEMORY_RECALL_PERSISTENT_FOUND"]
-        assert "Projeto Orquídea: cinco mapas" in response.text
+        assert "Usuário relatou que Orquídea terá cinco mapas" in response.text
         assert SOURCE in response.text
         assert ANSWER in response.text
         assert "11/11/2026" in response.text
