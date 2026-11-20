@@ -340,10 +340,13 @@ def render_conversation_turn(
 def render_current_turn(context: CognitiveContext) -> str:
     return render_conversation_turn(
         turn_id=context.turn_id,
-        speaker_id="ENTITY_AMORA" if context.temporal_opportunity else context.speaker_id,
-        addressee_id=context.speaker_id if context.temporal_opportunity else context.target_id,
+        speaker_id=("ENTITY_AMORA" if context.temporal_opportunity
+                    or "SCHEDULED_REMINDER" in context.reason_codes else context.speaker_id),
+        addressee_id=(context.speaker_id if context.temporal_opportunity
+                      or "SCHEDULED_REMINDER" in context.reason_codes else context.target_id),
         text=context.user_text,
-        source="core_temporal_initiative" if context.temporal_opportunity else "current_turn",
+        source=("core_scheduled_reminder" if "SCHEDULED_REMINDER" in context.reason_codes
+                else "core_temporal_initiative" if context.temporal_opportunity else "current_turn"),
     )
 
 
