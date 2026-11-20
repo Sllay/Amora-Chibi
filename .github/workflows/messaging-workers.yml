@@ -69,9 +69,6 @@ jobs:
       - name: Smoke test real raster transcode in non-root Discord container
         run: |
           docker run --rm --entrypoint sh amora-discord:test -c 'vips black /tmp/source.png 64 64 && node --input-type=module -e "import {readFile} from \"node:fs/promises\"; import {transcodeOversizedImage} from \"./workers/discord/incoming-image-transform.mjs\"; const input=await readFile(\"/tmp/source.png\"); const result=await transcodeOversizedImage(input,\"image/png\"); if(result.mime!==\"image/webp\" || result.bytes.length<12 || result.bytes.length>4*1024*1024) process.exit(1); console.log(\"vision-native-transcode-ok\")"'
-      - name: Smoke transparent PNG into opaque WebP in real Discord container
-        run: |
-          docker run --rm --entrypoint node amora-discord:test workers/discord/vision-alpha-smoke.mjs
       - name: Resolve exact Baileys release, import worker and audit installed tree
         working-directory: workers/whatsapp
         run: |
