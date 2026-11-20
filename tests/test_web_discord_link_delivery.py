@@ -153,3 +153,42 @@ async def test_references_are_isolated_by_discord_dm_session():
     })
     await navigator.research("pesquise Godot Android", "owner-dm")
     assert navigator.current_public_references("stranger-dm") == []
+
+
+@pytest.mark.asyncio
+async def test_current_turn_source_survives_provider_failure_without_storing_page_text():
+    def read(url):
+        return {
+            "status": "opened", "url": url, "title": "Official article",
+            "text": "A detailed page about Godot and Android functionality.",
+            "fetched_at": "2026-11-20T18:00:00+00:00",
+            "links": [{"url": "https://godotengine.org/releases", "title": "Releases"}],
+        }
+    navigator = WebNavigator(fetch_page=read)
+    result = await navigator.research("abre https://godotengine.org/article/android", "owner-dm")
+    assert result["status"] == "opened"
+    delivery = navigator.current_delivery("owner-dm")
+    assert delivery["sources"] == [{
+        "url": "https://godotengine.org/article/android", "title": "Official article"
+    }]
+    assert "text" not in delivery["sources"][0]
+    assert delivery["references"][0]["url"] == "https://godotengine.org/releases"
+    outgoing, _ = compose_web_delivery(
+        "Minha geração de texto falhou, mas encontrei a página.",
+        intent=WebIntent("open", "https://godotengine.org/article/android"),
+        sources=delivery["sources"], references=delivery["references"], owner_verified=True,
+    )
+    assert "Fontes consultadas:\nhttps://godotengine.org/article/android" in outgoing
+    await navigator.research("pesquisa", "owner-dm")
+    assert navigator.current_delivery("owner-dm")["sources"] == []
+
+
+def test_giant_search_urls_do_not_overflow_outbound_limit():
+    huge = "https://example.org/article?q=" + ("a" * 1800)
+    outgoing, _ = compose_web_delivery(
+        "Resposta verificada do modelo. " * 50,
+        intent=WebIntent("search", "example"),
+        sources=[{"url": huge}], references=[huge] * 5,
+        owner_verified=True,
+    )
+    assert len(outgoing) < 12000
