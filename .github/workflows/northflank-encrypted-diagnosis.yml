@@ -1,11 +1,14 @@
 name: Northflank encrypted log diagnosis
 
 on:
+  workflow_call:
+    inputs:
+      archive_fresh:
+        description: True only when invoked from the verified collector
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
-  workflow_run:
-    workflows:
-      - Northflank encrypted log archive
-    types: [completed]
   issue_comment:
     types: [created]
 
@@ -19,14 +22,12 @@ concurrency:
 jobs:
   diagnose:
     if: >-
+      inputs.archive_fresh == true ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.number == 342 &&
        github.event.comment.user.login == 'Sllay' &&
-       github.event.comment.body == '/amora logs diagnose') ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main')
+       github.event.comment.body == '/amora logs diagnose')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
