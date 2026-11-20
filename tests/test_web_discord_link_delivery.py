@@ -7,6 +7,7 @@ import pytest
 
 from amora.messaging.web_delivery import (
     compose_web_delivery, requested_screenshot_source, screenshot_requested,
+    neutralize_screenshot_claims,
 )
 from amora.web_tools.navigator import WebIntent, WebNavigator, parse_web_intent
 
@@ -192,3 +193,78 @@ def test_giant_search_urls_do_not_overflow_outbound_limit():
         owner_verified=True,
     )
     assert len(outgoing) < 12000
+
+
+
+def test_screenshot_only_intent_is_not_ignored_or_confused_with_search():
+    for sentence in (
+        "Amora, tira um print dessa página e me envia",
+        "Manda um print do site",
+        "Amora, me envia screenshot da página",
+    ):
+        assert parse_web_intent(sentence) == WebIntent("capture", "current")
+    assert parse_web_intent("pesquisa a API screenshot do Godot") == WebIntent(
+        "search", "API screenshot Godot"
+    )
+    assert parse_web_intent(
+        "pesquisa novidades Godot Android e manda print da página"
+    ) == WebIntent("search", "novidades Godot Android")
+
+
+@pytest.mark.asyncio
+async def test_capture_current_page_uses_last_verified_dm_page_without_reopening():
+    calls = []
+    def read(url):
+        calls.append(url)
+        return {
+            "status": "opened", "url": url, "title": "Godot",
+            "text": "Known page contents for the user.",
+            "fetched_at": "2026-11-20T19:00:00+00:00", "links": [],
+        }
+    nav = WebNavigator(fetch_page=read)
+    opened = await nav.research("abre https://godotengine.org/releases", "owner-dm")
+    assert opened["status"] == "opened"
+    capture = await nav.research("tira print dessa página e me envia", "owner-dm")
+    assert capture["status"] == "capture_pending"
+    assert capture["sources"] == []
+    assert calls == ["https://godotengine.org/releases"]
+    prior = nav.current_delivery("owner-dm")
+    assert requested_screenshot_source(
+        "tira print dessa página e me envia",
+        parse_web_intent("tira print dessa página e me envia"),
+        sources=prior["sources"], references=prior["references"],
+        owner_verified=True,
+    ) == "https://godotengine.org/releases"
+    assert (await nav.research("manda um print da página", "different-dm"))["reason"] == "WEB_SCREENSHOT_NO_PAGE"
+    assert nav.current_delivery("different-dm")["references"] == []
+
+
+@pytest.mark.asyncio
+async def test_capture_only_without_previous_web_page_fails_explicitly():
+    nav = WebNavigator(fetch_page=lambda _: (_ for _ in ()).throw(AssertionError()))
+    result = await nav.research("manda print", "owner-dm")
+    assert result == {"action": "capture", "status": "failed",
+                      "reason": "WEB_SCREENSHOT_NO_PAGE",
+                      "sources": [], "references": []}
+
+
+def test_model_cannot_claim_print_delivery_on_behalf_of_discord():
+    statement = "Encontrei dados da atualização. Tirei um print e enviei a imagem! O projeto usa Godot."
+    cleaned = neutralize_screenshot_claims(statement)
+    assert "Encontrei dados da atualização." in cleaned
+    assert "O projeto usa Godot." in cleaned
+    assert "enviei a imagem" not in cleaned
+    assert "anexo no Discord" in cleaned
+    unchanged = "Pesquisei como tirar print na Godot Engine."
+    assert neutralize_screenshot_claims(unchanged) == unchanged
+
+
+def test_screenshot_current_does_not_represent_old_page_as_new_source():
+    text, _ = compose_web_delivery(
+        "Captura solicitada.",
+        intent=WebIntent("capture", "current"),
+        sources=[{"url": "https://godotengine.org/releases"}],
+        references=[{"url": "https://godotengine.org/article"}],
+        owner_verified=True,
+    )
+    assert text == "Captura solicitada."
