@@ -172,3 +172,48 @@ async def test_group_date_query_never_discloses_private_history(tmp_path, monkey
         assert response.metadata["memory_recall_count"] == 0
     finally:
         core.close()
+
+
+def test_postgres_owner_day_sql_is_explicit_reviewed_and_private():
+    from amora.storage.postgres_runtime_registry import compiled_domain_registry
+    from amora.storage.postgres_runtime_cognition import OWNER_DAY_INPUTS, OWNER_DAY_REPLIES
+    statements = compiled_domain_registry()
+    assert statements[OWNER_DAY_INPUTS].parameter_count == 6
+    assert statements[OWNER_DAY_INPUTS].max_result_rows == 513
+    assert statements[OWNER_DAY_REPLIES].parameter_count == 2
+    assert statements[OWNER_DAY_REPLIES].max_result_rows == 64
+    source = statements[OWNER_DAY_INPUTS].postgres_sql
+    reply = statements[OWNER_DAY_REPLIES].postgres_sql
+    assert "speaker_id=%s" in source and "channel_type'='dm'" in source
+    assert "memory_reflection_invalidations" in source
+    assert "privacy_scope IN ('PERSONAL','PRIVATE')" in source
+    assert "status='sent'" in reply and "target_entity_id=%s" in reply
+    assert "jsonb_array_elements_text(%s::jsonb)" in reply
+    assert "julianday(" not in source and "json_extract(" not in source
+    assert "julianday(" not in reply and "json_extract(" not in reply
+
+
+def test_postgres_owner_day_uses_named_registry_not_dynamic_sql():
+    import threading
+    from amora.cognition.postgres_store import PostgresCognitiveStore
+    from amora.storage.postgres_runtime_cognition import OWNER_DAY_INPUTS, OWNER_DAY_REPLIES
+    class Conn:
+        def __init__(self):
+            self.calls = []
+        def execute(self, query, params):
+            self.calls.append((query, tuple(params)))
+            class Cursor:
+                def fetchall(self):
+                    return []
+            return Cursor()
+    store = object.__new__(PostgresCognitiveStore)
+    store._lock = threading.RLock()
+    store._conn = Conn()
+    low = datetime(2026, 11, 11, 3, tzinfo=timezone.utc).isoformat()
+    high = datetime(2026, 11, 12, 3, tzinfo=timezone.utc).isoformat()
+    assert store._owner_day_source_rows("PERSON_BK", low, high, 30) == []
+    assert store._owner_day_outbound_rows("PERSON_BK", ("sample-a", "sample-b")) == []
+    assert store._conn.calls[0] == (OWNER_DAY_INPUTS, ("PERSON_BK",low,high,low,high,31))
+    assert store._conn.calls[1] == (
+        OWNER_DAY_REPLIES, ("PERSON_BK",'["sample-a","sample-b"]'),
+    )
