@@ -69,7 +69,7 @@ jobs:
           # Even when the runner could not decrypt, publish a status enum.
           # NEVER publish exception text, URLs, passwords, or raw log lines.
           if [[ "$DIAGNOSIS_STEP_OUTCOME" != "success" ]]; then
-            printf '%s\\n' '{"schema":1,"status":"unavailable","reason":"decrypt_or_scan_failed","summary_events":{},"resources":[]}' > "$RUNNER_TEMP/northflank-diagnostics.json"
+            printf '%s\n' '{"schema":1,"status":"unavailable","reason":"decrypt_or_scan_failed","summary_events":{},"resources":[]}' > "$RUNNER_TEMP/northflank-diagnostics.json"
           fi
           [[ -s "$RUNNER_TEMP/northflank-diagnostics.json" ]] || { echo 'No safe diagnostic data available'; exit 1; }
           git fetch origin refs/heads/ops/northflank-log-archive:refs/remotes/origin/ops/northflank-log-archive
