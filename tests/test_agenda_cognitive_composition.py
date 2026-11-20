@@ -104,7 +104,7 @@ async def test_composed_reminder_hash_is_checked_at_claim(core):
         core.messaging_store.ack_outbound(reply.id, sent=True, external_message_id="reply-hash")
     service = AgendaService(core.database, core.clock, core.messaging_store)
     core.clock.advance(timedelta(minutes=10))
-    [item, when, oid] = service.due_items()
+    [(item, when, oid)] = service.due_items()
     [outbound] = service.tick(rendered={str(oid): "Ei, cobra teu amigo pela camisa!"})
     assert agenda_claim_allowed(core.database._conn, outbound, core.clock.now())
     tampered = outbound.model_copy(update={"text": "Mensagem alterada"})
