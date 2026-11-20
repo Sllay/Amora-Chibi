@@ -85,9 +85,13 @@ def _public_url(url: str) -> tuple[str, str, int, str]:
                 literal_ip = literal_ip.ipv4_mapped
             if not literal_ip.is_global:
                 raise WebFetchError("WEB_PRIVATE_NETWORK_DENIED")
-        safe_path = parsed.path or "/"
-        # Fragments have no effect on HTTP requests.
-        result = urlunsplit((scheme, parsed.netloc, safe_path, parsed.query, ""))
+        safe_path = quote(parsed.path or "/", safe="/%:@!$&'()*+,;=-._~")
+        safe_query = quote(parsed.query, safe="=&%:/?+;,@!$'()*-._~")
+        ascii_host = f"[{host}]" if ":" in host else host
+        netloc = ascii_host + (f":{port}" if port != (443 if scheme == "https" else 80) else "")
+        # Unicode paths and IDNA hostnames remain navigable without changing
+        # the certificate hostname, and fragments are never transmitted.
+        result = urlunsplit((scheme, netloc, safe_path, safe_query, ""))
     except WebFetchError:
         raise
     except (ValueError, UnicodeError, OverflowError) as exc:
