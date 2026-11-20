@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from amora.app import AmoraCore
+from amora.autonomy.models import DesireKind, Intention
 from amora.cognition.models import CognitiveRequest, ConversationMessage, MessageSource, MessageStatus
 from amora.cognition.prompt_frame import turn_frame, render_current_turn
 from amora.cognition.temporal import opportunity_state, trusted_opportunity
@@ -168,3 +169,45 @@ async def test_new_user_message_cancels_queued_initiative(core):
     claimed = core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD, account_scope="primary")
     assert out.id not in {item.id for item in claimed}
     assert new.outbound[0].id in {item.id for item in claimed}
+
+
+def test_bdi_opportunity_is_trusted_and_non_compulsory(monkeypatch):
+    monkeypatch.setenv("AMORA_CONVERSATION_TIMEZONE", "America/Recife")
+    now = datetime(2026, 11, 16, 18, tzinfo=timezone.utc)
+    then = now - timedelta(minutes=10)
+    base = {"status": "active", "kind": "initiate_contact",
+            "target_id": "PERSON_BK", "selected_utility": 0.78}
+    assert opportunity_state(now, then, then, "Conversa encerrada.") is None
+    decision = opportunity_state(now, then, then, "Conversa encerrada.", intention=base)
+    assert decision["state"] == "motivated_contact"
+    assert "stay_silent" in decision["allowed_actions"]
+    assert trusted_opportunity(decision)["state"] == "motivated_contact"
+    assert opportunity_state(now, then, then, "Conversa encerrada.",
+                             intention={**base, "target_id": "OTHER"}) is None
+    assert opportunity_state(now, then, then, "Conversa encerrada.",
+                             intention={**base, "selected_utility": 0.40}) is None
+
+
+@pytest.mark.asyncio
+async def test_core_bdi_intention_opens_authorized_owner_dm(core):
+    _bind_bk(core)
+    connected(core)
+    provider = TemporalProvider()
+    core.cognition.register_provider(provider)
+    result = await inbound(core)
+    deliver(core, result.outbound[0])
+    core.clock.advance(timedelta(minutes=10))
+    now = core.clock.now()
+    core.autonomy.store.put_intention(Intention(
+        kind=DesireKind.INITIATE_CONTACT, target_id="PERSON_BK",
+        source_kind="drive", selected_utility=0.78,
+        urgency=0.7, created_at=now, updated_at=now,
+        expires_at=now + timedelta(minutes=25),
+    ))
+    initiative = TemporalInitiative(core)
+    outbound = await initiative.tick()
+    assert outbound is not None
+    assert outbound.metadata["initiative_state"] == "motivated_contact"
+    assert provider.contexts[-1].temporal_opportunity["state"] == "motivated_contact"
+    assert await initiative.tick() is None
+    deliver(core, outbound)
