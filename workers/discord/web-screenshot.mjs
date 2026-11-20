@@ -36,7 +36,7 @@ function publicScreenshotCdn(value) {
     const host = u.hostname.toLowerCase();
     return (
       u.protocol === 'https:' && !u.username && !u.password
-      && !u.port && (host === 'cdn.microlink.io' || host.endsWith('.cdn.microlink.io'))
+      && !u.port && /^(?:cdn|[a-z]{3}|[a-z]{3}\d)\.microlink\.io$/.test(host)
       && u.toString().length <= 2500
     ) ? u.toString() : null;
   } catch {
