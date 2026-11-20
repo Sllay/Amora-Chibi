@@ -198,3 +198,37 @@ test('failed external screenshot never prevents sending research links', async (
   assert.match(calls[0].body.content, /godotengine\.org/);
   assert.match(calls[0].body.content, /não consegui capturar o print/i);
 });
+
+test('Discord image upload 400 degrades to the same verified links as JSON', async () => {
+  const calls = [];
+  const worker = new DiscordWorker({
+    token: 'test', core: {},
+    rest: {
+      request: async (path, options) => {
+        calls.push(options);
+        if (options.multipart) {
+          const error = new Error('Attachment denied');
+          error.status = 400;
+          error.retryable = false;
+          throw error;
+        }
+        return { id: 'sent', channel_id: 'chan' };
+      },
+    },
+    runtime: { rememberBotMessage() {} },
+  });
+  worker.webScreenshots = { capture: async () => ({
+    bytes: IMAGE_BYTES, mime: 'image/jpeg', filename: 'amora-web-print.jpg',
+  }) };
+  const id = await worker.sendOutbound({
+    id: '12345678-abcd-abcd-abcd-1234567890ab', platform: 'discord',
+    conversation_id: 'chan', text: 'https://godotengine.org/article/android',
+    metadata: { web_capture_owner_verified: true,
+      web_capture_source: 'https://godotengine.org/article/android' },
+  });
+  assert.equal(id, 'sent');
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].multipart);
+  assert.match(calls[1].body.content, /godotengine\.org/);
+  assert.equal(calls[1].body.nonce, JSON.parse(calls[0].multipart.get('payload_json')).nonce);
+});
