@@ -226,7 +226,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             try:
                 evidence = await asyncio.wait_for(
                     navigator.research(request.text, request.session_id),
-                    timeout=15.0 if navigator.browser is not None else 9.0,
+                    timeout=15.0 if (navigator.reader is not None or navigator.browser is not None) else 9.0,
                 )
             except Exception:
                 evidence = {"action": "unknown", "status": "failed",
