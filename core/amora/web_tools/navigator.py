@@ -319,8 +319,13 @@ def fetch_public_page(url: str) -> dict[str, Any]:
         for item in parser.links:
             if len(links) >= 12:
                 break
-            if item["url"] != final_url and item not in links:
-                links.append(item)
+            try:
+                link_url = _public_url(item["url"])[0]
+            except WebFetchError:
+                continue
+            normalized_link = {"url": link_url, "title": item["title"]}
+            if link_url != final_url and normalized_link not in links:
+                links.append(normalized_link)
         return {
             "status": "opened" if text else "empty",
             "url": final_url,
