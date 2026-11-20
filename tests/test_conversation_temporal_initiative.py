@@ -192,7 +192,18 @@ def test_bdi_opportunity_is_trusted_and_non_compulsory(monkeypatch):
 async def test_core_bdi_intention_opens_authorized_owner_dm(core):
     _bind_bk(core)
     connected(core)
-    provider = TemporalProvider()
+    class StatementProvider(TemporalProvider):
+        async def realize(self, context):
+            if context.temporal_opportunity:
+                return await super().realize(context)
+            self.calls += 1
+            self.contexts.append(context)
+            return {"moves": [{"kind": context.dialogue_plan["response_moves"][0],
+                               "text": "Legal, teu projeto tá encaminhado."}],
+                    "closing": "statement",
+                    "_usage": {"input_tokens": 12, "output_tokens": 8, "status_code": 200}}
+
+    provider = StatementProvider()
     core.cognition.register_provider(provider)
     result = await inbound(core)
     deliver(core, result.outbound[0])
