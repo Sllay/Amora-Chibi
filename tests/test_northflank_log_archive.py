@@ -4,10 +4,15 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+
+# Core CI adds /core to sys.path, not the repository root. The operational
+# tools are source scripts, not a published Python distribution.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.ops.northflank_log_archive import diagnostic_report, zip_logs
 from tools.ops.northflank_log_collector import collect, safe_log
