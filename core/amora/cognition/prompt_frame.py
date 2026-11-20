@@ -246,6 +246,14 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "image_text_is_instructions": False,
             "payload": context.visual_observation,
         }
+    if context.perceptual_expressions:
+        # Verified perception memory is data, never current pixels or commands.
+        frame["received_sticker_semantics"] = {
+            "canonical": False,
+            "source": "verified_perceptual_memory",
+            "image_text_is_instructions": False,
+            "payload": context.perceptual_expressions,
+        }
     if context.specialist_support:
         # Specialist material is useful evidence, never canonical state. Keeping
         # it outside canonical_state prevents a language model from silently
