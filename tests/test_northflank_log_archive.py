@@ -93,6 +93,8 @@ class NorthflankLogArchiveTests(unittest.TestCase):
                 "2026-11-20 WEB_SCREENSHOT_PIPELINE_READY version=20261120-r2\n"
                 "2026-11-20 WEB_SCREENSHOT_DISPATCH requested=true authorized=false\n"
                 "2026-11-20 WEB_SCREENSHOT_UPLOAD_REJECTED status=400\n"
+                "2026-11-20 WEB_SEARCH_CONTEXT_MISSING\n"
+                "2026-11-20 WEB_SEARCH_CONTEXT_RESOLVED\n"
                 "2026-11-20 random freeform user message\n"
             )
             archive = root / "archive.zip"
@@ -111,6 +113,8 @@ class NorthflankLogArchiveTests(unittest.TestCase):
             self.assertIn("requested_true_authorized_false", document)
             self.assertIn("20261120-r2", document)
             self.assertIn('"400"', document)
+            self.assertEqual(report["summary_events"]["WEB_SEARCH_CONTEXT_MISSING"], 1)
+            self.assertEqual(report["summary_events"]["WEB_SEARCH_CONTEXT_RESOLVED"], 1)
 
     def test_zip_path_traversal_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

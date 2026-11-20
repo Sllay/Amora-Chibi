@@ -16,6 +16,7 @@ from html.parser import HTMLParser
 import http.client
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
@@ -34,6 +35,7 @@ MAX_SOURCE_TEXT = 2400
 MAX_HOPS = 3
 ALLOWED_PORTS = frozenset({80, 443, 8080, 8443})
 USER_AGENT = "AmoraWeb/1.0 (read-only source retrieval; no automated login)"
+_LOG = logging.getLogger("amora.web")
 
 _LINK_RE = re.compile(r"https?://[^\s<>\"'\x60]+", re.IGNORECASE)
 _SCREENSHOT_FOLLOW_RE = re.compile(
@@ -61,6 +63,14 @@ _SEARCH_RE = re.compile(
     r"\b(?:pesquis[ae]|pesquise|buscar?|busque|procur[ae]|procure|"
     r"investig[ae]|investigue|busca\s+na\s+(?:web|internet)|"
     r"veja\s+na\s+(?:web|internet)|pesquisa\s+na\s+(?:web|internet))\b",
+    re.IGNORECASE,
+)
+# Explicit anaphoric requests may reuse the last verified source's topic,
+# never raw dialogue, ungrounded model guesses or unrelated memories.
+_CONTEXT_SEARCH_RE = re.compile(
+    r"\b(?:de\s+novo|novamente|outra\s+vez|mais\s+detalhes|"
+    r"mesmo\s+(?:assunto|site)|sobre\s+(?:isso|isto)|"
+    r"dessa\s+p[aá]gina|desse\s+site)\b",
     re.IGNORECASE,
 )
 
@@ -334,9 +344,25 @@ def _clean_search_query(raw: str, match: re.Match[str]) -> str:
     # a technical topic such as 'pesquise WebAssembly'.
     subject = re.sub(r"(?i)\b(?:na|pela|pela?\s+a|pela\s+|pela|por|via)\s+(?:web|internet)\b", " ", subject)
     subject = re.split(
-        r"(?i)\s+e\s+(?:me\s+)?(?:diz|diga|fala|fale|mostra|mostre|envia|mande)\b",
+        r"(?i)\s+e\s+(?:(?:me|mim)\s+)?"
+        r"(?:diz|diga|fala|fale|mostra|mostre|manda|mande|mandar|"
+        r"envia|envie|enviar|explica|explique|descreve|descreva|faz|fa[cç]a)\b",
         subject, maxsplit=1,
     )[0]
+    # "pesquisa de novo e me manda uma descrição" is a contextual request,
+    # not a search for "novo descrição". Preserve explicitly named topics.
+    subject = re.sub(
+        r"(?i)^\s*(?:(?:de\s+novo|novamente|outra\s+vez)\b[\s,;:]*)+",
+        "", subject,
+    )
+    subject = re.sub(
+        r"(?i)^\s*(?:(?:mais\s+)?detalhes(?:\s+sobre\s+(?:isso|isto|"
+        r"esse\s+site|essa\s+p[aá]gina))?|"
+        r"(?:mais\s+)?(?:sobre\s+)?(?:isso|isto|esse\s+site|"
+        r"essa\s+p[aá]gina|o\s+mesmo\s+assunto))"
+        r"(?:\s+de\s+novo)?\s*$",
+        "", subject,
+    )
     # Screenshot delivery is a separate transport instruction, never part of
     # the semantic search query (e.g. "Godot Android manda print").
     subject = re.split(
@@ -354,6 +380,42 @@ def _fold_search(value: str) -> str:
         ch for ch in unicodedata.normalize("NFKD", value.casefold())
         if not unicodedata.combining(ch)
     )
+
+
+def _page_topic(source: dict[str, Any]) -> str:
+    """Derive a small topic from a *successfully opened* public page.
+
+    Titles are untrusted data: use only a short title segment matching the
+    fetched URL host, otherwise fall back to the host identifier. No page
+    instructions, HTML, transcript or long text become query context.
+    """
+    url = str(source.get("url") or "")
+    try:
+        host = (urlsplit(url).hostname or "").lower().strip(".")
+    except ValueError:
+        return ""
+    if not host:
+        return ""
+    parts = [part for part in host.split(".") if part not in {
+        "www", "m", "en", "docs", "forum", "wiki", "com", "org",
+        "net", "io", "co", "br", "gov", "edu",
+    }]
+    entity = parts[-1] if parts else ""
+    if entity in {"github", "gitlab", "reddit", "wikipedia"}:
+        slug = [part for part in urlsplit(url).path.split("/")
+                if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{3,48}", part)]
+        if slug:
+            entity = slug[0]
+    if not re.fullmatch(r"[a-z0-9-]{4,55}", entity):
+        return ""
+    title = _clean(str(source.get("title") or ""), 150)
+    for segment in re.split(r"\s+[|–—-]\s+", title):
+        candidate = re.sub(r"[^\w]+", "", _fold_search(segment))
+        if (len(segment) <= 65 and len(segment.split()) <= 3
+                and entity.replace("-", "") in candidate
+                and not re.search(r"(?i)\b(?:ignore|instruction|prompt|system|senha|secret)\b", segment)):
+            return segment.strip()
+    return entity.replace("-", " ")
 
 
 def _topic_terms(query: str) -> list[str]:
@@ -668,8 +730,13 @@ class WebNavigator:
         # Only source/ref URL metadata survives briefly for the Discord worker
         # after provider fallback. Never retain fetched HTML or user text here.
         if result.get("status") in {"opened", "results_only"}:
+            sources = result.get("sources") or []
+            topic = str(result.get("topic") or "").strip()
+            if not topic and sources and isinstance(sources[0], dict):
+                topic = _page_topic(sources[0])
             projection = {
                 "action": result.get("action", ""),
+                "focus": _clean(topic, 90),
                 "sources": [
                     {"url": str(item.get("url") or ""), "title": str(item.get("title") or "")}
                     for item in (result.get("sources") or [])[:2] if isinstance(item, dict)
@@ -692,11 +759,12 @@ class WebNavigator:
             data = record[1]
             return {
                 "action": data["action"],
+                "focus": data.get("focus", ""),
                 "sources": [dict(item) for item in data["sources"]],
                 "references": [dict(item) for item in data["references"]],
             }
         self.last_delivery.pop(session_id, None)
-        return {"action": "", "sources": [], "references": []}
+        return {"action": "", "focus": "", "sources": [], "references": []}
 
     def remember_capture_request(self, session_id: str, public_url: str) -> None:
         """Mark a real, verified owner request so an immediate retry is possible."""
@@ -742,6 +810,22 @@ class WebNavigator:
             return {"action": "capture", "status": "failed",
                     "reason": "WEB_SCREENSHOT_NO_PAGE",
                     "sources": [], "references": []}
+        # Resolve anaphora BEFORE invalidating previous delivery evidence.
+        # An explicit new topic always wins; an empty generic command alone
+        # cannot silently search some random earlier subject.
+        search_topic = intent.argument
+        contextual_search = (
+            intent.action == "search" and not search_topic
+            and _CONTEXT_SEARCH_RE.search(text) is not None
+        )
+        if contextual_search:
+            search_topic = self.current_delivery(session_id).get("focus", "")
+            # Safe diagnostic event only: never log the subject, URL,
+            # Discord conversation, user content or session identifier.
+            _LOG.info(
+                "WEB_SEARCH_CONTEXT_RESOLVED" if search_topic
+                else "WEB_SEARCH_CONTEXT_MISSING"
+            )
         # Navigating to a new URL/search invalidates prior attachment retries.
         self.last_capture_requests.pop(session_id, None)
         # A failed NEW navigation must never use a previous turn's links.
@@ -760,19 +844,22 @@ class WebNavigator:
                                         or "chromium" in text.casefold())
             # No old links may masquerade as evidence of a new search.
             self._save_refs(session_id, [])
-            if not intent.argument:
-                raise WebFetchError("WEB_SEARCH_QUERY_EMPTY")
-            planned_queries = [intent.argument]
+            if not search_topic:
+                raise WebFetchError(
+                    "WEB_SEARCH_CONTEXT_REQUIRED" if contextual_search
+                    else "WEB_SEARCH_QUERY_EMPTY"
+                )
+            planned_queries = [search_topic]
             if self.planner is not None:
                 try:
                     planned = await asyncio.wait_for(
-                        self.planner.plan(text[:1200], intent.argument), timeout=3.8
+                        self.planner.plan(text[:1200], search_topic), timeout=3.8
                     )
                     if isinstance(planned, list) and planned:
                         # A caller cannot inject unsafe search text through
                         # planner output. Production Groq has its own validation.
                         from .query_planner import validated_queries
-                        checked = validated_queries({"queries": planned}, intent.argument)
+                        checked = validated_queries({"queries": planned}, search_topic)
                         if checked:
                             planned_queries = checked
                 except (TimeoutError, WebFetchError, ValueError, TypeError):
@@ -780,7 +867,7 @@ class WebNavigator:
             endpoint = os.getenv("AMORA_WEB_SEARCH_ENDPOINT", "").strip()
             validated: list[dict[str, str]] = []
             got_results = False
-            used_query = intent.argument
+            used_query = search_topic
             for search_query in planned_queries[:2]:
                 providers = (
                     [(self.search_provider, (search_query,))]
@@ -798,7 +885,7 @@ class WebNavigator:
                     got_results = True
                     # Rank AGAINST the original request, not merely the
                     # model-generated wording, to stop semantic topic drift.
-                    validated = _rank_search_results(results, intent.argument)
+                    validated = _rank_search_results(results, search_topic)
                     if validated:
                         used_query = search_query
                         break
@@ -838,7 +925,7 @@ class WebNavigator:
                     })
             return self._record_delivery(session_id, {
                 "action": "search", "status": "opened" if sources else "results_only",
-                "query": used_query[:240], "sources": sources,
+                "query": used_query[:240], "topic": search_topic[:90], "sources": sources,
                 "references": [{"number": index, "url": item["url"],
                                 "title": item["title"], "snippet": item.get("snippet", "")}
                                for index, item in enumerate(validated, 1)],
