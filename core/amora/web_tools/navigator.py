@@ -411,7 +411,9 @@ def _page_topic(source: dict[str, Any]) -> str:
     title = _clean(str(source.get("title") or ""), 150)
     for segment in re.split(r"\s+[|–—-]\s+", title):
         candidate = re.sub(r"[^\w]+", "", _fold_search(segment))
-        if len(segment) <= 65 and entity.replace("-", "") in candidate:
+        if (len(segment) <= 65 and len(segment.split()) <= 3
+                and entity.replace("-", "") in candidate
+                and not re.search(r"(?i)\b(?:ignore|instruction|prompt|system|senha|secret)\b", segment)):
             return segment.strip()
     return entity.replace("-", " ")
 
