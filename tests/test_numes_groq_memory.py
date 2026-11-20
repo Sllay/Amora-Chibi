@@ -40,6 +40,12 @@ def test_numes_free_route_public_catalog_id(monkeypatch):
             return "fictional-only"
     provider = NumesCognitiveProvider(Secrets())
     assert provider.model == NumesCognitiveProvider.DEFAULT_MODEL
+    assert NumesCognitiveProvider(
+        Secrets(), model="dealignai/deepseek-v4.1-flash-uncensored-fp8",
+    ).model == NumesCognitiveProvider.DEFAULT_MODEL
+    # A different intentional route must never be rewritten.
+    monkeypatch.setenv("AMORA_NUMES_DIALOGUE_MODEL", "another/model:free")
+    assert NumesCognitiveProvider(Secrets()).model == "another/model:free"
 
 
 def test_opt_in_provider_configuration_and_scope(tmp_path, monkeypatch):
