@@ -349,3 +349,33 @@ test('missing attachment in a successful Discord response gets an explicit non-d
   assert.notEqual(calls[1].body.nonce,
     JSON.parse(calls[0].multipart.get('payload_json')).nonce);
 });
+
+
+test('verified screenshot source from previous Core remains supported during rolling deploy', async () => {
+  const sent = [];
+  const worker = new DiscordWorker({
+    token: 'test', core: {},
+    rest: {
+      request: async (_, options) => {
+        sent.push(options);
+        return { id: 'sent', channel_id: 'chan',
+          attachments: options.multipart
+            ? [{ id: 'image', filename: 'amora-web-print.jpg' }] : [] };
+      },
+    },
+    runtime: { rememberBotMessage() {} },
+  });
+  worker.webScreenshots = { capture: async () => ({
+    bytes: IMAGE_BYTES, mime: 'image/jpeg', filename: 'amora-web-print.jpg',
+  }) };
+  await worker.sendOutbound({
+    id: '12345678-abcd-abcd-abcd-1234567890ab',
+    platform: 'discord', conversation_id: 'chan', text: 'Segue a fonte.',
+    metadata: {
+      web_capture_owner_verified: true,
+      web_capture_source: 'https://godotengine.org/',
+    },
+  });
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].multipart instanceof FormData);
+});
