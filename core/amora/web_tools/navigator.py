@@ -443,14 +443,20 @@ class WebNavigator:
     always reuses the public-IP-pinned transport above.
     """
 
-    def __init__(self, *, fetch_page=fetch_public_page, search=None, browser=None):
+    def __init__(self, *, fetch_page=fetch_public_page, search=None, browser=None,
+                 reader=None):
         self.fetch_page = fetch_page
         self.search_provider = search
-        # Browser stays in a separate worker: Core imports only an HTTP client.
-        if browser is None:
+        # Test-injected fetch/search providers cannot accidentally send URLs
+        # to external vendors. The production Core uses the defaults.
+        if browser is None and fetch_page is fetch_public_page and search is None:
             from .browser_client import BrowserClient
             browser = BrowserClient.from_environment()
+        if reader is None and fetch_page is fetch_public_page and search is None:
+            from .remote_reader import RemoteReader
+            reader = RemoteReader.from_environment()
         self.browser = browser
+        self.reader = reader
         self.sessions: OrderedDict[str, tuple[float, list[dict[str, str]]]] = OrderedDict()
         self._semaphore = asyncio.Semaphore(2)
 
@@ -459,33 +465,43 @@ class WebNavigator:
         if page.get("status") != "opened":
             return True
         text = str(page.get("text") or "").casefold()
-        return len(text) < 130 or any(cue in text[:500] for cue in (
+        return len(text.strip()) < 24 or any(cue in text[:500] for cue in (
             "enable javascript", "javascript is required",
             "ativar o javascript", "habilite javascript",
             "loading...", "just a moment", "checking your browser",
         ))
 
     async def _read_page(self, url: str, *, force_browser: bool = False) -> dict[str, Any]:
-        _public_url(url)  # Private literals fail before invoking any worker.
+        _public_url(url)  # Private literals fail before invoking any vendor.
         page = None
         original_error = None
-        if not force_browser or self.browser is None:
+        if not force_browser or (self.reader is None and self.browser is None):
             try:
                 page = await self._call(self.fetch_page, url)
             except (WebFetchError, TimeoutError) as exc:
                 original_error = exc
-        if self.browser is not None and (force_browser or page is None or self._needs_browser(page)):
-            try:
-                rendered = await asyncio.wait_for(self.browser.render(url), timeout=11.5)
-                if rendered.get("status") == "opened":
-                    return rendered
-            except (WebFetchError, TimeoutError):
-                pass  # Existing static evidence must never be discarded.
+        if force_browser or page is None or self._needs_browser(page):
+            rendered = await self._remote_render(url)
+            if rendered is not None:
+                return rendered
         if page is not None:
             return page
         if original_error is not None:
             raise original_error
-        raise WebFetchError("WEB_BROWSER_UNAVAILABLE")
+        raise WebFetchError("WEB_REMOTE_RENDER_UNAVAILABLE")
+
+    async def _remote_render(self, url: str) -> dict[str, Any] | None:
+        # Hosted JS first; an explicitly configured Chromium worker is last.
+        for provider in (self.reader, self.browser):
+            if provider is None:
+                continue
+            try:
+                page = await asyncio.wait_for(provider.render(url), timeout=10.0)
+                if isinstance(page, dict) and page.get("status") == "opened":
+                    return page
+            except (WebFetchError, TimeoutError):
+                continue
+        return None
 
     async def _call(self, fn, *args):
         async with self._semaphore:
@@ -562,24 +578,24 @@ class WebNavigator:
                 return_exceptions=True,
             )
             sources = [
-                {key: page[key] for key in ("url", "title", "text", "fetched_at", "status")}
+                {
+                    **{key: page[key] for key in ("url", "title", "text", "fetched_at", "status")},
+                    **({"retrieval": page["retrieval"]} if page.get("retrieval") else {}),
+                }
                 for page in fetched if isinstance(page, dict) and page.get("status") == "opened"
-                and (self.browser is None or not self._needs_browser(page))
+                and not self._needs_browser(page)
             ]
-            # Reserve the expensive Chromium slot for a search with no readable
-            # HTTP evidence. No arbitrary browser launch on every search.
-            if not sources and self.browser is not None:
-                try:
-                    rendered = await asyncio.wait_for(
-                        self.browser.render(validated[0]["url"]), timeout=11.5
-                    )
-                    if rendered.get("status") == "opened":
-                        sources.append({
-                            key: rendered[key] for key in (
-                                "url", "title", "text", "fetched_at", "status")
-                        })
-                except (WebFetchError, TimeoutError):
-                    pass
+            # If none of the two HTTP reads contains usable content, one
+            # hosted JS read is sufficient. This does not launch local Chrome.
+            if not sources and (self.reader is not None or self.browser is not None):
+                rendered = await self._remote_render(validated[0]["url"])
+                if rendered is not None:
+                    sources.append({
+                        **{key: rendered[key] for key in (
+                            "url", "title", "text", "fetched_at", "status"
+                        )},
+                        **({"retrieval": rendered["retrieval"]} if rendered.get("retrieval") else {}),
+                    })
             return {"action": "search", "status": "opened" if sources else "results_only",
                     "query": intent.argument[:240], "sources": sources,
                     "references": [{"number": index, "url": item["url"],
@@ -602,6 +618,8 @@ class WebNavigator:
         self._save_refs(session_id, refs)
         source = {key: page.get(key, "") for key in (
             "url", "title", "text", "fetched_at", "status")}
+        if page.get("retrieval"):
+            source["retrieval"] = page["retrieval"]
         return {
             "action": action, "status": page.get("status", "failed"),
             "sources": [source] if page.get("status") == "opened" else [],
