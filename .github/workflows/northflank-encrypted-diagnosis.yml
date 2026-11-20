@@ -1,0 +1,75 @@
+name: Northflank encrypted log diagnosis
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Northflank encrypted log archive
+    types: [completed]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: northflank-encrypted-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.number == 342 &&
+       github.event.comment.user.login == 'Sllay' &&
+       github.event.comment.body == '/amora logs diagnose') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Decrypt only in temporary runner and generate metadata-only diagnostics
+        shell: bash
+        env:
+          ARCHIVE_PASSPHRASE: ${{ secrets.AMORA_LOG_ARCHIVE_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ -n "$ARCHIVE_PASSPHRASE" ]] || { echo 'Missing secret AMORA_LOG_ARCHIVE_PASSPHRASE'; exit 1; }
+          [[ "${#ARCHIVE_PASSPHRASE}" -ge 32 ]] || { echo 'Archive secret must contain at least 32 characters'; exit 1; }
+          scratch="$(mktemp -d "$RUNNER_TEMP/northflank-diagnose.XXXXXXXX")"
+          trap 'rm -rf -- "$scratch"' EXIT
+          git fetch origin refs/heads/ops/northflank-log-archive:refs/remotes/origin/ops/northflank-log-archive
+          # Only encrypted bytes are read from Git; never echo their contents.
+          git show refs/remotes/origin/ops/northflank-log-archive:ops/logs/northflank-latest.zip.gpg > "$scratch/ciphertext.gpg"
+          [[ -s "$scratch/ciphertext.gpg" ]] || { echo 'No encrypted archive available'; exit 1; }
+          printf '%s' "$ARCHIVE_PASSPHRASE" | gpg \
+            --batch --quiet --pinentry-mode loopback --passphrase-fd 0 \
+            --decrypt --output "$scratch/snapshot.zip" "$scratch/ciphertext.gpg" 2>/dev/null
+          python tools/ops/northflank_log_archive.py diagnose \
+            --input "$scratch/snapshot.zip" \
+            --ciphertext "$scratch/ciphertext.gpg" \
+            --output "$RUNNER_TEMP/northflank-diagnostics.json"
+          # No plaintext log bytes or ZIP remain after this step.
+      - name: Commit only safe diagnostics on isolated branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin refs/heads/ops/northflank-log-archive:refs/remotes/origin/ops/northflank-log-archive
+          git switch --detach refs/remotes/origin/ops/northflank-log-archive
+          mkdir -p ops/logs
+          install -m 644 "$RUNNER_TEMP/northflank-diagnostics.json" ops/logs/diagnostics.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- ops/logs/diagnostics.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore(ops): update code-only Northflank diagnostics [skip ci]'
+            git push origin HEAD:ops/northflank-log-archive
+          fi
