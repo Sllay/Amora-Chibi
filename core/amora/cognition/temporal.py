@@ -92,12 +92,18 @@ OPPORTUNITY_ACTIONS = {
     "question_pending": ("follow_up_question", "light_reaction", "stay_silent"),
     "quick_answer_pending": ("follow_up_question", "light_reaction", "stay_silent"),
     "conversation_quiet": ("continue_topic", "open_contact", "stay_silent"),
+    "motivated_contact": ("open_contact", "continue_topic", "stay_silent"),
     "long_absence": ("check_in", "open_contact", "continue_topic", "stay_silent"),
 }
 
 
-def opportunity_state(now, user_at, reply_at, reply_text):
-    """Choose a bounded opportunity from observable time and the last sent text."""
+def opportunity_state(now, user_at, reply_at, reply_text, *, intention=None):
+    """Choose an opportunity from real time and a trusted Core BDI intention.
+
+    The language model does not create delivery authority. A current, strong
+    owner-targeted desire may trigger a *chance* to speak earlier than the
+    generic quiet-conversation timer; silence remains a valid decision.
+    """
     now, user_at, reply_at = map(aware_time, (now, user_at, reply_at))
     if not now or not user_at or not reply_at or not user_at <= reply_at <= now:
         return None
@@ -107,13 +113,28 @@ def opportunity_state(now, user_at, reply_at, reply_text):
     if since_user > 7 * 86400 or not 8 <= now.astimezone(conversation_zone()).hour < 22:
         return None
     text = reply_text.strip().casefold()
+    intent_contact = (
+        isinstance(intention, dict)
+        and intention.get("status") == "active"
+        and intention.get("target_id") == "PERSON_BK"
+        and (intention.get("kind") == "initiate_contact"
+             or (intention.get("kind") == "social_bid"
+                 and isinstance(intention.get("metadata"), dict)
+                 and intention["metadata"].get("bid_type") in {
+                     "seek_contact", "seek_repair", "express_gratitude"
+                 }))
+        and type(intention.get("selected_utility")) in {float, int}
+        and intention["selected_utility"] >= 0.60
+    )
     if since_user >= 6 * 3600 and since_reply >= 3600:
         state = "long_absence"
     elif text.endswith("?") and any(x in text for x in ("me responde logo", "responde agora", "me diz logo")) and since_reply >= 120:
         state = "quick_answer_pending"
     elif text.endswith("?") and since_reply >= 5 * 60:
         state = "question_pending"
-    elif since_reply >= 45 * 60:
+    elif intent_contact and since_reply >= 8 * 60:
+        state = "motivated_contact"
+    elif since_reply >= 30 * 60:
         state = "conversation_quiet"
     else:
         return None
