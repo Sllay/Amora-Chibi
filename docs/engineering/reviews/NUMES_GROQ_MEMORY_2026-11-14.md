@@ -3,7 +3,7 @@
 Northflank Core environment (only after the supporting revision is deployed):
 - AMORA_SECRET_NUMES_API_KEY: inference key from Numes. Never commit it.
 - AMORA_SOCIAL_PRIMARY=numes
-- AMORA_NUMES_DIALOGUE_MODEL=dealignai/deepseek-v4.1-flash-uncensored-fp8
+- AMORA_NUMES_DIALOGUE_MODEL=dealignai/deepseek-v4.1-flash-uncensored-fp8:free
 - AMORA_GROQ_MEMORY_MODEL=openai/gpt-oss-120b
 
 Existing AMORA_SECRET_GROQ_API_KEY stays. AMORA_GROQ_DIALOGUE_MODEL remains independent. Defaults unchanged when no new variables are set. Numes is registered only on explicit selection with a key, social-only; Groq specialist is source-only durable reflection, with existing Groq Qwen and other eligible providers as fallbacks. Operator memory reflection probe uses specialist if configured. The Numes adapter uses standard nonsexual conversational expression, not the external optional persona file. Existing identity/memory/privacy gates and output validation are unchanged; no database migration, worker update, or reset.

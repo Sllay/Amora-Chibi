@@ -45,7 +45,7 @@ class EmotionStore:
     def put_event(self, event: EmotionEvent) -> bool:
         with trace_lock(self._lock):
             try:
-                execute_atomic_statement(
+                cursor = execute_atomic_statement(
                     self.backend,
                     self._conn,
                     """
@@ -64,6 +64,8 @@ class EmotionStore:
                         event.privacy_scope.value, event.created_at.isoformat(), event.dedupe_key,
                     ),
                 )
+                if self.backend.capabilities.name == "postgres-candidate":
+                    return cursor.rowcount == 1
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise

@@ -26,28 +26,26 @@ def configure(monkeypatch, tmp_path):
     monkeypatch.setenv("AMORA_NUMES_DIALOGUE_MODEL", NumesCognitiveProvider.DEFAULT_MODEL)
 
 
-
-def test_numes_canonical_free_model_and_legacy_env(monkeypatch):
-    legacy = "dealignai/deepseek-v4.1-flash-uncensored-fp8"
-    canonical = legacy + ":free"
-    assert NumesCognitiveProvider.DEFAULT_MODEL == canonical
-
-    class Secrets:
-        def get(self, key):
-            return "synthetic-key" if key == "NUMES_API_KEY" else None
-
+def test_numes_free_route_public_catalog_id(monkeypatch):
     monkeypatch.delenv("AMORA_NUMES_DIALOGUE_MODEL", raising=False)
-    assert NumesCognitiveProvider(Secrets()).model == canonical
-
-    # The historic Northflank configuration must resolve to the free route.
-    monkeypatch.setenv("AMORA_NUMES_DIALOGUE_MODEL", legacy)
-    assert NumesCognitiveProvider(Secrets()).model == canonical
-    assert NumesCognitiveProvider(Secrets(), model=legacy).model == canonical
-
-    # An intentionally selected different model must not be overwritten.
-    custom = "different/model:free"
-    monkeypatch.setenv("AMORA_NUMES_DIALOGUE_MODEL", custom)
-    assert NumesCognitiveProvider(Secrets()).model == custom
+    assert NumesCognitiveProvider.DEFAULT_MODEL == "dealignai/deepseek-v4.1-flash-uncensored-fp8:free"
+    assert NumesCognitiveProvider.DEFAULT_MODEL.endswith(":free")
+    # A deployed Northflank environment may still contain this legacy value.
+    monkeypatch.setenv(
+        "AMORA_NUMES_DIALOGUE_MODEL",
+        "dealignai/deepseek-v4.1-flash-uncensored-fp8",
+    )
+    class Secrets:
+        def get(self, name):
+            return "fictional-only"
+    provider = NumesCognitiveProvider(Secrets())
+    assert provider.model == NumesCognitiveProvider.DEFAULT_MODEL
+    assert NumesCognitiveProvider(
+        Secrets(), model="dealignai/deepseek-v4.1-flash-uncensored-fp8",
+    ).model == NumesCognitiveProvider.DEFAULT_MODEL
+    # A different intentional route must never be rewritten.
+    monkeypatch.setenv("AMORA_NUMES_DIALOGUE_MODEL", "another/model:free")
+    assert NumesCognitiveProvider(Secrets()).model == "another/model:free"
 
 
 def test_opt_in_provider_configuration_and_scope(tmp_path, monkeypatch):
@@ -59,8 +57,10 @@ def test_opt_in_provider_configuration_and_scope(tmp_path, monkeypatch):
         assert core.models.descriptor("groq_memory").model == "openai/gpt-oss-120b"
         assert TaskClass.SOCIAL_DIALOGUE not in core.models.descriptor("groq_memory").capabilities
         assert TaskClass.REASONING not in core.models.descriptor("numes").capabilities
-        assert TaskClass.SOCIAL_DIALOGUE not in core.models.descriptor("groq").capabilities
-        assert not callable(getattr(core.cognition._providers["groq"], "realize", None))
+        assert TaskClass.SOCIAL_DIALOGUE in core.models.descriptor("groq").capabilities
+        assert core.models.descriptor("groq").model == "qwen/qwen3.8-27b"
+        assert callable(core.cognition._providers["groq"].realize)
+        assert core.models.descriptor("groq_memory").model == "openai/gpt-oss-120b"
         assert core.cognition._providers["numes"].max_retries == 0
         assert core.cognition._providers["numes"].timeout_seconds == 90.0
         assert not any(d.name == "numes" for d in core.models.ranked_candidates(
@@ -113,6 +113,95 @@ async def test_numes_chat_contract_and_zero_token_price(tmp_path, monkeypatch):
         with pytest.raises(ProviderError):
             await provider.realize(ctx.model_copy(update={"remote_processing_allowed": False}))
         assert len(payloads) == 1
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_numes_catalogue_audit_is_readonly_and_does_not_assume_zdr(tmp_path, monkeypatch):
+    configure(monkeypatch, tmp_path)
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        calls = []
+        def handler(req):
+            calls.append(req)
+            assert req.method == "GET"
+            assert req.url.host == "api.numes.ai"
+            assert req.url.path.endswith(
+                "/models/dealignai/deepseek-v4.1-flash-uncensored-fp8:free/endpoints"
+            )
+            assert "synthetic-numes-key" == req.headers["authorization"].split()[-1]
+            assert not req.content
+            return httpx.Response(200, json={"data": {"endpoints": [
+                {"supported_parameters": ["max_tokens", "temperature", "response_format"],
+                 "max_completion_tokens": 4096},
+                {"supported_parameters": ["max_tokens"],
+                 "max_completion_tokens": 512},
+            ]}})
+        fake_http(monkeypatch, handler)
+        result = await NumesCognitiveProvider(core.secrets).audit_endpoint_catalogue()
+        assert result == {
+            "success": True,
+            "http_status": 200,
+            "model_free_route": True,
+            "endpoint_count": 2,
+            "strict_parameter_declared_endpoints": 1,
+            "max_output_1200_eligible_endpoints": 1,
+            "privacy_policy_assessed": False,
+            "private_data_sent": False,
+        }
+        assert len(calls) == 1
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_numes_catalogue_rejects_legacy_id_and_never_echoes_body(tmp_path, monkeypatch):
+    configure(monkeypatch, tmp_path)
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        fake_http(monkeypatch, lambda _req: httpx.Response(
+            404, json={"error": {"metadata": {"error_type": "not_found"},
+                                 "message": MARKER}},
+        ))
+        result = await NumesCognitiveProvider(core.secrets).audit_endpoint_catalogue()
+        assert result["http_status"] == 404
+        assert result["error_type"] == "not_found"
+        assert result["private_data_sent"] is False
+        assert MARKER not in json.dumps(result)
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_numes_503_reports_canonical_error_type_without_provider_body(
+    tmp_path, monkeypatch, caplog,
+):
+    import logging
+    configure(monkeypatch, tmp_path)
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        ctx = core.cognition.compiler.compile(CognitiveRequest(
+            text="Pergunta fictícia sem memórias", speaker_id="PERSON_BK",
+            remote_processing_allowed=True,
+        ))
+        fake_http(monkeypatch, lambda _req: httpx.Response(
+            503, json={"error": {
+                "code": 503,
+                "metadata": {"error_type": "provider_unavailable"},
+                "message": MARKER,
+            }},
+        ))
+        with caplog.at_level(logging.INFO, logger="amora.cognition.numes"):
+            with pytest.raises(ProviderError) as exc:
+                await NumesCognitiveProvider(core.secrets).realize(ctx)
+        assert exc.value.status_code == 503
+        assert exc.value.diagnostics == {
+            "provider_error_category": "provider_unavailable",
+        }
+        assert MARKER not in str(exc.value)
+        assert MARKER not in caplog.text
+        assert "numes_stream_http_error" in caplog.text
     finally:
         core.close()
 
@@ -201,33 +290,69 @@ async def test_memory_probe_uses_configured_specialist(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_numes_social_failure_does_not_route_to_groq(tmp_path, monkeypatch):
+async def test_numes_failover_uses_qwen_before_gemini(tmp_path, monkeypatch):
     configure(monkeypatch, tmp_path)
     monkeypatch.setenv("AMORA_SECRET_GEMINI_API_KEY", "synthetic-gemini-key")
     core = AmoraCore.bootstrap(clock=SimulatedClock())
     try:
-        req = CognitiveRequest(text="Estou criando um jogo novo.", speaker_id="PERSON_BK",
-                               remote_processing_allowed=True, session_id="synthetic")
-        ctx = core.cognition.compiler.compile(req)
-        called = []
-        async def numes(context):
-            called.append("numes")
+        req = CognitiveRequest(
+            text="Estou criando um jogo novo.", speaker_id="PERSON_BK",
+            remote_processing_allowed=True, session_id="synthetic",
+        )
+        calls = []
+        async def numes(_):
+            calls.append("numes")
             raise ProviderError("synthetic unavailable", status_code=503)
-        async def gemini(context):
-            called.append("gemini")
+        async def groq(context):
+            calls.append("groq")
             return {"moves": [{"kind": context.dialogue_plan["response_moves"][0],
                                "text": "Que legal, um jogo novo!"}], "closing": "statement"}
+        async def gemini(context):
+            calls.append("gemini")
+            return {"moves": [{"kind": context.dialogue_plan["response_moves"][0],
+                               "text": "Gemini reservado"}], "closing": "statement"}
         monkeypatch.setattr(core.cognition._providers["numes"], "realize", numes)
+        monkeypatch.setattr(core.cognition._providers["groq"], "realize", groq)
         monkeypatch.setattr(core.cognition._providers["gemini"], "realize", gemini)
-        # The production router, not a hand-authored provider order.
-        ranked = core.models.ranked_candidates(TaskClass.SOCIAL_DIALOGUE,
-                                               require_structured_output=True)
-        assert ranked[0].name == "numes"
-        assert "groq" not in [d.name for d in ranked]
-        assert "groq_memory" not in [d.name for d in ranked]
+        ranked = core.models.ranked_candidates(
+            TaskClass.SOCIAL_DIALOGUE, require_structured_output=True,
+        )
+        assert [r.name for r in ranked[:3]] == ["numes", "groq", "gemini"]
+        assert "groq_memory" not in [r.name for r in ranked]
+        assert ranked[1].model == "qwen/qwen3.8-27b"
+        plan = await core.cognition.respond(req)
+        assert plan.provider == "groq"
+        assert calls == ["numes", "groq"]
+    finally:
+        core.close()
+
+
+@pytest.mark.asyncio
+async def test_qwen_failure_uses_gemini_after_numes(tmp_path, monkeypatch):
+    configure(monkeypatch, tmp_path)
+    monkeypatch.setenv("AMORA_SECRET_GEMINI_API_KEY", "synthetic-gemini-key")
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        req = CognitiveRequest(
+            text="Estou criando um jogo novo.", speaker_id="PERSON_BK",
+            remote_processing_allowed=True, session_id="synthetic",
+        )
+        calls = []
+        async def unavailable(name, context):
+            calls.append(name)
+            raise ProviderError("synthetic unavailable", status_code=503)
+        async def gemini(context):
+            calls.append("gemini")
+            return {"moves": [{"kind": context.dialogue_plan["response_moves"][0],
+                               "text": "Rota secundária funcionando!"}], "closing": "statement"}
+        for name in ("numes", "groq"):
+            async def fake(context, label=name):
+                return await unavailable(label, context)
+            monkeypatch.setattr(core.cognition._providers[name], "realize", fake)
+        monkeypatch.setattr(core.cognition._providers["gemini"], "realize", gemini)
         plan = await core.cognition.respond(req)
         assert plan.provider == "gemini"
-        assert called == ["numes", "gemini"]
+        assert calls == ["numes", "groq", "gemini"]
     finally:
         core.close()
 

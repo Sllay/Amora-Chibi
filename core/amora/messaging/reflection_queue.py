@@ -15,6 +15,10 @@ from amora.cognition import CognitiveRequest, JournalStage
 from amora.events import PrivacyScope
 from amora.storage.backend import execute_atomic_statement
 from amora.storage.database import AmoraDatabase
+from amora.storage.postgres_runtime_reflections import (
+    INVALIDATE_CANCEL as PG_INVALIDATE_CANCEL,
+    INVALIDATE_ARCHIVE as PG_INVALIDATE_ARCHIVE,
+)
 
 _LOG = logging.getLogger("amora.messaging.reflection")
 _MAX_ATTEMPTS = 5
@@ -150,15 +154,26 @@ class ReflectionQueue:
                 AND m.dedupe_key='cognitive-input:' || m.turn_id
                 AND COALESCE(json_extract(m.metadata_json,'$.transport_revision'),1)<=x.invalidated_through
             """
-            cursor = db._conn.execute(
-                "UPDATE memory_reflection_jobs SET status='cancelled',lease_token=NULL,lease_until=NULL,"
-                "last_reason='REFLECTION_SOURCE_INVALIDATED' WHERE status<>'cancelled' AND turn_id IN ("+stale+")",
-                (session_id, native_message_hash),
+            if db.backend.capabilities.name == "postgres-candidate":
+                # The original SQLite query concatenates a dynamic subquery.
+                # PostgreSQL must use fixed reviewed SQL IDs, never relying
+                # on matching arbitrary assembled strings at runtime.
+                cancel_sql=PG_INVALIDATE_CANCEL
+                archive_sql=PG_INVALIDATE_ARCHIVE
+            else:
+                cancel_sql=(
+                    "UPDATE memory_reflection_jobs SET status='cancelled',lease_token=NULL,lease_until=NULL,"
+                    "last_reason='REFLECTION_SOURCE_INVALIDATED' WHERE status<>'cancelled' AND turn_id IN ("+stale+")"
+                )
+                archive_sql=(
+                    "UPDATE memory_records SET archived_at=?,updated_at=? WHERE archived_at IS NULL "
+                    "AND provenance_source LIKE 'cognition:%' AND json_extract(metadata_json,'$.turn_id') IN ("+stale+")"
+                )
+            cursor=db._conn.execute(
+                cancel_sql,(session_id,native_message_hash),
             )
             db._conn.execute(
-                "UPDATE memory_records SET archived_at=?,updated_at=? WHERE archived_at IS NULL "
-                "AND provenance_source LIKE 'cognition:%' AND json_extract(metadata_json,'$.turn_id') IN ("+stale+")",
-                (now, now, session_id, native_message_hash),
+                archive_sql,(now,now,session_id,native_message_hash),
             )
             return cursor.rowcount
 

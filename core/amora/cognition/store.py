@@ -74,7 +74,7 @@ class CognitiveStore:
         values = self._message_values(item)
         with trace_lock(self._lock):
             try:
-                execute_atomic_statement(
+                cursor = execute_atomic_statement(
                     self.backend,
                     self._conn,
                     """INSERT INTO conversation_messages(
@@ -84,6 +84,8 @@ class CognitiveStore:
                     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     values,
                 )
+                if self.backend.capabilities.name == "postgres-candidate":
+                    return cursor.rowcount == 1
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise
@@ -267,7 +269,7 @@ class CognitiveStore:
     def put_segment(self, segment: SpeechSegment) -> bool:
         with trace_lock(self._lock):
             try:
-                execute_atomic_statement(
+                cursor = execute_atomic_statement(
                     self.backend,
                     self._conn,
                     """INSERT INTO speech_segments(
@@ -276,6 +278,8 @@ class CognitiveStore:
                     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     self._segment_values(segment),
                 )
+                if self.backend.capabilities.name == "postgres-candidate":
+                    return cursor.rowcount == 1
             except sqlite3.IntegrityError as exc:
                 if not is_duplicate_error(exc):
                     raise

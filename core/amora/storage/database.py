@@ -50,6 +50,12 @@ class AmoraDatabase:
 
     def migrate(self) -> int:
         with trace_lock(self._lock):
+            # PostgreSQL must never execute the SQLite DDL/bootstrap sequence.
+            # Run 1 only accepts a separately prepared and imported v18 schema;
+            # domain SQL support and production activation are later gates.
+            if self.backend.capabilities.name == "postgres-candidate":
+                self._conn.verify_prepared_schema(self.expected_schema_version)
+                return 0
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             applied = {row[0] for row in self._conn.execute("SELECT version FROM schema_migrations")}
             # Fail before any bootstrap writes if an older runtime opens a v19 DB.
@@ -128,7 +134,7 @@ class AmoraDatabase:
                     """INSERT INTO events (id, schema_version, event_type, timestamp, source, actor, target, confidence, importance, priority, payload_json, privacy_scope, session_id, correlation_id, causation_id, causal_parent, sequence, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(dedupe_key) DO NOTHING""",
                     values,
                 )
-            except sqlite3.IntegrityError as exc:
+            except Exception as exc:
                 # Only an existing *same-kind* event with the same dedupe key is
                 # idempotent. Never suppress unrelated PK or constraint failures.
                 if not is_duplicate_error(exc) or not event.dedupe_key:
@@ -426,6 +432,37 @@ class AmoraDatabase:
     @trace_stage("integrity_check")
     def integrity_check(self) -> str:
         with trace_lock(self._lock):
+            if self.backend.capabilities.name == "postgres-candidate":
+                # SQLite PRAGMA is never valid against PostgreSQL. An injected
+                # synthetic candidate remains unverified, including in CI.
+                self._conn.verify_prepared_schema(self.expected_schema_version)
+                import os
+                selection = os.getenv("AMORA_STORAGE_BACKEND")
+                staging_approved = (
+                    selection == "postgres-staging"
+                    and os.getenv("AMORA_PG_STAGING_APPROVAL")
+                    == "ALLOW_ONLY_ISOLATED_AIVEN_STAGING_CORE"
+                )
+                production_approved = (
+                    selection == "postgres"
+                    and os.getenv("AMORA_PG_PRODUCTION_APPROVAL")
+                    == "AUTHORIZE_VERIFIED_AIVEN_PG18_CORE_CUTOVER"
+                    and not os.getenv("AMORA_PG_STAGING_APPROVAL")
+                )
+                if not (staging_approved or production_approved):
+                    return "postgres-candidate-unverified"
+                from .postgres_run3_preflight import inspect_prepared_postgres
+                target = self._conn._target
+                # Explicitly require the same Aiven TLS-pinned policy used by
+                # the staging-only factory. No localhost test fixture can
+                # acquire a misleading "ok" readiness report.
+                if not target.require_tls or not target.host.endswith(".aivencloud.com"):
+                    return "postgres-candidate-unverified"
+                report = inspect_prepared_postgres(
+                    self._conn._raw, target, require_memory_epoch=True,
+                    allow_empty_migrations_for_import=False,
+                )
+                return "ok" if report.status == "structural_pass" else "postgres-candidate-unverified"
             row = self._conn.execute("PRAGMA integrity_check").fetchone()
             return str(row[0]) if row else "unknown"
 

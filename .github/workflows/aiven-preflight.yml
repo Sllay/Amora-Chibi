@@ -5,6 +5,10 @@ on:
     paths:
       - 'deploy/Dockerfile.aiven-preflight'
       - 'core/amora/storage/aiven_preflight.py'
+      - 'core/amora/storage/aiven_capacity_inventory.py'
+      - 'tests/test_aiven_capacity_inventory.py'
+      - 'core/amora/storage/aiven_transport_diagnostic.py'
+      - 'tests/test_aiven_transport_diagnostic.py'
       - 'tests/test_aiven_preflight.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE0.md'
       - '.github/workflows/aiven-preflight.yml'
@@ -12,6 +16,10 @@ on:
     paths:
       - 'deploy/Dockerfile.aiven-preflight'
       - 'core/amora/storage/aiven_preflight.py'
+      - 'core/amora/storage/aiven_capacity_inventory.py'
+      - 'tests/test_aiven_capacity_inventory.py'
+      - 'core/amora/storage/aiven_transport_diagnostic.py'
+      - 'tests/test_aiven_transport_diagnostic.py'
       - 'tests/test_aiven_preflight.py'
       - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE0.md'
       - '.github/workflows/aiven-preflight.yml'
@@ -42,3 +50,21 @@ jobs:
           set -e
           [ "$code" -eq 2 ]
           [ "$output" = '{"status": "blocked", "reason": "AIVEN_CA_FILE_UNAVAILABLE"}' ]
+
+      - name: Capacity inspector fails closed as non-root without secrets or network
+        run: |
+          set +e
+          output="$(docker run --rm --network none --entrypoint python amora-aiven-preflight:check /opt/amora/aiven_capacity_inventory.py 2>&1)"
+          code="$?"
+          set -e
+          [ "$code" -eq 2 ]
+          printf '%s\n' "$output" | python -c 'import json,sys; r=json.load(sys.stdin); assert r["status"]=="blocked"; assert r["reason"]=="AIVEN_DSN_MISSING_OR_INVALID"; assert r["aiven_import_performed"] is False; assert r["production_cutover_authorized"] is False'
+
+      - name: Transport probe fails closed without credentials and without network
+        run: |
+          set +e
+          output="$(docker run --rm --network none --entrypoint python amora-aiven-preflight:check /opt/amora/aiven_transport_diagnostic.py 2>&1)"
+          code="$?"
+          set -e
+          [ "$code" -eq 2 ]
+          printf '%s\n' "$output" | python -c 'import json,sys; r=json.load(sys.stdin); assert r["status"]=="blocked"; assert r["reason"]=="AIVEN_DSN_MISSING_OR_INVALID"; assert r["postgres_connected"] is False; assert r["sql_executed"] is False; assert r["aiven_import_performed"] is False'

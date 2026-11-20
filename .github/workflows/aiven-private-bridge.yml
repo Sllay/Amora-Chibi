@@ -1,0 +1,45 @@
+name: Aiven PCS4C two-Job bridge image (secret-free CI)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/aiven-private-bridge.yml'
+      - 'deploy/Dockerfile.aiven-private-pcs4c-bridge'
+      - 'core/amora/storage/aiven_private_import_operator.py'
+      - 'core/amora/storage/aiven_snapshot_audit.py'
+      - 'core/amora/storage/postgres_private_staging_import.py'
+      - 'core/amora/storage/postgres_run3_snapshot_preflight.py'
+      - 'core/amora/storage/pcs4_recovery.py'
+      - 'tests/test_aiven_private_import_operator.py'
+      - 'deploy/python.lock'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-bridge-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build nonroot private bridge image with no mounted user data
+        run: |
+          docker build -f deploy/Dockerfile.aiven-private-pcs4c-bridge -t amora-private-bridge:check .
+      - name: Default inspect fails safely without a mounted private volume
+        run: |
+          set +e
+          output="$(docker run --rm --network none amora-private-bridge:check 2>&1)"
+          code="$?"
+          set -e
+          [ "$code" -eq 2 ]
+          printf '%s\n' "$output" | python -c 'import json,sys; s=sys.stdin.read().strip(); assert s.startswith("AIVEN_PRIVATE_BRIDGE "); r=json.loads(s.split(" ",1)[1]); assert r["status"]=="blocked"; assert r["reason"]=="PG_PRIVATE_DURABLE_MOUNT_REQUIRED"; assert r["private_import_performed"] is False; assert r["production_cutover_authorized"] is False'
+      - name: Import without operator approval is blocked before disk or network
+        run: |
+          set +e
+          output="$(docker run --rm --network none amora-private-bridge:check python -m amora.storage.aiven_private_import_operator import 2>&1)"
+          code="$?"
+          set -e
+          [ "$code" -eq 2 ]
+          printf '%s\n' "$output" | python -c 'import json,sys; s=sys.stdin.read().strip(); assert s.startswith("AIVEN_PRIVATE_BRIDGE "); r=json.loads(s.split(" ",1)[1]); assert r["status"]=="blocked"; assert r["reason"]=="PG_PRIVATE_OPERATOR_GATES_REQUIRED"; assert r["production_cutover_authorized"] is False'

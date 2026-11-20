@@ -166,8 +166,24 @@ class AmoraCore:
         social = SocialSceneTracker()
         addressee = AddresseeEngine(identities)
         perspective = PerspectiveResolver(identities)
-        memory = MemoryService(MemoryStore(paths.database, active_clock, identities, backend=storage), active_clock)
-        world_store = WorldStore(paths.database, active_clock, backend=storage)
+        if storage.capabilities.name == "postgres-candidate":
+            # Candidate is explicitly injected, never environment-selected.
+            # PostgreSQL memory must use atomic postings/BM25 instead of the
+            # SQLite-only FTS5 DDL and JSON1 candidate retrieval.
+            from amora.memory.postgres_store import PostgresMemoryStore
+            memory_store_class = PostgresMemoryStore
+        else:
+            memory_store_class = MemoryStore
+        memory = MemoryService(
+            memory_store_class(paths.database, active_clock, identities, backend=storage),
+            active_clock,
+        )
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.world.postgres_store import PostgresWorldStore
+            world_store_class = PostgresWorldStore
+        else:
+            world_store_class = WorldStore
+        world_store = world_store_class(paths.database, active_clock, backend=storage)
         world = WorldModelService(world_store, active_clock)
         self_model = SelfModelService(world_store, active_clock)
         self_model.ensure_core_identity()
@@ -179,14 +195,24 @@ class AmoraCore:
         )
         relationships.seed_registry_relationships()
         perspective_consolidator = PerspectiveConsolidator(world)
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.emotion.postgres_store import PostgresEmotionStore
+            emotion_store_class = PostgresEmotionStore
+        else:
+            emotion_store_class = EmotionStore
         emotion = EmotionEngine(
-            EmotionStore(paths.database, active_clock, backend=storage),
+            emotion_store_class(paths.database, active_clock, backend=storage),
             active_clock,
             identities,
             events,
         )
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.autonomy.postgres_store import PostgresAutonomyStore
+            autonomy_store_class = PostgresAutonomyStore
+        else:
+            autonomy_store_class = AutonomyStore
         autonomy = AutonomyEngine(
-            AutonomyStore(paths.database, active_clock, backend=storage),
+            autonomy_store_class(paths.database, active_clock, backend=storage),
             active_clock,
             identities,
             emotion,
@@ -194,7 +220,12 @@ class AmoraCore:
             events,
         )
         models = ModelRouter()
-        cognitive_store = CognitiveStore(paths.database, active_clock, backend=storage)
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.cognition.postgres_store import PostgresCognitiveStore
+            cognitive_store_class = PostgresCognitiveStore
+        else:
+            cognitive_store_class = CognitiveStore
+        cognitive_store = cognitive_store_class(paths.database, active_clock, backend=storage)
         cognition = CognitiveEngine(
             cognitive_store,
             ContextCompiler(
@@ -230,16 +261,26 @@ class AmoraCore:
             if mistral_cognition.descriptor.available:
                 cognition.register_provider(mistral_cognition)
 
-        groq_cognition = GroqCognitiveProvider(secrets)
+        # Qwen is the explicitly agreed social second route for Numes.
+        # The separate Groq memory model remains GPT-OSS (see below).
+        groq_cognition = GroqCognitiveProvider(
+            secrets, model="qwen/qwen3.8-27b" if social_primary == "numes" else None,
+        )
         if groq_cognition.descriptor.available:
             memory_model = os.getenv("AMORA_GROQ_MEMORY_MODEL", "").strip()
             if social_primary == "numes":
-                # Numes owns dialogue; Groq must never receive the social
-                # envelope as an implicit fallback in this configuration.
-                cognition.register_provider(GroqMemoryProvider(
-                    secrets, model=groq_cognition.model, name="groq", primary=False))
-            else:
-                cognition.register_provider(groq_cognition)
+                # The social failover order is Numes, Groq/Qwen, then other
+                # eligible providers. This spoken-surface provider is distinct
+                # from the GPT-OSS source-only memory specialist below.
+                from dataclasses import replace
+                groq_cognition.descriptor = replace(
+                    groq_cognition.descriptor,
+                    metadata={
+                        **groq_cognition.descriptor.metadata,
+                        "social_secondary_preference": True,
+                    },
+                )
+            cognition.register_provider(groq_cognition)
             if memory_model:
                 cognition.register_provider(GroqMemoryProvider(secrets, model=memory_model))
 
@@ -261,15 +302,25 @@ class AmoraCore:
             cognition.register_provider(openrouter_cognition)
 
         events.subscribe_bootstrap("cognition.action_suggested", autonomy.handle_cognitive_suggestion)
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.conversation.postgres_store import PostgresConversationStore
+            conversation_store_class = PostgresConversationStore
+        else:
+            conversation_store_class = ConversationStore
         conversation = ConversationEngine(
-            ConversationStore(paths.database, active_clock, backend=storage),
+            conversation_store_class(paths.database, active_clock, backend=storage),
             active_clock,
             social,
             emotion,
             events,
             cognition=cognition,
         )
-        messaging_store = MessagingStore(database, active_clock)
+        if storage.capabilities.name == "postgres-candidate":
+            from amora.messaging.postgres_store import PostgresMessagingStore
+            messaging_store_class = PostgresMessagingStore
+        else:
+            messaging_store_class = MessagingStore
+        messaging_store = messaging_store_class(database, active_clock)
         platform_presence = PlatformPresenceController(messaging_store, active_clock)
         from amora.messaging.incoming_vision import GroqIncomingImageVision, IncomingVisionCascade
         from amora.messaging.nvidia_incoming_vision import NvidiaMistralIncomingImageVision
@@ -455,8 +506,15 @@ class AmoraCore:
                 return {"status": "not_ready", "error_code": "AUTH_NOT_CONFIGURED"}
             if self.database.schema_version() != self.database.expected_schema_version:
                 return {"status": "not_ready", "error_code": "SCHEMA_NOT_CURRENT"}
-            with self.database._lock, self.database._conn:
-                self.database._conn.execute("UPDATE schema_migrations SET version=version WHERE version=(SELECT MAX(version) FROM schema_migrations)")
+            if self.database.backend.capabilities.name == "postgres-candidate":
+                # The existing SQLite update is not a PostgreSQL liveness
+                # check. A staging-only Aiven PG18 backend must pass the same
+                # read-only structural/transport probe used by /health.
+                if self.database.integrity_check() != "ok":
+                    return {"status": "not_ready", "error_code": "STORAGE_UNAVAILABLE"}
+            else:
+                with self.database._lock, self.database._conn:
+                    self.database._conn.execute("UPDATE schema_migrations SET version=version WHERE version=(SELECT MAX(version) FROM schema_migrations)")
             return {"status": "ready", "storage": self.database.backend.capabilities.name}
         except Exception:
             return {"status": "not_ready", "error_code": "STORAGE_UNAVAILABLE"}

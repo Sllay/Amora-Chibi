@@ -21,6 +21,10 @@ RUN --mount=type=secret,id=proxy_ca \
 
 RUN addgroup -g 10001 amora && adduser -D -u 10001 -G amora amora
 COPY --chmod=0444 core/amora/storage/aiven_preflight.py /opt/amora/aiven_preflight.py
+# Optional operator-run metadata-only inventory; the default CMD is unchanged.
+COPY --chmod=0444 core/amora/storage/aiven_capacity_inventory.py /opt/amora/aiven_capacity_inventory.py
+# Standalone, optional operator-only staged network diagnostic. No default CMD change.
+COPY --chmod=0444 core/amora/storage/aiven_transport_diagnostic.py /opt/amora/aiven_transport_diagnostic.py
 
 USER 10001:10001
 CMD ["python", "/opt/amora/aiven_preflight.py"]

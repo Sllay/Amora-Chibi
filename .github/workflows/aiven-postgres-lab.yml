@@ -1,0 +1,245 @@
+name: Aiven PostgreSQL 18 synthetic memory lab
+
+on:
+  pull_request:
+    paths:
+      - 'core/amora/storage/postgres_memory_lab.py'
+      - 'core/amora/storage/postgres_v18_manifest.py'
+      - 'core/amora/storage/postgres_v18_lab_schema.py'
+      - 'core/amora/storage/postgres_synthetic_import.py'
+      - 'core/amora/storage/postgres_privacy_lab.py'
+      - 'core/amora/storage/postgres_fts_parity_lab.py'
+      - 'core/amora/storage/postgres_fts_folded_lab.py'
+      - 'core/amora/storage/postgres_fts_bm25_lab.py'
+      - 'core/amora/storage/postgres_atomic_index_lab.py'
+      - 'core/amora/storage/postgres_sql_connection_lab.py'
+      - 'core/amora/storage/postgres_domain_parity_lab.py'
+      - 'core/amora/storage/postgres_speech_leases_lab.py'
+      - 'core/amora/storage/postgres_auth_sessions_lab.py'
+      - 'core/amora/storage/postgres_voice_stop_lab.py'
+      - 'core/amora/storage/postgres_runtime_sql_audit.py'
+      - 'core/amora/storage/postgres_conversation_read_lab.py'
+      - 'core/amora/storage/postgres_runtime_connection.py'
+      - 'core/amora/storage/aiven_staging_core_backend.py'
+      - 'core/amora/storage/aiven_production_core_backend.py'
+      - 'tests/test_aiven_production_core_selector.py'
+      - 'core/amora/storage/aiven_core_readonly_probe.py'
+      - 'core/amora/storage/aiven_memory_write_probe.py'
+      - 'tests/test_aiven_memory_write_probe.py'
+      - 'tools/ops/aiven_pg18_native_backup.py'
+      - 'deploy/Dockerfile.aiven-native-pg18-backup'
+      - 'tests/test_aiven_pg18_native_backup.py'
+      - 'tests/test_aiven_core_readonly_probe.py'
+      - 'tests/test_aiven_staging_readiness.py'
+      - 'tests/test_aiven_staging_core_selector.py'
+      - 'Dockerfile'
+      - 'core/amora/storage/postgres_runtime_registry.py'
+      - 'core/amora/storage/postgres_runtime_conversation.py'
+      - 'core/amora/storage/postgres_runtime_identity.py'
+      - 'core/amora/storage/postgres_runtime_memory.py'
+      - 'core/amora/storage/postgres_runtime_voice.py'
+      - 'core/amora/storage/postgres_runtime_cognition.py'
+      - 'core/amora/storage/postgres_runtime_expression.py'
+      - 'core/amora/storage/postgres_runtime_conversation_lifecycle.py'
+      - 'core/amora/conversation/runtime.py'
+      - 'core/amora/storage/postgres_runtime_world.py'
+      - 'core/amora/storage/postgres_runtime_actions.py'
+      - 'core/amora/storage/postgres_runtime_avatar.py'
+      - 'core/amora/storage/postgres_runtime_autonomy.py'
+      - 'core/amora/storage/postgres_runtime_emotion.py'
+      - 'core/amora/storage/postgres_runtime_messaging.py'
+      - 'core/amora/storage/postgres_runtime_generation.py'
+      - 'core/amora/storage/postgres_runtime_reflections.py'
+      - 'core/amora/storage/postgres_runtime_agenda.py'
+      - 'core/amora/storage/postgres_runtime_temporal.py'
+      - 'core/amora/storage/postgres_runtime_episode.py'
+      - 'core/amora/storage/postgres_episode_lab_schema.py'
+      - 'core/amora/memory/postgres_episode_fence.py'
+      - 'core/amora/memory/episode_work.py'
+      - 'core/amora/messaging/reflection_queue.py'
+      - 'core/amora/messaging/generation_lifecycle.py'
+      - 'core/amora/messaging/storage_lane.py'
+      - 'core/amora/agenda/service.py'
+      - 'core/amora/messaging/temporal_initiative.py'
+      - 'core/amora/storage/postgres_runtime_synthetic_setup.py'
+      - 'core/amora/storage/backend.py'
+      - 'core/amora/world/postgres_store.py'
+      - 'core/amora/autonomy/postgres_store.py'
+      - 'core/amora/emotion/postgres_store.py'
+      - 'core/amora/messaging/postgres_store.py'
+      - 'core/amora/messaging/store.py'
+      - 'core/amora/actions/store.py'
+      - 'core/amora/autonomy/store.py'
+      - 'core/amora/emotion/store.py'
+      - 'core/amora/memory/postgres_store.py'
+      - 'core/amora/conversation/postgres_store.py'
+      - 'core/amora/cognition/postgres_store.py'
+      - 'core/amora/app.py'
+      - 'core/amora/conversation/store.py'
+      - 'core/amora/cognition/store.py'
+      - 'core/amora/storage/database.py'
+      - 'pyproject.toml'
+      - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN1_INFRASTRUCTURE.md'
+      - 'tests/test_postgres_memory_lab_contract.py'
+      - 'tests/test_postgres_v18_manifest.py'
+      - 'tests/test_postgres_v18_lab_schema.py'
+      - 'tests/test_postgres_synthetic_import.py'
+      - 'tests/test_postgres_privacy_parity.py'
+      - 'tests/test_postgres_fts_parity.py'
+      - 'tests/test_postgres_fts_folded_lab.py'
+      - 'tests/test_postgres_fts_bm25_lab.py'
+      - 'tests/test_postgres_atomic_index_lab.py'
+      - 'tests/test_postgres_sql_connection_lab.py'
+      - 'tests/test_postgres_domain_parity.py'
+      - 'tests/test_postgres_speech_leases_lab.py'
+      - 'tests/test_postgres_auth_sessions_lab.py'
+      - 'tests/test_postgres_voice_stop_lab.py'
+      - 'tests/test_postgres_runtime_sql_audit.py'
+      - 'tests/test_postgres_conversation_read_lab.py'
+      - 'tests/test_postgres_runtime_connection.py'
+      - 'tests/test_postgres_sql_connection_lab.py'
+      - 'tests/test_postgres_runtime_sql_audit.py'
+      - 'tests/test_postgres_run1_end_to_end.py'
+      - 'tests/test_postgres_run1_memory_integration.py'
+      - 'tests/test_postgres_run2_core_bootstrap.py'
+      - 'tests/test_postgres_run2_usage_boundary.py'
+      - 'tests/test_postgres_run2_messaging_queue.py'
+      - 'tests/test_postgres_run2_cognition_v1.py'
+      - 'tests/test_postgres_run2_rank_parity.py'
+      - 'tests/test_postgres_run2_atomic_decay.py'
+      - 'tests/test_postgres_run2_episode_fence.py'
+      - 'tests/test_postgres_run2_reflection_queue.py'
+      - 'tests/test_postgres_run2_replica_epoch.py'
+      - 'tests/test_postgres_run2_native_backup_restore.py'
+      - 'tests/test_postgres_run2_episode_worker.py'
+      - 'tests/test_postgres_run2_discord_core.py'
+      - 'tests/test_postgres_run2_expression_lifecycle.py'
+      - 'tests/test_postgres_run2_conversation_lifecycle.py'
+      - 'tests/test_postgres_run2_discord_pipeline.py'
+      - 'tests/test_postgres_run2_scaled_import.py'
+      - 'tests/test_postgres_run2_unicode_rank_stress.py'
+      - 'tests/test_postgres_run2_expression_inventory.py'
+      - 'tests/test_postgres_run2_core_entry_sql_inventory.py'
+      - 'core/amora/storage/postgres_memory_epoch_lab.py'
+      - 'tests/test_postgres_runtime_domain_contract.py'
+      - 'tests/test_postgres_run3_sql_inventory.py'
+      - 'core/amora/storage/postgres_run3_snapshot_preflight.py'
+      - 'core/amora/storage/postgres_run3_preflight.py'
+      - 'tests/test_postgres_run3_snapshot_preflight.py'
+      - 'tests/test_postgres_run3_queue_soak.py'
+      - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN3_RELEASE_READINESS.md'
+      - 'tests/test_postgres_run3_readonly_preflight.py'
+      - 'tests/test_postgres_run3_restart_soak.py'
+      - 'core/amora/storage/postgres_private_staging_import.py'
+      - 'tests/test_postgres_private_staging_import.py'
+      - 'core/amora/storage/postgres_staging_schema_prepare.py'
+      - 'core/amora/storage/postgres_fts_bm25_lab.py'
+      - 'core/amora/storage/postgres_voice_stop_lab.py'
+      - 'core/amora/storage/postgres_memory_epoch_lab.py'
+      - 'tests/test_postgres_staging_schema_prepare.py'
+      - 'docs/engineering/reviews/AIVEN_POSTGRES_RUN3_AUDIT.md'
+      - 'tests/test_postgres_memory_lab_integration.py'
+      - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
+      - '.github/workflows/aiven-postgres-lab.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'core/amora/storage/postgres_memory_lab.py'
+      - 'tests/test_postgres_memory_lab_contract.py'
+      - 'tests/test_postgres_memory_lab_integration.py'
+      - 'docs/engineering/reviews/AIVEN_POSTGRES_PHASE2A.md'
+      - '.github/workflows/aiven-postgres-lab.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: amora_pg_synthetic
+          POSTGRES_USER: amora_ci
+          POSTGRES_PASSWORD: synthetic_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U amora_ci -d amora_pg_synthetic"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install synthetic-only test dependencies
+        run: |
+          python -m pip install -e '.[dev,aiven-preflight]'
+          python -m pip install --only-binary=:all: 'psycopg[binary]==3.3.9'
+      - name: Compile serving Core and migration tests
+        run: |
+          python -m compileall -q core/amora tests
+      - name: Run fail-closed unit tests and real PostgreSQL 18 integration
+        env:
+          AMORA_PG_SYNTHETIC_LAB: '1'
+        run: |
+          python -m pytest -vv --durations=10 -o faulthandler_timeout=120 \
+            tests/test_postgres_memory_lab_contract.py \
+            tests/test_postgres_memory_lab_integration.py \
+            tests/test_postgres_v18_manifest.py \
+            tests/test_postgres_v18_lab_schema.py \
+            tests/test_postgres_synthetic_import.py \
+            tests/test_postgres_privacy_parity.py \
+            tests/test_postgres_fts_parity.py \
+            tests/test_postgres_fts_folded_lab.py \
+            tests/test_postgres_fts_bm25_lab.py \
+            tests/test_postgres_atomic_index_lab.py \
+            tests/test_postgres_sql_connection_lab.py \
+            tests/test_postgres_domain_parity.py \
+            tests/test_postgres_speech_leases_lab.py \
+            tests/test_postgres_auth_sessions_lab.py \
+            tests/test_postgres_voice_stop_lab.py \
+            tests/test_postgres_runtime_sql_audit.py \
+            tests/test_postgres_conversation_read_lab.py \
+            tests/test_postgres_runtime_connection.py \
+            tests/test_aiven_staging_core_selector.py \
+            tests/test_aiven_production_core_selector.py \
+            tests/test_aiven_core_readonly_probe.py \
+            tests/test_aiven_memory_write_probe.py \
+            tests/test_aiven_pg18_native_backup.py \
+            tests/test_aiven_staging_readiness.py \
+            tests/test_postgres_run1_end_to_end.py \
+            tests/test_postgres_run1_memory_integration.py \
+            tests/test_postgres_run2_core_bootstrap.py \
+            tests/test_postgres_run2_usage_boundary.py \
+            tests/test_postgres_run2_messaging_queue.py \
+            tests/test_postgres_run2_cognition_v1.py \
+            tests/test_postgres_run2_rank_parity.py \
+            tests/test_postgres_run2_atomic_decay.py \
+            tests/test_postgres_run2_episode_fence.py \
+            tests/test_postgres_run2_reflection_queue.py \
+            tests/test_postgres_run2_replica_epoch.py \
+            tests/test_postgres_run2_native_backup_restore.py \
+            tests/test_postgres_run2_episode_worker.py \
+            tests/test_postgres_run2_discord_core.py \
+            tests/test_postgres_run2_expression_lifecycle.py \
+            tests/test_postgres_run2_conversation_lifecycle.py \
+            tests/test_postgres_run2_discord_pipeline.py \
+            tests/test_postgres_run2_scaled_import.py \
+            tests/test_postgres_run2_unicode_rank_stress.py \
+            tests/test_postgres_run2_expression_inventory.py \
+            tests/test_postgres_run2_core_entry_sql_inventory.py \
+            tests/test_postgres_runtime_domain_contract.py \
+            tests/test_postgres_run3_sql_inventory.py \
+            tests/test_postgres_run3_snapshot_preflight.py \
+            tests/test_postgres_run3_queue_soak.py \
+            tests/test_postgres_run3_readonly_preflight.py \
+            tests/test_postgres_run3_restart_soak.py \
+            tests/test_postgres_private_staging_import.py \
+            tests/test_postgres_staging_schema_prepare.py
