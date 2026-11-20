@@ -40,7 +40,7 @@ Amora, tira print do link 2.
    Microlink**, com screenshot em JPEG e qualidade limitada. Não executa
    Chromium e não aumenta a RAM do Core.
 3. A API retorna URL de screenshot hospedada no CDN oficial; o worker baixa
-   apenas de `cdn.microlink.io` por HTTPS, com 9 s de limite e até 2,5 MB,
+   apenas de hosts CDN oficiais da Microlink (`cdn.microlink.io` e regionais como `iad.microlink.io`) por HTTPS, com 9 s de limite e até 2,5 MB,
    verifica o tipo e os bytes da imagem.
 4. O worker envia a captura via **multipart/form-data** para o mesmo endpoint
    de mensagem Discord, com a imagem como anexo, e usa o nonce idempotente
