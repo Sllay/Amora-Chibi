@@ -122,6 +122,17 @@ class NorthflankLogArchiveTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 diagnostic_report(path, ciphertext)
 
+    def test_existing_secrets_and_project_are_wired_into_archive_workflow(self):
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github/workflows/northflank-encrypted-archive.yml"
+        ).read_text(encoding="utf-8")
+        assert "secrets.NF_BACKUP_API_TOKEN" in workflow
+        assert "secrets.AMORA_LOG_ARCHIVE_PASSPHRASE" in workflow
+        assert "vars.NORTHFLANK_PROJECT_ID || 'default'" in workflow
+        assert "vars.NORTHFLANK_TEAM_ID || 'mejorberrys-team'" in workflow
+        assert "secrets.NORTHFLANK_API_TOKEN" not in workflow
+
     def test_redaction_of_credentials_precedes_any_public_diagnostics(self):
         self.assertEqual(
             safe_log('Authorization: Bearer token-super-secret'),
