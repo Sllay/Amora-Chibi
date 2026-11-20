@@ -207,6 +207,24 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "REFLECTION_MODE"],
             )
 
+        if "SCHEDULED_REMINDER" in context.reason_codes:
+            return DialoguePlan(
+                act=DialogueAct.CONTINUE_TOPIC,
+                objective=(
+                    "Deliver the exact scheduled obligation in Amora's own brief, "
+                    "context-sensitive voice. The written reminder instruction is "
+                    "authoritative; never change, omit, delay or invent its subject, "
+                    "deadline, recipient, or completion status. Memory is optional "
+                    "context, not evidence that the task is already done."
+                ),
+                depth=DialogueDepth.SHORT,
+                response_moves=["deliver_reminder", "personal_context_note"],
+                ask_followup=False, offer_help=False, closing_mode="statement",
+                style_register=style, tone_tags=tone, stance="supportive",
+                relational_attitude=attitude,
+                reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "SCHEDULED_REMINDER_DELIVERY"],
+            )
+
         if "AUTONOMOUS_INITIATION" in context.reason_codes:
             if context.temporal_opportunity:
                 return DialoguePlan(
