@@ -9,6 +9,7 @@ from amora.memory import MemoryKind
 
 class MemoryProposal(BaseModel):
     kind: MemoryKind = MemoryKind.EPISODIC
+    behavioral_signal: str = Field(default="none", pattern=r"^(none|speech_preference|behavioral_correction)$")
     content: str = Field(min_length=1, max_length=2000)
     summary: str | None = Field(default=None, max_length=500)
     confidence: float = Field(default=0.6, ge=0.0, le=1.0)
