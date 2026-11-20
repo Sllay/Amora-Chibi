@@ -140,6 +140,108 @@ class CognitiveStore:
             ).fetchall()
         return [self._message_from_row(row) for row in reversed(rows)]
 
+    @trace_stage("history_read")
+    def owner_day_conversations(
+        self, owner_id: str, start_utc, end_utc, *, terms=frozenset(),
+        limit: int = 4, scan_limit: int = 512,
+    ) -> tuple[list[dict], bool]:
+        """Retrieve real owner DM inputs and sent Amora replies, read-only.
+
+        SQL scopes the principal, privacy, transport and invalidations *before*
+        any content leaves storage. Historical transport timestamps are
+        checked by the same trusted observed_timestamp as normal Core history.
+        """
+        from amora.cognition.temporal import observed_timestamp
+        from amora.memory.recall_intent import topic_terms
+        from amora.messaging.session_identity import messaging_session_ref
+
+        if (not owner_id or start_utc.tzinfo is None or end_utc.tzinfo is None
+                or not start_utc < end_utc):
+            raise ValueError("INVALID_OWNER_DAY_QUERY")
+        limit = max(1, min(6, int(limit)))
+        scan_limit = max(limit, min(512, int(scan_limit)))
+        rows = self._owner_day_source_rows(
+            owner_id, start_utc.isoformat(), end_utc.isoformat(), scan_limit,
+        )
+        scanned_complete = len(rows) <= scan_limit
+        selected = []
+        for row in rows[:scan_limit]:
+            message = self._message_from_row(row)
+            instant, _ = observed_timestamp(message)
+            if instant is None or not start_utc <= instant < end_utc:
+                continue
+            text = (message.raw_text or message.normalized_text or "").strip()
+            if not text or (terms and not terms <= topic_terms(text)):
+                continue
+            selected.append({
+                "turn_id": str(message.turn_id),
+                "session_id": message.session_id,
+                "at": instant,
+                "user_text": text,
+                "reply_text": None,
+            })
+        # Never describe a queued, cancelled or failed draft as "she said".
+        visible = selected[:limit]
+        if visible:
+            by_turn = {entry["turn_id"]: entry for entry in visible}
+            reply_rows = self._owner_day_outbound_rows(owner_id, tuple(by_turn))
+            for reply in reply_rows:
+                metadata = json.loads(reply["metadata_json"] or "{}")
+                entry = by_turn.get(str(metadata.get("cognitive_turn_id") or ""))
+                if (entry is not None and entry["reply_text"] is None
+                        and entry["session_id"] == messaging_session_ref(
+                            "discord", reply["account_scope"], reply["conversation_id"])
+                        and reply["text"] and reply["text"].strip()):
+                    entry["reply_text"] = reply["text"].strip()
+        return visible, scanned_complete
+
+
+    def _owner_day_source_rows(self, owner_id, start, end, scan_limit):
+        sql = """
+            SELECT m.* FROM conversation_messages m
+            WHERE m.speaker_id=? AND m.addressee_id='ENTITY_AMORA'
+              AND m.dedupe_key='cognitive-input:' || m.turn_id
+              AND m.session_id IS NOT NULL AND m.status='received'
+              AND m.privacy_scope IN ('PERSONAL', 'PRIVATE')
+              AND json_extract(m.metadata_json,'$.surface')='platform_messaging'
+              AND json_extract(m.metadata_json,'$.platform')='discord'
+              AND json_extract(m.metadata_json,'$.channel_type')='dm'
+              AND COALESCE(json_extract(m.metadata_json,'$.test_mode'),0)=0
+              AND COALESCE(json_extract(m.metadata_json,'$.observed_only'),0)=0
+              AND NOT EXISTS (
+                SELECT 1 FROM memory_reflection_invalidations x
+                WHERE x.session_id=m.session_id
+                  AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash')
+                  AND x.invalidated_through>=COALESCE(
+                      json_extract(m.metadata_json,'$.transport_revision'),1)
+              )
+              AND (
+                (julianday(m.started_at)>=julianday(?) AND julianday(m.started_at)<julianday(?))
+                OR (julianday(json_extract(m.metadata_json,'$.platform_sent_at'))>=julianday(?)
+                    AND julianday(json_extract(m.metadata_json,'$.platform_sent_at'))<julianday(?))
+              )
+            ORDER BY julianday(m.started_at), m.id LIMIT ?
+        """
+        with trace_lock(self._lock):
+            rows = self._conn.execute(
+                sql, (owner_id, start, end, start, end, scan_limit + 1),
+            ).fetchall()
+
+        return rows
+
+    def _owner_day_outbound_rows(self, owner_id, turn_ids):
+        placeholders = ",".join("?" for _ in turn_ids)
+        with trace_lock(self._lock):
+            reply_rows = self._conn.execute(
+                "SELECT account_scope,conversation_id,text,metadata_json "
+                "FROM messaging_outbound_queue "
+                "WHERE platform='discord' AND target_entity_id=? AND status='sent' "
+                "AND json_extract(metadata_json,'$.cognitive_turn_id') IN (" + placeholders + ") "
+                "ORDER BY created_at,id",
+                (owner_id, *turn_ids),
+            ).fetchall()
+        return reply_rows
+
     def source_invalidated(self, session_id, native_message_hash, revision):
         with trace_lock(self._lock):
             row = self._conn.execute(
