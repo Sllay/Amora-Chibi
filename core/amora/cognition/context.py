@@ -483,6 +483,36 @@ class ContextCompiler:
         if visual is not None:
             reasons.append("INCOMING_IMAGE_ANALYZED" if visual["status"] == "analyzed"
                            else "INCOMING_IMAGE_NOT_ANALYZED")
+        stored_stickers = []
+        if (remote and not shared
+                and request.privacy_scope == PrivacyScope.PERSONAL
+                and request.metadata.get("surface") == "platform_messaging"
+                and request.metadata.get("platform") == "discord"
+                and request.metadata.get("channel_type") == "dm"
+                and request.speaker_id == "PERSON_BK"
+                and request.metadata.get("cognitive_mode", "reply") == "reply"):
+            raw_stickers = request.metadata.get("known_sticker_perception")
+            if isinstance(raw_stickers, list):
+                for entry in raw_stickers[:3]:
+                    if (not isinstance(entry, dict)
+                            or entry.get("source") != "verified_perceptual_memory"
+                            or not isinstance(entry.get("description"), str)
+                            or not isinstance(entry.get("confidence"), (int, float))):
+                        continue
+                    entry_clean = {
+                        "description": entry["description"][:200],
+                        "confidence": max(0.0, min(1.0, float(entry["confidence"]))),
+                        "source": "verified_perceptual_memory",
+                    }
+                    for key in ("visual_concepts", "affect_tags", "social_roles", "interpretations"):
+                        values = entry.get(key)
+                        entry_clean[key] = [
+                            value[:80] for value in values[:8]
+                            if isinstance(value, str)
+                        ] if isinstance(values, list) else []
+                    stored_stickers.append(entry_clean)
+        if stored_stickers:
+            reasons.append("KNOWN_STICKER_SEMANTICS_REUSED")
         context = CognitiveContext(
             turn_id=request.turn_id, created_at=now, speaker_id=request.speaker_id, expression_profile=profile,
             target_id=request.target_id, user_text=request.text, acir=acir, self_model=self_snapshot,
@@ -492,6 +522,7 @@ class ContextCompiler:
             world_claims=claims, recent_messages=recent, temporal_context=temporal,
             temporal_opportunity=opportunity,
             visual_observation=visual,
+            perceptual_expressions=stored_stickers,
             privacy_scope=request.privacy_scope,
             remote_processing_allowed=remote, token_budget=token_budget, reason_codes=reasons,
             scene_visibility=visibility,
