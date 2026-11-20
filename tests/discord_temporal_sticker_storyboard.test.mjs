@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { access, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+import { deflateSync } from 'node:zlib';
 
 import {
   animationFrameCount, temporalFrameIndices, renderTemporalStoryboard,
@@ -10,7 +11,63 @@ import {
 
 // Compact, original four-frame artwork fixtures created without network I/O.
 const GIF = Buffer.from('R0lGODlhQABAAIEAAP////8AAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQICQAAACwAAAAAQABAAAAIlwABCBxIsKDBgwgTKlzIsKHDhxAjSpxIsaLFixgzatzIsaPHjyBDihxJsqTJkyhTqlzJsqXLlzBjypxJU2WAmzdrEsTJMyfNnkB9wgxKNCbRoEOPInWpdCnLpkWfQgXacipVqVZxVs2qdWvWl1wDJJ1q1KpMsj+j6gTQc63bt3Djyp1Lt67du3jz6t3Lt6/fv4ADCx4MICAAIfkECAwAAAAsAAAAAEAAQACB/////wAAAAAAAAAACJYAAQgcSLCgwYMIEypcyLChw4cQI0qcSLGixYsYM2rcyLGjx48gQ4ocSbKkyZMoU6pcybKly5cwY8qcSZNmgJs3axLEyTOnzZ5AA8gMSjQm0aAwjxZ1qRRpy6ZLV0J1KnVqz6dWeWLN6pMlV6FMuSa1apRs2aY1j+oceHWt27dw48qdS7eu3bt48+rdy7ev37+AAwvOGxAAIfkECA4AAAAsAAAAAEAAQACB/////wAAAAAAAAAACJYAAQgcSLCgwYMIEypcyLChw4cQI0qcSLGixYsYM2rcyLGjx48gQ4ocSbKkyZMoU6pcybKly5cwY8qcSbNmwgA4cdocmLOnTpo+g/6EKbRozKJCiSJN6nIpU5ZOjUKNGrQl1apTr+a0qnUrV60vuwZQSvXoVZllgUrd6XOn27dw48qdS7eu3bt48+rdy7ev37+AAwuGGxAAIfkECBEAAAAsAAAAAEAAQACB/////wAAAAAAAAAACJYAAQgcSLCgwYMIEypcyLChw4cQI0qcSLGixYsYM2rcyLGjx48gQ4ocSbKkyZMoU6pcybKly5cwY8qcSbPmxAA4cdocmLOnTpo+g/6EKbRozKJCiSJN6nIpU5ZOjUKNGrQl1apTr+a0qnUrV60vuwZQSvXoVZllgUrd6XOn27dw48qdS7eu3bt48+rdy7ev37+AAwuGGRAAOw==', 'base64');
-const APNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAACGFjVEwAAAAEAAAAAHzNZtAAAAAaZmNUTAAAAAAAAABAAAAAQAAAAAAAAAAAAAkAZAIA85ozXAAAAPtJREFUeJztmEEKwyAQANfS/3/Znry0arQRhiUzx6SB2VEkTam11ngwL1qAxgC0AI0BaAEaA9ACNAWgBGgMQAvQGIAWoDEALUBjAFqAxgC0AI0BaAGa9/YTpfxeS/xheT1Ab/DvewlDXAeYDT76baIQ8zNgZ/gTzwE8/hAcB7i7ikl2gTuge/XU6iXYBe4AWoDGALQATT/AqTe5BG+E7oDhnburl2D1I9wBFwH+XcUkqx+x8ne4DbPyVpdo8Mb6B5FZiISDN/Y/iSUetoeHIC1AYwBagMYAtACNAWgBGgPQAjQGoAVoDEAL0BiAFqAxAC1AYwBagMYAtADNBwaUIIYFR1g3AAAAGmZjVEwAAAABAAAAQAAAAEAAAAAAAAAAAAADABkCAH5wOioAAAD+ZmRBVAAAAAJ4nO3YwQ6CMBAGYWt8/1euJy6KRO2SbxP+OSqQ2WlDgDHnnLcLc9cCmgTQApoE0AKaBNACmgTQApoE0AKaBNACmgTQApoE0AKaBNACmgTQAprHaVce4/23hh+g6wPsDf76X6MQdQGOBv90bIMQNfeAX4avOK+Qy98E1wOsriLeBdkBS2dXrR7cBdkBWkCTAFpAsxag6kkOPhFmByxfYXX18PtAdkDJVf5dxQZvg3Wvw9sw3zzVNRh8o/6DyFGIRoNvnPdJrOGwe+QmqAU0CaAFNAmgBTQJoAU0CaAFNAmgBTQJoAU0CaAFNAmgBTQJoAU0CaAFNE+mmSCGIdDzOgAAABpmY1RMAAAAAwAAACcAAAATAAAABQAAABYABwAyAgCZcXyIAAAAf2ZkQVQAAAAEeJztljsOwCAMQ5OK+1/ZXVo1ChS1+bAEj4Dxk5eEAYBWibk/m8S3RJRHIyh9N4DMhZtBvb0VkEcwTh/m8OXBBSgHztqa8hdrztua+KdYc4HacFbFw0WNaqBac0T+9i5/weaI7O0JX+7KdAd9mRrL9zkd/HMTPgHgyR4qJh0/SAAAABpmY1RMAAAABQAAACcAAAATAAAADwAAABYAEQBkAgARhWZWAAAAf2ZkQVQAAAAGeJztljsOwCAMQ5OK+1/ZXVo1ChS1+bAEj4Dxk5eEAYBWibk/m8S3RJRHIyh9N4DMhZtBvb0VkEcwTh/m8OXBBSgHztua+KdYc4HacFbFw0WNaqBac0T+9i5/weaI7O0JX+7KdAd9mRrL9zkd/HMTPgHgyR4qzhDKYgAAAABJRU5ErkJggg==', 'base64');
+// Build a valid APNG with four actual, independently encoded frames. Node
+// tests do not need a platform-specific image generation dependency.
+function pngChunk(kind, payload) {
+  const tag = Buffer.from(kind, 'ascii');
+  const size = Buffer.alloc(4);
+  size.writeUInt32BE(payload.length);
+  const crcInput = Buffer.concat([tag, payload]);
+  let crc = 0xffffffff;
+  for (const byte of crcInput) {
+    crc ^= byte;
+    for (let n = 0; n < 8; n++) {
+      crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+  }
+  const sum = Buffer.alloc(4);
+  sum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+  return Buffer.concat([size, tag, payload, sum]);
+}
+function animatedPngFixture() {
+  const signature = Buffer.from('89504e470d0a1a0a', 'hex');
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(2, 0);
+  ihdr.writeUInt32BE(2, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6; // RGBA
+  const actl = Buffer.alloc(8);
+  actl.writeUInt32BE(4, 0);
+  const chunks = [pngChunk('IHDR', ihdr), pngChunk('acTL', actl)];
+  let sequence = 0;
+  for (let frame = 0; frame < 4; frame++) {
+    const fctl = Buffer.alloc(26);
+    fctl.writeUInt32BE(sequence++, 0);
+    fctl.writeUInt32BE(2, 4);
+    fctl.writeUInt32BE(2, 8);
+    fctl.writeUInt16BE(10, 20);
+    fctl.writeUInt16BE(100, 22);
+    chunks.push(pngChunk('fcTL', fctl));
+    const color = [
+      [220, 0, 0, 255],
+      [0, 200, 0, 255],
+      [0, 0, 230, 255],
+      [230, 210, 0, 255],
+    ][frame];
+    const scanline = Buffer.from([0, ...color, ...color]);
+    const compressed = deflateSync(Buffer.concat([scanline, scanline]));
+    if (frame === 0) {
+      chunks.push(pngChunk('IDAT', compressed));
+    } else {
+      const fdatSequence = Buffer.alloc(4);
+      fdatSequence.writeUInt32BE(sequence++);
+      chunks.push(pngChunk('fdAT', Buffer.concat([fdatSequence, compressed])));
+    }
+  }
+  chunks.push(pngChunk('IEND', Buffer.alloc(0)));
+  return Buffer.concat([signature, ...chunks]);
+}
+const APNG = animatedPngFixture();
 const sources = [
   { bytes: GIF, formatType: 4, mime: 'image/gif' },
   { bytes: APNG, formatType: 2, mime: 'image/png' },
