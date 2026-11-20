@@ -20,6 +20,7 @@ import os
 import re
 import socket
 import ssl
+import unicodedata
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -289,6 +290,101 @@ class WebIntent:
     argument: str
 
 
+# The search index receives topical keywords, not a raw Discord sentence.
+# The stopped words are grammatical/interaction fillers, never a list of
+# approved subjects or domains. Negations and technical terms are retained.
+_SEARCH_FILLERS = frozenset({
+    "a", "o", "as", "os", "um", "uma", "uns", "umas", "de", "da", "do", "das",
+    "dos", "no", "na", "nos", "nas", "em", "e", "que", "qual", "quais",
+    "sobre", "por", "favor", "pra", "para", "pelo", "pela", "pelos", "pelas",
+    "me", "diz", "diga", "fala", "fale", "mostra", "mostre", "envia",
+    "mande", "encontre", "agora", "entao", "então", "ai", "aí", "ae",
+})
+_SEARCH_GENERIC = frozenset({
+    "novidade", "novidades", "noticia", "noticias", "news",
+    "recentes", "recente", "atual", "atualizacoes", "atualizacao",
+    "ultimas", "ultimos", "ultima", "ultimo", "informacoes", "informacao",
+})
+
+
+def _clean_search_query(raw: str, match: re.Match[str]) -> str:
+    """Extract the subject after the search verb; remove casual preambles.
+
+    Example: 'Okay então Amora pesquisa novidade sobre Android na web da
+    Godot Engine' -> 'novidade Android Godot Engine'. No model call needed.
+    """
+    subject = raw[match.end():match.end() + 400]
+    # 'na web' describes the medium; preserve 'web' when it belongs to
+    # a technical topic such as 'pesquise WebAssembly'.
+    subject = re.sub(r"(?i)\b(?:na|pela|pela?\s+a|pela\s+|pela|por|via)\s+(?:web|internet)\b", " ", subject)
+    subject = re.split(
+        r"(?i)\s+e\s+(?:me\s+)?(?:diz|diga|fala|fale|mostra|mostre|envia|mande)\b",
+        subject, maxsplit=1,
+    )[0]
+    words = re.findall(r'"[^"\n]+"|[\w][\w.+#-]*', subject, flags=re.UNICODE)
+    terms = [word for word in words if word.casefold() not in _SEARCH_FILLERS]
+    return " ".join(terms[:28])[:240].strip()
+
+
+def _fold_search(value: str) -> str:
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", value.casefold())
+        if not unicodedata.combining(ch)
+    )
+
+
+def _topic_terms(query: str) -> list[str]:
+    seen: set[str] = set()
+    terms = []
+    for token in re.findall(r"\w+", _fold_search(query)):
+        if len(token) < 2 or token in _SEARCH_GENERIC or token in _SEARCH_FILLERS or token in seen:
+            continue
+        seen.add(token)
+        terms.append(token)
+    return terms[:20]
+
+
+def _rank_search_results(results: list[dict[str, str]], query: str) -> list[dict[str, str]]:
+    """Discard off-topic search listings instead of letting them become cited.
+
+    Search providers occasionally return a real but unrelated URL. No public
+    domain is privileged or prohibited here: ranking uses the *user topic*.
+    """
+    topics = _topic_terms(query)
+    minimum_matches = min(2, len(topics))
+    scored = []
+    seen_urls: set[str] = set()
+    for index, item in enumerate(results[:15]):
+        if not isinstance(item, dict):
+            continue
+        try:
+            url = _public_url(str(item.get("url") or ""))[0]
+        except WebFetchError:
+            continue
+        if url in seen_urls:
+            continue
+        title = _clean(str(item.get("title") or ""), 160)
+        snippet = _clean(str(item.get("snippet") or ""), 300)
+        title_norm = _fold_search(title)
+        snippet_norm = _fold_search(snippet)
+        # URL host/path can legitimately support matching the requested
+        # product/project even if the search engine returns a terse title.
+        url_norm = _fold_search(urlsplit(url).hostname or "") + " " + _fold_search(urlsplit(url).path)
+        matches = sum(1 for term in topics if term in title_norm or term in snippet_norm or term in url_norm)
+        if topics and matches < minimum_matches:
+            continue
+        score = (
+            matches * 4
+            + sum(5 for term in topics if term in title_norm)
+            + sum(2 for term in topics if term in url_norm)
+            + sum(1 for term in topics if term in snippet_norm)
+        )
+        seen_urls.add(url)
+        scored.append((-score, index, {"url": url, "title": title, "snippet": snippet}))
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return [item[2] for item in scored[:5]]
+
+
 def parse_web_intent(text: str) -> WebIntent | None:
     raw = str(text or "")[:12000]
     urls = _LINK_RE.findall(raw)
@@ -304,9 +400,9 @@ def parse_web_intent(text: str) -> WebIntent | None:
         return WebIntent("follow", follow.group(1))
     search = _SEARCH_RE.search(raw)
     if search:
-        # Keep the actual user query; no synthetic rewriting or broad external
-        # search based merely on ordinary conversational references to the web.
-        return WebIntent("search", raw[:350])
+        # Do not send greetings, 'Okay', user instructions or Amora's name
+        # ahead of the actual subject to search engines.
+        return WebIntent("search", _clean_search_query(raw, search))
     return None
 
 
@@ -377,7 +473,7 @@ def _searx_search(query: str, endpoint: str) -> list[dict[str, str]]:
             continue
         results.append({"url": url, "title": _clean(str(item.get("title") or ""), 160),
                         "snippet": _clean(str(item.get("content") or ""), 300)})
-        if len(results) >= 5:
+        if len(results) >= 12:
             break
     return results
 
@@ -404,7 +500,7 @@ def _bing_rss_search(query: str) -> list[dict[str, str]]:
             "url": url, "title": _clean(item.findtext("title") or "", 160),
             "snippet": _clean(item.findtext("description") or "", 300),
         })
-        if len(results) >= 5:
+        if len(results) >= 12:
             break
     if not results:
         raise WebFetchError("WEB_SEARCH_UNAVAILABLE")
@@ -428,7 +524,7 @@ def _ddg_search(query: str) -> list[dict[str, str]]:
             continue
         seen.add(url)
         results.append({"url": url, "title": item["title"], "snippet": ""})
-        if len(results) >= 5:
+        if len(results) >= 12:
             break
     if not results:
         raise WebFetchError("WEB_SEARCH_UNAVAILABLE")
@@ -543,6 +639,8 @@ class WebNavigator:
                 return await self._open(intent.argument, session_id, "open",
                                         force_browser="navegador" in text.casefold()
                                         or "chromium" in text.casefold())
+            if not intent.argument:
+                raise WebFetchError("WEB_SEARCH_QUERY_EMPTY")
             endpoint = os.getenv("AMORA_WEB_SEARCH_ENDPOINT", "").strip()
             providers = (
                 [(self.search_provider, (intent.argument,))]
@@ -550,26 +648,27 @@ class WebNavigator:
                 ([( _searx_search, (intent.argument, endpoint))] if endpoint else [])
                 + [(_bing_rss_search, (intent.argument,)), (_ddg_search, (intent.argument,))]
             )
-            results = []
+            validated: list[dict[str, str]] = []
+            got_results = False
             for provider, arguments in providers:
                 try:
                     results = await self._call(provider, *arguments)
-                    if results:
-                        break
                 except (WebFetchError, TimeoutError):
                     continue
-            if not results:
-                raise WebFetchError("WEB_SEARCH_UNAVAILABLE")
-            validated: list[dict[str, str]] = []
-            for item in results[:5]:
-                try:
-                    safe_url = _public_url(str(item.get("url") or ""))[0]
-                except WebFetchError:
+                if not results:
                     continue
-                validated.append({"url": safe_url, "title": _clean(str(item.get("title") or ""), 160),
-                                  "snippet": _clean(str(item.get("snippet") or ""), 300)})
+                got_results = True
+                validated = _rank_search_results(results, intent.argument)
+                if validated:
+                    break
+                # A provider can succeed at HTTP but return completely wrong
+                # search results. Try the next independent provider instead
+                # of passing music/Wikipedia/grammar noise to the model.
             if not validated:
-                raise WebFetchError("WEB_SEARCH_UNAVAILABLE")
+                raise WebFetchError(
+                    "WEB_SEARCH_NO_RELEVANT_RESULTS" if got_results
+                    else "WEB_SEARCH_UNAVAILABLE"
+                )
             self._save_refs(session_id, validated)
             # Read two independent sources concurrently under the Core turn
             # timeout. Only actual opened pages are promoted to citations.
