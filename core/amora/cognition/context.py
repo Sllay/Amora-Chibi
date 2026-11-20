@@ -12,7 +12,7 @@ from amora.events import PrivacyScope
 from amora.identity import EntityRegistry
 from amora.language import ACIRCompiler, PerspectiveFrame, PerspectiveResolver, PerspectiveStack
 from amora.language.text_references import scoped_registry, history_antecedents
-from amora.memory import MemoryQuery, MemoryService
+from amora.memory import MemoryKind, MemoryQuery, MemoryService
 from amora.social import SocialSceneTracker
 from amora.time import Clock
 from amora.world import SelfModelService, WorldModelService
@@ -438,6 +438,54 @@ class ContextCompiler:
             recent = recent[-48:]
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
+        # Independently recover up to two source-consented interaction
+        # preferences, even when today's subject differs from the correction.
+        # Ordinary Memory V2 topic selection must not drop these signals.
+        guidance: list[ContextMemory] = []
+        feedback_mode = (
+            remote and not shared and request.session_id is not None
+            and request.privacy_scope == PrivacyScope.PERSONAL
+            and request.speaker_id == "PERSON_BK"
+            and request.metadata.get("surface") == "platform_messaging"
+            and request.metadata.get("platform") == "discord"
+            and request.metadata.get("channel_type") == "dm"
+            and request.metadata.get("cognitive_mode", "reply") in {
+                "reply", "autonomous_initiation", "scheduled_reminder"
+            }
+            and not request.metadata.get("test_mode")
+        )
+        if feedback_mode:
+            guidance_query = MemoryQuery(
+                text="", kinds={MemoryKind.SEMANTIC}, entity_ids={"PERSON_BK"},
+                required_tags={"amora_behavioral_feedback"},
+                projection_recipient_id="PERSON_BK",
+                projection_remote_only=True, limit=2,
+            )
+            feedback_hits = (
+                projection.recall(guidance_query)
+                if use_projection else self.memory.recall(guidance_query)
+            )
+            for hit in feedback_hits:
+                item = hit.memory
+                if (item.owner_entity_id != "PERSON_BK"
+                        or item.metadata.get("behavioral_signal") not in {
+                            "speech_preference", "behavioral_correction"
+                        } or not self.privacy_gate.memory_allowed(
+                            item, remote=True, recipient_id="PERSON_BK")):
+                    continue
+                observed = aware_time(item.metadata.get("source_observed_at"))
+                guidance.append(ContextMemory(
+                    id=str(item.id), kind=item.kind.value,
+                    content=(item.summary or item.content)[:320],
+                    score=hit.score, confidence=item.provenance.confidence,
+                    recorded_at=item.created_at.isoformat(),
+                    source_observed_at=observed.isoformat() if observed else None,
+                    privacy_scope=item.privacy_scope.value,
+                    reason_codes=["SOURCE_GROUNDED_BEHAVIORAL_FEEDBACK"],
+                ))
+        if guidance:
+            reasons.append("BEHAVIORAL_GUIDANCE_PROJECTED")
+
         with span("acir"):
             reference_registry = scoped_registry(self.identities, request.speaker_id,
                                                  authorized_relations=authorized_relations,
@@ -519,6 +567,7 @@ class ContextCompiler:
             relationships=relationships, mood={"valence": round(mood.valence, 6), "arousal": round(mood.arousal, 6),
                                                "dominance": round(mood.dominance, 6)},
             directed_affect=affect, drives=drives, active_intention=intention, memories=memories,
+            behavioral_guidance=guidance,
             world_claims=claims, recent_messages=recent, temporal_context=temporal,
             temporal_opportunity=opportunity,
             visual_observation=visual,
