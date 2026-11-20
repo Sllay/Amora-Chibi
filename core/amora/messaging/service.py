@@ -12,6 +12,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from amora.cognition import CognitiveRequest
 from amora.memory.recall_intent import parse_recall_intent
+from amora.memory.temporal_recall import parse_temporal_recall
 from .memory_disclosure import parse_disclosure_intent, disclosure_excerpt
 from .session_identity import messaging_session_ref
 from .memory_expression import render_memory_reply
@@ -349,6 +350,11 @@ class PlatformMessagingService:
         if recall_intent is not None and not is_verified_owner(
                 self.attention.profiles, message, decision.speaker_entity_id):
             recall_intent = None
+        temporal_recall = (parse_temporal_recall(message.text, self.clock.now())
+                           if decision.action == RoutingAction.RESPOND and explicit_memory is None
+                           and disclosure_intent is None and message.platform.value == "discord"
+                           and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)
+                           else None)
         if (decision.action == RoutingAction.RESPOND and explicit_memory is None
                 and recall_intent is None and disclosure_intent is None):
             control = self.presence_control.handle(
@@ -442,6 +448,20 @@ class PlatformMessagingService:
             request.metadata["memory_consolidation"] = False
             await self.cognition.observe_input_async(request)
             result = self._memory_disclosure_result(message, decision, request, disclosure_intent)
+            result = result.model_copy(update={"duplicate": duplicate_recovery})
+            self._log_result(result, provider="local_control", fallback_used=False,
+                             cognitive_reason_codes=list(result.outbound[0].metadata.get("cognitive_reason_codes", []))
+                             if result.outbound else [],
+                             remote_processing_allowed=message.remote_processing_allowed)
+            return result
+
+        if temporal_recall is not None:
+            request.metadata["explicit_memory_recall"] = True
+            request.metadata["temporal_memory_recall"] = True
+            request.metadata["reflection_enqueue_requested"] = False
+            request.metadata["memory_consolidation"] = False
+            await self.cognition.observe_input_async(request)
+            result = self._temporal_recall_result(message, decision, request, temporal_recall)
             result = result.model_copy(update={"duplicate": duplicate_recovery})
             self._log_result(result, provider="local_control", fallback_used=False,
                              cognitive_reason_codes=list(result.outbound[0].metadata.get("cognitive_reason_codes", []))
@@ -919,6 +939,85 @@ class PlatformMessagingService:
         outbound = self._queue_outbound(
             message, decision, text, metadata=metadata,
             reason_codes=[reason, "LOCAL_OWNER_DISCLOSURE"])
+        return InboundResult(decision=decision, outbound=[outbound])
+
+    def _temporal_recall_result(self, message, decision, request, intent) -> InboundResult:
+        """Answer a verified owner's explicit date query from original evidence."""
+        from amora.events import PrivacyScope
+        from amora.cognition.temporal import conversation_zone
+
+        shared = message.channel_type != ChannelType.DM
+        records = []
+        complete = True
+        if shared and not self.attention.floor.validate_reply(message, decision):
+            return InboundResult(decision=decision.model_copy(update={
+                "action": RoutingAction.SILENCE,
+                "reason_codes": [*decision.reason_codes, "REPLY_LEASE_INVALIDATED"],
+            }))
+        if not is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id):
+            reason = "TEMPORAL_RECALL_AUTHORITY_BLOCKED"
+            text = "Não posso consultar esse histórico nesta conversa."
+        elif shared:
+            reason = "TEMPORAL_RECALL_PRIVATE_DM_REQUIRED"
+            text = "Para procurar conversas antigas por data, me pergunta no nosso privado."
+        elif message.privacy_scope not in {PrivacyScope.PERSONAL, PrivacyScope.PRIVATE}:
+            reason = "TEMPORAL_RECALL_PRIVACY_BLOCKED"
+            text = "Não posso consultar conversas antigas com essa classificação."
+        else:
+            start, end = intent.utc_bounds()
+            records, complete = self.cognition.store.owner_day_conversations(
+                OWNER_ENTITY_ID, start, end, terms=intent.topic, limit=4,
+            )
+            if not records:
+                reason = "TEMPORAL_RECALL_NO_MATCH" if complete else "TEMPORAL_RECALL_INCOMPLETE"
+                text = (f"Não encontrei uma conversa comprovada em {intent.day_label}"
+                        + (" sobre esse assunto." if intent.topic else ".")
+                        + ("" if complete else " A busca foi limitada; pode haver mais mensagens."))
+            else:
+                reason = "TEMPORAL_RECALL_FOUND"
+                zone = conversation_zone()
+                parts = [f"Estas são conversas registradas em {intent.day_label} (horário local):"]
+                for row in records:
+                    at = row["at"].astimezone(zone).strftime("%H:%M")
+                    user = " ".join(row["user_text"].split())
+                    answer = " ".join((row["reply_text"] or "").split())
+                    parts.append(f"• {at} — Você: “{user[:210]}{'…' if len(user) > 210 else ''}”")
+                    if answer:
+                        parts.append(f"  Eu respondi: “{answer[:240]}{'…' if len(answer) > 240 else ''}”")
+                    elif intent.assistant_only:
+                        parts.append("  Não encontrei uma resposta confirmada como enviada.")
+                if not complete:
+                    parts.append("Essa é uma amostra; há mais mensagens para pesquisar.")
+                text = "\n".join(parts)
+                # Avoid Discord's message length limit without changing evidence.
+                if len(text) > 1900:
+                    text = text[:1899] + "…"
+
+        if shared and (not public_text_allowed(text)
+                       or not audience_text_allowed(text, audience_id=request.session_id)):
+            return InboundResult(decision=decision.model_copy(update={
+                "action": RoutingAction.SILENCE,
+                "reason_codes": [*decision.reason_codes, "CONFIDENTIAL_OUTPUT_SUPPRESSED"],
+            }))
+        self.cognition.record_turn_decision(
+            request, "TAKE_TURN", [reason, "LOCAL_TEMPORAL_HISTORY_RECALL"], decision.score)
+        self.store.add_inbound_reason(
+            platform=message.platform, account_scope=message.account_scope,
+            conversation_id=message.conversation_id, message_id=message.message_id, reason=reason)
+        outbound = self._queue_outbound(
+            message, decision, text,
+            metadata={
+                "local_control": True, "cognitive_turn_id": str(request.turn_id),
+                "generation_stage": "temporal_recall", "provider": "local_control",
+                "generation_error_code": None, "cognitive_reason_codes": [reason],
+                "memory_recall_count": len(records) if not shared else 0,
+                "memory_recall_source": "verified_conversation_history" if not shared else "restricted",
+                "memory_recall_search_complete": complete if not shared else False,
+                "transport_revision": message.transport_revision,
+                "delivery_message_id": message.message_id,
+            },
+            reason_codes=[reason, "LOCAL_TEMPORAL_HISTORY_RECALL"],
+        )
         return InboundResult(decision=decision, outbound=[outbound])
 
     def _explicit_recall_result(self, message, decision, request, intent) -> InboundResult:
