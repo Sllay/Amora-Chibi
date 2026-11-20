@@ -854,15 +854,25 @@ export class DiscordWorker {
         firstChunk: index === 0,
         nonce: discordNonce(item.id, index),
       });
-      const created = await this.rest.request(
-        `/channels/${encodeURIComponent(item.conversation_id)}/messages`,
-        {
+      const messagePath = `/channels/${encodeURIComponent(item.conversation_id)}/messages`;
+      let created;
+      try {
+        created = await this.rest.request(messagePath, {
           method: 'POST',
           ...(index === 0 && screenshot
             ? { multipart: screenshotMultipart(payload, screenshot) }
             : { body: payload }),
-        },
-      );
+        });
+      } catch (error) {
+        // A definitive 4xx means the screenshot upload was rejected and no
+        // message was accepted. Deliver links as JSON instead of silencing
+        // the reply. For uncertain network/5xx outcomes, do NOT duplicate
+        // the message: let the existing nonce/ack recovery own retry.
+        if (!(index === 0 && screenshot && error?.retryable === false
+            && [400, 413, 415, 422].includes(Number(error?.status)))) throw error;
+        safeLog('WEB_SCREENSHOT_UPLOAD_REJECTED', `status=${error.status}`);
+        created = await this.rest.request(messagePath, { method: 'POST', body: payload });
+      }
       if (created?.id && created?.channel_id) this.runtime.rememberBotMessage(created);
       if (!firstMessageId) firstMessageId = created?.id || null;
     }
