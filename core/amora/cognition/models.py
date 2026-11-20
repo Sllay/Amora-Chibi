@@ -177,6 +177,9 @@ class CognitiveContext(BaseModel):
     # Ephemeral aid from a specialist reasoning model. It is never canonical
     # identity/state and is not persisted as a fact merely because a model wrote it.
     specialist_support: dict[str, Any] | None = None
+    # Read-only, per-turn public web evidence. Never treated as canonical
+    # memory, identity or instructions from the source page.
+    web_research: dict[str, Any] | None = None
     privacy_scope: PrivacyScope = PrivacyScope.PERSONAL
     remote_processing_allowed: bool = False
     scene_visibility: Literal["private", "group", "public_stream"] = "private"

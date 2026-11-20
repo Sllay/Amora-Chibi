@@ -4,6 +4,7 @@ from amora.latency_trace import trace_stage, span
 
 import asyncio
 import logging
+import os
 from time import perf_counter
 from typing import Any
 
@@ -212,6 +213,29 @@ class CognitiveEngine(ProductionCognitiveEngine):
         except ContextBudgetExceeded:
             return await self._fallback_plan(request, "Esse contexto ficou grande demais para processar com segurança.",
                 on_segment=on_segment, reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "LOCAL_FALLBACK"], started=started)
+        # A verified owner-DM request can request read-only web retrieval.
+        # Evidence is attached *after* canonical compilation: it is not a
+        # user-forgeable memory, world claim, identity or action grant.
+        web_eligible = _web_retrieval_allowed(request)
+        if web_eligible:
+            from amora.web_tools import WebNavigator
+            navigator = getattr(self, "_owner_web_navigator", None)
+            if navigator is None:
+                navigator = WebNavigator()
+                self._owner_web_navigator = navigator
+            try:
+                evidence = await asyncio.wait_for(
+                    navigator.research(request.text, request.session_id), timeout=9.0
+                )
+            except Exception:
+                evidence = {"action": "unknown", "status": "failed",
+                            "reason": "WEB_RUNTIME_FAILED", "sources": [], "references": []}
+            if evidence is not None:
+                context.web_research = evidence
+                context.reason_codes.append(
+                    "WEB_SOURCE_RETRIEVED" if evidence.get("sources")
+                    else "WEB_RETRIEVAL_UNAVAILABLE"
+                )
         estimated_tokens = max(1, len(context.model_dump_json()) // 4)
         await self._journal_async(
             request,
@@ -722,6 +746,19 @@ class CognitiveEngine(ProductionCognitiveEngine):
             metadata={
                 "realization_frame": frame_dump,
                 "realization_validated": True,
+                "web_sources": [
+                    {"url": item.get("url", ""), "title": item.get("title", "")}
+                    for item in (context.web_research.get("sources") or [])[:2]
+                    if item.get("status") == "opened"
+                ] if context is not None and context.web_research else [],
+                "web_references": [
+                    str(item.get("url") or "") for item in
+                    (context.web_research.get("references") or [])[:3]
+                ] if context is not None and context.web_research else [],
+                "web_reference_action": (
+                    context.web_research.get("action")
+                    if context is not None and context.web_research else None
+                ),
             "dialogue_plan_semantically_enforced": "RESPONSE_SEMANTIC_FILTER_DISABLED" not in validated.reason_codes,
                 "candidate_index": usage.get("candidate_index"),
                 "cues": [cue.value for cue in speech_plan.cues],
@@ -734,6 +771,22 @@ class CognitiveEngine(ProductionCognitiveEngine):
         else:
             self._finish_plan(request, plan)
         return plan
+
+
+def _web_retrieval_allowed(request: CognitiveRequest) -> bool:
+    """Defense-in-depth gate; adapter has to verify owner before this check."""
+    return bool(
+        os.getenv("AMORA_WEB_ENABLED", "1").strip().lower() not in {"0", "false", "off"}
+        and request.speaker_id == "PERSON_BK"
+        and request.metadata.get("web_owner_verified") is True
+        and request.metadata.get("surface") == "platform_messaging"
+        and request.metadata.get("platform") == "discord"
+        and request.metadata.get("channel_type") == "dm"
+        and request.metadata.get("cognitive_mode", "reply") == "reply"
+        and request.privacy_scope == PrivacyScope.PERSONAL
+        and request.remote_processing_allowed
+        and not request.metadata.get("test_mode")
+    )
 
 
 def _execution_metadata(metadata: dict[str, Any]) -> dict[str, object]:
