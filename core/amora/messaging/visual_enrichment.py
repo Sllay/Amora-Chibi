@@ -425,7 +425,7 @@ class VisualExpressionEnrichmentService:
     @staticmethod
     def _has_apng_control(content: bytes) -> bool:
         """Locate a genuine acTL chunk before the first PNG IDAT chunk."""
-        if not content.startswith(b"\\x89PNG\\r\\n\\x1a\\n"):
+        if not content.startswith(b"\x89PNG\r\n\x1a\n"):
             return False
         at = 8
         while at + 12 <= len(content):
