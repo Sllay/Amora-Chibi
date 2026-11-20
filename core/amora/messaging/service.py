@@ -568,6 +568,8 @@ class PlatformMessagingService:
         cognitive_reasons: list[str] = []
         cognitive_turn_id = str(request.turn_id)
         generation_started = self.clock.monotonic()
+        web_capture_source: str | None = None
+        plan = None
         set_ms("messaging_pre_cognition_ms", elapsed_ms(ingress_started))
         set_value("_critical_phase", "cognition")
         cognition_started = perf_counter()
@@ -582,34 +584,6 @@ class PlatformMessagingService:
             cognitive_reasons = list(plan.reason_codes)
             cognitive_turn_id = str(plan.turn_id)
             text = (plan.display_text or plan.speech_text or fallback).strip()
-            # The trusted Core, not a language model, appends verified sources.
-            # Speech remains natural; Discord gets clickable primary URLs.
-            consulted = (plan.metadata.get("web_sources") or [])[:2]
-            if consulted and not fallback_used and message.channel_type == ChannelType.DM:
-                source_lines = [
-                    str(item["url"]) for item in consulted
-                    if isinstance(item, dict)
-                    and isinstance(item.get("url"), str)
-                    and item["url"].startswith(("https://", "http://"))
-                ]
-                if source_lines:
-                    text += "\n\nFontes consultadas:\n" + "\n".join(source_lines)
-            if (not fallback_used and message.channel_type == ChannelType.DM
-                    and plan.metadata.get("web_references")):
-                # Numbered, unvisited references match WebNavigator's
-                # session-local "abre o link N" contract. Full URLs originate
-                # from Core, not the language model.
-                reference_urls = [
-                    url for url in plan.metadata["web_references"]
-                    if isinstance(url, str) and url.startswith(("https://", "http://"))
-                ][:3]
-                if reference_urls:
-                    label = ("Resultados da busca (nem todos lidos):"
-                             if plan.metadata.get("web_reference_action") == "search"
-                             else "Links encontrados nesta página (ainda não abertos):")
-                    text += "\n\n" + label + "\n" + "\n".join(
-                        f"{index}. {url}" for index, url in enumerate(reference_urls, 1)
-                    )
             if "CONFIDENTIAL_OUTPUT_SUPPRESSED" in cognitive_reasons:
                 text = ""
             elif message.channel_type != ChannelType.GROUP or (
@@ -640,6 +614,32 @@ class PlatformMessagingService:
                 "messaging_cognition_timeout timeout_seconds=%.1f remote_processing_allowed=%s",
                 self.cognition_timeout_seconds,
                 message.remote_processing_allowed,
+            )
+
+        # Even a *hard* provider timeout can occur AFTER web results arrived.
+        # Compose public links outside the generation try/except so a failed
+        # conversational model cannot hide sources the Core already found.
+        if web_owner_verified and text and "CONFIDENTIAL_OUTPUT_SUPPRESSED" not in cognitive_reasons:
+            from amora.messaging.web_delivery import (
+                compose_web_delivery, requested_screenshot_source,
+            )
+            core_nav = getattr(self.cognition, "_owner_web_navigator", None)
+            core_delivery = (
+                core_nav.current_delivery(request.session_id)
+                if core_nav is not None else {"sources": [], "references": []}
+            )
+            intent = parse_web_intent(message.text)
+            plan_meta = plan.metadata if plan is not None else {}
+            sources = (plan_meta.get("web_sources") or core_delivery["sources"])[:2]
+            references = plan_meta.get("web_references") or core_delivery["references"]
+            text, _ = compose_web_delivery(
+                text, intent=intent, sources=sources, references=references,
+                session_references=core_delivery["references"],
+                owner_verified=True,
+            )
+            web_capture_source = requested_screenshot_source(
+                message.text, intent, sources=sources, references=references,
+                session_references=core_delivery["references"], owner_verified=True,
             )
 
         set_ms("messaging_cognition_ms", elapsed_ms(cognition_started))
@@ -720,6 +720,8 @@ class PlatformMessagingService:
                 "attention_score": decision.score,
                 "transport_revision": message.transport_revision,
                 "delivery_message_id": message.message_id,
+                **({"web_capture_source": web_capture_source,
+                    "web_capture_owner_verified": True} if web_capture_source and web_owner_verified else {}),
             },
             reason_codes=["CORE_OUTBOUND_ENQUEUED", *cognitive_reasons],
         )
