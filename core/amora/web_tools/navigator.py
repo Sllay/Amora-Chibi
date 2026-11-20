@@ -540,9 +540,12 @@ class WebNavigator:
     """
 
     def __init__(self, *, fetch_page=fetch_public_page, search=None, browser=None,
-                 reader=None):
+                 reader=None, planner=None):
         self.fetch_page = fetch_page
         self.search_provider = search
+        # Planner is injected only after Core verifies owner-DM authorization.
+        # No extra network service is enabled by a standalone navigator.
+        self.planner = planner
         # Test-injected fetch/search providers cannot accidentally send URLs
         # to external vendors. The production Core uses the defaults.
         if browser is None and fetch_page is fetch_public_page and search is None:
@@ -641,29 +644,49 @@ class WebNavigator:
                                         or "chromium" in text.casefold())
             if not intent.argument:
                 raise WebFetchError("WEB_SEARCH_QUERY_EMPTY")
+            planned_queries = [intent.argument]
+            if self.planner is not None:
+                try:
+                    planned = await asyncio.wait_for(
+                        self.planner.plan(text[:1200], intent.argument), timeout=3.8
+                    )
+                    if isinstance(planned, list) and planned:
+                        # A caller cannot inject unsafe search text through
+                        # planner output. Production Groq has its own validation.
+                        from .query_planner import validated_queries
+                        checked = validated_queries({"queries": planned}, intent.argument)
+                        if checked:
+                            planned_queries = checked
+                except (TimeoutError, WebFetchError, ValueError, TypeError):
+                    pass
             endpoint = os.getenv("AMORA_WEB_SEARCH_ENDPOINT", "").strip()
-            providers = (
-                [(self.search_provider, (intent.argument,))]
-                if self.search_provider is not None else
-                ([( _searx_search, (intent.argument, endpoint))] if endpoint else [])
-                + [(_bing_rss_search, (intent.argument,)), (_ddg_search, (intent.argument,))]
-            )
             validated: list[dict[str, str]] = []
             got_results = False
-            for provider, arguments in providers:
-                try:
-                    results = await self._call(provider, *arguments)
-                except (WebFetchError, TimeoutError):
-                    continue
-                if not results:
-                    continue
-                got_results = True
-                validated = _rank_search_results(results, intent.argument)
+            used_query = intent.argument
+            for search_query in planned_queries[:2]:
+                providers = (
+                    [(self.search_provider, (search_query,))]
+                    if self.search_provider is not None else
+                    ([( _searx_search, (search_query, endpoint))] if endpoint else [])
+                    + [(_bing_rss_search, (search_query,)), (_ddg_search, (search_query,))]
+                )
+                for provider, arguments in providers:
+                    try:
+                        results = await self._call(provider, *arguments)
+                    except (WebFetchError, TimeoutError):
+                        continue
+                    if not results:
+                        continue
+                    got_results = True
+                    # Rank AGAINST the original request, not merely the
+                    # model-generated wording, to stop semantic topic drift.
+                    validated = _rank_search_results(results, intent.argument)
+                    if validated:
+                        used_query = search_query
+                        break
+                    # Search provider may reply successfully with nonsense.
                 if validated:
                     break
-                # A provider can succeed at HTTP but return completely wrong
-                # search results. Try the next independent provider instead
-                # of passing music/Wikipedia/grammar noise to the model.
             if not validated:
                 raise WebFetchError(
                     "WEB_SEARCH_NO_RELEVANT_RESULTS" if got_results
@@ -696,7 +719,7 @@ class WebNavigator:
                         **({"retrieval": rendered["retrieval"]} if rendered.get("retrieval") else {}),
                     })
             return {"action": "search", "status": "opened" if sources else "results_only",
-                    "query": intent.argument[:240], "sources": sources,
+                    "query": used_query[:240], "sources": sources,
                     "references": [{"number": index, "url": item["url"],
                                     "title": item["title"], "snippet": item.get("snippet", "")}
                                    for index, item in enumerate(validated, 1)]}
