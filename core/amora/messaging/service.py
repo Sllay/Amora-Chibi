@@ -350,11 +350,17 @@ class PlatformMessagingService:
         if recall_intent is not None and not is_verified_owner(
                 self.attention.profiles, message, decision.speaker_entity_id):
             recall_intent = None
-        temporal_recall = (parse_temporal_recall(message.text, self.clock.now())
-                           if decision.action == RoutingAction.RESPOND and explicit_memory is None
-                           and disclosure_intent is None and message.platform.value == "discord"
-                           and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)
-                           else None)
+        temporal_candidate = (parse_temporal_recall(message.text, self.clock.now())
+                              if decision.action == RoutingAction.RESPOND and explicit_memory is None
+                              and disclosure_intent is None and message.platform.value == "discord"
+                              else None)
+        # Critical path: don't make an extra identity SQL round-trip for
+        # ordinary chat. The local parser costs no storage/provider calls.
+        temporal_recall = (
+            temporal_candidate if temporal_candidate is not None
+            and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)
+            else None
+        )
         if (decision.action == RoutingAction.RESPOND and explicit_memory is None
                 and recall_intent is None and disclosure_intent is None):
             control = self.presence_control.handle(
