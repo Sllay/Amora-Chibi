@@ -1,0 +1,155 @@
+"""Discord web links are Core-owned, even if model realizes fallback text."""
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from amora.messaging.web_delivery import (
+    compose_web_delivery, requested_screenshot_source, screenshot_requested,
+)
+from amora.web_tools.navigator import WebIntent, WebNavigator, parse_web_intent
+
+
+def test_search_links_survive_model_fallback_and_remain_clickable():
+    message, capture = compose_web_delivery(
+        "Hoje não consegui terminar a leitura das páginas.",
+        intent=WebIntent("search", "godot android"),
+        sources=[],
+        references=[],
+        session_references=[
+            {"url": "https://godotengine.org/article/android-editor", "title": "Godot Android"},
+            {"url": "https://forum.godotengine.org/t/mobile", "title": "Community"},
+        ],
+        owner_verified=True,
+    )
+    assert capture is None
+    assert "não consegui terminar" in message
+    assert "Resultados da busca (nem todos lidos):" in message
+    assert "1. https://godotengine.org/article/android-editor" in message
+    assert "2. https://forum.godotengine.org/t/mobile" in message
+
+
+def test_model_cannot_invent_unverified_source_urls():
+    content, capture = compose_web_delivery(
+        "https://model-invented.example.org/fake",
+        intent=WebIntent("search", "godot"),
+        sources=[],
+        references=[],
+        owner_verified=True,
+    )
+    assert "Fontes consultadas:" not in content
+    assert "Resultados da busca" not in content
+    assert capture is None
+
+
+def test_source_links_vs_unread_search_results_are_not_misrepresented():
+    content, _ = compose_web_delivery(
+        "Encontrei a atualização.",
+        intent=WebIntent("search", "godot android"),
+        sources=[{"url": "https://godotengine.org/article/android", "title": "Article"}],
+        references=[
+            "https://godotengine.org/article/android",
+            "https://forum.godotengine.org/t/topic",
+        ],
+        owner_verified=True,
+    )
+    assert "Fontes consultadas:\nhttps://godotengine.org/article/android" in content
+    assert "1. https://godotengine.org/article/android" in content
+    assert "2. https://forum.godotengine.org/t/topic" in content
+
+
+@pytest.mark.parametrize("text", [
+    "Amora, tira um print do link 2",
+    "Manda um print do site",
+    "Amora, me envia screenshot da página",
+    "Amora, pesquisa Godot Android e manda print da página",
+])
+def test_user_explicitly_requests_web_screenshot(text):
+    assert screenshot_requested(text)
+
+
+@pytest.mark.parametrize("text", [
+    "Olha minhas imagens do Android",
+    "A página tem desenhos bonitos",
+    "Estou criando um editor de screenshots",
+    "Amora, pesquisa a API screenshot do Godot",
+])
+def test_screenshot_not_triggered_by_generic_image_conversation(text):
+    assert not screenshot_requested(text)
+
+
+def test_print_of_numbered_link_is_an_explicit_web_follow():
+    assert parse_web_intent("Amora, tira print do link 2") == WebIntent("follow", "2")
+
+
+def test_screenshot_target_requires_verified_owner_and_explicit_request():
+    intent = WebIntent("search", "godot android")
+    source = {"url": "https://godotengine.org/article/android-editor"}
+    kwargs = {"intent": intent, "sources": [source]}
+    assert requested_screenshot_source(
+        "me manda um print da página", owner_verified=True, **kwargs
+    ) == "https://godotengine.org/article/android-editor"
+    assert requested_screenshot_source(
+        "pesquisa godot", owner_verified=True, **kwargs
+    ) is None
+    assert requested_screenshot_source(
+        "manda print", owner_verified=False, **kwargs
+    ) is None
+
+
+def test_credential_urls_never_reach_external_screenshot_service():
+    assert requested_screenshot_source(
+        "Manda um print deste site",
+        WebIntent("open", "https://example.org/data?access_token=private"),
+        owner_verified=True,
+    ) is None
+
+
+def test_search_with_only_references_can_capture_first_result_as_a_screenshot():
+    assert requested_screenshot_source(
+        "Pesquisa novidades sobre Godot Android e manda print da página",
+        WebIntent("search", "godot android"),
+        references=[
+            "https://godotengine.org/article/android-editor",
+            "https://godotengine.org/releases",
+        ],
+        owner_verified=True,
+    ) == "https://godotengine.org/article/android-editor"
+
+
+@pytest.mark.asyncio
+async def test_failed_new_search_invalidates_previous_result_references():
+    ref = {"url": "https://godotengine.org/article/older", "title": "Older"}
+    def finder(query):
+        if "Godot" in query:
+            return [ref]
+        return []
+    navigator = WebNavigator(
+        search=finder,
+        fetch_page=lambda url: {
+            "status": "opened", "url": url, "title": "Older",
+            "text": "An article about Godot Android updates",
+            "fetched_at": "2026-11-20T19:00:00+00:00", "links": [],
+        },
+    )
+    assert (await navigator.research("pesquise Godot Android", "owner-dm"))["status"] == "opened"
+    assert navigator.current_public_references("owner-dm") == [ref]
+    outcome = await navigator.research("pesquise notícias de Blender Blender", "owner-dm")
+    assert outcome["status"] == "failed"
+    assert navigator.current_public_references("owner-dm") == []
+
+
+@pytest.mark.asyncio
+async def test_references_are_isolated_by_discord_dm_session():
+    navigator = WebNavigator(search=lambda q: [{
+        "url": "https://godotengine.org/article/android",
+        "title": "Godot Android updates",
+        "snippet": "Godot Android",
+    }], fetch_page=lambda url: {
+        "status": "opened", "url": url, "title": "Godot Android",
+        "text": "Godot Android news update",
+        "fetched_at": "2026-11-20T19:00:00+00:00", "links": [],
+    })
+    await navigator.research("pesquise Godot Android", "owner-dm")
+    assert navigator.current_public_references("stranger-dm") == []
