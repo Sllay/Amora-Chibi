@@ -8,6 +8,7 @@ on:
       - 'tests/test_web_browser_run2.py'
       - 'tests/test_web_remote_reader_low_memory.py'
       - 'tests/test_web_search_relevance.py'
+      - 'tests/test_web_groq_query_planner.py'
       - 'docs/engineering/AMORA_WEB_RUN2.md'
       - 'docs/engineering/AMORA_WEB_LOW_MEMORY.md'
       - '.github/workflows/web-browser-worker.yml'
@@ -18,6 +19,7 @@ on:
       - 'tests/test_web_browser_run2.py'
       - 'tests/test_web_remote_reader_low_memory.py'
       - 'tests/test_web_search_relevance.py'
+      - 'tests/test_web_groq_query_planner.py'
       - 'docs/engineering/AMORA_WEB_RUN2.md'
       - 'docs/engineering/AMORA_WEB_LOW_MEMORY.md'
       - '.github/workflows/web-browser-worker.yml'
@@ -35,7 +37,7 @@ jobs:
       - name: Compile browser worker and Core bridge
         run: python -m compileall -q workers/browser core/amora/web_tools
       - name: Test isolated authenticated worker and Core fallback without public network
-        run: python -m pytest tests/test_web_browser_run2.py tests/test_web_remote_reader_low_memory.py tests/test_web_tools_run1.py tests/test_web_search_relevance.py -q
+        run: python -m pytest tests/test_web_browser_run2.py tests/test_web_remote_reader_low_memory.py tests/test_web_tools_run1.py tests/test_web_search_relevance.py tests/test_web_groq_query_planner.py -q
 
   browser-image:
     runs-on: ubuntu-latest
