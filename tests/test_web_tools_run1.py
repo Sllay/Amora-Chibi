@@ -187,8 +187,8 @@ async def test_search_then_follow_same_session_and_block_unrelated_session():
     def lookup(query):
         assert "Godot" in query
         return [
-            {"url": "https://example.org/a", "title": "Article A", "snippet": "A"},
-            {"url": "https://example.org/b", "title": "Article B", "snippet": "B"},
+            {"url": "https://example.org/a", "title": "Godot Android article A", "snippet": "Godot engine"},
+            {"url": "https://example.org/b", "title": "Godot Android article B", "snippet": "Godot engine"},
         ]
     def fetch(url):
         visited.append(url)
