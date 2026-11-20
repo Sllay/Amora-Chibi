@@ -201,10 +201,10 @@ async def test_search_then_follow_same_session_and_block_unrelated_session():
     assert followed["sources"][0]["url"] == "https://example.org/b"
     deep = await navigator.research("abre o link 1", "owner-dm")
     assert deep["sources"][0]["url"] == "https://example.org/deep"
-    assert visited == [
-        "https://example.org/a", "https://example.org/b",
-        "https://example.org/b", "https://example.org/deep",
-    ]
+    # Parallel fetches can start in either order; source ordering returned
+    # to the model stays deterministic because asyncio.gather preserves order.
+    assert set(visited[:2]) == {"https://example.org/a", "https://example.org/b"}
+    assert visited[2:] == ["https://example.org/b", "https://example.org/deep"]
 
 
 @pytest.mark.asyncio
