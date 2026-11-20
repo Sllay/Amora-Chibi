@@ -250,6 +250,24 @@ class ContextCompiler:
         if request.target_id:
             entity_ids.add(request.target_id)
 
+        from amora.memory.context_selection import (
+            subject_terms, select_memories, select_recent,
+        )
+        # V2 is an opt-in-by-context *projection*, never new authorization.
+        # It operates only for remote-consented, private messaging replies.
+        # Shared/voice/test/reflection paths keep their existing contracts.
+        memory_v2 = (
+            remote and not shared and speaker is not None and request.session_id is not None
+            and request.privacy_scope == PrivacyScope.PERSONAL
+            and request.metadata.get("surface") == "platform_messaging"
+            and request.metadata.get("channel_type") == "dm"
+            and request.metadata.get("cognitive_mode", "reply") == "reply"
+            and not request.metadata.get("test_mode")
+            and not request.metadata.get("explicit_memory_recall")
+            and not request.metadata.get("memory_disclosure_request")
+        )
+        memory_topics = subject_terms(request.text) if memory_v2 else frozenset()
+        memory_source_turns: dict[str, str] = {}
         memories: list[ContextMemory] = []
         # Generic recollection requests contain no event-specific retrieval terms.
         # Use entity/recency ranking rather than letting conversational filler
@@ -314,11 +332,23 @@ class ContextCompiler:
             if self.privacy_gate.memory_allowed(item, remote=remote, recipient_id=request.speaker_id):
                 source_at = aware_time((getattr(item, "metadata", None) or {}).get("source_observed_at"))
                 recorded_at = aware_time(getattr(item, "created_at", None))
-                memories.append(ContextMemory(id=str(item.id), kind=item.kind.value, content=item.summary or item.content,
-                                              recorded_at=recorded_at.isoformat() if recorded_at else None,
-                                              source_observed_at=source_at.isoformat() if source_at else None,
-                                              score=hit.score, confidence=item.provenance.confidence,
-                                              privacy_scope=item.privacy_scope.value, reason_codes=hit.reason_codes))
+                # The detailed source-bound fact is more useful than a tiny
+                # summary when the current topic actually mentions the subject.
+                # Otherwise keep the low-cost summary as before.
+                topic_match = bool(memory_topics & subject_terms(item.content + " " + (item.summary or "")))
+                content = (
+                    item.content[:600] if memory_v2 and topic_match
+                    else item.summary or item.content
+                )
+                selected = ContextMemory(id=str(item.id), kind=item.kind.value, content=content,
+                                         recorded_at=recorded_at.isoformat() if recorded_at else None,
+                                         source_observed_at=source_at.isoformat() if source_at else None,
+                                         score=hit.score, confidence=item.provenance.confidence,
+                                         privacy_scope=item.privacy_scope.value, reason_codes=hit.reason_codes)
+                memories.append(selected)
+                if (memory_v2 and topic_match and item.owner_entity_id == request.speaker_id
+                        and item.remote_processing_allowed and item.metadata.get("turn_id")):
+                    memory_source_turns[selected.id] = str(item.metadata["turn_id"])
 
         claims: list[dict[str, Any]] = []
         authorized_relations: set[tuple[str, str, str]] = set()
@@ -370,7 +400,39 @@ class ContextCompiler:
                                "observed_at": observed_at.isoformat() if observed_at else None,
                                "timestamp_source": timestamp_source})
         timeline_recent = recent
-        recent = recent[-48:]
+        if memory_v2:
+            memories = select_memories(memories, request.text)
+            recent, historical_turns = select_recent(recent, request.text)
+            reasons.append("MEMORY_V2_BOUNDED_CONTEXT")
+            if historical_turns:
+                reasons.append("MEMORY_V2_RELEVANT_DIALOGUE_RECALLED")
+            # Enrich only the top two already-authorized, topic-matched
+            # records with original utterance and *sent* Amora response.
+            # A private or nonremote source is never projected to the LLM.
+            candidates = [
+                item for item in memories
+                if item.id in memory_source_turns
+            ][:2]
+            if candidates:
+                episodes = self.store.owner_turn_conversations(
+                    request.speaker_id,
+                    [memory_source_turns[item.id] for item in candidates],
+                )
+                for item in candidates:
+                    source = episodes.get(memory_source_turns[item.id])
+                    if (not source or not source.get("remote_processing_allowed")
+                            or source.get("privacy_scope") != PrivacyScope.PERSONAL.value):
+                        continue
+                    at = source["at"].isoformat(timespec="minutes")
+                    user = " ".join(source["user_text"].split())[:230]
+                    reply = " ".join((source.get("reply_text") or "").split())[:230]
+                    evidence = f"\nEvidência de conversa em {at}: o usuário disse: “{user}”"
+                    if reply:
+                        evidence += f"; Amora respondeu: “{reply}”"
+                    item.content = item.content[:600] + evidence
+                    reasons.append("MEMORY_V2_SOURCE_LINKED_EVIDENCE")
+        else:
+            recent = recent[-48:]
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")
 
         with span("acir"):
