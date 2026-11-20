@@ -40,6 +40,7 @@ jobs:
           umask 077
           [[ -n "$NORTHFLANK_API_TOKEN" ]] || { echo 'Missing secret NORTHFLANK_API_TOKEN'; exit 1; }
           [[ -n "$ARCHIVE_PASSPHRASE" ]] || { echo 'Missing secret AMORA_LOG_ARCHIVE_PASSPHRASE'; exit 1; }
+          [[ "${#ARCHIVE_PASSPHRASE}" -ge 32 ]] || { echo 'Archive secret must contain at least 32 characters'; exit 1; }
           [[ -n "$NORTHFLANK_PROJECT_ID" ]] || { echo 'Missing variable NORTHFLANK_PROJECT_ID'; exit 1; }
           scratch="$(mktemp -d "$RUNNER_TEMP/northflank-archive.XXXXXXXX")"
           trap 'rm -rf -- "$scratch"' EXIT
