@@ -223,10 +223,21 @@ class CognitiveEngine(ProductionCognitiveEngine):
             if navigator is None:
                 navigator = WebNavigator()
                 self._owner_web_navigator = navigator
+            # Only explicit search commands in a *verified owner DM* can
+            # invoke the Qwen planner. Direct URLs and numbered follow-links
+            # must not spend tokens on a model.
+            from amora.web_tools.navigator import parse_web_intent
+            web_intent = parse_web_intent(request.text)
+            if web_intent is not None and web_intent.action == "search" and navigator.planner is None:
+                from amora.web_tools.query_planner import GroqQueryPlanner
+                groq = self._providers.get("groq")
+                secrets = getattr(groq, "secrets", None)
+                api_key = secrets.get("GROQ_API_KEY") if secrets is not None else None
+                navigator.planner = GroqQueryPlanner(api_key)
             try:
                 evidence = await asyncio.wait_for(
                     navigator.research(request.text, request.session_id),
-                    timeout=15.0 if (navigator.reader is not None or navigator.browser is not None) else 9.0,
+                    timeout=16.0 if (navigator.reader is not None or navigator.browser is not None) else 11.0,
                 )
             except Exception:
                 evidence = {"action": "unknown", "status": "failed",
