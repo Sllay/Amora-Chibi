@@ -25,6 +25,9 @@ _SCORE_FIELDS = (
 class MemoryExtractionItem(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     kind: Literal["episodic", "semantic", "relational"]
+    # Only an explicit instruction/preference or correction about Amora's
+    # interaction style; it never carries authority over system policy.
+    behavioral_signal: Literal["none", "speech_preference", "behavioral_correction"] = "none"
     content: str = Field(min_length=1, max_length=1400)
     summary: str = Field(max_length=450)
     confidence: float = Field(ge=0, le=1)
@@ -58,6 +61,9 @@ def memory_schema() -> dict:
     # Inline schema: no dynamic maps, arbitrary objects or optional properties.
     fields = {
         "kind": {"type": "string", "enum": ["episodic", "semantic", "relational"]},
+        "behavioral_signal": {"type": "string", "enum": [
+            "none", "speech_preference", "behavioral_correction"
+        ]},
         "content": {"type": "string", "minLength": 1, "maxLength": 1400},
         "summary": {"type": "string", "maxLength": 450},
         **{name: {"type": "number", "minimum": 0, "maximum": 1} for name in _SCORE_FIELDS},
@@ -81,12 +87,19 @@ def memory_instructions(*, repair: bool = False) -> str:
         "Se não houver informação durável, retorne {\"memory_candidates\":[]}. "
         "No máximo cinco propostas SE houver fatos diferentes, e zero se nada for durável. "
         "Para mensagens curtas, use no máximo três; não invente fatos para preencher a lista. "
+        "Para cada candidato defina behavioral_signal: none por padrão; speech_preference "
+        "SOMENTE quando o usuário declarar expressamente como prefere que Amora converse, "
+        "e behavioral_correction SOMENTE quando ele corrigir explicitamente como Amora "
+        "respondeu ou agiu. Uma reclamação vaga não define uma regra permanente; "
+        "não crie ordens não ditas. Quando marcado, kind deve ser semantic e a memória "
+        "deve descrever somente a preferência/correção concreta relatada, incluindo "
+        "contexto e limites, sem generalizar uma exceção para toda conversa. "
         "Diferencie: episodic para acontecimentos com contexto/decisão; semantic para fatos "
         "estáveis sobre projetos e preferências; relational só para relações realmente relatadas. "
         "Preserve nomes de projetos, datas, quantidades, metas, decisões, limitações, "
         "mudanças de planos e estado atual sem exagerar nem simplificar demais. "
         "Nunca confunda algo planejado com algo concluído. "
-        "Todas as propostas exigem kind, content, summary e todos os nove escores "
+        "Todas as propostas exigem kind, behavioral_signal, content, summary e todos os nove escores "
         "numéricos de zero a um. Use a língua da mensagem; seja conciso. "
         "kind: episodic, semantic ou relational. confidence mede fidelidade ao relato, "
         "importance relevância futura, novelty novidade do relato, emotional_weight carga "
