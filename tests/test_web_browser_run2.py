@@ -296,7 +296,7 @@ async def test_core_does_not_launch_browser_for_full_static_article():
 
 @pytest.mark.asyncio
 async def test_core_preserves_http_error_if_browser_fails():
-    async def blocked(url):
+    async def blocked(self, url):
         raise WebFetchError("WEB_BROWSER_UNAVAILABLE")
     class FakeBrowser:
         render = blocked
