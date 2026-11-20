@@ -87,14 +87,22 @@ export class WebScreenshotService {
     this.dailyLimit = Math.max(0, Math.min(10, Number(dailyLimit) || 0));
     this.day = '';
     this.used = 0;
+    this.lastFailureCode = null;
+  }
+
+  _failed(code) {
+    this.lastFailureCode = code;
+    return null;
   }
 
   async capture(value) {
+    this.lastFailureCode = null;
     const target = publicScreenshotTarget(value);
-    if (!this.enabled || !target) return null;
+    if (!this.enabled) return this._failed('disabled');
+    if (!target) return this._failed('invalid_public_url');
     const today = new Date().toISOString().slice(0, 10);
     if (today !== this.day) { this.day = today; this.used = 0; }
-    if (this.used >= this.dailyLimit) return null;
+    if (this.used >= this.dailyLimit) return this._failed('daily_limit');
     this.used += 1; // reserve before async network; no parallel quota escape
     const endpoint = new URL(this.apiKey ? PRO_API : API);
     endpoint.searchParams.set('url', target);
@@ -104,28 +112,34 @@ export class WebScreenshotService {
     endpoint.searchParams.set('meta', 'false');
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 9000);
+    // Remote pages can spend >9 s rendering. This does not allocate a
+    // Chromium process on the Core and remains below the outbound claim lease.
+    const timer = setTimeout(() => controller.abort(), 18000);
     try {
       const answer = await this.fetchImpl(endpoint.toString(), {
         method: 'GET',
         redirect: 'error', signal: controller.signal,
         headers: this.apiKey ? { 'x-api-key': this.apiKey } : {},
       });
-      if (!answer.ok) return null;
+      if (!answer.ok) return this._failed(
+        answer.status === 429 ? 'provider_rate_limited'
+          : answer.status === 401 || answer.status === 403 ? 'provider_auth_required'
+            : 'provider_http_error'
+      );
       const raw = await boundedResponse(answer, MAX_JSON_BYTES);
-      if (!raw) return null;
+      if (!raw) return this._failed('provider_response_invalid');
       const record = JSON.parse(new TextDecoder().decode(raw));
-      if (record.status !== 'success') return null;
+      if (record.status !== 'success') return this._failed('provider_refused');
       const screenshotUrl = publicScreenshotCdn(record.data?.screenshot?.url);
-      if (!screenshotUrl) return null;
+      if (!screenshotUrl) return this._failed('provider_image_url_invalid');
       const image = await this.fetchImpl(screenshotUrl, {
         method: 'GET', redirect: 'error', signal: controller.signal,
       });
-      if (!image.ok) return null;
+      if (!image.ok) return this._failed('image_cdn_http_error');
       const type = String(image.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-      if (!['image/jpeg', 'image/png', 'image/webp'].includes(type)) return null;
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(type)) return this._failed('image_mime_invalid');
       const data = await boundedResponse(image, MAX_IMAGE_BYTES);
-      if (!data || !looksLikeImage(data, type)) return null;
+      if (!data || !looksLikeImage(data, type)) return this._failed('image_bytes_invalid');
       return {
         bytes: data,
         mime: type,
@@ -133,7 +147,7 @@ export class WebScreenshotService {
           : type === 'image/webp' ? 'amora-web-print.webp' : 'amora-web-print.jpg',
       };
     } catch {
-      return null;
+      return this._failed(controller.signal.aborted ? 'provider_timeout' : 'provider_network_error');
     } finally {
       clearTimeout(timer);
     }

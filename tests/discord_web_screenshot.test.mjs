@@ -379,3 +379,50 @@ test('verified screenshot source from previous Core remains supported during rol
   assert.equal(sent.length, 1);
   assert.ok(sent[0].multipart instanceof FormData);
 });
+
+
+test('screenshot records a safe reason when free provider is rate limited', async () => {
+  const service = new WebScreenshotService({
+    fetchImpl: async () => new Response('limited', { status: 429 }),
+  });
+  const result = await service.capture('https://godotengine.org/');
+  assert.equal(result, null);
+  assert.equal(service.lastFailureCode, 'provider_rate_limited');
+});
+
+test('screenshot-disabled instance exposes failure without making a network request', async () => {
+  let calls = 0;
+  const service = new WebScreenshotService({
+    enabled: false,
+    fetchImpl: async () => { calls += 1; throw new Error('unexpected'); },
+  });
+  assert.equal(await service.capture('https://godotengine.org/'), null);
+  assert.equal(service.lastFailureCode, 'disabled');
+  assert.equal(calls, 0);
+});
+
+test('capture-status text without Core metadata is explicitly marked not sent', async () => {
+  const sent = [];
+  const worker = new DiscordWorker({
+    token: 'test', core: {},
+    rest: {
+      request: async (_path, options) => {
+        sent.push(options);
+        return { id: 'text-id', channel_id: 'chan', attachments: [] };
+      },
+    },
+    runtime: { rememberBotMessage() {} },
+  });
+  worker.webScreenshots = {
+    async capture() { throw new Error('Should never infer URL from text'); },
+  };
+  await worker.sendOutbound({
+    id: '12345678-abcd-abcd-abcd-1234567890ab',
+    platform: 'discord', conversation_id: 'chan',
+    text: 'Vou solicitar o envio do print desta página.',
+    metadata: {},
+  });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].body.content, /sem autorização de anexo/i);
+  assert.match(sent[0].body.content, /Nada foi enviado/i);
+});

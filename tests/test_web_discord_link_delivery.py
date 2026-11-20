@@ -305,3 +305,88 @@ async def test_browser_interstitial_is_not_counted_as_a_read_page():
     assert result["status"] == "failed"
     assert result["reason"] == "WEB_PAGE_CONTENT_UNAVAILABLE"
     assert nav.current_delivery("owner-dm")["sources"] == []
+
+
+
+def test_simple_send_image_followup_requires_previous_capture_lease():
+    # Exact follow-up from the real Discord incident.
+    assert parse_web_intent("Envie a imagem") == WebIntent(
+        "capture_retry", "previous"
+    )
+    assert parse_web_intent("Amora, me manda a foto!") == WebIntent(
+        "capture_retry", "previous"
+    )
+    # A reference to a new picture should not send a previous web screenshot.
+    assert parse_web_intent("envia a imagem do coelho") is None
+    assert not screenshot_requested("Envie a imagem")
+
+
+@pytest.mark.asyncio
+async def test_send_image_retries_only_recent_verified_screenshot_in_same_dm():
+    nav = WebNavigator(fetch_page=lambda url: {
+        "status": "opened", "url": url, "title": "Godot",
+        "text": "Godot official website and resources.",
+        "fetched_at": "2026-11-20T20:00:00+00:00",
+        "links": [],
+    })
+    assert (await nav.research(
+        "abre https://godotengine.org", "owner-dm"
+    ))["status"] == "opened"
+    assert (await nav.research(
+        "Envie a imagem", "owner-dm"
+    ))["reason"] == "WEB_SCREENSHOT_NO_PENDING_REQUEST"
+
+    nav.remember_capture_request("owner-dm", "https://godotengine.org/")
+    retry = await nav.research("Envie a imagem", "owner-dm")
+    assert retry == {
+        "action": "capture_retry", "status": "capture_pending",
+        "sources": [], "references": [],
+    }
+    url = requested_screenshot_source(
+        "Envie a imagem", WebIntent("capture_retry", "previous"),
+        owner_verified=True,
+        authorized_retry_url=nav.current_capture_target("owner-dm"),
+    )
+    assert url == "https://godotengine.org/"
+    assert requested_screenshot_source(
+        "Envie a imagem", WebIntent("capture_retry", "previous"),
+        owner_verified=False, authorized_retry_url=url,
+    ) is None
+    assert requested_screenshot_source(
+        "Envie a imagem", WebIntent("capture_retry", "previous"),
+        owner_verified=True,
+    ) is None
+    # No cross-user copy of the link.
+    assert nav.current_capture_target("another-dm") is None
+    assert (await nav.research(
+        "Envie a imagem", "another-dm"
+    ))["status"] == "failed"
+
+    # An explicit new navigation invalidates the previous retry lease.
+    await nav.research("abre https://godotengine.org/releases", "owner-dm")
+    assert nav.current_capture_target("owner-dm") is None
+
+
+@pytest.mark.asyncio
+async def test_web_screenshot_retry_lease_expires_without_persistent_memory():
+    nav = WebNavigator(fetch_page=lambda url: (_ for _ in ()).throw(
+        AssertionError("retry must not fetch another page")
+    ))
+    nav.remember_capture_request("owner", "https://godotengine.org/")
+    current = nav.last_capture_requests["owner"]
+    nav.last_capture_requests["owner"] = (current[0] - 601, current[1])
+    assert nav.current_capture_target("owner") is None
+    failed = await nav.research("Envie a imagem", "owner")
+    assert failed["reason"] == "WEB_SCREENSHOT_NO_PENDING_REQUEST"
+
+
+def test_web_screenshot_retry_cannot_forward_sensitive_url():
+    from amora.web_tools.navigator import WebFetchError
+    import pytest
+    nav = WebNavigator(fetch_page=lambda url: {})
+    # Only call inside the event loop in the async contract below.
+    assert requested_screenshot_source(
+        "Envie a imagem", WebIntent("capture_retry", "previous"),
+        owner_verified=True,
+        authorized_retry_url="https://example.org/?access_token=secret",
+    ) is None

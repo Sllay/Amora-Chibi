@@ -105,6 +105,9 @@ export class DiscordWorker {
       apiKey: process.env.AMORA_WEB_SCREENSHOT_MICROLINK_API_KEY || '',
       dailyLimit: Number(process.env.AMORA_WEB_SCREENSHOT_DAILY_LIMIT || 4),
     });
+    safeLog('WEB_SCREENSHOT_PIPELINE_READY', 'version=20261120-r2'
+      + ' enabled=' + this.webScreenshots.enabled
+      + ' provider=' + (this.webScreenshots.apiKey ? 'keyed' : 'keyless'));
     this.typingProgress = new Map();
     this.socket = null;
     this.ready = false;
@@ -843,12 +846,25 @@ export class DiscordWorker {
     const screenshotRequested = item?.platform === 'discord'
       && (item?.metadata?.web_capture_requested === true || verifiedSource);
     const authorizedScreenshot = screenshotRequested && verifiedSource;
+    const captureReplyHint = /^(?:solicitei a captura|vou solicitar o envio do print)/i
+      .test(String(item?.text || '').trim());
+    if (captureReplyHint && !screenshotRequested) {
+      // A Core capture-status message with no transport metadata must not
+      // silently masquerade as a screenshot attempt. Never infer a URL from text.
+      safeLog('WEB_SCREENSHOT_METADATA_MISSING');
+      const note = '\n\n(O pedido de print chegou sem autorização de anexo. Nada foi enviado.)';
+      if (chunks[0].length + note.length <= 2000) chunks[0] += note;
+      else chunks.push(note.trim());
+    }
+    safeLog('WEB_SCREENSHOT_DISPATCH', 'requested=' + screenshotRequested
+      + ' authorized=' + authorizedScreenshot);
     const screenshot = authorizedScreenshot
       ? await this.webScreenshots.capture(item.metadata.web_capture_source)
       : null;
     if (screenshotRequested && !screenshot) {
       safeLog('WEB_SCREENSHOT_UNAVAILABLE', authorizedScreenshot
-        ? 'reason=provider_or_quota' : 'reason=no_authorized_public_page');
+        ? 'reason=' + (this.webScreenshots.lastFailureCode || 'provider_unknown')
+        : 'reason=no_authorized_public_page');
       const note = authorizedScreenshot
         ? '\n\n(Não consegui capturar o print desta página. Os links continuam disponíveis.)'
         : '\n\n(Não existe uma página pública autorizada para este print. Nenhum anexo foi enviado.)';
