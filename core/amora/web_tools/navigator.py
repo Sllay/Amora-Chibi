@@ -46,6 +46,12 @@ _FOLLOW_RE = re.compile(
     r".{0,35}?\b(?:link|resultado|refer[eê]ncia)\s*(?:n[ºo°.]?\s*)?(\d{1,2})\b",
     re.IGNORECASE | re.DOTALL,
 )
+_CAPTURE_RETRY_RE = re.compile(
+    r"^\s*(?:amora[,\s]+)?(?:me\s+)?"
+    r"(?:envie|envia|mande|manda|reenvi[ae])\s+"
+    r"(?:(?:a|o|essa|esse)\s+)?(?:imagem|foto|arquivo|anexo)\s*[.!?]*$",
+    re.IGNORECASE,
+)
 _CAPTURE_CURRENT_RE = re.compile(
     r"\b(?:tira|tirar|manda|mande|envia|enviar|mostra|mostre|faz|quero)\b"
     r".{0,48}?\b(?:print|screenshot|captura(?:\s+de\s+tela)?)\b",
@@ -422,6 +428,10 @@ def parse_web_intent(text: str) -> WebIntent | None:
         return WebIntent("search", _clean_search_query(raw, search))
     if _CAPTURE_CURRENT_RE.search(raw):
         return WebIntent("capture", "current")
+    # A bare "envie a imagem" may refer to the preceding screenshot request;
+    # the navigator still requires an owner-DM capture lease before acting.
+    if _CAPTURE_RETRY_RE.search(raw):
+        return WebIntent("capture_retry", "previous")
     return None
 
 
@@ -577,6 +587,9 @@ class WebNavigator:
         self.reader = reader
         self.sessions: OrderedDict[str, tuple[float, list[dict[str, str]]]] = OrderedDict()
         self.last_delivery: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+        # URL-only, per-DM short-lived lease for explicit screenshot retry.
+        # Not a memory record; no page text or conversation is retained.
+        self.last_capture_requests: OrderedDict[str, tuple[float, str]] = OrderedDict()
         self._semaphore = asyncio.Semaphore(2)
 
     @staticmethod
@@ -685,12 +698,38 @@ class WebNavigator:
         self.last_delivery.pop(session_id, None)
         return {"action": "", "sources": [], "references": []}
 
+    def remember_capture_request(self, session_id: str, public_url: str) -> None:
+        """Mark a real, verified owner request so an immediate retry is possible."""
+        from .remote_reader import _shareable_public_url
+        safe = _shareable_public_url(public_url)
+        now = asyncio.get_running_loop().time()
+        self.last_capture_requests[session_id] = (now, safe)
+        self.last_capture_requests.move_to_end(session_id)
+        while len(self.last_capture_requests) > 32:
+            self.last_capture_requests.popitem(last=False)
+
+    def current_capture_target(self, session_id: str) -> str | None:
+        record = self.last_capture_requests.get(session_id)
+        if record and asyncio.get_running_loop().time() - record[0] < 600:
+            return record[1]
+        self.last_capture_requests.pop(session_id, None)
+        return None
+
     async def research(self, text: str, session_id: str | None) -> dict[str, Any] | None:
         intent = parse_web_intent(text)
         if intent is None:
             return None
         if not session_id:
             return {"action": intent.action, "status": "unavailable", "reason": "WEB_SESSION_REQUIRED",
+                    "sources": [], "references": []}
+        if intent.action == "capture_retry":
+            # Do not guess which image the user means. Only a recent verified
+            # screenshot URL from this exact private Discord session qualifies.
+            if self.current_capture_target(session_id) is not None:
+                return {"action": "capture_retry", "status": "capture_pending",
+                        "sources": [], "references": []}
+            return {"action": "capture_retry", "status": "failed",
+                    "reason": "WEB_SCREENSHOT_NO_PENDING_REQUEST",
                     "sources": [], "references": []}
         if intent.action == "capture":
             # A screenshot-only follow-up must use the last actual page/result
@@ -703,6 +742,8 @@ class WebNavigator:
             return {"action": "capture", "status": "failed",
                     "reason": "WEB_SCREENSHOT_NO_PAGE",
                     "sources": [], "references": []}
+        # Navigating to a new URL/search invalidates prior attachment retries.
+        self.last_capture_requests.pop(session_id, None)
         # A failed NEW navigation must never use a previous turn's links.
         self.last_delivery.pop(session_id, None)
         try:
