@@ -28,12 +28,8 @@ from amora.web_tools.navigator import (
     "https://example.com%0d%0aevil/",
 ])
 def test_restricted_destinations_never_become_public_http_requests(url):
-    if any(value in url for value in ("127.0.0.1", "169.254.", "[::1]")):
-        # Literal addresses get rejected during the pinned address validation.
-        pass
-    else:
-        with pytest.raises(WebFetchError):
-            _public_url(url)
+    with pytest.raises(WebFetchError):
+        _public_url(url)
 
 
 def test_trusted_public_ip_fence_fails_closed_for_mixed_answers(monkeypatch):
@@ -157,10 +153,9 @@ def test_searx_json_does_not_accept_file_or_local_result_urls(monkeypatch):
         lambda target: ("https://searx.example.net/search", 200,
                         {"content-type": "application/json"}, body),
     )
-    # URL shape validation happens here; private IP access stays protected by
-    # the actual socket resolver on follow/open.
+    # Literal internal addresses are removed even from search references.
     result = _searx_search("release", "https://searx.example.net")
-    assert len(result) == 2
+    assert len(result) == 1
     assert result[0]["url"] == "https://example.net/release"
 
 
