@@ -91,7 +91,7 @@ def compose_web_delivery(
         return content, None
     # This request only asks for the previous page's image; old references
     # must not be presented as newly fetched web evidence.
-    if intent.action == "capture":
+    if intent.action in {"capture", "capture_retry"}:
         return content, None
     opened = _public_urls(sources or [], max_items=2)
     refs = _public_urls(references or session_references or [], max_items=5)
