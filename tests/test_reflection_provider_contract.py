@@ -30,7 +30,8 @@ class Secrets:
 
 def item():
     return {
-        "kind": "episodic", "behavioral_signal": "none", "content": "O falante relatou que o projeto Orquidea terá cinco mapas.",
+        "kind": "episodic", "behavioral_signal": "none",
+        "behavioral_topic": "none", "behavioral_scope": "contextual", "content": "O falante relatou que o projeto Orquidea terá cinco mapas.",
         "summary": "Projeto Orquidea: cinco mapas",
         "confidence": .95, "importance": .95, "novelty": .95, "emotional_weight": .3,
         "relationship_relevance": .4, "future_consequence": .9, "goal_relevance": .9,

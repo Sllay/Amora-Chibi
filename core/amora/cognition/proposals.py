@@ -10,6 +10,11 @@ from amora.memory import MemoryKind
 class MemoryProposal(BaseModel):
     kind: MemoryKind = MemoryKind.EPISODIC
     behavioral_signal: str = Field(default="none", pattern=r"^(none|speech_preference|behavioral_correction)$")
+    behavioral_topic: str = Field(
+        default="none",
+        pattern=r"^(none|question_repetition|response_length|initiative_frequency|address_style|humor|sticker_usage|other)$",
+    )
+    behavioral_scope: str = Field(default="contextual", pattern=r"^(general|contextual)$")
     content: str = Field(min_length=1, max_length=2000)
     summary: str | None = Field(default=None, max_length=500)
     confidence: float = Field(default=0.6, ge=0.0, le=1.0)

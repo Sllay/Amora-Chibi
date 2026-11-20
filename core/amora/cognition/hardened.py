@@ -285,7 +285,9 @@ class CognitiveEngine(BaseCognitiveEngine):
                     metadata={"provider": descriptor.name, "model": descriptor.model, "turn_id": str(request.turn_id),
                               "reflection_remote_reuse": remote_reuse,
                               **({"behavioral_signal": feedback_kind,
-                                  "behavioral_source": "verified_owner_dm_feedback"}
+                                  "behavioral_source": "verified_owner_dm_feedback",
+                                  "behavioral_topic": getattr(proposal, "behavioral_topic", "none"),
+                                  "behavioral_scope": getattr(proposal, "behavioral_scope", "contextual")}
                                  if behavioral else {}),
                               **source_time_metadata},
                 ),

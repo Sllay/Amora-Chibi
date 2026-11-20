@@ -17,6 +17,8 @@ class BehavioralProvider(StructuredProvider):
             "memory_candidates": [{
                 "kind": "semantic",
                 "behavioral_signal": "behavioral_correction",
+                "behavioral_topic": "question_repetition",
+                "behavioral_scope": "general",
                 "content": "BK corrigiu a Amora: não repetir a mesma pergunta se ele já respondeu.",
                 "summary": "BK prefere que Amora evite perguntas repetidas já respondidas.",
                 "confidence": 0.97,
@@ -115,8 +117,9 @@ async def test_behavior_source_must_be_original_verified_owner_dm(tmp_path, monk
 def test_typed_source_only_feedback_contract_is_conservative():
     schema = memory_schema()
     item = schema["properties"]["memory_candidates"]["items"]
-    assert "behavioral_signal" in item["required"]
+    assert {"behavioral_signal", "behavioral_topic", "behavioral_scope"} <= set(item["required"])
     assert "behavioral_correction" in item["properties"]["behavioral_signal"]["enum"]
+    assert "question_repetition" in item["properties"]["behavioral_topic"]["enum"]
     extracted = MemoryExtraction.model_validate({
         "memory_candidates": [{
             "kind": "semantic", "content": "BK prefere respostas curtas.",
@@ -129,3 +132,5 @@ def test_typed_source_only_feedback_contract_is_conservative():
         }]
     })
     assert extracted.memory_candidates[0].behavioral_signal == "none"
+    assert extracted.memory_candidates[0].behavioral_topic == "none"
+    assert extracted.memory_candidates[0].behavioral_scope == "contextual"

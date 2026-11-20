@@ -330,7 +330,7 @@ class ContextCompiler:
                             require_topic_match=named_recall,
                             allow_entity_fallback=explicit_recall and not shared and not named_recall,
                             supplement_tags={"amora_behavioral_feedback"} if feedback_mode else set(),
-                            supplement_limit=2 if feedback_mode else 0)
+                            supplement_limit=6 if feedback_mode else 0)
         projection = self.memory_projection
         use_projection = (
             projection is not None and remote and not shared
@@ -345,6 +345,8 @@ class ContextCompiler:
                 "memory_disclosure_request", "explicit_memory_recall", "speech_device_id"))
         )
         hits = projection.recall(query) if use_projection else self.memory.recall(query)
+        from amora.memory.behavioral_resolution import resolve_behavioral_guidance
+        feedback_candidates = []
         guidance: list[ContextMemory] = []
         for hit in hits:
             item = hit.memory
@@ -352,20 +354,7 @@ class ContextCompiler:
                 continue
             if self.privacy_gate.memory_allowed(item, remote=remote, recipient_id=request.speaker_id):
                 if "TAGGED_SUPPLEMENT" in hit.reason_codes:
-                    if (item.owner_entity_id == "PERSON_BK"
-                            and item.metadata.get("behavioral_signal") in {
-                                "speech_preference", "behavioral_correction"
-                            }):
-                        observed = aware_time(item.metadata.get("source_observed_at"))
-                        guidance.append(ContextMemory(
-                            id=str(item.id), kind=item.kind.value,
-                            content=(item.summary or item.content)[:320],
-                            score=hit.score, confidence=item.provenance.confidence,
-                            recorded_at=item.created_at.isoformat(),
-                            source_observed_at=observed.isoformat() if observed else None,
-                            privacy_scope=item.privacy_scope.value,
-                            reason_codes=["SOURCE_GROUNDED_BEHAVIORAL_FEEDBACK"],
-                        ))
+                    feedback_candidates.append(hit)
                     continue
                 source_at = aware_time((getattr(item, "metadata", None) or {}).get("source_observed_at"))
                 recorded_at = aware_time(getattr(item, "created_at", None))
@@ -386,6 +375,24 @@ class ContextCompiler:
                 if (memory_v2 and topic_match and item.owner_entity_id == request.speaker_id
                         and item.remote_processing_allowed and item.metadata.get("turn_id")):
                     memory_source_turns[selected.id] = str(item.metadata["turn_id"])
+
+        # Recent, explicit general correction of the *same classified topic*
+        # supersedes an older general preference in the provider projection.
+        # Neither historic memory nor its source is overwritten.
+        for feedback in resolve_behavioral_guidance(
+            feedback_candidates, owner_id=request.speaker_id, limit=2
+        ):
+            item = feedback.memory
+            observed = aware_time(item.metadata.get("source_observed_at"))
+            guidance.append(ContextMemory(
+                id=str(item.id), kind=item.kind.value,
+                content=(item.summary or item.content)[:320],
+                score=feedback.score, confidence=item.provenance.confidence,
+                recorded_at=item.created_at.isoformat(),
+                source_observed_at=observed.isoformat() if observed else None,
+                privacy_scope=item.privacy_scope.value,
+                reason_codes=["SOURCE_GROUNDED_BEHAVIORAL_FEEDBACK"],
+            ))
 
         claims: list[dict[str, Any]] = []
         authorized_relations: set[tuple[str, str, str]] = set()
