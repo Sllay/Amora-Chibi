@@ -631,7 +631,10 @@ class PlatformMessagingService:
                 if core_nav is not None else {"sources": [], "references": []}
             )
             intent = parse_web_intent(message.text)
-            web_capture_requested = screenshot_requested(message.text)
+            capture_retry = bool(intent is not None and intent.action == "capture_retry")
+            web_capture_requested = screenshot_requested(message.text) or capture_retry
+            retry_source = (core_nav.current_capture_target(request.session_id)
+                            if capture_retry and core_nav is not None else None)
             plan_meta = plan.metadata if plan is not None else {}
             sources = (plan_meta.get("web_sources") or core_delivery["sources"])[:2]
             references = plan_meta.get("web_references") or core_delivery["references"]
@@ -643,20 +646,29 @@ class PlatformMessagingService:
             web_capture_source = requested_screenshot_source(
                 message.text, intent, sources=sources, references=references,
                 session_references=core_delivery["references"], owner_verified=True,
+                authorized_retry_url=retry_source,
+            )
+            if web_capture_source and core_nav is not None:
+                # Register only an explicitly authorized public URL, never a
+                # model-made link or arbitrary unrelated image from chat.
+                core_nav.remember_capture_request(request.session_id, web_capture_source)
+            _LOG.info(
+                "web_capture_request kind=%s requested=%s authorized=%s",
+                intent.action if intent is not None else "none",
+                web_capture_requested, bool(web_capture_source),
             )
             if web_capture_requested:
-                if intent is not None and intent.action == "capture":
+                if intent is not None and intent.action in {"capture", "capture_retry"}:
                     # Screenshot-only command: the language model has no
                     # authority to claim capture/upload success. Discord is
                     # the sole transport receipt.
                     text = (
-                        "Solicitei a captura da última página pública desta "
-                        "conversa. O print só está entregue se aparecer como "
+                        "Vou solicitar o envio do print desta página. "
+                        "Só considere entregue se o arquivo aparecer como "
                         "anexo nesta mensagem."
                         if web_capture_source else
-                        "Não encontrei uma página recente nesta conversa "
-                        "para capturar. Abra um link ou faça uma pesquisa e "
-                        "solicite o print novamente."
+                        "Não tenho uma captura web recente autorizada para "
+                        "enviar. Abra a página e peça o print novamente."
                     )
                 else:
                     text = neutralize_screenshot_claims(text)
