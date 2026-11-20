@@ -562,6 +562,7 @@ class WebNavigator:
         self.browser = browser
         self.reader = reader
         self.sessions: OrderedDict[str, tuple[float, list[dict[str, str]]]] = OrderedDict()
+        self.last_delivery: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
         self._semaphore = asyncio.Semaphore(2)
 
     @staticmethod
@@ -629,12 +630,42 @@ class WebNavigator:
         return []
 
     def current_public_references(self, session_id: str) -> list[dict[str, str]]:
-        """Snapshot Core-held URLs for transport; never model invented links.
-
-        Only call after the Discord owner/DM gate. An unsuccessful NEW search
-        clears the old refs so a model fallback cannot cite stale searches.
-        """
+        """Snapshot Core-held URLs for transport; never model invented links."""
         return [dict(item) for item in self._refs(session_id)[:5]]
+
+    def _record_delivery(self, session_id: str, result: dict[str, Any]) -> dict[str, Any]:
+        # Only source/ref URL metadata survives briefly for the Discord worker
+        # after provider fallback. Never retain fetched HTML or user text here.
+        if result.get("status") in {"opened", "results_only"}:
+            projection = {
+                "action": result.get("action", ""),
+                "sources": [
+                    {"url": str(item.get("url") or ""), "title": str(item.get("title") or "")}
+                    for item in (result.get("sources") or [])[:2] if isinstance(item, dict)
+                    and item.get("status") == "opened"
+                ],
+                "references": [
+                    {"url": str(item.get("url") or ""), "title": str(item.get("title") or "")}
+                    for item in (result.get("references") or [])[:5] if isinstance(item, dict)
+                ],
+            }
+            self.last_delivery[session_id] = (asyncio.get_running_loop().time(), projection)
+            self.last_delivery.move_to_end(session_id)
+            while len(self.last_delivery) > 32:
+                self.last_delivery.popitem(last=False)
+        return result
+
+    def current_delivery(self, session_id: str) -> dict[str, Any]:
+        record = self.last_delivery.get(session_id)
+        if record and asyncio.get_running_loop().time() - record[0] < 900:
+            data = record[1]
+            return {
+                "action": data["action"],
+                "sources": [dict(item) for item in data["sources"]],
+                "references": [dict(item) for item in data["references"]],
+            }
+        self.last_delivery.pop(session_id, None)
+        return {"action": "", "sources": [], "references": []}
 
     async def research(self, text: str, session_id: str | None) -> dict[str, Any] | None:
         intent = parse_web_intent(text)
@@ -643,6 +674,8 @@ class WebNavigator:
         if not session_id:
             return {"action": intent.action, "status": "unavailable", "reason": "WEB_SESSION_REQUIRED",
                     "sources": [], "references": []}
+        # A failed next action must NEVER serve the previous turn's links.
+        self.last_delivery.pop(session_id, None)
         try:
             if intent.action == "follow":
                 refs = self._refs(session_id)
@@ -733,11 +766,13 @@ class WebNavigator:
                         )},
                         **({"retrieval": rendered["retrieval"]} if rendered.get("retrieval") else {}),
                     })
-            return {"action": "search", "status": "opened" if sources else "results_only",
-                    "query": used_query[:240], "sources": sources,
-                    "references": [{"number": index, "url": item["url"],
-                                    "title": item["title"], "snippet": item.get("snippet", "")}
-                                   for index, item in enumerate(validated, 1)]}
+            return self._record_delivery(session_id, {
+                "action": "search", "status": "opened" if sources else "results_only",
+                "query": used_query[:240], "sources": sources,
+                "references": [{"number": index, "url": item["url"],
+                                "title": item["title"], "snippet": item.get("snippet", "")}
+                               for index, item in enumerate(validated, 1)],
+            })
         except (WebFetchError, TimeoutError) as exc:
             code = exc.code if isinstance(exc, WebFetchError) else "WEB_TIMEOUT"
             return {"action": intent.action, "status": "failed", "reason": code,
@@ -757,10 +792,10 @@ class WebNavigator:
             "url", "title", "text", "fetched_at", "status")}
         if page.get("retrieval"):
             source["retrieval"] = page["retrieval"]
-        return {
+        return self._record_delivery(session_id, {
             "action": action, "status": page.get("status", "failed"),
             "sources": [source] if page.get("status") == "opened" else [],
             "references": [{"number": index, "url": item["url"], "title": item["title"]}
                            for index, item in enumerate(refs[:12], 1)],
             **({"reason": "WEB_CONTENT_UNSUPPORTED"} if page.get("status") == "unsupported" else {}),
-        }
+        })
