@@ -142,15 +142,26 @@ def requested_screenshot_source(
     references: list[object] | None = None,
     session_references: list[object] | None = None,
     owner_verified: bool = False,
+    authorized_retry_url: str | None = None,
 ) -> str | None:
-    if not owner_verified or not screenshot_requested(request_text) or intent is None:
+    if not owner_verified or intent is None:
         return None
-    candidates = _public_urls(sources or [], max_items=2)
-    if not candidates and intent.action in {"search", "follow", "capture"}:
+    retry = intent.action == "capture_retry"
+    if retry:
+        # Retry is allowed ONLY after WebNavigator validates its previous
+        # verified-owner screenshot request lease in the same DM.
+        if not authorized_retry_url:
+            return None
+        candidates = _public_urls([authorized_retry_url], max_items=1)
+    else:
+        if not screenshot_requested(request_text):
+            return None
+        candidates = _public_urls(sources or [], max_items=2)
+    if not candidates and not retry and intent.action in {"search", "follow", "capture"}:
         candidates = _public_urls(
             references or session_references or [], max_items=1
         )
-    if not candidates and intent.action == "open":
+    if not candidates and not retry and intent.action == "open":
         candidates = _public_urls([intent.argument], max_items=1)
     if not candidates:
         return None
