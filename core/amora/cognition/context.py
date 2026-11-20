@@ -367,7 +367,7 @@ class ContextCompiler:
                             reason_codes=["SOURCE_GROUNDED_BEHAVIORAL_FEEDBACK"],
                         ))
                     continue
-                source_at = aware_time((getattr(item, "metadata", None) or {}).get("source_observed_at")
+                source_at = aware_time((getattr(item, "metadata", None) or {}).get("source_observed_at"))
                 recorded_at = aware_time(getattr(item, "created_at", None))
                 # The detailed source-bound fact is more useful than a tiny
                 # summary when the current topic actually mentions the subject.
