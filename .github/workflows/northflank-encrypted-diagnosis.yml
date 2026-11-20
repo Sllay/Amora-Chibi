@@ -1,0 +1,63 @@
+name: Northflank encrypted log diagnosis
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Northflank encrypted log archive
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: northflank-encrypted-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Decrypt only in temporary runner and generate metadata-only diagnostics
+        shell: bash
+        env:
+          ARCHIVE_PASSPHRASE: ${{ secrets.AMORA_LOG_ARCHIVE_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ -n "$ARCHIVE_PASSPHRASE" ]] || { echo 'Missing secret AMORA_LOG_ARCHIVE_PASSPHRASE'; exit 1; }
+          [[ -s ops/logs/northflank-latest.zip.gpg ]] || { echo 'No encrypted snapshot available'; exit 1; }
+          scratch="$(mktemp -d "$RUNNER_TEMP/northflank-diagnose.XXXXXXXX")"
+          trap 'rm -rf -- "$scratch"' EXIT
+          # Hide decryptor metadata, NEVER print or upload decrypted data.
+          printf '%s' "$ARCHIVE_PASSPHRASE" | gpg \
+            --batch --quiet --pinentry-mode loopback --passphrase-fd 0 \
+            --decrypt --output "$scratch/snapshot.zip" \
+            ops/logs/northflank-latest.zip.gpg 2>/dev/null
+          python tools/ops/northflank_log_archive.py diagnose \
+            --input "$scratch/snapshot.zip" \
+            --ciphertext ops/logs/northflank-latest.zip.gpg \
+            --output "$scratch/diagnostics.json"
+          # This file contains ONLY an allowlisted code/event histogram,
+          # NOT original lines or extracts. It can be inspected via GitHub.
+          mkdir -p ops/logs
+          install -m 644 "$scratch/diagnostics.json" ops/logs/diagnostics.json
+      - name: Commit diagnostic counters only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- ops/logs/diagnostics.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore(ops): update safe Northflank diagnostics [skip ci]'
+            git push origin HEAD:main
+          fi
