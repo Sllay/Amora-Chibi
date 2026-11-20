@@ -121,6 +121,7 @@ class MemoryQuery(BaseModel):
     projection_remote_only: bool = False
     allow_entity_fallback: bool = False
     require_topic_match: bool = False
+    required_tags: set[str] = Field(default_factory=set, max_length=4)
 
     @model_validator(mode="after")
     def validate_window(self) -> "MemoryQuery":
