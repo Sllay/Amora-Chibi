@@ -5,6 +5,7 @@ promise. Every due occurrence has one deterministic outbound id.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -198,7 +199,45 @@ class AgendaService:
             )
         return item.model_copy(update={"status": "cancelled"})
 
-    def tick(self):
+    def due_items(self):
+        """Return only due, unsent and deliverable occurrences for composition.
+
+        The scheduler may call this before asking cognition to write a reminder.
+        It never reserves or alters the occurrence; tick() remains the only
+        delivery writer and revalidates all authority/expiry at insertion.
+        """
+        if not agenda_enabled():
+            return []
+        now = utc(self.clock.now())
+        with trace_lock(self.db._lock):
+            result = []
+            for item in _ledger(self.db._conn):
+                if item.status != "active":
+                    continue
+                when = occurrence(item, now)
+                if when is None:
+                    continue
+                key = f"amora:agenda:occurrence:{item.id}:{when.isoformat()}"
+                oid = uuid5(NAMESPACE_URL, key)
+                if self.db._conn.execute(
+                    "SELECT status,error_code FROM messaging_outbound_queue WHERE id=?",
+                    (str(oid),),
+                ).fetchone() is not None:
+                    continue
+                if not _valid_target(self.db._conn, item.account_scope,
+                                     item.conversation_id, item.external_actor_id,
+                                     connected=True):
+                    continue
+                pending = self.db._conn.execute(
+                    """SELECT 1 FROM messaging_outbound_queue WHERE status IN ('queued','claimed')
+                       AND json_extract(metadata_json,'$.agenda_id')=? LIMIT 1""",
+                    (str(item.id),),
+                ).fetchone()
+                if pending is None:
+                    result.append((item, when, oid))
+            return result
+
+    def tick(self, *, rendered: dict[str, str] | None = None):
         """Scan bounded active agenda, queue only the due current occurrence."""
         if not agenda_enabled():
             return []
@@ -214,16 +253,26 @@ class AgendaService:
                 continue
             key = f"amora:agenda:occurrence:{item.id}:{when.isoformat()}"
             oid = uuid5(NAMESPACE_URL, key)
+            candidate = (rendered or {}).get(str(oid))
+            composed = (candidate.strip() if isinstance(candidate, str)
+                        and 0 < len(candidate.strip()) <= 360 else item.text)
+            metadata = {"agenda_id": str(item.id), "agenda_occurrence": when.isoformat(),
+                        "agenda_expires_at": (when + timedelta(minutes=5)).isoformat(),
+                        "agenda_external_actor_id": item.external_actor_id,
+                        "agenda_source": "explicit_owner_schedule",
+                        "agenda_state": "recurring_prompt" if item.interval_minutes else "scheduled_reminder"}
+            if composed != item.text:
+                # Bind the generated wording to the immutable owner instruction.
+                # Claim-time verification rejects altered text or mismatched agenda.
+                metadata.update({
+                    "agenda_source_text": item.text,
+                    "agenda_render_sha256": hashlib.sha256(composed.encode("utf-8")).hexdigest(),
+                    "agenda_render_kind": "cognitive",
+                })
             msg = OutboundMessage(
                 id=oid, platform=MessagingPlatform.DISCORD,
                 account_scope=item.account_scope, conversation_id=item.conversation_id,
-                target_entity_id=OWNER, text=item.text,
-                created_at=now,
-                metadata={"agenda_id": str(item.id), "agenda_occurrence": when.isoformat(),
-                          "agenda_expires_at": (when + timedelta(minutes=5)).isoformat(),
-                          "agenda_external_actor_id": item.external_actor_id,
-                          "agenda_source": "explicit_owner_schedule",
-                          "agenda_state": "recurring_prompt" if item.interval_minutes else "scheduled_reminder"},
+                target_entity_id=OWNER, text=composed, created_at=now, metadata=metadata,
             )
             with trace_lock(self.db._lock):
                 # Do not accumulate dozens of expired queued reminders while
@@ -298,7 +347,16 @@ def agenda_claim_allowed(conn, message: OutboundMessage, now: datetime, *, requi
         if item is None or item.status != "active" or occurrence(item, instant) != due:
             return False
         if (item.account_scope != message.account_scope or item.conversation_id != message.conversation_id
-                or item.external_actor_id != external or item.text != message.text):
+                or item.external_actor_id != external):
+            return False
+        if meta.get("agenda_render_kind") == "cognitive":
+            if (meta.get("agenda_source_text") != item.text
+                    or not isinstance(message.text, str)
+                    or not 0 < len(message.text.strip()) <= 360
+                    or hashlib.sha256(message.text.encode("utf-8")).hexdigest()
+                       != meta.get("agenda_render_sha256")):
+                return False
+        elif item.text != message.text:
             return False
         return _valid_target(conn, item.account_scope, item.conversation_id, external,
                              connected=require_connected)
