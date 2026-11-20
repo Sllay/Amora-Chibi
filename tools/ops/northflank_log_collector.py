@@ -139,6 +139,15 @@ class Northflank:
         rows = data.get(listing) if isinstance(data, dict) else None
         if not isinstance(rows, list):
             raise CollectionError("invalid_" + listing + "_list")
+        # Northflank documents service deployments as newest-first; also sort
+        # job runs explicitly so an unusual API ordering cannot archive stale
+        # runs instead of the six latest.
+        rows = sorted(
+            rows,
+            key=lambda row: str(row.get("startedAt") or row.get("createdAt") or "")
+            if isinstance(row, dict) else "",
+            reverse=True,
+        )
         return rows[:KEEP]
 
     def logs(self, kind: str, resource_id: str, version_id: str):
