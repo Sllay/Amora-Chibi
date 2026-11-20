@@ -165,6 +165,9 @@ class CognitiveContext(BaseModel):
     temporal_context: dict[str, Any] | None = None
     temporal_opportunity: dict[str, Any] | None = None
     visual_observation: dict[str, Any] | None = None
+    # Previously verified sticker semantics for currently received expressions;
+    # transport-native IDs and private media never enter the model context.
+    perceptual_expressions: list[dict[str, Any]] = Field(default_factory=list, max_length=3)
     dialogue_plan: dict[str, Any] = Field(default_factory=dict)
     # Only the small contextually relevant subset is projected. These entries
     # describe what Amora knows she can potentially do; they grant no authority.
