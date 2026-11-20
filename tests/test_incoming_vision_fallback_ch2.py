@@ -180,3 +180,46 @@ async def test_bounded_cascade_cannot_wait_unbounded_on_stalled_primary(monkeypa
     )
     assert await chain.analyze(payload()) == observation()
     assert primary.calls == 1 and secondary.calls == 1
+
+
+
+@pytest.mark.asyncio
+async def test_same_valid_image_recovers_from_one_intermitent_empty_groq_response(monkeypatch):
+    monkeypatch.delenv("AMORA_VISION_NVIDIA_FALLBACK", raising=False)
+    class FlakyPrimary(MockVisual):
+        async def analyze(self, image, user_text):
+            self.calls += 1
+            if self.calls == 1:
+                raise GroqVisionError(
+                    "INCOMING_VISION_EMPTY_RESPONSE", "synthetic empty first response"
+                )
+            return observation()
+    groq = FlakyPrimary()
+    fallback = MockVisual()
+    cascade = IncomingVisionCascade(groq, fallback)
+    assert await cascade.analyze(payload(), "O que vê nessa imagem?") == observation()
+    assert groq.calls == 2
+    assert fallback.calls == 0  # no second-provider privacy escalation
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_groq_never_loops_or_spends_more_requests(monkeypatch):
+    monkeypatch.delenv("AMORA_VISION_NVIDIA_FALLBACK", raising=False)
+    groq = MockVisual(error="INCOMING_VISION_HTTP_429")
+    cascade = IncomingVisionCascade(groq, MockVisual())
+    with pytest.raises(GroqVisionError) as error:
+        await cascade.analyze(payload())
+    assert error.value.code == "INCOMING_VISION_HTTP_429"
+    assert groq.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fast_transient_retry_obeys_remaining_visual_budget(monkeypatch):
+    monkeypatch.delenv("AMORA_VISION_NVIDIA_FALLBACK", raising=False)
+    groq = MockVisual(error="INCOMING_VISION_TRANSPORT_FAILED")
+    cascade = IncomingVisionCascade(groq, MockVisual(),
+                                    total_timeout_seconds=0.2)
+    with pytest.raises(GroqVisionError) as error:
+        await cascade.analyze(payload())
+    assert error.value.code == "INCOMING_VISION_TRANSPORT_FAILED"
+    assert groq.calls == 1  # less than 5 seconds left: no retry
