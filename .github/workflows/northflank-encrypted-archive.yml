@@ -80,4 +80,6 @@ jobs:
     # was successfully pushed, without depending on workflow_run event delivery.
     needs: archive
     uses: ./.github/workflows/northflank-encrypted-diagnosis.yml
+    with:
+      archive_fresh: true
     secrets: inherit
