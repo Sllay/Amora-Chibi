@@ -862,6 +862,7 @@ export class DiscordWorker {
       });
       const messagePath = `/channels/${encodeURIComponent(item.conversation_id)}/messages`;
       let created;
+      let imageUploadRejected = false;
       try {
         created = await this.rest.request(messagePath, {
           method: 'POST',
@@ -876,6 +877,7 @@ export class DiscordWorker {
         // the message: let the existing nonce/ack recovery own retry.
         if (!(index === 0 && screenshot && error?.retryable === false
             && [400, 413, 415, 422].includes(Number(error?.status)))) throw error;
+        imageUploadRejected = true;
         safeLog('WEB_SCREENSHOT_UPLOAD_REJECTED', 'status=' + error.status);
         const note = '\n\n(O Discord recusou o anexo do print. A captura não foi entregue.)';
         const fallbackPayload = {
@@ -888,7 +890,7 @@ export class DiscordWorker {
       }
       if (created?.id && created?.channel_id) this.runtime.rememberBotMessage(created);
       if (!firstMessageId) firstMessageId = created?.id || null;
-      if (index === 0 && screenshot && !created?.attachments?.some(
+      if (index === 0 && screenshot && !imageUploadRejected && !created?.attachments?.some(
         (entry) => entry?.id && entry?.filename === screenshot.filename
       )) {
         // Accepted text is not proof of an attached image. Never retry the
@@ -907,7 +909,7 @@ export class DiscordWorker {
         } catch (noticeError) {
           safeLog('WEB_SCREENSHOT_RECEIPT_NOTICE_FAILED', errorLabel(noticeError));
         }
-      } else if (index === 0 && screenshot) {
+      } else if (index === 0 && screenshot && !imageUploadRejected) {
         safeLog('WEB_SCREENSHOT_ATTACHMENT_CONFIRMED');
       }
     }
