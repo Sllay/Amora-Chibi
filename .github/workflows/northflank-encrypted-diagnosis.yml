@@ -41,6 +41,7 @@ jobs:
           set -euo pipefail
           umask 077
           [[ -n "$ARCHIVE_PASSPHRASE" ]] || { echo 'Missing secret AMORA_LOG_ARCHIVE_PASSPHRASE'; exit 1; }
+          [[ "${#ARCHIVE_PASSPHRASE}" -ge 32 ]] || { echo 'Archive secret must contain at least 32 characters'; exit 1; }
           [[ -s ops/logs/northflank-latest.zip.gpg ]] || { echo 'No encrypted snapshot available'; exit 1; }
           scratch="$(mktemp -d "$RUNNER_TEMP/northflank-diagnose.XXXXXXXX")"
           trap 'rm -rf -- "$scratch"' EXIT
