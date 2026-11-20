@@ -465,7 +465,7 @@ class WebNavigator:
         if page.get("status") != "opened":
             return True
         text = str(page.get("text") or "").casefold()
-        return len(text) < 130 or any(cue in text[:500] for cue in (
+        return len(text.strip()) < 24 or any(cue in text[:500] for cue in (
             "enable javascript", "javascript is required",
             "ativar o javascript", "habilite javascript",
             "loading...", "just a moment", "checking your browser",
