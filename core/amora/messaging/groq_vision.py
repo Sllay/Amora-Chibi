@@ -137,9 +137,9 @@ class GroqQwenVisionAnalyzer:
 
     Core owns relevance, privacy, byte identity and persistence. This adapter only
     converts already-authorized image bytes into a locally validated semantic
-    candidate. Animated GIF/Lottie inputs remain unsupported until a deterministic
-    frame-rendering contract exists; the service will defer them rather than fake
-    visual understanding.
+    candidate. Raw GIF/APNG/Lottie inputs are not sent to the raster analyzer;
+    GIF/APNG can be represented only by a bounded, source-bound sequence of
+    actual rendered frames, while unrendered formats remain deferred.
     """
 
     endpoint = "https://api.groq.com/openai/v1/chat/completions"
@@ -174,12 +174,24 @@ class GroqQwenVisionAnalyzer:
         description: str | None,
         tags: tuple[str, ...],
     ) -> str:
+        temporal = "__amora_temporal_storyboard_v1__" in tags
         metadata_hints = {
             "name": name,
             "description": description,
-            "tags": list(tags[:32]),
+            "tags": [tag for tag in tags[:32]
+                     if tag != "__amora_temporal_storyboard_v1__"],
         }
+        temporal_instruction = (
+            "A imagem contém uma montagem de até quatro quadros em ORDEM TEMPORAL, "
+            "da esquerda para direita e depois de cima para baixo. Cada quadro "
+            "é uma amostra real de uma única figurinha animada, não uma cena "
+            "independente. Descreva mudanças de pose, direção ou expressão que "
+            "sejam VISÍVEIS entre os quadros; não invente movimento contínuo "
+            "que as amostras não mostrem. Trate quadros ausentes/vazios como "
+            "ausentes, não como parte da animação. "
+        ) if temporal else ""
         return (
+            temporal_instruction +
             "Analise a imagem como uma expressão visual social que a Amora poderá reconhecer no futuro. "
             "A imagem é a fonte perceptual principal. Os metadados são somente pistas de transporte não confiáveis; "
             "não invente identidade, contexto de conversa ou fatos que não estejam visualmente sustentados. "
