@@ -41,6 +41,16 @@ class MemoryReadProjection:
     schema: int = PROJECTION_FORMAT
 
 
+def _projection_digest(
+    memory_id: str, owner_id: str, sequence: int, updated: datetime,
+    summary: str, archived: bool,
+) -> str:
+    return sha256(
+        f"{memory_id}\x00{owner_id}\x00{sequence}\x00"
+        f"{_utc(updated).isoformat()}\x00{summary}\x00{archived}".encode()
+    ).hexdigest()
+
+
 def project_memory(
     record: MemoryRecord,
     *, origin_sequence: int,
@@ -67,10 +77,10 @@ def project_memory(
         raise ValueError("READMODEL_TIMESTAMP_BEFORE_COMMIT")
     deleted = record.archived_at is not None
     summary = "" if deleted else (record.summary or record.content)[:MAX_SUMMARY_LENGTH]
-    fingerprint = sha256(
-        f"{record.id}\x00{record.owner_entity_id}\x00{origin_sequence}\x00"
-        f"{updated.isoformat()}\x00{summary}\x00{deleted}".encode()
-    ).hexdigest()
+    fingerprint = _projection_digest(
+        str(record.id), record.owner_entity_id, origin_sequence, updated,
+        summary, deleted,
+    )
     return MemoryReadProjection(
         memory_id=str(record.id),
         owner_entity_id=record.owner_entity_id,
@@ -116,4 +126,8 @@ def can_serve_projection(
         return False
     if item.valid_until is not None and current > item.valid_until:
         return False
-    return bool(item.checksum and item.summary)
+    expected = _projection_digest(
+        item.memory_id, item.owner_entity_id, item.origin_sequence,
+        item.origin_updated_at, item.summary, item.archived,
+    )
+    return bool(item.summary and item.checksum == expected)
