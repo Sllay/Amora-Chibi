@@ -1,0 +1,30 @@
+name: Altare - read-only staging preflight and safe log codes
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_log_codes:
+        description: Summarize known operational codes, never publish raw logs
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Read Altare app status and allowlisted event counts only
+        env:
+          ALTARE_TOKEN: ${{ secrets.ALTARE_TOKEN_READONLY }}
+          ALTARE_LOG_COUNTS_ENABLED: ${{ inputs.include_log_codes }}
+        run: |
+          python tools/ops/altare_readonly_diagnostics.py
