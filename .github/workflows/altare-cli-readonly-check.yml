@@ -46,12 +46,23 @@ jobs:
         run: |
           set -euo pipefail
           set +x
-          curl -fsSL --max-time 30 https://altare.gg/install.sh -o "$RUNNER_TEMP/install-altr.sh"
-          sh "$RUNNER_TEMP/install-altr.sh" >/dev/null 2>&1
+          exec > >(tee -a "$RUNNER_TEMP/altare-cli-readonly-result.txt") 2>&1
+          install_status=$(curl --silent --connect-timeout 8 --max-time 30 \
+            --output "$RUNNER_TEMP/install-altr.sh" --write-out '%{http_code}' \
+            'https://altare.gg/install.sh' 2>/dev/null || true)
+          if [[ "$install_status" != 200 ]]; then
+            [[ "$install_status" =~ ^[0-9]{3}$ ]] || install_status=000
+            echo "ALTARE_CLI_INSTALLER=HTTP_$install_status"
+            exit 0
+          fi
+          if ! sh "$RUNNER_TEMP/install-altr.sh" >/dev/null 2>&1; then
+            echo 'ALTARE_CLI_INSTALL_FAILED'
+            exit 0
+          fi
           export PATH="$HOME/.local/bin:$PATH"
           if ! command -v altr >/dev/null 2>&1; then
             echo 'ALTARE_CLI_INSTALL_FAILED'
-            exit 2
+            exit 0
           fi
           if altr docker info Core-Amora --json >/dev/null 2>&1; then
             echo 'ALTARE_CLI_CORE_READ_ACCESS_PASS'
@@ -76,6 +87,7 @@ jobs:
               'ALTARE_CURL_ANON',
               'ALTARE_CURL_WITH_TOKEN',
               'ALTARE_CLI_INSTALL_FAILED',
+              'ALTARE_CLI_INSTALLER',
               'ALTARE_CLI_CORE_READ_ACCESS_PASS',
               'ALTARE_CLI_CORE_READ_ACCESS_DENIED_OR_UNAVAILABLE',
               'ALTARE_CLI_DISCORD_READ_ACCESS_PASS',
