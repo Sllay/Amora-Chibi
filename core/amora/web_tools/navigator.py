@@ -820,7 +820,9 @@ class WebNavigator:
             self.last_delivery[session_id] = (asyncio.get_running_loop().time(), projection)
             if self.workspace is not None:
                 try:
-                    self.workspace.record_visit(session_id, result)
+                    self.workspace.record_visit(
+                        session_id, {**result, "topic": topic},
+                    )
                 except Exception:
                     _LOG.warning("WEB_WORKSPACE_PERSIST_FAILED")
             self.last_delivery.move_to_end(session_id)
