@@ -1,0 +1,63 @@
+name: Altare - check team token through official curl and altr CLI
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: >-
+      github.ref == 'refs/heads/main' && github.actor == 'Sllay' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'issue_comment' &&
+        github.event.issue.number == 349 &&
+        github.event.comment.body == '/amora altare cli check'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Check official API using curl rather than Python urllib
+        shell: bash
+        env:
+          ALTARE_TOKEN: ${{ secrets.ALTARE_TOKEN_CONFIG }}
+        run: |
+          set -euo pipefail
+          set +x
+          if [[ "$ALTARE_TOKEN" != alt_* ]]; then
+            echo 'ALTARE_CURL_TOKEN_SHAPE_INVALID'
+            exit 2
+          fi
+          endpoint='https://console.altare.gg/api/api-tokens/self'
+          anon=$(curl --max-time 15 -sS -o /dev/null -w '%{http_code}' "$endpoint" || true)
+          auth=$(curl --max-time 15 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ALTARE_TOKEN" "$endpoint" || true)
+          [[ "$anon" =~ ^[0-9]{3}$ ]] || anon=000
+          [[ "$auth" =~ ^[0-9]{3}$ ]] || auth=000
+          echo "ALTARE_CURL_ANON=HTTP_$anon"
+          echo "ALTARE_CURL_WITH_TOKEN=HTTP_$auth"
+      - name: Check Altare official altr read-only Docker App info
+        shell: bash
+        env:
+          ALTARE_TOKEN: ${{ secrets.ALTARE_TOKEN_CONFIG }}
+        run: |
+          set -euo pipefail
+          set +x
+          curl -fsSL --max-time 30 https://altare.gg/install.sh -o "$RUNNER_TEMP/install-altr.sh"
+          sh "$RUNNER_TEMP/install-altr.sh" >/dev/null 2>&1
+          export PATH="$HOME/.local/bin:$PATH"
+          if ! command -v altr >/dev/null 2>&1; then
+            echo 'ALTARE_CLI_INSTALL_FAILED'
+            exit 2
+          fi
+          if altr docker info Core-Amora --json >/dev/null 2>&1; then
+            echo 'ALTARE_CLI_CORE_READ_ACCESS_PASS'
+          else
+            echo 'ALTARE_CLI_CORE_READ_ACCESS_DENIED_OR_UNAVAILABLE'
+          fi
+          if altr docker info Discord-Amora --json >/dev/null 2>&1; then
+            echo 'ALTARE_CLI_DISCORD_READ_ACCESS_PASS'
+          else
+            echo 'ALTARE_CLI_DISCORD_READ_ACCESS_DENIED_OR_UNAVAILABLE'
+          fi
