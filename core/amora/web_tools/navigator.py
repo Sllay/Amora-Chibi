@@ -80,6 +80,19 @@ _WEB_PIN_CURRENT_RE = re.compile(
     r"\s+(?:(?:esse|este|essa|esta|o|a)\s+)?(?:link|site|p[aá]gina)\s*[.!?]*$",
     re.IGNORECASE,
 )
+_WEB_PIN_ALL_RE = re.compile(
+    r"^\s*(?:amora[,\s]+)?(?:salva|salve|guarda|guarde)"
+    r"\s+(?:(?:todos|esses|estes|os)\s+)?links?"
+    r"(?:\s+(?:da\s+pesquisa|encontrados?))?\s*[.!?]*$",
+    re.IGNORECASE,
+)
+_WEB_DESCRIBE_LINK_RE = re.compile(
+    r"\b(?:o\s+que\s+(?:tem|mostra|cont[eé]m)|"
+    r"(?:sobre\s+)?o\s+que\s+(?:era|[eé])|descrev[ae]|"
+    r"explique|explica|resume|resuma|do\s+que\s+(?:trata|fala))\b"
+    r".{0,60}?\b(?:link|resultado)\s*(?:n[ºo°.]?\s*)?(\d{1,2})\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _WEB_CONTINUE_RE = re.compile(
     r"\b(?:continua|continue|continuar|prossegue|prossiga)\b"
     r".{0,24}?\b(?:pesquisa|pesquisando|busca|buscando|investiga[cç][aã]o)\b",
@@ -372,6 +385,7 @@ def _clean_search_query(raw: str, match: re.Match[str]) -> str:
     subject = re.split(
         r"(?i)\s+e\s+(?:(?:me|mim)\s+)?"
         r"(?:diz|diga|fala|fale|mostra|mostre|manda|mande|mandar|"
+        r"salva|salve|guarda|guarde|"
         r"envia|envie|enviar|explica|explique|descreve|descreva|faz|fa[cç]a)\b",
         subject, maxsplit=1,
     )[0]
@@ -512,6 +526,11 @@ def parse_web_intent(text: str) -> WebIntent | None:
         while first.endswith(")") and first.count(")") > first.count("("):
             first = first[:-1]
         return WebIntent("open", first)
+    describe = _WEB_DESCRIBE_LINK_RE.search(raw)
+    if describe:
+        return WebIntent("describe_link", describe.group(1))
+    if _WEB_PIN_ALL_RE.search(raw):
+        return WebIntent("pin_results", "")
     pin = _WEB_PIN_RE.search(raw)
     if pin:
         return WebIntent("pin", pin.group(1))
@@ -890,7 +909,8 @@ class WebNavigator:
         if not session_id:
             return {"action": intent.action, "status": "unavailable", "reason": "WEB_SESSION_REQUIRED",
                     "sources": [], "references": []}
-        if intent.action in {"saved_links", "web_history", "pin"}:
+        if intent.action in {"saved_links", "web_history", "pin",
+                             "pin_results", "describe_link"}:
             if self.workspace is None:
                 return {"action": intent.action, "status": "failed",
                         "reason": "WEB_WORKSPACE_UNAVAILABLE",
@@ -919,6 +939,47 @@ class WebNavigator:
                         "sources": [], "references": found[:12],
                     })
                 refs = self._refs(session_id)
+                if intent.action == "pin_results":
+                    if not refs:
+                        raise WebFetchError("WEB_REFERENCE_NOT_FOUND")
+                    count = 0
+                    for entry in refs[:5]:
+                        if self.workspace.pin(session_id, entry):
+                            count += 1
+                    if not count and not self.workspace.bookmarks(session_id):
+                        raise WebFetchError("WEB_BOOKMARK_PERSIST_FAILED")
+                    return self._record_delivery(session_id, {
+                        "action": "pin_results", "status": "results_only",
+                        "saved_count": count, "sources": [],
+                        "references": refs[:5],
+                    })
+                if intent.action == "describe_link":
+                    index = int(intent.argument) - 1
+                    if not 0 <= index < len(refs):
+                        raise WebFetchError("WEB_REFERENCE_NOT_FOUND")
+                    wanted = refs[index]
+                    note = None
+                    for record in self.workspace.recent(session_id, 24):
+                        for entry in record.get("entries", []):
+                            if entry.get("url") == wanted.get("url"):
+                                note = entry
+                                break
+                        if note:
+                            break
+                    return {
+                        "action": "describe_link",
+                        "status": "results_only",
+                        "sources": [],
+                        "references": [wanted],
+                        "stored_evidence": {
+                            "url": wanted["url"],
+                            "title": str((note or wanted).get("title") or ""),
+                            "state": (note or {}).get("state", "found"),
+                            "excerpt": str((note or {}).get("excerpt") or "")[:950],
+                            "snippet": str((note or {}).get("snippet") or "")[:160],
+                            "disclaimer": "Historical evidence, not freshly opened.",
+                        },
+                    }
                 previous = self.current_delivery(session_id)
                 if intent.argument == "current":
                     options = previous["sources"] or previous["references"]
