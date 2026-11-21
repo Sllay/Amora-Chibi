@@ -1,7 +1,12 @@
 """No-network security and portability tests for private Altare env CI import."""
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
+
+# Core's editable package adds /core, not necessarily the repository root.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.ops.altare_bulk_env_apply import plan, apply, validate_origin
 from tools.ops.altare_env_handoff import EnvHandoffError
