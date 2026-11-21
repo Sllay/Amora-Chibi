@@ -88,3 +88,47 @@ def test_cli_failure_only_emits_variable_name(monkeypatch):
                         lambda *args, **kwargs: subprocess.CompletedProcess(args, 1))
     with pytest.raises(EnvHandoffError, match="ALTARE_DOCKER_ENV_APPLY_FAILED:DISCORD_BOT_TOKEN"):
         apply("discord", {"DISCORD_BOT_TOKEN": "SECRET_VALUE"}, "token")
+
+
+def test_api_access_confirms_scopes_and_exact_app_visibility(monkeypatch):
+    from tools.ops import altare_bulk_env_apply as module
+    calls = []
+    def fake_api(path, token):
+        calls.append(path)
+        if path == "/api-tokens/self":
+            return {
+                "team": {"id": "team-01"},
+                "scopes": ["servers:view", "servers:settings"],
+            }
+        if path == "/tenants/team-01/servers":
+            return {"items": [{"name": "Core-Amora"}, {"name": "Discord-Amora"}]}
+        raise AssertionError("unexpected endpoint")
+    monkeypatch.setattr(module, "_read_altare_json", fake_api)
+    module.check_altare_access("core", "alt_private-test")
+    module.check_altare_access("discord", "alt_private-test")
+    assert calls == [
+        "/api-tokens/self", "/tenants/team-01/servers",
+        "/api-tokens/self", "/tenants/team-01/servers",
+    ]
+
+
+def test_api_access_denies_missing_permission_and_missing_app(monkeypatch):
+    from tools.ops import altare_bulk_env_apply as module
+    def fake_scopes(path, token):
+        if path == "/api-tokens/self":
+            return {"team": {"id": "team-01"}, "scopes": ["servers:view"]}
+        return {"items": [{"name": "Core-Amora"}]}
+    monkeypatch.setattr(module, "_read_altare_json", fake_scopes)
+    with pytest.raises(EnvHandoffError, match="ALTARE_API_SCOPES_INSUFFICIENT"):
+        module.check_altare_access("discord", "alt_private-test")
+
+    def fake_missing(path, token):
+        if path == "/api-tokens/self":
+            return {
+                "team": {"id": "team-01"},
+                "scopes": ["servers:view", "servers:settings"],
+            }
+        return {"items": [{"name": "Core-Amora"}]}
+    monkeypatch.setattr(module, "_read_altare_json", fake_missing)
+    with pytest.raises(EnvHandoffError, match="ALTARE_TARGET_APP_NOT_VISIBLE"):
+        module.check_altare_access("discord", "alt_private-test")
