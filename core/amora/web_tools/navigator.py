@@ -59,6 +59,32 @@ _CAPTURE_CURRENT_RE = re.compile(
     r".{0,48}?\b(?:print|screenshot|captura(?:\s+de\s+tela)?)\b",
     re.IGNORECASE | re.DOTALL,
 )
+_WEB_SAVED_RE = re.compile(
+    r"\b(?:mostra|mostre|lista|liste|quais|ver|veja)\b"
+    r".{0,50}?\b(?:links?\s+(?:salvos?|guardados?|favoritos?)|favoritos?)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_WEB_HISTORY_RE = re.compile(
+    r"\b(?:mostra|mostre|lista|liste|quais|ver|veja)\b"
+    r".{0,50}?\b(?:hist[oó]rico\s+(?:de\s+)?(?:pesquisa|navega[cç][aã]o)|"
+    r"sites?\s+(?:que\s+)?(?:abriu|acessou|visitou))\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_WEB_PIN_RE = re.compile(
+    r"\b(?:salva|salve|guarda|guarde|favorita|favorite|marca|marque)\b"
+    r".{0,35}?\b(?:link|resultado|refer[eê]ncia)\s*(?:n[ºo°.]?\s*)?(\d{1,2})\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_WEB_PIN_CURRENT_RE = re.compile(
+    r"^\s*(?:amora[,\s]+)?(?:salva|salve|guarda|guarde|favorita|favorite)"
+    r"\s+(?:(?:esse|este|essa|esta|o|a)\s+)?(?:link|site|p[aá]gina)\s*[.!?]*$",
+    re.IGNORECASE,
+)
+_WEB_CONTINUE_RE = re.compile(
+    r"\b(?:continua|continue|continuar|prossegue|prossiga)\b"
+    r".{0,24}?\b(?:pesquisa|pesquisando|busca|buscando|investiga[cç][aã]o)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _SEARCH_RE = re.compile(
     r"\b(?:pesquis[ae]|pesquise|buscar?|busque|procur[ae]|procure|"
     r"investig[ae]|investigue|busca\s+na\s+(?:web|internet)|"
@@ -480,6 +506,17 @@ def parse_web_intent(text: str) -> WebIntent | None:
         while first.endswith(")") and first.count(")") > first.count("("):
             first = first[:-1]
         return WebIntent("open", first)
+    pin = _WEB_PIN_RE.search(raw)
+    if pin:
+        return WebIntent("pin", pin.group(1))
+    if _WEB_PIN_CURRENT_RE.search(raw):
+        return WebIntent("pin", "current")
+    if _WEB_SAVED_RE.search(raw):
+        return WebIntent("saved_links", "")
+    if _WEB_HISTORY_RE.search(raw):
+        return WebIntent("web_history", "")
+    if _WEB_CONTINUE_RE.search(raw):
+        return WebIntent("search", "")
     follow = _FOLLOW_RE.search(raw) or _SCREENSHOT_FOLLOW_RE.search(raw)
     if follow:
         return WebIntent("follow", follow.group(1))
@@ -631,12 +668,14 @@ class WebNavigator:
     """
 
     def __init__(self, *, fetch_page=fetch_public_page, search=None, browser=None,
-                 reader=None, planner=None):
+                 reader=None, planner=None, workspace=None):
         self.fetch_page = fetch_page
         self.search_provider = search
         # Planner is injected only after Core verifies owner-DM authorization.
         # No extra network service is enabled by a standalone navigator.
         self.planner = planner
+        self.workspace = workspace
+        self._hydrated_sessions: set[str] = set()
         # Test-injected fetch/search providers cannot accidentally send URLs
         # to external vendors. The production Core uses the defaults.
         if browser is None and fetch_page is fetch_public_page and search is None:
@@ -748,6 +787,11 @@ class WebNavigator:
                 ],
             }
             self.last_delivery[session_id] = (asyncio.get_running_loop().time(), projection)
+            if self.workspace is not None:
+                try:
+                    self.workspace.record_visit(session_id, result)
+                except Exception:
+                    _LOG.warning("WEB_WORKSPACE_PERSIST_FAILED")
             self.last_delivery.move_to_end(session_id)
             while len(self.last_delivery) > 32:
                 self.last_delivery.popitem(last=False)
