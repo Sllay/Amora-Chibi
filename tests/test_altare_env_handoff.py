@@ -9,6 +9,9 @@ from pathlib import Path
 
 import pytest
 
+# Core CI adds /core, not necessarily repository root, to the Python path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from tools.ops.altare_env_handoff import (
     EnvHandoffError, parse_source, prepare, write_private, main,
 )
