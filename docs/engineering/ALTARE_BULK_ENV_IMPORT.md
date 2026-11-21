@@ -58,18 +58,22 @@ remove chaves que nao pertencem ao destino e imprime APENAS contagens e codigos.
 Pode-se usar `--core-file`, `--discord-file` e
 `--core-origin https://core-amora.go.altare.global` com caminhos personalizados.
 
-Para importar, voce precisa do **altr CLI oficial funcionando em ambiente
-Linux suportado** e de um token Altare valido no ambiente local com
-`servers:view` e `servers:settings`. A CLI oficial possui distribuicao
-Linux ARM64, mas nao ha garantia de compatibilidade direta com Android/Termux;
-se nao executar no Android, use uma distribuicao Linux privada via proot ou
-outro terminal privado suportado. Verifique `altr --version`.
-Nao coloque o token na linha de comando ou no historico:
+Para importar pelo Termux, o CLI oficial `altr` deve funcionar e voce
+deve estar autenticado por `altr login`. Esse login guarda uma sessao local,
+sem copiar novas chaves de API para o chat ou GitHub.
 
 ```bash
-read -rs -p 'Altare token: ' ALTARE_TOKEN_CONFIG; echo
-export ALTARE_TOKEN_CONFIG
+altr login --no-browser
+altr whoami
+altr docker info Core-Amora --json >/dev/null && echo CORE_VISIVEL
+altr docker info Discord-Amora --json >/dev/null && echo DISCORD_VISIVEL
 ```
+
+Apos o login, o importador **usa automaticamente essa sessao local** se
+`ALTARE_TOKEN_CONFIG` nao estiver definida. Para automacao CI, a alternativa
+com token de equipe no ambiente continua disponivel e verifica permissao
+`servers:view` e `servers:settings`. Nunca use `altr token` diretamente
+no terminal sem redirecionamento: ele imprime uma credencial sensivel.
 
 **Pare ambos os aplicativos no Altare e confira isso no painel antes da
 importacao; especialmente Discord-Amora nunca deve ter outro Gateway ativo
@@ -81,7 +85,9 @@ unset ALTARE_TOKEN_CONFIG
 ```
 
 O importador NAO instala CLI, NAO inicia os aplicativos nem faz deploy
-do codigo; envia cada variavel validada por
+do codigo. Na ausencia de ALTARE_TOKEN_CONFIG, valida os dois apps por
+`altr docker info` (somente leitura) antes de qualquer escrita; envia
+cada variavel validada por
 `altr docker env set <app> KEY=value`, o comando que a documentacao
 oficial oferece para Docker Apps existentes. Cada aplicacao de variavel
 pode reiniciar um app em execucao: por isso deve estar PARADO. Um erro no
