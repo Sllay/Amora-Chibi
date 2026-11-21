@@ -194,6 +194,28 @@ class AmoraDatabase:
             except (ValueError, TypeError, KeyError):
                 raise ValueError("PERCEPTION_EVENT_INVALID") from None
 
+    def list_events_by_type_session(
+        self, *, event_type: str, session_id: str, limit: int = 24,
+    ) -> list[AmoraEvent]:
+        """Read only one owner's bounded research notebook event stream.
+
+        The caller must verify identity/DM scope first. Never expose this
+        general-purpose private-events query via a public HTTP endpoint.
+        """
+        if event_type not in {"web.research.visit.v1", "web.research.bookmark.v1"}:
+            raise ValueError("WEB_WORKSPACE_EVENT_TYPE_DENIED")
+        if not session_id or not 0 < len(session_id) <= 256:
+            raise ValueError("WEB_WORKSPACE_SESSION_INVALID")
+        bounded = min(max(1, int(limit)), 36)
+        with trace_lock(self._lock):
+            rows = self._conn.execute(
+                "SELECT * FROM events WHERE event_type=? AND session_id=? "
+                "AND privacy_scope='PERSONAL' AND actor='PERSON_BK' "
+                "ORDER BY timestamp DESC LIMIT ?",
+                (event_type, session_id, bounded),
+            ).fetchall()
+        return [self._decode_stored_event(row) for row in rows]
+
     def event_count(self) -> int:
         with trace_lock(self._lock):
             row = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()
