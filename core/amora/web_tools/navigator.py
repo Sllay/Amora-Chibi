@@ -523,6 +523,11 @@ _CONTEXTUAL_TERMS = frozenset({
     "contei", "comentei", "vimos", "viu", "ver", "pesquisa",
     "pesquisando", "busca", "buscando", "pesquisar", "novamente",
     "continuar", "continue", "continua", "relembra",
+    "mensagem", "mensagens", "anteriores", "anterior", "historico",
+    "conversa", "conversas", "ultima", "ultimas", "ultimo", "ultimos",
+    "passada", "passado", "naquelas", "naquela", "naquele",
+    "nosso", "nossos", "nossa", "nossas", "discutimos", "comentamos",
+    "falou", "to", "ta", "ligado",
 })
 _CONTEXT_HISTORY_FILLER = _CONTEXTUAL_TERMS | frozenset({
     "amora", "voce", "voce", "vc", "pra", "para", "quero",
