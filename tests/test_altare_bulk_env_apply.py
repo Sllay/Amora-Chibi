@@ -132,3 +132,20 @@ def test_api_access_denies_missing_permission_and_missing_app(monkeypatch):
     monkeypatch.setattr(module, "_read_altare_json", fake_missing)
     with pytest.raises(EnvHandoffError, match="ALTARE_TARGET_APP_NOT_VISIBLE"):
         module.check_altare_access("discord", "alt_private-test")
+
+
+@pytest.mark.parametrize("status,code", [
+    (401, "ALTARE_API_TOKEN_UNAUTHORIZED_401"),
+    (403, "ALTARE_API_SCOPE_DENIED_403"),
+])
+def test_altare_api_failure_distinguishes_auth_from_scope(monkeypatch, status, code):
+    from urllib.error import HTTPError
+    from tools.ops import altare_bulk_env_apply as module
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            raise HTTPError(request.full_url, status, "private", {}, None)
+
+    monkeypatch.setattr(module, "build_opener", lambda *_: FakeOpener())
+    with pytest.raises(EnvHandoffError, match=code):
+        module._read_altare_json("/api-tokens/self", "alt_test-token")
