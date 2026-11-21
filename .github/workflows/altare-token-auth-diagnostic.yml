@@ -86,3 +86,34 @@ jobs:
               print('ALTARE_TOKEN_DIAG=NETWORK_OR_RESPONSE_ERROR')
               raise SystemExit(2)
           PY
+      - name: Probe exact documented curl GET safely without response bodies
+        shell: bash
+        env:
+          ALTARE_TOKEN_CONFIG: ${{ secrets.ALTARE_TOKEN_CONFIG }}
+        run: |
+          set -euo pipefail
+          set +x
+          if [[ -z "$ALTARE_TOKEN_CONFIG" ]]; then
+            echo 'ALTARE_CURL_PROBE=MISSING_SECRET'
+            exit 2
+          fi
+          report="$(curl --silent --show-error \
+            --connect-timeout 8 --max-time 20 \
+            --output /dev/null \
+            --write-out '%{http_code}:%{content_type}' \
+            -H "Authorization: Bearer $ALTARE_TOKEN_CONFIG" \
+            -H 'Accept: application/json' \
+            'https://console.altare.gg/api/api-tokens/self')" || {
+              echo 'ALTARE_CURL_PROBE=NETWORK_ERROR'
+              exit 2
+            }
+          status="${report%%:*}"
+          mime="${report#*:}"
+          if [[ "$mime" == application/json* ]]; then kind=JSON
+          elif [[ "$mime" == text/html* ]]; then kind=HTML
+          else kind=OTHER
+          fi
+          case "$status" in 200|401|403|429|502|503)
+            echo "ALTARE_CURL_PROBE=HTTP_${status}_${kind}" ;;
+            *) echo 'ALTARE_CURL_PROBE=OTHER_STATUS' ;;
+          esac
