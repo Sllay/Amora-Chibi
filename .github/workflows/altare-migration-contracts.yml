@@ -1,0 +1,29 @@
+name: Altare migration contracts
+
+on:
+  pull_request:
+    paths:
+      - 'tools/ops/altare_*.py'
+      - 'tests/test_altare_*.py'
+      - 'deploy/altare/**'
+      - '.github/workflows/altare-*.yml'
+      - 'docs/engineering/ALTARE_FULL_CUTOVER_RUNBOOK.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install tested project tooling, no secret credentials
+        run: python -m pip install --disable-pip-version-check -c deploy/python.lock -e '.[dev]'
+      - name: Test private env handoff and allowlisted Altare diagnostics
+        run: |
+          python -m pytest tests/test_altare_env_handoff.py tests/test_altare_readonly_diagnostics.py -v
