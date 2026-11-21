@@ -936,6 +936,15 @@ class WebNavigator:
                     url = _shareable_public_url(intent.argument)
                     title = urlsplit(url).hostname or ""
                     target = {"url": url, "title": title, "state": "found"}
+                    for row in self.workspace.recent(session_id, 24):
+                        matched = next(
+                            (item for item in row.get("entries", [])
+                             if isinstance(item, dict) and item.get("url") == url
+                             and item.get("state") == "read"), None,
+                        )
+                        if matched is not None:
+                            target = matched
+                            break
                     self.workspace.pin(session_id, target)
                     return {"action": "pin_url", "status": "saved",
                             "sources": [], "references": [target]}
