@@ -516,8 +516,8 @@ def _rank_search_results(results: list[dict[str, str]], query: str) -> list[dict
 _CONTEXTUAL_TERMS = frozenset({
     "aquilo", "isso", "isto", "coisa", "parada", "negocio", "assunto",
     "tema", "mesmo", "anterior", "anteriormente", "antes", "ontem",
-    "que", "eu", "te", "nos", "nossa", "nossas", "gente", "a", "o",
-    "uma", "um", "sobre", "da", "de", "do", "das", "dos", "la",
+    "que", "eu", "te", "nos", "nossa", "nossas", "gente", "a", "o", "aquela", "aquele", "aquele", "aquilo", "essa", "esse",
+    "umas", "uns", "uma", "um", "sobre", "da", "de", "do", "das", "dos", "la",
     "ai", "aqui", "ok", "okay", "certo", "conversamos", "falamos",
     "tava", "estava", "estavamos", "falando", "dizendo", "falei",
     "contei", "comentei", "vimos", "viu", "ver", "pesquisa",
@@ -1180,6 +1180,8 @@ class WebNavigator:
         contextual_search = (
             intent.action == "search"
             and _is_contextual_search_subject(search_topic)
+            and (bool(search_topic) or _CONTEXT_SEARCH_RE.search(text) is not None
+                 or _WEB_CONTINUE_RE.search(text) is not None)
         )
         if contextual_search:
             # Prefer the authorized live conversation over old web workspace
