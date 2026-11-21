@@ -126,7 +126,7 @@ def compose_web_delivery(
     if refs:
         label = (
             "Links salvos na biblioteca da pesquisa:"
-            if intent.action == "saved_links"
+            if intent.action in {"saved_links", "pin_results"}
             else "Histórico de URLs (nem todas as páginas foram lidas):"
             if intent.action == "web_history"
             else "Resultado salvo:"
