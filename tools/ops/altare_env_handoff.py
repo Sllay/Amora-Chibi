@@ -52,6 +52,8 @@ REQUIRED = {
 }
 MAX_BYTES = 128 * 1024
 MAX_KEYS = 220
+MAX_ALTARE_VARIABLES = 200
+MAX_ALTARE_ENV_BYTES = 32_000
 
 
 class EnvHandoffError(ValueError):
@@ -135,6 +137,14 @@ def prepare(source: Mapping[str, str], *, kind: str) -> tuple[dict[str, str], tu
         if key.startswith("DISCORD_") and kind == "core":
             continue
         safe[key] = value
+    if len(safe) > MAX_ALTARE_VARIABLES:
+        raise EnvHandoffError("HANDOFF_ALTARE_VARIABLE_LIMIT")
+    encoded_size = sum(
+        len(key.encode("utf-8")) + len(value.encode("utf-8")) + 2
+        for key, value in safe.items()
+    )
+    if encoded_size > MAX_ALTARE_ENV_BYTES:
+        raise EnvHandoffError("HANDOFF_ALTARE_ENV_SIZE_LIMIT")
     missing = tuple(sorted(REQUIRED[kind].difference(safe)))
     return safe, missing
 
