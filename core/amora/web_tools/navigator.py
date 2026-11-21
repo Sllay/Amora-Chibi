@@ -867,7 +867,12 @@ class WebNavigator:
 
     def _hydrate_workspace(self, session_id: str) -> None:
         """Restore references after process restart without re-fetching URLs."""
-        if self.workspace is None or session_id in self._hydrated_sessions:
+        if self.workspace is None:
+            return
+        # Memory projections expire after 15 minutes. The *durable* notebook
+        # must be eligible for re-hydration even if this process never restarted.
+        current = self.last_delivery.get(session_id)
+        if current and asyncio.get_running_loop().time() - current[0] < 900:
             return
         self._hydrated_sessions.add(session_id)
         try:
