@@ -12,14 +12,14 @@ ORIGIN = "https://core-amora.go.altare.global"
 
 def test_core_candidate_filters_legacy_host_and_sets_new_origin():
     bundle = (
-        "AMORA_POSTGRES_DSN=postgresql://alice:secret@aiven.example/main\\n"
-        "AMORA_MESSAGING_SERVICE_TOKEN=" + "t" * 40 + "\\n"
-        "AMORA_SECRET_LOCAL_API_TOKEN=" + "a" * 40 + "\\n"
-        "AMORA_PUBLIC_ORIGINS=https://old.northflank.app\\n"
-        "AMORA_POSTGRES_CA_FILE=/oldhost/aiven.pem\\n"
-        "AMORA_PG_STAGING_APPROVAL=old-approval\\n"
-        "NF_BACKUP_API_TOKEN=do-not-include\\n"
-        "GROQ_API_KEY=provider-value\\n"
+        "AMORA_POSTGRES_DSN=postgresql://alice:secret@aiven.example/main\n"
+        "AMORA_MESSAGING_SERVICE_TOKEN=" + "t" * 40 + "\n"
+        "AMORA_SECRET_LOCAL_API_TOKEN=" + "a" * 40 + "\n"
+        "AMORA_PUBLIC_ORIGINS=https://old.northflank.app\n"
+        "AMORA_POSTGRES_CA_FILE=/oldhost/aiven.pem\n"
+        "AMORA_PG_STAGING_APPROVAL=old-approval\n"
+        "NF_BACKUP_API_TOKEN=do-not-include\n"
+        "GROQ_API_KEY=provider-value\n"
     )
     got = plan(bundle, service="core", core_origin=ORIGIN)
     assert got["AMORA_POSTGRES_CA_FILE"] == "/var/lib/amora/secrets/aiven-ca.pem"
