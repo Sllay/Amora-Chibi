@@ -146,4 +146,28 @@ def test_parser_for_notebook_avoids_generic_conversation():
     assert parse_web_intent("salva o link 2") == WebIntent("pin", "2")
     assert parse_web_intent("salva esse link") == WebIntent("pin", "current")
     assert parse_web_intent("continue pesquisando") == WebIntent("search", "")
+    assert parse_web_intent("salva esses links") == WebIntent("pin_results", "")
+    assert parse_web_intent("descreve o link 2") == WebIntent("describe_link", "2")
     assert parse_web_intent("Eu salvei a memória dela ontem") is None
+
+
+
+@pytest.mark.asyncio
+async def test_saved_many_links_and_recovered_read_description_are_real_provenance(notebook):
+    finder = lambda _: [
+        {"url": "https://godotengine.org/article/a", "title": "Godot Engine A",
+         "snippet": "Godot Engine"},
+        {"url": "https://godotengine.org/article/b", "title": "Godot Engine B",
+         "snippet": "Godot Engine"},
+    ]
+    nav = WebNavigator(fetch_page=open_page, search=finder, workspace=notebook)
+    await nav.research("pesquisa Godot Engine", "owner-dm")
+    remembered = await nav.research("descreve o link 2", "owner-dm")
+    assert remembered["status"] == "results_only"
+    assert remembered["references"][0]["url"] == "https://godotengine.org/article/b"
+    assert remembered["stored_evidence"]["state"] == "read"
+    assert remembered["stored_evidence"]["excerpt"].startswith("The Godot Engine")
+    result = await nav.research("salva esses links", "owner-dm")
+    assert result["saved_count"] == 2
+    assert len(notebook.bookmarks("owner-dm")) == 2
+    assert len(notebook.bookmarks("other-dm")) == 0
