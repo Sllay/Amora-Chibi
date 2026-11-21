@@ -1,0 +1,67 @@
+name: Amora Ayatsuri2D headless export (experimental)
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/ayatsuri2d-actions-prototype]
+    paths:
+      - ".github/workflows/ayatsuri2d-avatar-export.yml"
+      - "tools/ayatsuri-batch/**"
+      - "assets/amora-live2d/**"
+  pull_request:
+    paths:
+      - ".github/workflows/ayatsuri2d-avatar-export.yml"
+      - "tools/ayatsuri-batch/**"
+      - "assets/amora-live2d/**"
+
+permissions:
+  contents: read
+
+jobs:
+  ayatsuri-headless:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout Amora
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/ayatsuri-batch
+      - name: Compile and run Ayatsuri2D batch exporter tests
+        run: cargo test --manifest-path tools/ayatsuri-batch/Cargo.toml --all-targets
+      - name: Check for approved layered artwork
+        id: art
+        shell: bash
+        run: |
+          if test -f assets/amora-live2d/layers/00_body_horns.png; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No separated Amora artwork yet. Self-test passed; actual export skipped."
+          fi
+      - name: Export layered Amora with Ayatsuri2D libraries
+        if: steps.art.outputs.ready == 'true'
+        shell: bash
+        run: |
+          cargo run --release --manifest-path tools/ayatsuri-batch/Cargo.toml -- \
+            assets/amora-live2d/manifest.json artifacts/AmoraBolinha
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("artifacts/AmoraBolinha")
+          model = json.loads((root / "AmoraBolinha.model3.json").read_text())
+          refs = model["FileReferences"]
+          for key in (refs["Moc"], refs["DisplayInfo"], *refs["Textures"]):
+              assert (root / key).is_file(), f"Missing referenced file: {key}"
+          print("Model bundle references verified")
+          PY
+      - name: Publish model bundle (STATIC prototype, not animated rig)
+        if: steps.art.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: amora-ayatsuri-static-moc3
+          path: artifacts/AmoraBolinha/
+          if-no-files-found: error
+          retention-days: 7
