@@ -147,6 +147,9 @@ def test_parser_for_notebook_avoids_generic_conversation():
     assert parse_web_intent("salva o link 2") == WebIntent("pin", "2")
     assert parse_web_intent("salva esse link") == WebIntent("pin", "current")
     assert parse_web_intent("continue pesquisando") == WebIntent("search", "")
+    assert parse_web_intent("salva https://godotengine.org/releases") == WebIntent(
+        "pin_url", "https://godotengine.org/releases"
+    )
     assert parse_web_intent("salva esses links") == WebIntent("pin_results", "")
     assert parse_web_intent("descreve o link 2") == WebIntent("describe_link", "2")
     assert parse_web_intent("Eu salvei a memória dela ontem") is None
@@ -172,3 +175,19 @@ async def test_saved_many_links_and_recovered_read_description_are_real_provenan
     assert result["saved_count"] == 2
     assert len(notebook.bookmarks("owner-dm")) == 2
     assert len(notebook.bookmarks("other-dm")) == 0
+
+
+
+@pytest.mark.asyncio
+async def test_explicit_user_url_can_be_saved_but_is_not_falsely_marked_read(notebook):
+    nav = WebNavigator(fetch_page=lambda u: (_ for _ in ()).throw(
+        AssertionError("saving must not open the URL")), workspace=notebook)
+    result = await nav.research("salva https://godotengine.org/releases", "owner-dm")
+    assert result["status"] == "saved"
+    assert notebook.bookmarks("owner-dm")[0]["url"] == "https://godotengine.org/releases"
+    assert not notebook.bookmarks("owner-dm")[0].get("excerpt")
+    rejected = await nav.research(
+        "salva https://example.org/?access_token=secret", "owner-dm"
+    )
+    assert rejected["status"] == "failed"
+    assert len(notebook.bookmarks("owner-dm")) == 1
