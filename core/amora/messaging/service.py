@@ -639,7 +639,7 @@ class PlatformMessagingService:
             sources = (plan_meta.get("web_sources") or core_delivery["sources"])[:2]
             references = (
                 core_delivery["references"]
-                if intent is not None and intent.action in {"saved_links", "web_history"}
+                if intent is not None and intent.action in {"saved_links", "web_history", "pin_results"}
                 else (plan_meta.get("web_references") or core_delivery["references"])
             )
             text, _ = compose_web_delivery(
