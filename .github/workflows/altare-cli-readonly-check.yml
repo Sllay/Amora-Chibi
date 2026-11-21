@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   verify:
@@ -26,6 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           set +x
+          exec > >(tee -a "$RUNNER_TEMP/altare-cli-readonly-result.txt") 2>&1
           if [[ "$ALTARE_TOKEN" != alt_* ]]; then
             echo 'ALTARE_CURL_TOKEN_SHAPE_INVALID'
             exit 2
@@ -61,3 +63,35 @@ jobs:
           else
             echo 'ALTARE_CLI_DISCORD_READ_ACCESS_DENIED_OR_UNAVAILABLE'
           fi
+      - name: Publish read-only CLI check safely to issue 349
+        if: always() && github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const p = process.env.RUNNER_TEMP + '/altare-cli-readonly-result.txt';
+            const lines = fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n') : [];
+            const allowed = [
+              'ALTARE_CURL_TOKEN_SHAPE_INVALID',
+              'ALTARE_CURL_ANON',
+              'ALTARE_CURL_WITH_TOKEN',
+              'ALTARE_CLI_INSTALL_FAILED',
+              'ALTARE_CLI_CORE_READ_ACCESS_PASS',
+              'ALTARE_CLI_CORE_READ_ACCESS_DENIED_OR_UNAVAILABLE',
+              'ALTARE_CLI_DISCORD_READ_ACCESS_PASS',
+              'ALTARE_CLI_DISCORD_READ_ACCESS_DENIED_OR_UNAVAILABLE'
+            ];
+            const results = lines.map(line => line.trim()).filter(line =>
+              allowed.some(code => line === code || line.startsWith(code + '=')) &&
+              /^[A-Z0-9_=]+$/.test(line));
+            const body = [
+              '**Altare CLI read-only check (sem segredos)**',
+              ...results.slice(0, 8).map(line => '- ' + line),
+              'Somente codigos de teste e status foram publicados.'
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 349,
+              body
+            });
