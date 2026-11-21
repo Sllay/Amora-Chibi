@@ -226,3 +226,23 @@ async def test_same_process_rehydrates_durable_topic_after_ephemeral_ttl(noteboo
     result = await nav.research("continue pesquisando", "owner-dm")
     assert result["status"] == "opened"
     assert seen == ["Godot Engine"]
+
+
+
+@pytest.mark.asyncio
+async def test_numbered_saved_links_follow_the_freshly_listed_order(notebook):
+    nav = WebNavigator(fetch_page=open_page, workspace=notebook)
+    notebook.pin("owner-dm", {
+        "url": "https://godotengine.org/learn", "title": "Godot Learn",
+        "state": "found",
+    })
+    notebook.pin("owner-dm", {
+        "url": "https://godotengine.org/releases", "title": "Godot Releases",
+        "state": "found",
+    })
+    displayed = await nav.research("mostra meus links salvos", "owner-dm")
+    assert displayed["references"][0]["url"] == "https://godotengine.org/releases"
+    assert displayed["references"][1]["url"] == "https://godotengine.org/learn"
+    followed = await nav.research("abre o link 2", "owner-dm")
+    assert followed["status"] == "opened"
+    assert followed["sources"][0]["url"] == "https://godotengine.org/learn"
