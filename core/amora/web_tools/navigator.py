@@ -849,7 +849,8 @@ class WebNavigator:
         entries = record.get("entries") or []
         sources = [e for e in entries if isinstance(e, dict)
                    and e.get("state") == "read" and e.get("url")]
-        refs = [e for e in entries if isinstance(e, dict) and e.get("url")]
+        refs = [e for e in (record.get("references") or [])
+                if isinstance(e, dict) and e.get("url")]
         projection = {
             "action": str(record.get("action") or ""),
             "focus": str(record.get("topic") or "")[:90]
