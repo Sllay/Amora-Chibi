@@ -789,7 +789,7 @@ class WebNavigator:
                 ],
                 "references": [
                     {"url": str(item.get("url") or ""), "title": str(item.get("title") or "")}
-                    for item in (result.get("references") or [])[:5] if isinstance(item, dict)
+                    for item in (result.get("references") or [])[:12] if isinstance(item, dict)
                 ],
             }
             self.last_delivery[session_id] = (asyncio.get_running_loop().time(), projection)
@@ -899,9 +899,11 @@ class WebNavigator:
                     pins = self.workspace.bookmarks(session_id, 20)
                     refs = [{"url": p["url"], "title": p.get("title", ""),
                              "state": "saved"} for p in pins if p.get("url")]
-                    return {"action": "saved_links",
-                            "status": "results_only" if refs else "empty",
-                            "sources": [], "references": refs[:20]}
+                    return self._record_delivery(session_id, {
+                        "action": "saved_links",
+                        "status": "results_only" if refs else "empty",
+                        "sources": [], "references": refs[:12],
+                    })
                 if intent.action == "web_history":
                     visits = self.workspace.recent(session_id, 24)
                     found, seen = [], set()
@@ -910,9 +912,11 @@ class WebNavigator:
                             if item.get("url") and item["url"] not in seen:
                                 seen.add(item["url"])
                                 found.append(item)
-                    return {"action": "web_history",
-                            "status": "results_only" if found else "empty",
-                            "sources": [], "references": found[:20]}
+                    return self._record_delivery(session_id, {
+                        "action": "web_history",
+                        "status": "results_only" if found else "empty",
+                        "sources": [], "references": found[:12],
+                    })
                 refs = self._refs(session_id)
                 previous = self.current_delivery(session_id)
                 if intent.argument == "current":
