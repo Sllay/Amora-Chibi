@@ -105,18 +105,39 @@ class WebWorkspaceStore:
         return self._read(session_id, VISIT_EVENT, min(max(1, limit), MAX_RECENT_VISITS))
 
     def bookmarks(self, session_id: str, limit: int = 20) -> list[dict[str, Any]]:
-        return self._read(session_id, BOOKMARK_EVENT, min(max(1, limit), MAX_BOOKMARKS))
+        # Latest evidence for one URL wins, but older revisions remain an
+        # append-only personal audit trail. No duplicate links in the reply.
+        records = self._read(session_id, BOOKMARK_EVENT, MAX_BOOKMARKS)
+        unique, seen = [], set()
+        for record in records:
+            url = _safe_url(record.get("url"))
+            if url and url not in seen:
+                seen.add(url)
+                unique.append(record)
+            if len(unique) >= min(max(1, limit), MAX_BOOKMARKS):
+                break
+        return unique
 
     def pin(self, session_id: str, entry: dict[str, Any], *, reason: str = "") -> bool:
         safe = _safe_entry(entry, read=entry.get("state") == "read")
         if not safe:
             return False
-        return self._write(session_id, BOOKMARK_EVENT, {
+        excerpt = _clean(str(entry.get("excerpt") or ""), 300)
+        reason = _clean(reason, 160)
+        payload = {
             "url": safe["url"], "title": safe["title"],
-            "excerpt": _clean(str(entry.get("excerpt") or ""), 300),
-            "reason": _clean(reason, 160),
+            "excerpt": excerpt, "reason": reason,
             "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }, dedupe_key="webpin:" + self._key(session_id, safe["url"]))
+        }
+        # Stable for identical saves, new revision for enriched evidence.
+        # A pinned unread link can later receive a real excerpt after reading.
+        fingerprint = hashlib.sha256(
+            (safe["title"] + "\x00" + excerpt + "\x00" + reason).encode()
+        ).hexdigest()[:16]
+        return self._write(
+            session_id, BOOKMARK_EVENT, payload,
+            dedupe_key="webpin:" + self._key(session_id, safe["url"]) + ":" + fingerprint,
+        )
 
     def notebook(self, session_id: str) -> dict[str, Any]:
         """Bounded evidence for the LLM. Web excerpts remain untrusted data."""
