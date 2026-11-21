@@ -34,7 +34,7 @@ jobs:
       - name: Read Altare app status and exact event codes only
         id: collect
         env:
-          ALTARE_TOKEN: ${{ secrets.ALTARE_TOKEN_READONLY }}
+          ALTARE_TOKEN: ${{ secrets.ALTARE_TOKEN_CONFIG }}
           ALTARE_LOG_COUNTS_ENABLED: ${{ github.event_name == 'issue_comment' || inputs.include_log_codes }}
         shell: bash
         run: |

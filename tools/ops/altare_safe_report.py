@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable
 import urllib.request
@@ -17,7 +18,14 @@ ALLOWED_BLOCKED = frozenset({
     "ALTARE_LOG_SCOPE_REQUIRED", "ALTARE_APP_NOT_FOUND",
     "ALTARE_LOG_REQUEST_INVALID", "ALTARE_LOG_FORMAT_INVALID",
 })
-ALLOWED_APPS = frozenset({"amora-core", "amora-discord"})
+ALLOWED_APPS = frozenset({"Core-Amora", "Discord-Amora"})
+SAFE_API_HTTP = re.compile(
+    r"ALTARE_API_HTTP_(?:400|401|403|404|429|500|502|503|OTHER)_"
+    r"(?:HTML|OTHER|JSON_(?:UNCLASSIFIED|TOKEN_INVALID|TOKEN_REVOKED|"
+    r"TOKEN_EXPIRED|TOKEN_WRONG_TEAM|TOKEN_ROUTE_NOT_ALLOWED|"
+    r"TOKEN_MISSING_SCOPE|TOKEN_SCOPE_REQUIRED))\Z"
+)
+
 ISSUE_URL = "https://api.github.com/repos/Sllay/Amora-Chibi/issues/349/comments"
 
 
@@ -37,8 +45,9 @@ def safe_report(source: str) -> str:
         if state == "blocked":
             reason = record.get("reason")
             messages.append("Preflight bloqueado: " +
-                            (reason if reason in ALLOWED_BLOCKED
-                             else "ALTARE_UNAVAILABLE"))
+                            (reason if isinstance(reason, str) and (
+                                reason in ALLOWED_BLOCKED or SAFE_API_HTTP.fullmatch(reason)
+                             ) else "ALTARE_UNAVAILABLE"))
         elif state in {"ready", "apps_not_created"}:
             messages.append("Preflight: " + state)
             apps = record.get("apps") or {}

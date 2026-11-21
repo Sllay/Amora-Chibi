@@ -25,11 +25,11 @@ class _Response:
 def test_exact_code_allowlist_and_owner_issue_report():
     raw = [
         {"status": "ready", "apps": {
-            "amora-core": {"exists": True, "memory_mb": "PRIVATE_PWD"},
-            "amora-discord": {"exists": False},
+            "Core-Amora": {"exists": True, "memory_mb": "PRIVATE_PWD"},
+            "Discord-Amora": {"exists": False},
             "evil-secret-app": {"exists": True},
         }},
-        {"app": "amora-core", "events": {
+        {"app": "Core-Amora", "events": {
             "WEB_SCREENSHOT_UNAVAILABLE": 2,
             "WEB_WORKSPACE_READ_FAILED": 1,
             "private user said password": 10,
@@ -45,8 +45,8 @@ def test_exact_code_allowlist_and_owner_issue_report():
     assert "WEB_WORKSPACE_READ_FAILED: 1" in result
     assert "provider_timeout: 1" in result
     assert "ALTARE_UNAVAILABLE" in result
-    assert "amora-core: encontrado" in result
-    assert "amora-discord: nao encontrado" in result
+    assert "Core-Amora: encontrado" in result
+    assert "Discord-Amora: nao encontrado" in result
     assert "PRIVATE_PWD" not in result
     assert "evil-secret-app" not in result
     assert "SECRET_TOKEN" not in result
@@ -92,3 +92,21 @@ def test_invalid_github_token_fails_before_connect():
                 opener=lambda *args, **kwargs: (_ for _ in ()).throw(
                     AssertionError("must not connect")
                 ))
+
+
+def test_allowlisted_html_denial_retains_http_status_without_provider_data():
+    report = safe_report(json.dumps({
+        "status": "blocked",
+        "reason": "ALTARE_API_HTTP_403_HTML",
+        "server": "cloudflare private marker",
+    }))
+    assert "ALTARE_API_HTTP_403_HTML" in report
+    assert "private marker" not in report
+
+def test_unrecognized_http_error_code_is_not_published():
+    report = safe_report(json.dumps({
+        "status": "blocked",
+        "reason": "ALTARE_API_HTTP_403_HTML_TOKEN=VERY_SECRET",
+    }))
+    assert "ALTARE_UNAVAILABLE" in report
+    assert "VERY_SECRET" not in report

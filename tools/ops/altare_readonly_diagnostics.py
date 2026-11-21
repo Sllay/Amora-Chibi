@@ -67,6 +67,30 @@ def _read(path: str, token: str, *, params: dict[str, str] | None = None,
         if len(content) > 2_000_000:
             raise AltareControlError("ALTARE_RESPONSE_TOO_LARGE")
         obj = json.loads(content.decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # An HTML denial is not the JSON API's authentication decision.
+        # Only fixed status, MIME and known error codes may leave the runner;
+        # never echo a response body, URL, token, team or HTTP headers.
+        mime = (exc.headers.get("Content-Type", "") if exc.headers else "").lower()
+        kind = "JSON" if "json" in mime else "HTML" if "html" in mime else "OTHER"
+        code = "UNCLASSIFIED"
+        if kind == "JSON":
+            try:
+                body = json.loads(exc.read(4096))
+                proposed = (body.get("code") if isinstance(body, dict) else None)
+                if proposed in {
+                    "TOKEN_INVALID", "TOKEN_REVOKED", "TOKEN_EXPIRED",
+                    "TOKEN_WRONG_TEAM", "TOKEN_ROUTE_NOT_ALLOWED",
+                    "TOKEN_MISSING_SCOPE", "TOKEN_SCOPE_REQUIRED",
+                }:
+                    code = proposed
+            except (ValueError, UnicodeError, OSError):
+                pass
+        status = exc.code if exc.code in {400, 401, 403, 404, 429, 500, 502, 503} else "OTHER"
+        raise AltareControlError(
+            f"ALTARE_API_HTTP_{status}_{kind}_{code}" if kind == "JSON"
+            else f"ALTARE_API_HTTP_{status}_{kind}"
+        ) from None
     except (urllib.error.URLError, OSError, ValueError, UnicodeError):
         raise AltareControlError("ALTARE_READONLY_API_UNAVAILABLE") from None
     if not isinstance(obj, dict):
@@ -74,7 +98,7 @@ def _read(path: str, token: str, *, params: dict[str, str] | None = None,
     return obj
 
 
-def inspect(token: str, names: tuple[str, ...] = ("amora-core", "amora-discord"),
+def inspect(token: str, names: tuple[str, ...] = ("Core-Amora", "Discord-Amora"),
             *, fetch: Callable[..., dict[str, Any]] = _read) -> dict[str, Any]:
     if any(not NAME_RE.fullmatch(name) for name in names):
         raise AltareControlError("ALTARE_APP_NAME_INVALID")
