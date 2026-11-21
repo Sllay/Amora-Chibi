@@ -16,6 +16,8 @@ concurrency:
 
 jobs:
   archive:
+    outputs:
+      old_host_active: ${{ steps.hostcheck.outputs.active }}
     # The public issue trigger may only be used by the repository owner.
     # The body is never interpolated into a shell, and this does not run on PR.
     if: >-
@@ -33,7 +35,19 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: true
+      - name: Refuse old-host collector after source-controlled host cutover
+        id: hostcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(PYTHONPATH=core python -c 'from amora.deployment_profiles import get_profile; print(get_profile().host)')" == 'northflank' ]]; then
+            echo 'active=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'active=false' >> "$GITHUB_OUTPUT"
+            echo 'Northflank collector disabled because deployment profile changed.'
+          fi
       - name: Read-only Northflank fetch, zip and encrypt inside ephemeral runner
+        if: steps.hostcheck.outputs.active == 'true'
         shell: bash
         env:
           NORTHFLANK_API_TOKEN: ${{ secrets.NF_BACKUP_API_TOKEN }}
@@ -60,6 +74,7 @@ jobs:
             --s2k-digest-algo SHA512 --s2k-count 65011712 \
             --output "$RUNNER_TEMP/northflank-latest.zip.gpg" "$scratch/archive.zip"
       - name: Commit ciphertext only to isolated archive branch (never main)
+        if: steps.hostcheck.outputs.active == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -76,6 +91,7 @@ jobs:
           fi
 
   diagnose:
+    if: needs.archive.outputs.old_host_active == 'true'
     # A reusable workflow is guaranteed to run after the encrypted archive
     # was successfully pushed, without depending on workflow_run event delivery.
     needs: archive
