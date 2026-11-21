@@ -54,6 +54,7 @@ def test_scopes_exclude_host_specific_and_core_secrets_from_discord():
         assert "PORT" not in values
         assert "NF_BACKUP_API_TOKEN" not in values
         assert "AMORA_POSTGRES_CA_FILE" not in values
+        assert "AMORA_POSTGRES_CA_PEM" not in values
         assert "AMORA_CORE_URL" not in values
 
 
