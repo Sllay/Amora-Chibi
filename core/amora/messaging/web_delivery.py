@@ -94,7 +94,8 @@ def compose_web_delivery(
     if intent.action in {"capture", "capture_retry"}:
         return content, None
     opened = _public_urls(sources or [], max_items=2)
-    refs = _public_urls(references or session_references or [], max_items=5)
+    max_refs = 12 if intent.action in {"saved_links", "web_history"} else 5
+    refs = _public_urls(references or session_references or [], max_items=max_refs)
     if intent.action == "search" and not refs and session_references:
         refs = _public_urls(session_references, max_items=5)
 
@@ -124,7 +125,13 @@ def compose_web_delivery(
     append_lines("Fontes consultadas:", [(0, url) for url in opened])
     if refs:
         label = (
-            "Resultados da busca (nem todos lidos):"
+            "Links salvos na biblioteca da pesquisa:"
+            if intent.action == "saved_links"
+            else "Histórico de URLs (nem todas as páginas foram lidas):"
+            if intent.action == "web_history"
+            else "Resultado salvo:"
+            if intent.action == "pin"
+            else "Resultados da busca (nem todos lidos):"
             if intent.action == "search"
             else "Links encontrados nesta página (nem todos abertos):"
         )
