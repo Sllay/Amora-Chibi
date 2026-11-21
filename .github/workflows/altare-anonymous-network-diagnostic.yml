@@ -1,0 +1,68 @@
+name: Altare - compare anonymous and authenticated API status
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Sllay' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'issue_comment' &&
+        github.event.issue.number == 349 &&
+        github.event.comment.body == '/amora altare network diagnose'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compare status and response type; never print credentials or content
+        shell: bash
+        env:
+          ALTARE_TOKEN_CONFIG: ${{ secrets.ALTARE_TOKEN_CONFIG }}
+        run: |
+          set -euo pipefail
+          set +x
+          python - <<'PY'
+          import os
+          import urllib.request
+          import urllib.error
+
+          token = os.environ.get('ALTARE_TOKEN_CONFIG', '')
+          if not token.startswith('alt_') or any(ch.isspace() for ch in token):
+              print('ALTARE_SECRET_FORMAT_MISSING_OR_INVALID')
+              raise SystemExit(2)
+          url = 'https://console.altare.gg/api/api-tokens/self'
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          def probe(label, authenticated):
+              headers = {'Accept': 'application/json'}
+              if authenticated:
+                  headers['Authorization'] = 'Bearer ' + token
+              request = urllib.request.Request(url, headers=headers, method='GET')
+              try:
+                  with urllib.request.build_opener(NoRedirect()).open(request, timeout=15) as response:
+                      status = response.status
+                      mime = response.headers.get('Content-Type', '')
+                      server = response.headers.get('Server', '')
+              except urllib.error.HTTPError as exc:
+                  status = exc.code
+                  mime = exc.headers.get('Content-Type', '')
+                  server = exc.headers.get('Server', '')
+              except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+                  print(label + '=NETWORK_ERROR')
+                  return
+              type_enum = 'JSON' if 'json' in mime.lower() else 'HTML' if 'html' in mime.lower() else 'OTHER'
+              cdn_enum = 'CDN' if 'cloudflare' in server.lower() else 'NON_CDN'
+              print(label + '=HTTP_' + str(status) + ':' + type_enum + ':' + cdn_enum)
+
+          probe('ALTARE_WITHOUT_TOKEN', False)
+          probe('ALTARE_WITH_SAVED_TOKEN', True)
+          PY
