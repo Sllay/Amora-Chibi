@@ -1,6 +1,8 @@
 name: Altare - import encrypted env bundle to stopped Docker App
 
 on:
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       service:
@@ -35,10 +37,14 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       github.actor == 'Sllay' &&
-      (inputs.mode == 'check' ||
-       (inputs.mode == 'apply' &&
-        ((inputs.service == 'core' && inputs.confirmation == 'APPLY_CORE_STOPPED') ||
-         (inputs.service == 'discord' && inputs.confirmation == 'APPLY_DISCORD_STOPPED'))))
+      ((github.event_name == 'issue_comment' &&
+        github.event.issue.number == 349 &&
+        github.event.comment.body == '/amora altare import check') ||
+       (github.event_name == 'workflow_dispatch' &&
+        (inputs.mode == 'check' ||
+         (inputs.mode == 'apply' &&
+          ((inputs.service == 'core' && inputs.confirmation == 'APPLY_CORE_STOPPED') ||
+           (inputs.service == 'discord' && inputs.confirmation == 'APPLY_DISCORD_STOPPED'))))))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -47,13 +53,13 @@ jobs:
         with:
           python-version: '3.12'
       - name: Validate private Core bundle; do not print secret values
-        if: inputs.service == 'core'
+        if: github.event_name == 'issue_comment' || inputs.service == 'core'
         shell: bash
         env:
           AMORA_PRIVATE_ENV_BUNDLE: ${{ secrets.AMORA_CORE_ENV_BUNDLE }}
           ALTARE_TOKEN_CONFIG: ${{ secrets.ALTARE_TOKEN_CONFIG }}
-          CORE_ORIGIN: ${{ inputs.core_origin }}
-          MODE: ${{ inputs.mode }}
+          CORE_ORIGIN: ${{ github.event_name == 'issue_comment' && 'https://core-amora.go.altare.global' || inputs.core_origin }}
+          MODE: ${{ github.event_name == 'issue_comment' && 'check' || inputs.mode }}
         run: |
           set -euo pipefail
           set +x
@@ -64,13 +70,13 @@ jobs:
           fi
           python -m tools.ops.altare_bulk_env_apply --service core --core-origin "$CORE_ORIGIN" --mode "$MODE"
       - name: Validate private Discord bundle; do not start Gateway
-        if: inputs.service == 'discord'
+        if: github.event_name == 'issue_comment' || inputs.service == 'discord'
         shell: bash
         env:
           AMORA_PRIVATE_ENV_BUNDLE: ${{ secrets.AMORA_DISCORD_ENV_BUNDLE }}
           ALTARE_TOKEN_CONFIG: ${{ secrets.ALTARE_TOKEN_CONFIG }}
-          CORE_ORIGIN: ${{ inputs.core_origin }}
-          MODE: ${{ inputs.mode }}
+          CORE_ORIGIN: ${{ github.event_name == 'issue_comment' && 'https://core-amora.go.altare.global' || inputs.core_origin }}
+          MODE: ${{ github.event_name == 'issue_comment' && 'check' || inputs.mode }}
         run: |
           set -euo pipefail
           set +x
