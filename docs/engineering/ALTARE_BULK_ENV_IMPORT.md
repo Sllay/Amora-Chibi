@@ -28,3 +28,72 @@ Limits: Altare <= 200 env vars and <= 32KB per app; GitHub Actions secrets <= 48
 Docs: https://docs.altare.gg/apps/docker
 Docs: https://docs.altare.gg/cli/reference
 Docs: https://docs.github.com/en/actions/reference/security/secrets
+
+## Importacao direta dos arquivos do celular (Android/Termux)
+
+Para quem ja tem dois arquivos privados no armazenamento do celular, nao e necessario
+transformar esses arquivos em segredos do GitHub. O importador de arquivos locais
+faz a separacao e valida as regras de seguranca existentes.
+
+Arquivos padrao (depois de `termux-setup-storage`):
+
+- `~/storage/downloads/core/.env`
+- `~/storage/downloads/discord/.env`
+
+O programa tambem tenta `/storage/emulated/0/Download/{core,discord}/.env`.
+**Nao copie nenhum arquivo .env para dentro do Git. Nao publique em issues,
+Actions/artifacts ou chats.** Depois da importacao, remova os arquivos da pasta
+publica Downloads e mantenha somente um backup privado protegido.
+
+No Termux, na raiz do checkout atualizado do repositorio:
+
+```bash
+termux-setup-storage
+python -m tools.ops.altare_phone_env_import
+```
+
+O comando padrao e **offline**, somente valida os dois arquivos, compara
+`AMORA_MESSAGING_SERVICE_TOKEN` entre eles, verifica os campos obrigatorios,
+remove chaves que nao pertencem ao destino e imprime APENAS contagens e codigos.
+Pode-se usar `--core-file`, `--discord-file` e
+`--core-origin https://core-amora.go.altare.global` com caminhos personalizados.
+
+Para importar, voce precisa do **altr CLI oficial funcionando em ambiente
+Linux suportado** e de um token Altare valido no ambiente local com
+`servers:view` e `servers:settings`. A CLI oficial possui distribuicao
+Linux ARM64, mas nao ha garantia de compatibilidade direta com Android/Termux;
+se nao executar no Android, use uma distribuicao Linux privada via proot ou
+outro terminal privado suportado. Verifique `altr --version`.
+Nao coloque o token na linha de comando ou no historico:
+
+```bash
+read -rs -p 'Altare token: ' ALTARE_TOKEN_CONFIG; echo
+export ALTARE_TOKEN_CONFIG
+```
+
+**Pare ambos os aplicativos no Altare e confira isso no painel antes da
+importacao; especialmente Discord-Amora nunca deve ter outro Gateway ativo
+junto com o Discord do Northflank.** Entao:
+
+```bash
+python -m tools.ops.altare_phone_env_import --mode apply --confirm BOTH_APPS_STOPPED
+unset ALTARE_TOKEN_CONFIG
+```
+
+O importador NAO instala CLI, NAO inicia os aplicativos nem faz deploy
+do codigo; envia cada variavel validada por
+`altr docker env set <app> KEY=value`, o comando que a documentacao
+oficial oferece para Docker Apps existentes. Cada aplicacao de variavel
+pode reiniciar um app em execucao: por isso deve estar PARADO. Um erro no
+meio pode deixar um conjunto parcial; execute novamente enquanto parado.
+
+O importador assume o Core em `https://core-amora.go.altare.global`
+(sobrescreva `--core-origin` se o painel mostrar outro endereco).
+Ele fixa `AMORA_POSTGRES_CA_FILE` em
+`/var/lib/amora/secrets/aiven-ca.pem`: **o certificado de CA real ainda
+precisa ser instalado no volume persistente**. A importacao nao cria esse
+arquivo e nao comprova que o Core esta pronto para iniciar.
+
+Este procedimento exige que os arquivos estejam acessiveis ao terminal
+executando o script. O ChatGPT e o GitHub Actions nao conseguem ler
+automaticamente a pasta Downloads privada do seu celular.
