@@ -1,0 +1,33 @@
+name: Altare - inspect Core HTTPS domain and app ports (read only)
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Sllay' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'issue_comment' &&
+        github.event.issue.number == 349 &&
+        github.event.comment.body == '/amora altare domain inspect'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Read official Altare API only, output domain and status enums
+        env:
+          ALTARE_TOKEN_CONFIG: ${{ secrets.ALTARE_TOKEN_CONFIG }}
+        run: |
+          set -euo pipefail
+          set +x
+          python tools/ops/altare_public_domain_probe.py
