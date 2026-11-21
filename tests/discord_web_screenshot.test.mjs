@@ -491,3 +491,24 @@ test('Discord multipart 400 preserves trusted screenshot image URL for visual fa
   assert.match(calls[1].body.content, /Captura disponível pelo link verificado/);
   assert.match(calls[1].body.content, /cdn\.microlink\.io/);
 });
+
+
+test('repeated owner screenshot reuses bounded successful capture without quota burn', async () => {
+  const calls = [];
+  const service = new WebScreenshotService({
+    dailyLimit: 1,
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return calls.length === 1 ? apiResponse() : imageResponse();
+    },
+  });
+  const first = await service.capture('https://godotengine.org/');
+  const second = await service.capture('https://godotengine.org/');
+  assert.ok(first);
+  assert.equal(second, first);
+  assert.equal(calls.length, 2);
+  assert.equal(service.used, 1);
+  assert.equal(service.recent.size, 1);
+  assert.equal(await service.capture('https://www.blender.org/'), null);
+  assert.equal(service.lastFailureCode, 'daily_limit');
+});
