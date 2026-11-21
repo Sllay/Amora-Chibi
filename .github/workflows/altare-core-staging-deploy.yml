@@ -61,7 +61,30 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           # The app must already exist. The Altare team token cannot create it.
           # No secrets or environment files are printed or copied to CI.
-          altr docker info "$APP_NAME" --json > "$RUNNER_TEMP/altare-app-info.json"
+          altr docker info "$APP_NAME" --json > /dev/null
           altr docker set "$APP_NAME" --no-auto-update
           altr docker set "$APP_NAME" --image "$IMAGE"
-          echo 'Altare Core image update requested. Verify readiness /ready and memory before cutover.'
+          echo 'Altare Core image update requested, waiting for /ready.'
+      - name: Verify Core readiness over HTTPS, without printing response bodies
+        shell: bash
+        env:
+          CORE_ORIGIN: ${{ vars.ALTARE_CORE_ORIGIN }}
+        run: |
+          set -euo pipefail
+          # Initial staging only permits Altare-managed HTTPS subdomains.
+          # Custom domains need an independently reviewed trust policy.
+          [[ "$CORE_ORIGIN" =~ ^https://[a-z0-9-]+\.go\.altare\.global$ ]] ||
+            { echo 'ALTARE_CORE_ORIGIN missing or not an Altare HTTPS host'; exit 2; }
+          ok=0
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --max-time 7 \
+                "$CORE_ORIGIN/ready" --output /dev/null 2>/dev/null; then
+              ok=1
+              break
+            fi
+            sleep 5
+          done
+          [[ "$ok" == 1 ]] ||
+            { echo 'ALTARE_CORE_READINESS_NOT_CONFIRMED'; exit 2; }
+          echo 'ALTARE_CORE_READINESS_CONFIRMED'
+
