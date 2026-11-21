@@ -118,6 +118,10 @@ def test_cache_never_crosses_owner_or_outlives_canonical_revision():
     assert not can_serve_projection(forged_revision,
                                     requester_owner_id="PERSON_BK",
                                     required_sequence=9, now=now())
+    malformed_timestamp = replace(p, origin_updated_at=datetime(2026, 11, 20))
+    assert not can_serve_projection(malformed_timestamp,
+                                    requester_owner_id="PERSON_BK",
+                                    required_sequence=9, now=now())
 
 
 def test_archive_and_expiry_projections_cannot_be_served():
