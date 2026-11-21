@@ -1,20 +1,29 @@
-name: Altare - read-only staging preflight and safe log codes
+name: Altare - read-only diagnostics via GitHub control issue
 
 on:
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       include_log_codes:
-        description: Summarize known operational codes, never publish raw logs
+        description: Summarize known errors without exposing raw logs
         type: boolean
         required: false
         default: true
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   inspect:
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'issue_comment' &&
+        github.event.issue.number == 349 &&
+        github.event.comment.user.login == 'Sllay' &&
+        github.event.comment.body == '/amora altare diagnose'))
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -22,9 +31,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Read Altare app status and allowlisted event counts only
+      - name: Read Altare app status and exact event codes only
+        id: collect
         env:
           ALTARE_TOKEN: ${{ secrets.ALTARE_TOKEN_READONLY }}
-          ALTARE_LOG_COUNTS_ENABLED: ${{ inputs.include_log_codes }}
+          ALTARE_LOG_COUNTS_ENABLED: ${{ github.event_name == 'issue_comment' || inputs.include_log_codes }}
+        shell: bash
         run: |
-          python tools/ops/altare_readonly_diagnostics.py
+          set +e
+          python tools/ops/altare_readonly_diagnostics.py \
+            > "$RUNNER_TEMP/altare-safe-report.jsonl" 2>/dev/null
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+      - name: Post ONLY allowlisted codes to issue #349
+        if: github.event_name == 'issue_comment'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ALTARE_DIAG_REPORT_PATH: ${{ runner.temp }}/altare-safe-report.jsonl
+        run: python -m tools.ops.altare_safe_report
+      - name: Mark incomplete provider inspection
+        if: steps.collect.outputs.exit_code != '0'
+        run: |
+          echo 'ALTARE_PREFLIGHT_INCOMPLETE: see safe issue comment if triggered'
+          exit 2
