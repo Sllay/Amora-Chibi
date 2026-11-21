@@ -17,7 +17,7 @@ CORE = "Core-Amora"
 DISCORD = "Discord-Amora"
 EXPECTED = {"Core-Amora": "fi-hel03.altare.global:25193",
             "Discord-Amora": "fi-hel03.altare.global:25847"}
-HOSTNAME = re.compile(r"[a-z0-9-]+\\.go\\.altare\\.global\\Z")
+HOSTNAME = re.compile(r"[a-z0-9-]+\.go\.altare\.global\Z")
 
 
 class SafeProbeError(RuntimeError):
