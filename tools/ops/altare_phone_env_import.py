@@ -10,6 +10,7 @@ import argparse
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -71,6 +72,34 @@ def prepare_local_files(
     return result
 
 
+def check_cli_session_access(kind: str) -> None:
+    """Verify the target app is visible to a local authenticated altr session.
+
+    All stdout and stderr are muted: the command may include account data.
+    The actual Altare session is stored by the official CLI after login.
+    """
+    if kind not in EXPECTED_NAMES:
+        raise EnvHandoffError("ALTARE_SERVICE_UNKNOWN")
+    safe_env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+    }
+    for name in ("XDG_CONFIG_HOME", "ALTARE_TEAM"):
+        if os.environ.get(name):
+            safe_env[name] = os.environ[name]
+    try:
+        run = subprocess.run(
+            ["altr", "docker", "info", EXPECTED_NAMES[kind], "--json"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=safe_env, timeout=25, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise EnvHandoffError("ALTARE_CLI_READ_ACCESS_FAILED:" + kind.upper()) from None
+    if run.returncode:
+        raise EnvHandoffError("ALTARE_CLI_READ_ACCESS_FAILED:" + kind.upper())
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Import Download/core/.env and Download/discord/.env without exposing keys"
@@ -105,12 +134,15 @@ def main(argv: list[str] | None = None) -> int:
         if shutil.which("altr") is None:
             raise EnvHandoffError("ALTARE_CLI_NOT_INSTALLED")
         token = os.environ.get("ALTARE_TOKEN_CONFIG", "")
-        if not token:
-            raise EnvHandoffError("ALTARE_CONFIG_TOKEN_MISSING")
 
-        # Resolve and authorize all selected targets before any mutation.
+        # A configured team token takes precedence; otherwise use the
+        # existing official 'altr login' session on this phone.
+        # Verify both targets before any variable write.
         for kind in selected:
-            check_altare_access(kind, token)
+            if token:
+                check_altare_access(kind, token)
+            else:
+                check_cli_session_access(kind)
         for kind in selected:
             count = apply(kind, variables[kind], token)
             print(f"ALTARE_LOCAL_ENV_APPLIED service={kind} count={count}")
