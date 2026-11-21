@@ -18,8 +18,8 @@ ORIGIN = "https://core-amora.go.altare.global"
 def make_files(tmp_path, *, shared="same-value", discord_shared=None):
     core = tmp_path / "core" / ".env"
     discord = tmp_path / "discord" / ".env"
-    core.parent.mkdir()
-    discord.parent.mkdir()
+    core.parent.mkdir(parents=True)
+    discord.parent.mkdir(parents=True)
     core.write_text("\n".join((
         "AMORA_POSTGRES_DSN=postgresql://example.net/dev",
         "AMORA_SECRET_LOCAL_API_TOKEN=admin-secret-value",
