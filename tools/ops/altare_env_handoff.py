@@ -25,6 +25,15 @@ NOT_PORTABLE = {
     "AMORA_PUBLIC_ORIGINS", "AMORA_POSTGRES_CA_FILE",
     "AMORA_DURABLE_FILESYSTEM", "AMORA_WORKER_HEALTH_PORT",
     "AMORA_BROWSER_URL", "AMORA_WEB_BROWSER_URL",
+    # A Northflank-only operator endpoint is a live call into the old host,
+    # even if the generic Core/Discord variables were moved correctly.
+    "AMORA_PCS4_DEV_ENABLED", "AMORA_PCS4_NF_PROJECT",
+    "AMORA_PCS4_NF_JOB", "AMORA_PCS4_NF_TOKEN",
+    "AMORA_PCS4_NF_TEAM",
+    # Credentials for Altare administration belong in CI secrets, not
+    # application environments. Never migrate a legacy host control token.
+    "AMORA_HOME", "AMORA_TRUSTED_PROXY_IPS",
+    "AMORA_WEB_BROWSER_PRIVATE_HTTP",
 }
 NOT_PORTABLE_PREFIXES = ("NF_", "NORTHFLANK_", "ALTARE_", "GITHUB_")
 REQUIRED = {
