@@ -88,6 +88,9 @@ export class WebScreenshotService {
     this.day = '';
     this.used = 0;
     this.lastFailureCode = null;
+    // At most two public screenshots (typically <5MB total), five-minute TTL.
+    // Repeated Discord retry for the same site does not consume Microlink quota.
+    this.recent = new Map();
   }
 
   _failed(code) {
@@ -100,6 +103,11 @@ export class WebScreenshotService {
     const target = publicScreenshotTarget(value);
     if (!this.enabled) return this._failed('disabled');
     if (!target) return this._failed('invalid_public_url');
+    const cached = this.recent.get(target);
+    if (cached && Date.now() - cached.when < 300_000) {
+      return cached.image;
+    }
+    if (cached) this.recent.delete(target);
     const today = new Date().toISOString().slice(0, 10);
     if (today !== this.day) { this.day = today; this.used = 0; }
     if (this.used >= this.dailyLimit) return this._failed('daily_limit');
@@ -140,15 +148,17 @@ export class WebScreenshotService {
       if (!['image/jpeg', 'image/png', 'image/webp'].includes(type)) return this._failed('image_mime_invalid');
       const data = await boundedResponse(image, MAX_IMAGE_BYTES);
       if (!data || !looksLikeImage(data, type)) return this._failed('image_bytes_invalid');
-      return {
+      const screenshot = {
         bytes: data,
         // Already verified against the small Microlink-owned CDN allowlist.
-        // Used only as a visible fallback if Discord rejects the file upload.
         imageUrl: screenshotUrl,
         mime: type,
         filename: type === 'image/png' ? 'amora-web-print.png'
           : type === 'image/webp' ? 'amora-web-print.webp' : 'amora-web-print.jpg',
       };
+      this.recent.set(target, { when: Date.now(), image: screenshot });
+      while (this.recent.size > 2) this.recent.delete(this.recent.keys().next().value);
+      return screenshot;
     } catch {
       return this._failed(controller.signal.aborted ? 'provider_timeout' : 'provider_network_error');
     } finally {
