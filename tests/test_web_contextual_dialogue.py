@@ -22,7 +22,9 @@ def test_literal_command_words_are_not_promoted_to_search_topics():
     for phrase in [
         "coisa", "uma coisa ai", "aquilo que a gente tava falando",
         "sobre o que conversamos antes", "isso", "aquele assunto",
-        "a parada que eu tava falando anteriormente", "",
+        "a parada que eu tava falando anteriormente",
+        "o que eu falei nas mensagens anteriores",
+        "o que a gente falou na conversa passada", "",
     ]:
         assert _is_contextual_search_subject(phrase), phrase
     assert not _is_contextual_search_subject("Godot Android exportacao mobile")
