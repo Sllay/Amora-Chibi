@@ -207,3 +207,22 @@ def test_bookmark_can_gain_verified_excerpt_after_initial_unread_save(notebook):
     bookmarks = notebook.bookmarks(session)
     assert len(bookmarks) == 1
     assert bookmarks[0]["excerpt"] == "Official Godot Engine tutorials and examples."
+
+
+
+@pytest.mark.asyncio
+async def test_same_process_rehydrates_durable_topic_after_ephemeral_ttl(notebook):
+    seen = []
+    nav = WebNavigator(
+        fetch_page=open_page, workspace=notebook,
+        search=lambda q: seen.append(q) or [{
+            "url": "https://godotengine.org/article/news",
+            "title": "Godot Engine news", "snippet": "Godot Engine",
+        }],
+    )
+    await nav.research("abre https://godotengine.org/", "owner-dm")
+    old = nav.last_delivery["owner-dm"]
+    nav.last_delivery["owner-dm"] = (old[0] - 1000, old[1])
+    result = await nav.research("continue pesquisando", "owner-dm")
+    assert result["status"] == "opened"
+    assert seen == ["Godot Engine"]
