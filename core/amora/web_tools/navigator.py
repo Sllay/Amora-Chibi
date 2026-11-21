@@ -950,9 +950,17 @@ class WebNavigator:
                 if intent.action == "pin_results":
                     if not refs:
                         raise WebFetchError("WEB_REFERENCE_NOT_FOUND")
+                    visited = {
+                        item["url"]: item
+                        for row in self.workspace.recent(session_id, 24)
+                        for item in row.get("entries", [])
+                        if isinstance(item, dict) and item.get("url")
+                        and item.get("state") == "read"
+                    }
                     count = 0
                     for entry in refs[:5]:
-                        if self.workspace.pin(session_id, entry):
+                        detailed = visited.get(entry.get("url"), entry)
+                        if self.workspace.pin(session_id, detailed):
                             count += 1
                     if not count and not self.workspace.bookmarks(session_id):
                         raise WebFetchError("WEB_BOOKMARK_PERSIST_FAILED")
@@ -997,6 +1005,19 @@ class WebNavigator:
                     target = refs[idx] if 0 <= idx < len(refs) else None
                 if not target:
                     raise WebFetchError("WEB_REFERENCE_NOT_FOUND")
+                # A numbered result may have been fully read earlier.
+                # Save its verified excerpt as well as the exact URL, so a
+                # later question can be answered without re-fetching the page.
+                for row in self.workspace.recent(session_id, 24):
+                    candidate = next(
+                        (item for item in row.get("entries", [])
+                         if isinstance(item, dict)
+                         and item.get("url") == target.get("url")
+                         and item.get("state") == "read"), None,
+                    )
+                    if candidate is not None:
+                        target = candidate
+                        break
                 pinned = self.workspace.pin(session_id, target)
                 existing = any(entry.get("url") == target.get("url")
                                for entry in self.workspace.bookmarks(session_id))
