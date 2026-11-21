@@ -149,3 +149,19 @@ def test_altare_api_failure_distinguishes_auth_from_scope(monkeypatch, status, c
     monkeypatch.setattr(module, "build_opener", lambda *_: FakeOpener())
     with pytest.raises(EnvHandoffError, match=code):
         module._read_altare_json("/api-tokens/self", "alt_test-token")
+
+
+def test_altare_api_html_forbidden_is_not_mislabeled_as_scope_denial(monkeypatch):
+    from urllib.error import HTTPError
+    from tools.ops import altare_bulk_env_apply as module
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            raise HTTPError(
+                request.full_url, 403, "Forbidden",
+                {"Content-Type": "text/html; charset=utf-8"}, None,
+            )
+
+    monkeypatch.setattr(module, "build_opener", lambda *_: FakeOpener())
+    with pytest.raises(EnvHandoffError, match="ALTARE_API_NON_JSON_403"):
+        module._read_altare_json("/api-tokens/self", "alt_test-token")
