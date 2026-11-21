@@ -8,6 +8,10 @@ on:
       - 'deploy/altare/**'
       - '.github/workflows/altare-*.yml'
       - 'docs/engineering/ALTARE_FULL_CUTOVER_RUNBOOK.md'
+      - 'docs/engineering/ALTARE_PORTABILITY_RUNBOOK.md'
+      - 'core/amora/host_preflight.py'
+      - 'core/amora/storage/pcs4_dev.py'
+      - '.github/workflows/northflank-encrypted-archive.yml'
   workflow_dispatch:
 
 permissions:
@@ -26,4 +30,4 @@ jobs:
         run: python -m pip install --disable-pip-version-check -c deploy/python.lock -e '.[dev]'
       - name: Test private env handoff and allowlisted Altare diagnostics
         run: |
-          python -m pytest tests/test_altare_env_handoff.py tests/test_altare_readonly_diagnostics.py tests/test_altare_safe_report.py -v
+          python -m pytest tests/test_altare_env_handoff.py tests/test_altare_readonly_diagnostics.py tests/test_altare_safe_report.py tests/test_altare_host_portability.py -v
