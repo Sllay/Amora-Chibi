@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from amora.host_preflight import inspect_core, inspect_discord
+from amora.host_preflight import inspect_core, inspect_discord, preflight, main
 from amora.storage.pcs4_dev import NorthflankRecovery
 
 
@@ -34,6 +34,22 @@ def worker_variables():
         "AMORA_MESSAGING_SERVICE_TOKEN": "t" * 40,
         "AMORA_PLATFORM_ACCOUNT_SCOPE": "primary",
     }
+
+
+def test_candidate_altare_preflight_isolated_from_default_profile(tmp_path, capsys, monkeypatch):
+    env = core_variables()
+    ca = tmp_path / "aiven-ca.pem"
+    ca.write_text("synthetic CA path probe; no TLS attempted")
+    env["AMORA_POSTGRES_CA_FILE"] = str(ca)
+    env["AMORA_HOME"] = str(tmp_path)
+    # Production profile remains Northflank during safe staging.
+    assert "HOST_PROFILE_MUST_BE_ALTARE" in preflight(env)["reason_codes"]
+    assert preflight(env, candidate_altare=True)["reason_codes"] == []
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert main(["--candidate-altare"]) == 0
+    assert "HOST_PROFILE_MUST_BE_ALTARE" not in capsys.readouterr().out
+    assert main([]) == 2
 
 
 def test_altare_core_requires_real_ca_mount_and_writable_data_folder():
