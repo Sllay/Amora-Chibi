@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
+
+# The full Core pytest matrix adds /core, not necessarily repository root.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.ops.altare_safe_report import ISSUE_URL, publish, safe_report
 
