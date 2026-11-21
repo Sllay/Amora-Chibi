@@ -637,7 +637,11 @@ class PlatformMessagingService:
                             if capture_retry and core_nav is not None else None)
             plan_meta = plan.metadata if plan is not None else {}
             sources = (plan_meta.get("web_sources") or core_delivery["sources"])[:2]
-            references = plan_meta.get("web_references") or core_delivery["references"]
+            references = (
+                core_delivery["references"]
+                if intent is not None and intent.action in {"saved_links", "web_history"}
+                else (plan_meta.get("web_references") or core_delivery["references"])
+            )
             text, _ = compose_web_delivery(
                 text, intent=intent, sources=sources, references=references,
                 session_references=core_delivery["references"],
