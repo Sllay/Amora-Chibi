@@ -1,0 +1,90 @@
+name: Altare - guarded Core staging release (no Discord gateway)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DEPLOY_ALTARE_CORE_STAGING after host secrets, volume and CA checks
+        required: true
+        type: string
+      core_app_name:
+        description: Existing Altare Docker App name (created by owner)
+        required: true
+        default: amora-core
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: amora-altare-core-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      inputs.confirmation == 'DEPLOY_ALTARE_CORE_STAGING' &&
+      vars.ALTARE_CORE_STAGING_READY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: altare-staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm immutable deployment identity
+        shell: bash
+        env:
+          APP_NAME: ${{ inputs.core_app_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$APP_NAME" =~ ^[a-z][a-z0-9-]{2,62}$ ]] || { echo 'invalid app name'; exit 2; }
+          [[ "$SHA" =~ ^[a-f0-9]{40}$ ]] || { echo 'invalid commit'; exit 2; }
+          echo "Release version: $SHA"
+      - name: Install official Altare CLI for ephemeral CI operation
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            https://altare.gg/install.sh -o "$RUNNER_TEMP/install-altr.sh"
+          sh "$RUNNER_TEMP/install-altr.sh"
+          command -v altr || test -x "$HOME/.local/bin/altr"
+      - name: Deploy reviewed Core container only
+        shell: bash
+        env:
+          ALTARE_TOKEN: ${{ secrets.ALTARE_TOKEN_DEPLOY }}
+          APP_NAME: ${{ inputs.core_app_name }}
+          IMAGE: ghcr.io/sllay/amora-chibi-core:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ -n "$ALTARE_TOKEN" ]] || { echo 'Missing ALTARE_TOKEN_DEPLOY'; exit 2; }
+          export PATH="$HOME/.local/bin:$PATH"
+          # The app must already exist. The Altare team token cannot create it.
+          # No secrets or environment files are printed or copied to CI.
+          altr docker info "$APP_NAME" --json > /dev/null
+          altr docker set "$APP_NAME" --no-auto-update
+          altr docker set "$APP_NAME" --image "$IMAGE"
+          echo 'Altare Core image update requested, waiting for /ready.'
+      - name: Verify Core readiness over HTTPS, without printing response bodies
+        shell: bash
+        env:
+          CORE_ORIGIN: ${{ vars.ALTARE_CORE_ORIGIN }}
+        run: |
+          set -euo pipefail
+          # Initial staging only permits Altare-managed HTTPS subdomains.
+          # Custom domains need an independently reviewed trust policy.
+          [[ "$CORE_ORIGIN" =~ ^https://[a-z0-9-]+\.go\.altare\.global$ ]] ||
+            { echo 'ALTARE_CORE_ORIGIN missing or not an Altare HTTPS host'; exit 2; }
+          ok=0
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --max-time 7 \
+                "$CORE_ORIGIN/ready" --output /dev/null 2>/dev/null; then
+              ok=1
+              break
+            fi
+            sleep 5
+          done
+          [[ "$ok" == 1 ]] ||
+            { echo 'ALTARE_CORE_READINESS_NOT_CONFIRMED'; exit 2; }
+          echo 'ALTARE_CORE_READINESS_CONFIRMED'
+

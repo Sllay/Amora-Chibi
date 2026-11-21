@@ -242,6 +242,14 @@ class NorthflankRecovery:
 
     @classmethod
     def from_environment(cls):
+        # This legacy recovery controller is *Northflank-only*. Never let a
+        # stale exported token or enabled flag trigger a recovery job against
+        # the old provider once the Core is hosted on Altare. Its endpoints
+        # will remain disabled until a separately certified Altare adapter
+        # exists (jobs and log contracts differ).
+        from amora.deployment_profiles import get_profile
+        if os.getenv("ALTARE") == "1" or get_profile().host != "northflank":
+            return None
         if os.getenv("AMORA_PCS4_DEV_ENABLED") != "1":
             return None
         return cls(os.environ.get("AMORA_PCS4_NF_PROJECT", ""),

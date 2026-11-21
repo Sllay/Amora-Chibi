@@ -26,6 +26,14 @@ secrets/
 .env
 .env.*
 !.env.example
+# Exported per-service env/JSON from cloud hosts must NEVER enter Git
+*.env
+*.env.*
+!*.env.example
+*northflank*export*.json
+*altare*secret*.json
+deploy/altare/.private/
+
 
 # Signing / private keys (NUNCA versionar)
 *.keystore
