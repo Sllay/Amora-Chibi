@@ -59,6 +59,45 @@ _CAPTURE_CURRENT_RE = re.compile(
     r".{0,48}?\b(?:print|screenshot|captura(?:\s+de\s+tela)?)\b",
     re.IGNORECASE | re.DOTALL,
 )
+_WEB_SAVED_RE = re.compile(
+    r"\b(?:mostra|mostre|lista|liste|quais|ver|veja)\b"
+    r".{0,50}?\b(?:links?\s+(?:salvos?|guardados?|favoritos?)|favoritos?)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_WEB_HISTORY_RE = re.compile(
+    r"\b(?:mostra|mostre|lista|liste|quais|ver|veja)\b"
+    r".{0,50}?\b(?:hist[oó]rico\s+(?:de\s+)?(?:pesquisa|navega[cç][aã]o)|"
+    r"sites?\s+(?:que\s+)?(?:abriu|acessou|visitou))\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_WEB_PIN_RE = re.compile(
+    r"\b(?:salva|salve|guarda|guarde|favorita|favorite|marca|marque)\b"
+    r".{0,35}?\b(?:link|resultado|refer[eê]ncia)\s*(?:n[ºo°.]?\s*)?(\d{1,2})\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_WEB_PIN_CURRENT_RE = re.compile(
+    r"^\s*(?:amora[,\s]+)?(?:salva|salve|guarda|guarde|favorita|favorite)"
+    r"\s+(?:(?:esse|este|essa|esta|o|a)\s+)?(?:link|site|p[aá]gina)\s*[.!?]*$",
+    re.IGNORECASE,
+)
+_WEB_PIN_ALL_RE = re.compile(
+    r"^\s*(?:amora[,\s]+)?(?:salva|salve|guarda|guarde)"
+    r"\s+(?:(?:todos|esses|estes|os)\s+)?links?"
+    r"(?:\s+(?:da\s+pesquisa|encontrados?))?\s*[.!?]*$",
+    re.IGNORECASE,
+)
+_WEB_DESCRIBE_LINK_RE = re.compile(
+    r"\b(?:o\s+que\s+(?:tem|mostra|cont[eé]m)|"
+    r"(?:sobre\s+)?o\s+que\s+(?:era|[eé])|descrev[ae]|"
+    r"explique|explica|resume|resuma|do\s+que\s+(?:trata|fala))\b"
+    r".{0,60}?\b(?:link|resultado)\s*(?:n[ºo°.]?\s*)?(\d{1,2})\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_WEB_CONTINUE_RE = re.compile(
+    r"\b(?:continua|continue|continuar|prossegue|prossiga)\b"
+    r".{0,24}?\b(?:pesquisa|pesquisando|busca|buscando|investiga[cç][aã]o)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _SEARCH_RE = re.compile(
     r"\b(?:pesquis[ae]|pesquise|buscar?|busque|procur[ae]|procure|"
     r"investig[ae]|investigue|busca\s+na\s+(?:web|internet)|"
@@ -346,6 +385,7 @@ def _clean_search_query(raw: str, match: re.Match[str]) -> str:
     subject = re.split(
         r"(?i)\s+e\s+(?:(?:me|mim)\s+)?"
         r"(?:diz|diga|fala|fale|mostra|mostre|manda|mande|mandar|"
+        r"salva|salve|guarda|guarde|"
         r"envia|envie|enviar|explica|explique|descreve|descreva|faz|fa[cç]a)\b",
         subject, maxsplit=1,
     )[0]
@@ -473,6 +513,17 @@ def _rank_search_results(results: list[dict[str, str]], query: str) -> list[dict
 def parse_web_intent(text: str) -> WebIntent | None:
     raw = str(text or "")[:12000]
     urls = _LINK_RE.findall(raw)
+    if urls and re.search(
+        r"(?i)\b(?:salva|salve|guarda|guarde|favorita|favorite)\b",
+        raw[:raw.find(urls[0])],
+    ):
+        return WebIntent("pin_url", urls[0].rstrip(".,;:!?\u00bb"))
+    if len(urls) > 1:
+        # Batch only small explicit link lists. Each URL still runs through the
+        # same public-network fence, never arbitrary user-supplied commands.
+        return WebIntent("open_many", json.dumps([
+            url.rstrip(".,;:!?\u00bb") for url in urls[:3]
+        ]))
     if urls:
         first = urls[0].rstrip(".,;:!?\u00bb")
         # Markdown/chat often add an unmatched closing parenthesis after a
@@ -480,6 +531,22 @@ def parse_web_intent(text: str) -> WebIntent | None:
         while first.endswith(")") and first.count(")") > first.count("("):
             first = first[:-1]
         return WebIntent("open", first)
+    describe = _WEB_DESCRIBE_LINK_RE.search(raw)
+    if describe:
+        return WebIntent("describe_link", describe.group(1))
+    if _WEB_PIN_ALL_RE.search(raw):
+        return WebIntent("pin_results", "")
+    pin = _WEB_PIN_RE.search(raw)
+    if pin:
+        return WebIntent("pin", pin.group(1))
+    if _WEB_PIN_CURRENT_RE.search(raw):
+        return WebIntent("pin", "current")
+    if _WEB_SAVED_RE.search(raw):
+        return WebIntent("saved_links", "")
+    if _WEB_HISTORY_RE.search(raw):
+        return WebIntent("web_history", "")
+    if _WEB_CONTINUE_RE.search(raw):
+        return WebIntent("search", "")
     follow = _FOLLOW_RE.search(raw) or _SCREENSHOT_FOLLOW_RE.search(raw)
     if follow:
         return WebIntent("follow", follow.group(1))
@@ -631,12 +698,14 @@ class WebNavigator:
     """
 
     def __init__(self, *, fetch_page=fetch_public_page, search=None, browser=None,
-                 reader=None, planner=None):
+                 reader=None, planner=None, workspace=None):
         self.fetch_page = fetch_page
         self.search_provider = search
         # Planner is injected only after Core verifies owner-DM authorization.
         # No extra network service is enabled by a standalone navigator.
         self.planner = planner
+        self.workspace = workspace
+        self._hydrated_sessions: set[str] = set()
         # Test-injected fetch/search providers cannot accidentally send URLs
         # to external vendors. The production Core uses the defaults.
         if browser is None and fetch_page is fetch_public_page and search is None:
@@ -734,6 +803,12 @@ class WebNavigator:
             topic = str(result.get("topic") or "").strip()
             if not topic and sources and isinstance(sources[0], dict):
                 topic = _page_topic(sources[0])
+            if not topic and result.get("action") in {
+                "saved_links", "web_history", "pin_results",
+            }:
+                prior = self.last_delivery.get(session_id)
+                if prior and asyncio.get_running_loop().time() - prior[0] < 900:
+                    topic = str(prior[1].get("focus") or "")
             projection = {
                 "action": result.get("action", ""),
                 "focus": _clean(topic, 90),
@@ -744,10 +819,17 @@ class WebNavigator:
                 ],
                 "references": [
                     {"url": str(item.get("url") or ""), "title": str(item.get("title") or "")}
-                    for item in (result.get("references") or [])[:5] if isinstance(item, dict)
+                    for item in (result.get("references") or [])[:12] if isinstance(item, dict)
                 ],
             }
             self.last_delivery[session_id] = (asyncio.get_running_loop().time(), projection)
+            if self.workspace is not None:
+                try:
+                    self.workspace.record_visit(
+                        session_id, {**result, "topic": topic},
+                    )
+                except Exception:
+                    _LOG.warning("WEB_WORKSPACE_PERSIST_FAILED")
             self.last_delivery.move_to_end(session_id)
             while len(self.last_delivery) > 32:
                 self.last_delivery.popitem(last=False)
@@ -783,13 +865,205 @@ class WebNavigator:
         self.last_capture_requests.pop(session_id, None)
         return None
 
+    def _hydrate_workspace(self, session_id: str) -> None:
+        """Restore references after process restart without re-fetching URLs."""
+        if self.workspace is None:
+            return
+        # Memory projections expire after 15 minutes. The *durable* notebook
+        # must be eligible for re-hydration even if this process never restarted.
+        current = self.last_delivery.get(session_id)
+        if current and asyncio.get_running_loop().time() - current[0] < 900:
+            return
+        self._hydrated_sessions.add(session_id)
+        try:
+            rows = self.workspace.recent(session_id, limit=1)
+        except Exception:
+            _LOG.warning("WEB_WORKSPACE_RESTORE_FAILED")
+            return
+        if not rows:
+            return
+        record = rows[0]
+        entries = record.get("entries") or []
+        sources = [e for e in entries if isinstance(e, dict)
+                   and e.get("state") == "read" and e.get("url")]
+        refs = [e for e in (record.get("references") or [])
+                if isinstance(e, dict) and e.get("url")]
+        projection = {
+            "action": str(record.get("action") or ""),
+            "focus": str(record.get("topic") or "")[:90]
+                or (_page_topic(sources[0]) if sources else ""),
+            "sources": [{"url": e["url"], "title": str(e.get("title") or "")}
+                        for e in sources[:2]],
+            "references": [{"url": e["url"], "title": str(e.get("title") or "")}
+                           for e in refs[:12]],
+        }
+        self.last_delivery[session_id] = (asyncio.get_running_loop().time(), projection)
+        self._save_refs(session_id, projection["references"])
+
+    def _workspace_notebook(self, session_id: str) -> dict[str, Any]:
+        if self.workspace is None:
+            return {}
+        try:
+            return self.workspace.notebook(session_id)
+        except Exception:
+            _LOG.warning("WEB_WORKSPACE_READ_FAILED")
+            return {}
+
     async def research(self, text: str, session_id: str | None) -> dict[str, Any] | None:
         intent = parse_web_intent(text)
         if intent is None:
             return None
+        if session_id:
+            self._hydrate_workspace(session_id)
+        result = await self._research_intent(text, session_id, intent)
+        if result is not None and session_id:
+            notebook = self._workspace_notebook(session_id)
+            if notebook:
+                result["research_notebook"] = notebook
+        return result
+
+    async def _research_intent(self, text: str, session_id: str | None,
+                               intent: WebIntent) -> dict[str, Any] | None:
         if not session_id:
             return {"action": intent.action, "status": "unavailable", "reason": "WEB_SESSION_REQUIRED",
                     "sources": [], "references": []}
+        if intent.action in {"saved_links", "web_history", "pin",
+                             "pin_url", "pin_results", "describe_link"}:
+            if self.workspace is None:
+                return {"action": intent.action, "status": "failed",
+                        "reason": "WEB_WORKSPACE_UNAVAILABLE",
+                        "sources": [], "references": []}
+            try:
+                if intent.action == "pin_url":
+                    # A newly supplied URL may be stored as a user bookmark,
+                    # never presented as a page the Core has already read.
+                    from .remote_reader import _shareable_public_url
+                    url = _shareable_public_url(intent.argument)
+                    title = urlsplit(url).hostname or ""
+                    target = {"url": url, "title": title, "state": "found"}
+                    for row in self.workspace.recent(session_id, 24):
+                        matched = next(
+                            (item for item in row.get("entries", [])
+                             if isinstance(item, dict) and item.get("url") == url
+                             and item.get("state") == "read"), None,
+                        )
+                        if matched is not None:
+                            target = matched
+                            break
+                    self.workspace.pin(session_id, target)
+                    return {"action": "pin_url", "status": "saved",
+                            "sources": [], "references": [target]}
+                if intent.action == "saved_links":
+                    pins = self.workspace.bookmarks(session_id, 20)
+                    refs = [{"url": p["url"], "title": p.get("title", ""),
+                             "state": "saved"} for p in pins if p.get("url")]
+                    self._save_refs(session_id, refs[:12])
+                    return self._record_delivery(session_id, {
+                        "action": "saved_links",
+                        "status": "results_only" if refs else "empty",
+                        "sources": [], "references": refs[:12],
+                    })
+                if intent.action == "web_history":
+                    visits = self.workspace.recent(session_id, 24)
+                    found, seen = [], set()
+                    for record in visits:
+                        for item in record.get("entries", []):
+                            if item.get("url") and item["url"] not in seen:
+                                seen.add(item["url"])
+                                found.append(item)
+                    self._save_refs(session_id, found[:12])
+                    return self._record_delivery(session_id, {
+                        "action": "web_history",
+                        "status": "results_only" if found else "empty",
+                        "sources": [], "references": found[:12],
+                    })
+                refs = self._refs(session_id)
+                if intent.action == "pin_results":
+                    if not refs:
+                        raise WebFetchError("WEB_REFERENCE_NOT_FOUND")
+                    visited = {
+                        item["url"]: item
+                        for row in self.workspace.recent(session_id, 24)
+                        for item in row.get("entries", [])
+                        if isinstance(item, dict) and item.get("url")
+                        and item.get("state") == "read"
+                    }
+                    count = 0
+                    for entry in refs[:5]:
+                        detailed = visited.get(entry.get("url"), entry)
+                        if self.workspace.pin(session_id, detailed):
+                            count += 1
+                    if not count and not self.workspace.bookmarks(session_id):
+                        raise WebFetchError("WEB_BOOKMARK_PERSIST_FAILED")
+                    return self._record_delivery(session_id, {
+                        "action": "pin_results", "status": "results_only",
+                        "saved_count": count, "sources": [],
+                        "references": refs[:5],
+                    })
+                if intent.action == "describe_link":
+                    index = int(intent.argument) - 1
+                    if not 0 <= index < len(refs):
+                        raise WebFetchError("WEB_REFERENCE_NOT_FOUND")
+                    wanted = refs[index]
+                    note = None
+                    for record in self.workspace.recent(session_id, 24):
+                        for entry in record.get("entries", []):
+                            if entry.get("url") == wanted.get("url"):
+                                note = entry
+                                break
+                        if note:
+                            break
+                    return {
+                        "action": "describe_link",
+                        "status": "results_only",
+                        "sources": [],
+                        "references": [wanted],
+                        "stored_evidence": {
+                            "url": wanted["url"],
+                            "title": str((note or wanted).get("title") or ""),
+                            "state": (note or {}).get("state", "found"),
+                            "excerpt": str((note or {}).get("excerpt") or "")[:950],
+                            "snippet": str((note or {}).get("snippet") or "")[:160],
+                            "disclaimer": "Historical evidence, not freshly opened.",
+                        },
+                    }
+                previous = self.current_delivery(session_id)
+                if intent.argument == "current":
+                    options = previous["sources"] or previous["references"]
+                    target = options[0] if options else None
+                else:
+                    idx = int(intent.argument) - 1
+                    target = refs[idx] if 0 <= idx < len(refs) else None
+                if not target:
+                    raise WebFetchError("WEB_REFERENCE_NOT_FOUND")
+                # A numbered result may have been fully read earlier.
+                # Save its verified excerpt as well as the exact URL, so a
+                # later question can be answered without re-fetching the page.
+                for row in self.workspace.recent(session_id, 24):
+                    candidate = next(
+                        (item for item in row.get("entries", [])
+                         if isinstance(item, dict)
+                         and item.get("url") == target.get("url")
+                         and item.get("state") == "read"), None,
+                    )
+                    if candidate is not None:
+                        target = candidate
+                        break
+                pinned = self.workspace.pin(session_id, target)
+                existing = any(entry.get("url") == target.get("url")
+                               for entry in self.workspace.bookmarks(session_id))
+                if not pinned and not existing:
+                    raise WebFetchError("WEB_BOOKMARK_PERSIST_FAILED")
+                return {"action": "pin", "status": "saved",
+                        "sources": [], "references": [target]}
+            except WebFetchError as exc:
+                return {"action": intent.action, "status": "failed",
+                        "reason": exc.code, "sources": [], "references": []}
+            except Exception:
+                _LOG.warning("WEB_WORKSPACE_ACTION_FAILED")
+                return {"action": intent.action, "status": "failed",
+                        "reason": "WEB_WORKSPACE_ACTION_FAILED",
+                        "sources": [], "references": []}
         if intent.action == "capture_retry":
             # Do not guess which image the user means. Only a recent verified
             # screenshot URL from this exact private Discord session qualifies.
@@ -816,7 +1090,8 @@ class WebNavigator:
         search_topic = intent.argument
         contextual_search = (
             intent.action == "search" and not search_topic
-            and _CONTEXT_SEARCH_RE.search(text) is not None
+            and (_CONTEXT_SEARCH_RE.search(text) is not None
+                 or _WEB_CONTINUE_RE.search(text) is not None)
         )
         if contextual_search:
             search_topic = self.current_delivery(session_id).get("focus", "")
@@ -838,6 +1113,37 @@ class WebNavigator:
                     raise WebFetchError("WEB_REFERENCE_NOT_FOUND")
                 return await self._open(refs[index]["url"], session_id, "follow",
                                         force_browser="navegador" in text.casefold())
+            if intent.action == "open_many":
+                try:
+                    urls = json.loads(intent.argument)
+                except (TypeError, ValueError):
+                    raise WebFetchError("WEB_URL_INVALID") from None
+                if not isinstance(urls, list) or not 1 <= len(urls) <= 3:
+                    raise WebFetchError("WEB_URL_INVALID")
+                for url in urls:
+                    _public_url(url)
+                pages = await asyncio.gather(
+                    *(self._read_page(url) for url in urls),
+                    return_exceptions=True,
+                )
+                opened = []
+                for page in pages:
+                    if (isinstance(page, dict)
+                            and page.get("status") == "opened"
+                            and not self._needs_browser(page)):
+                        opened.append({
+                            key: page.get(key, "") for key in
+                            ("url", "title", "text", "fetched_at", "status")
+                        })
+                refs = [{"url": url, "title": urlsplit(url).hostname or ""}
+                        for url in urls]
+                self._save_refs(session_id, refs)
+                return self._record_delivery(session_id, {
+                    "action": "open_many",
+                    "status": "opened" if opened else "results_only",
+                    "sources": opened,
+                    "references": refs,
+                })
             if intent.action == "open":
                 return await self._open(intent.argument, session_id, "open",
                                         force_browser="navegador" in text.casefold()

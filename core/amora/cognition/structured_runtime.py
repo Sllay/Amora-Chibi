@@ -221,7 +221,9 @@ class CognitiveEngine(ProductionCognitiveEngine):
             from amora.web_tools import WebNavigator
             navigator = getattr(self, "_owner_web_navigator", None)
             if navigator is None:
-                navigator = WebNavigator()
+                navigator = WebNavigator(
+                    workspace=getattr(self, "_owner_web_workspace_store", None),
+                )
                 self._owner_web_navigator = navigator
             # Only explicit search commands in a *verified owner DM* can
             # invoke the Qwen planner. Direct URLs and numbered follow-links

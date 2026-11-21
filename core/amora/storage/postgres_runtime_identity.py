@@ -34,6 +34,17 @@ def identity_statements(*, schema: str = "amora_pg_v18_lab") -> dict[str, Review
         "SELECT * FROM amora_pg_v18_lab.events WHERE id=%s AND event_type=%s", 2, 1)
     add("SELECT COUNT(*) FROM events",
         "SELECT COUNT(*) FROM amora_pg_v18_lab.events", 0, 1)
+    # Research evidence lookup is an audited, bounded owner-DM read.
+    # It uses v18 events without new DDL and cannot read another scope.
+    add(
+        "SELECT * FROM events WHERE event_type=? AND session_id=? "
+        "AND privacy_scope='PERSONAL' AND actor='PERSON_BK' "
+        "ORDER BY timestamp DESC LIMIT ?",
+        "SELECT * FROM amora_pg_v18_lab.events WHERE event_type=%s "
+        "AND session_id=%s AND privacy_scope='PERSONAL' AND actor='PERSON_BK' "
+        "ORDER BY timestamp DESC LIMIT %s",
+        3, 36,
+    )
 
     add("INSERT INTO entities(id, canonical_name, entity_type, payload_json) VALUES (?, ?, ?, '{}') ON CONFLICT(id) DO UPDATE SET canonical_name=excluded.canonical_name, entity_type=excluded.entity_type",
         """INSERT INTO amora_pg_v18_lab.entities(

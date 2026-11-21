@@ -68,6 +68,18 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
         # user utterance, plan, speaker/addressee, canonical identity or V3.
         if projected.specialist_support is not None:
             projected.specialist_support = None
+        elif projected.web_research and projected.web_research.get("research_notebook"):
+            notebook = projected.web_research["research_notebook"]
+            recent = notebook.get("recent_pages") or []
+            saved = notebook.get("saved_links") or []
+            if len(recent) > 3:
+                recent.pop()
+            elif len(saved) > 3:
+                saved.pop()
+            else:
+                # Optional past web evidence yields before this turn's sources,
+                # identity, memory or current user text under a tight Groq TPM.
+                projected.web_research.pop("research_notebook", None)
         elif projected.web_research and len(projected.web_research.get("sources") or []) > 1:
             projected.web_research["sources"].pop()
         elif projected.web_research and (projected.web_research.get("sources") or []):
