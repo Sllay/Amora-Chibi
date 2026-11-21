@@ -499,6 +499,12 @@ def _rank_search_results(results: list[dict[str, str]], query: str) -> list[dict
 def parse_web_intent(text: str) -> WebIntent | None:
     raw = str(text or "")[:12000]
     urls = _LINK_RE.findall(raw)
+    if len(urls) > 1:
+        # Batch only small explicit link lists. Each URL still runs through the
+        # same public-network fence, never arbitrary user-supplied commands.
+        return WebIntent("open_many", json.dumps([
+            url.rstrip(".,;:!?\u00bb") for url in urls[:3]
+        ]))
     if urls:
         first = urls[0].rstrip(".,;:!?\u00bb")
         # Markdown/chat often add an unmatched closing parenthesis after a
@@ -883,6 +889,55 @@ class WebNavigator:
         if not session_id:
             return {"action": intent.action, "status": "unavailable", "reason": "WEB_SESSION_REQUIRED",
                     "sources": [], "references": []}
+        if intent.action in {"saved_links", "web_history", "pin"}:
+            if self.workspace is None:
+                return {"action": intent.action, "status": "failed",
+                        "reason": "WEB_WORKSPACE_UNAVAILABLE",
+                        "sources": [], "references": []}
+            try:
+                if intent.action == "saved_links":
+                    pins = self.workspace.bookmarks(session_id, 20)
+                    refs = [{"url": p["url"], "title": p.get("title", ""),
+                             "state": "saved"} for p in pins if p.get("url")]
+                    return {"action": "saved_links",
+                            "status": "results_only" if refs else "empty",
+                            "sources": [], "references": refs[:20]}
+                if intent.action == "web_history":
+                    visits = self.workspace.recent(session_id, 24)
+                    found, seen = [], set()
+                    for record in visits:
+                        for item in record.get("entries", []):
+                            if item.get("url") and item["url"] not in seen:
+                                seen.add(item["url"])
+                                found.append(item)
+                    return {"action": "web_history",
+                            "status": "results_only" if found else "empty",
+                            "sources": [], "references": found[:20]}
+                refs = self._refs(session_id)
+                previous = self.current_delivery(session_id)
+                if intent.argument == "current":
+                    options = previous["sources"] or previous["references"]
+                    target = options[0] if options else None
+                else:
+                    idx = int(intent.argument) - 1
+                    target = refs[idx] if 0 <= idx < len(refs) else None
+                if not target:
+                    raise WebFetchError("WEB_REFERENCE_NOT_FOUND")
+                pinned = self.workspace.pin(session_id, target)
+                existing = any(entry.get("url") == target.get("url")
+                               for entry in self.workspace.bookmarks(session_id))
+                if not pinned and not existing:
+                    raise WebFetchError("WEB_BOOKMARK_PERSIST_FAILED")
+                return {"action": "pin", "status": "saved",
+                        "sources": [], "references": [target]}
+            except WebFetchError as exc:
+                return {"action": intent.action, "status": "failed",
+                        "reason": exc.code, "sources": [], "references": []}
+            except Exception:
+                _LOG.warning("WEB_WORKSPACE_ACTION_FAILED")
+                return {"action": intent.action, "status": "failed",
+                        "reason": "WEB_WORKSPACE_ACTION_FAILED",
+                        "sources": [], "references": []}
         if intent.action == "capture_retry":
             # Do not guess which image the user means. Only a recent verified
             # screenshot URL from this exact private Discord session qualifies.
@@ -909,7 +964,8 @@ class WebNavigator:
         search_topic = intent.argument
         contextual_search = (
             intent.action == "search" and not search_topic
-            and _CONTEXT_SEARCH_RE.search(text) is not None
+            and (_CONTEXT_SEARCH_RE.search(text) is not None
+                 or _WEB_CONTINUE_RE.search(text) is not None)
         )
         if contextual_search:
             search_topic = self.current_delivery(session_id).get("focus", "")
@@ -931,6 +987,37 @@ class WebNavigator:
                     raise WebFetchError("WEB_REFERENCE_NOT_FOUND")
                 return await self._open(refs[index]["url"], session_id, "follow",
                                         force_browser="navegador" in text.casefold())
+            if intent.action == "open_many":
+                try:
+                    urls = json.loads(intent.argument)
+                except (TypeError, ValueError):
+                    raise WebFetchError("WEB_URL_INVALID") from None
+                if not isinstance(urls, list) or not 1 <= len(urls) <= 3:
+                    raise WebFetchError("WEB_URL_INVALID")
+                for url in urls:
+                    _public_url(url)
+                pages = await asyncio.gather(
+                    *(self._read_page(url) for url in urls),
+                    return_exceptions=True,
+                )
+                opened = []
+                for page in pages:
+                    if (isinstance(page, dict)
+                            and page.get("status") == "opened"
+                            and not self._needs_browser(page)):
+                        opened.append({
+                            key: page.get(key, "") for key in
+                            ("url", "title", "text", "fetched_at", "status")
+                        })
+                refs = [{"url": url, "title": urlsplit(url).hostname or ""}
+                        for url in urls]
+                self._save_refs(session_id, refs)
+                return self._record_delivery(session_id, {
+                    "action": "open_many",
+                    "status": "opened" if opened else "results_only",
+                    "sources": opened,
+                    "references": refs,
+                })
             if intent.action == "open":
                 return await self._open(intent.argument, session_id, "open",
                                         force_browser="navegador" in text.casefold()
