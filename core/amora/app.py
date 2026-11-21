@@ -246,6 +246,11 @@ class AmoraCore:
             operations=operations,
         )
 
+        # Web research is durable evidence, not a world belief or social memory.
+        # Reuse the already-active database and verified owner-DM boundaries.
+        from amora.web_tools.workspace_store import WebWorkspaceStore
+        cognition._owner_web_workspace_store = WebWorkspaceStore(database)
+
         # Operational preference: Groq/Qwen for lower latency and shorter turns.
         # NVIDIA/Mistral remains opt-in via AMORA_SOCIAL_PRIMARY=mistral.
         # The Core/Amora V3 identity is independent of the selected provider.
