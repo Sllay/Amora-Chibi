@@ -862,11 +862,22 @@ export class DiscordWorker {
       ? await this.webScreenshots.capture(item.metadata.web_capture_source)
       : null;
     if (screenshotRequested && !screenshot) {
-      safeLog('WEB_SCREENSHOT_UNAVAILABLE', authorizedScreenshot
-        ? 'reason=' + (this.webScreenshots.lastFailureCode || 'provider_unknown')
-        : 'reason=no_authorized_public_page');
+      const knownFailures = new Set([
+        'disabled', 'invalid_public_url', 'daily_limit',
+        'provider_rate_limited', 'provider_auth_required',
+        'provider_http_error', 'provider_response_invalid', 'provider_refused',
+        'provider_image_url_invalid', 'image_cdn_http_error',
+        'image_mime_invalid', 'image_bytes_invalid', 'provider_timeout',
+        'provider_network_error', 'provider_unknown',
+      ]);
+      const rawCode = authorizedScreenshot ? this.webScreenshots.lastFailureCode : null;
+      const reason = authorizedScreenshot
+        ? (knownFailures.has(rawCode) ? rawCode : 'provider_unknown')
+        : 'no_authorized_public_page';
+      safeLog('WEB_SCREENSHOT_UNAVAILABLE', 'reason=' + reason);
       const note = authorizedScreenshot
-        ? '\n\n(Não consegui capturar o print desta página. Os links continuam disponíveis.)'
+        ? '\n\n(Não consegui capturar o print. Código: ' + reason
+          + '. Nenhum anexo foi enviado.)'
         : '\n\n(Não existe uma página pública autorizada para este print. Nenhum anexo foi enviado.)';
       if (chunks[0].length + note.length <= 2000) chunks[0] += note;
       else chunks.push(note.trim());
@@ -897,7 +908,16 @@ export class DiscordWorker {
             && [400, 413, 415, 422].includes(Number(error?.status)))) throw error;
         imageUploadRejected = true;
         safeLog('WEB_SCREENSHOT_UPLOAD_REJECTED', 'status=' + error.status);
-        const note = '\n\n(O Discord recusou o anexo do print. A captura não foi entregue.)';
+        // The raster was fetched successfully, but Discord rejected the
+        // multipart. Surface a *verified* Microlink CDN URL when present so
+        // the owner can still open the actual screenshot. A link is not an
+        // attachment; do not claim otherwise.
+        const trustedFallback = typeof screenshot.imageUrl === 'string'
+          && /^https:\/\/(?:(?:cdn|[a-z]{3}|[a-z]{3}\d)\.microlink\.io|microlink-cdn\.s3\.amazonaws\.com)\//.test(screenshot.imageUrl)
+          ? screenshot.imageUrl : '';
+        const note = '\n\n(O Discord recusou o anexo do print. '
+          + (trustedFallback ? 'Captura disponível pelo link verificado: ' + trustedFallback
+            : 'A captura não foi entregue.') + ')';
         const fallbackPayload = {
           ...payload,
           content: (payload.content + note).slice(0, 2000),
@@ -916,7 +936,10 @@ export class DiscordWorker {
         safeLog('WEB_SCREENSHOT_ATTACHMENT_NOT_CONFIRMED');
         const correction = discordReplyPayload(
           'Não consegui confirmar o anexo do print na resposta do Discord. ' +
-          'Considere que a captura não foi entregue; os links continuam válidos.',
+          (typeof screenshot.imageUrl === 'string' &&
+           /^https:\/\/(?:(?:cdn|[a-z]{3}|[a-z]{3}\d)\.microlink\.io|microlink-cdn\.s3\.amazonaws\.com)\//.test(screenshot.imageUrl)
+            ? 'É possível abrir a captura neste link: ' + screenshot.imageUrl
+            : 'Considere que a captura não foi entregue; os links continuam válidos.'),
           { nonce: discordNonce(item.id, chunks.length), firstChunk: true },
         );
         try {
