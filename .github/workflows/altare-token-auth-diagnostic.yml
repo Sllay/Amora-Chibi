@@ -69,6 +69,9 @@ jobs:
                   print('ALTARE_REQUIRED_VIEW=' + str('servers:view' in scopes))
                   print('ALTARE_REQUIRED_SETTINGS=' + str('servers:settings' in scopes))
           except urllib.error.HTTPError as error:
+              # Classify proxy vs JSON API failure without exposing any body or headers.
+              mime = error.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
+              print('ALTARE_TOKEN_RESPONSE_TYPE=' + ('JSON' if mime == 'application/json' else 'HTML' if mime == 'text/html' else 'OTHER'))
               # Only emit a documented enum from a bounded JSON response.
               try:
                   payload = json.loads(error.read(4096))
