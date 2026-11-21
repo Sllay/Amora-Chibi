@@ -130,3 +130,28 @@ def test_secret_handoff_strips_old_volume_and_host_control_values():
         "AMORA_POSTGRES_CA_FILE",
     ):
         assert banned not in values
+
+
+
+def test_discord_environment_is_strict_allowlist_not_core_provider_secrets():
+    from tools.ops.altare_env_handoff import prepare
+    env = {
+        "DISCORD_BOT_TOKEN": "discord-value",
+        "DISCORD_APPLICATION_ID": "123",
+        "AMORA_MESSAGING_SERVICE_TOKEN": "z" * 40,
+        "NUMES_API_KEY": "NUMES_MUST_NOT_LEAK",
+        "GROQ_API_KEY": "GROQ_MUST_NOT_LEAK",
+        "OPENROUTER_API_KEY": "OPENROUTER_MUST_NOT_LEAK",
+        "AMORA_SECRET_LOCAL_API_TOKEN": "ADMIN_MUST_NOT_LEAK",
+        "AMORA_POSTGRES_DSN": "DATABASE_MUST_NOT_LEAK",
+        "AMORA_WEB_SCREENSHOT_MICROLINK_API_KEY": "microlink-worker-only",
+        "AMORA_WEB_SCREENSHOT_DAILY_LIMIT": "4",
+    }
+    filtered, missing = prepare(env, kind="discord")
+    assert not missing
+    assert set(filtered) == {
+        "DISCORD_BOT_TOKEN", "DISCORD_APPLICATION_ID",
+        "AMORA_MESSAGING_SERVICE_TOKEN",
+        "AMORA_WEB_SCREENSHOT_MICROLINK_API_KEY",
+        "AMORA_WEB_SCREENSHOT_DAILY_LIMIT",
+    }
