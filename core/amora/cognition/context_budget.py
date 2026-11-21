@@ -83,9 +83,16 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
         elif projected.web_research and len(projected.web_research.get("sources") or []) > 1:
             projected.web_research["sources"].pop()
         elif projected.web_research and (projected.web_research.get("sources") or []):
-            projected.web_research["sources"][0]["text"] = (
-                projected.web_research["sources"][0].get("text") or "")[:600]
-            if len(projected.web_research["sources"][0]["text"]) <= 600:
+            # Keep the final current-turn source when shortening it is enough
+            # to fit. The previous branch cleared it on the same iteration:
+            # after [:600], len(text) <= 600 is always true.
+            source = projected.web_research["sources"][0]
+            text = source.get("text") or ""
+            if len(text) > 600:
+                source["text"] = text[:600]
+            else:
+                # Even a concise source exceeds the provider budget; discard
+                # only after giving the shorter evidence a chance to fit.
                 projected.web_research["sources"].clear()
         elif projected.capabilities:
             projected.capabilities.pop()
