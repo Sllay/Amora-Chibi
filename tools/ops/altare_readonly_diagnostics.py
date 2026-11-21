@@ -89,14 +89,17 @@ def inspect(token: str, names: tuple[str, ...] = ("amora-core", "amora-discord")
     apps = fetch(f"/tenants/{team_id}/servers", token)
     listed = {item.get("name"): item for item in apps.get("items", [])
               if isinstance(item, dict)}
+    def bounded_number(value: Any) -> int | None:
+        return value if type(value) is int and 0 <= value <= 100_000 else None
+
     statuses: dict[str, Any] = {}
     for name in names:
         app = listed.get(name)
         statuses[name] = {
             "exists": bool(app),
-            "memory_mb": app.get("memoryMb") if app else None,
-            "cpu_pct": app.get("cpuPercent") if app else None,
-            "disk_mb": app.get("diskMb") if app else None,
+            "memory_mb": bounded_number(app.get("memoryMb")) if app else None,
+            "cpu_pct": bounded_number(app.get("cpuPercent")) if app else None,
+            "disk_mb": bounded_number(app.get("diskMb")) if app else None,
         }
     # No token name, ID, prefix or team ID printed to public CI logs.
     return {
