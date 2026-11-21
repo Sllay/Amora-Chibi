@@ -54,6 +54,7 @@ test('keyless Microlink delivers a bounded real raster and no site cookies or pr
   const image = await service.capture('https://godotengine.org/article/android');
   assert.equal(image.mime, 'image/jpeg');
   assert.equal(image.filename, 'amora-web-print.jpg');
+  assert.equal(image.imageUrl, IMAGE_URL);
   assert.deepEqual(image.bytes, IMAGE_BYTES);
   const api = new URL(called[0].url);
   assert.equal(api.hostname, 'api.microlink.io');
@@ -425,4 +426,68 @@ test('capture-status text without Core metadata is explicitly marked not sent', 
   assert.equal(sent.length, 1);
   assert.match(sent[0].body.content, /sem autorização de anexo/i);
   assert.match(sent[0].body.content, /Nada foi enviado/i);
+});
+
+
+test('known capture failure reason reaches Discord without leaking request URLs', async () => {
+  const calls = [];
+  const worker = new DiscordWorker({
+    token: 'test', core: {},
+    rest: { request: async (_path, opts) => {
+      calls.push(opts); return { id: 'sent', channel_id: 'chan' };
+    } },
+    runtime: { rememberBotMessage() {} },
+  });
+  worker.webScreenshots = {
+    lastFailureCode: 'provider_rate_limited',
+    async capture() { return null; },
+  };
+  await worker.sendOutbound({
+    id: '12345678-abcd-abcd-abcd-1234567890ab',
+    platform: 'discord', conversation_id: 'chan',
+    text: 'Solicitei o print.',
+    metadata: {
+      web_capture_requested: true, web_capture_owner_verified: true,
+      web_capture_source: 'https://godotengine.org/',
+    },
+  });
+  assert.match(calls[0].body.content, /provider_rate_limited/);
+  assert.match(calls[0].body.content, /Nenhum anexo foi enviado/i);
+});
+
+test('Discord multipart 400 preserves trusted screenshot image URL for visual fallback', async () => {
+  const calls = [];
+  const worker = new DiscordWorker({
+    token: 'test', core: {},
+    rest: { request: async (_path, options) => {
+      calls.push(options);
+      if (options.multipart) {
+        const err = new Error('rejected');
+        err.status = 400;
+        err.retryable = false;
+        throw err;
+      }
+      return { id: 'sent', channel_id: 'chan', attachments: [] };
+    } },
+    runtime: { rememberBotMessage() {} },
+  });
+  worker.webScreenshots = {
+    async capture() {
+      return {
+        filename: 'amora-web-print.jpg', mime: 'image/jpeg',
+        bytes: IMAGE_BYTES, imageUrl: IMAGE_URL,
+      };
+    },
+  };
+  await worker.sendOutbound({
+    id: '12345678-abcd-abcd-abcd-1234567890ab',
+    platform: 'discord', conversation_id: 'chan',
+    text: 'Print Godot', metadata: {
+      web_capture_requested: true, web_capture_owner_verified: true,
+      web_capture_source: 'https://godotengine.org/',
+    },
+  });
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].body.content, /Captura disponível pelo link verificado/);
+  assert.match(calls[1].body.content, /cdn\.microlink\.io/);
 });
