@@ -38,6 +38,7 @@ def test_scopes_exclude_host_specific_and_core_secrets_from_discord():
         "AMORA_SECRET_LOCAL_API_TOKEN": "a" * 40,
         "AMORA_POSTGRES_DSN": "postgresql://owner:secret@aiven",
         "AMORA_POSTGRES_CA_FILE": "/northflank/secrets/ca.pem",
+        "AMORA_POSTGRES_CA_PEM": "-----BEGIN CERTIFICATE-----\nSYNTHETIC\n-----END CERTIFICATE-----",
         "AMORA_CORE_URL": "https://northflank.old",
         "PORT": "8731",
         "NF_BACKUP_API_TOKEN": "northflank-data",
