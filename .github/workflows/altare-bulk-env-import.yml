@@ -1,0 +1,82 @@
+name: Altare - import encrypted env bundle to stopped Docker App
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Which STOPPED Docker App receives the private vars?
+        required: true
+        type: choice
+        options: [core, discord]
+      core_origin:
+        description: Exact actual Core HTTPS address, e.g. https://core-amora.go.altare.global
+        required: true
+        type: string
+      mode:
+        description: Check first; apply only after checking and stopping target app
+        required: true
+        type: choice
+        options: [check, apply]
+        default: check
+      confirmation:
+        description: For apply, type APPLY_CORE_STOPPED or APPLY_DISCORD_STOPPED
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: altare-private-env-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Sllay' &&
+      (inputs.mode == 'check' ||
+       (inputs.mode == 'apply' &&
+        ((inputs.service == 'core' && inputs.confirmation == 'APPLY_CORE_STOPPED') ||
+         (inputs.service == 'discord' && inputs.confirmation == 'APPLY_DISCORD_STOPPED'))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate private Core bundle; do not print secret values
+        if: inputs.service == 'core'
+        shell: bash
+        env:
+          AMORA_PRIVATE_ENV_BUNDLE: ${{ secrets.AMORA_CORE_ENV_BUNDLE }}
+          ALTARE_TOKEN_CONFIG: ${{ secrets.ALTARE_TOKEN_CONFIG }}
+          CORE_ORIGIN: ${{ inputs.core_origin }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          set +x
+          if [[ "$MODE" == "apply" ]]; then
+            curl -fsSL https://altare.gg/install.sh -o "$RUNNER_TEMP/install-altr.sh"
+            sh "$RUNNER_TEMP/install-altr.sh" >/dev/null 2>&1
+            export PATH="$HOME/.local/bin:$PATH"
+          fi
+          python -m tools.ops.altare_bulk_env_apply --service core --core-origin "$CORE_ORIGIN" --mode "$MODE"
+      - name: Validate private Discord bundle; do not start Gateway
+        if: inputs.service == 'discord'
+        shell: bash
+        env:
+          AMORA_PRIVATE_ENV_BUNDLE: ${{ secrets.AMORA_DISCORD_ENV_BUNDLE }}
+          ALTARE_TOKEN_CONFIG: ${{ secrets.ALTARE_TOKEN_CONFIG }}
+          CORE_ORIGIN: ${{ inputs.core_origin }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          set +x
+          if [[ "$MODE" == "apply" ]]; then
+            curl -fsSL https://altare.gg/install.sh -o "$RUNNER_TEMP/install-altr.sh"
+            sh "$RUNNER_TEMP/install-altr.sh" >/dev/null 2>&1
+            export PATH="$HOME/.local/bin:$PATH"
+          fi
+          python -m tools.ops.altare_bulk_env_apply --service discord --core-origin "$CORE_ORIGIN" --mode "$MODE"
