@@ -1,0 +1,57 @@
+{
+  "name": "AmoraBolinha",
+  "width": 1024,
+  "height": 1024,
+  "layers": [
+    {
+      "name": "body_horns",
+      "file": "layers/00_body_horns.png",
+      "group": "Body"
+    },
+    {
+      "name": "eye_white_L",
+      "file": "layers/01_eye_white_L.png",
+      "group": "Eyes"
+    },
+    {
+      "name": "eye_white_R",
+      "file": "layers/02_eye_white_R.png",
+      "group": "Eyes"
+    },
+    {
+      "name": "iris_L",
+      "file": "layers/03_iris_L.png",
+      "group": "Eyes"
+    },
+    {
+      "name": "iris_R",
+      "file": "layers/04_iris_R.png",
+      "group": "Eyes"
+    },
+    {
+      "name": "upper_lid_L",
+      "file": "layers/05_upper_lid_L.png",
+      "group": "Eyes"
+    },
+    {
+      "name": "upper_lid_R",
+      "file": "layers/06_upper_lid_R.png",
+      "group": "Eyes"
+    },
+    {
+      "name": "lower_lid_L",
+      "file": "layers/07_lower_lid_L.png",
+      "group": "Eyes"
+    },
+    {
+      "name": "lower_lid_R",
+      "file": "layers/08_lower_lid_R.png",
+      "group": "Eyes"
+    },
+    {
+      "name": "mouth",
+      "file": "layers/09_mouth.png",
+      "group": "Mouth"
+    }
+  ]
+}
