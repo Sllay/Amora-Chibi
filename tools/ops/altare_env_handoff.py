@@ -23,6 +23,7 @@ NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 NOT_PORTABLE = {
     "HOME", "PORT", "SERVER_PORT", "AMORA_HOST", "AMORA_CORE_URL",
     "AMORA_PUBLIC_ORIGINS", "AMORA_POSTGRES_CA_FILE",
+    "AMORA_POSTGRES_CA_PEM",
     "AMORA_DURABLE_FILESYSTEM", "AMORA_WORKER_HEALTH_PORT",
     "AMORA_BROWSER_URL", "AMORA_WEB_BROWSER_URL",
     # A Northflank-only operator endpoint is a live call into the old host,
