@@ -85,6 +85,9 @@ class WebWorkspaceStore:
             "action": action,
             "topic": _clean(str(result.get("topic") or ""), 90),
             "entries": entries[:15],
+            # Keep the *actual* numbered reference order separately.
+            # Reconstructing it from [opened, found] shifts link 2 after restart.
+            "references": [item for item in refs if item is not None][:12],
             "status": str(result.get("status")),
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         })
