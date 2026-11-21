@@ -139,3 +139,24 @@ def test_normal_private_dialogue_brings_original_remote_allowed_source(tmp_path,
         assert "MEMORY_V2_SOURCE_LINKED_EVIDENCE" not in local_only.reason_codes
     finally:
         core.close()
+
+
+def test_short_acknowledgement_plus_continuation_keeps_recent_context_not_random_memories():
+    history = _history()
+    irrelevant_memories = [
+        _record(1, "Uma receita de pão"),
+        _record(2, "Um problema de astronomia"),
+    ]
+    for utterance in (
+        "Certo, continue.", "Okay, prossiga", "Tá, pode continuar",
+        "Sim, segue!", "Continua!", "Blz, pode seguir",
+    ):
+        assert is_social_only(utterance), utterance
+        assert subject_terms(utterance) == frozenset()
+        assert select_memories(irrelevant_memories, utterance) == []
+        selected, historic = select_recent(history, utterance)
+        assert selected == history[-8:]
+        assert historic == 0
+    # Specific action is NOT a mere acknowledgement; keep the actual topic.
+    assert not is_social_only("Certo, continue a animação do coelho")
+    assert "coelho" in subject_terms("Certo, continue a animação do coelho")
