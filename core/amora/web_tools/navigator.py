@@ -513,6 +513,11 @@ def _rank_search_results(results: list[dict[str, str]], query: str) -> list[dict
 def parse_web_intent(text: str) -> WebIntent | None:
     raw = str(text or "")[:12000]
     urls = _LINK_RE.findall(raw)
+    if urls and re.search(
+        r"(?i)\b(?:salva|salve|guarda|guarde|favorita|favorite)\b",
+        raw[:raw.find(urls[0])],
+    ):
+        return WebIntent("pin_url", urls[0].rstrip(".,;:!?\u00bb"))
     if len(urls) > 1:
         # Batch only small explicit link lists. Each URL still runs through the
         # same public-network fence, never arbitrary user-supplied commands.
@@ -918,12 +923,22 @@ class WebNavigator:
             return {"action": intent.action, "status": "unavailable", "reason": "WEB_SESSION_REQUIRED",
                     "sources": [], "references": []}
         if intent.action in {"saved_links", "web_history", "pin",
-                             "pin_results", "describe_link"}:
+                             "pin_url", "pin_results", "describe_link"}:
             if self.workspace is None:
                 return {"action": intent.action, "status": "failed",
                         "reason": "WEB_WORKSPACE_UNAVAILABLE",
                         "sources": [], "references": []}
             try:
+                if intent.action == "pin_url":
+                    # A newly supplied URL may be stored as a user bookmark,
+                    # never presented as a page the Core has already read.
+                    from .remote_reader import _shareable_public_url
+                    url = _shareable_public_url(intent.argument)
+                    title = urlsplit(url).hostname or ""
+                    target = {"url": url, "title": title, "state": "found"}
+                    self.workspace.pin(session_id, target)
+                    return {"action": "pin_url", "status": "saved",
+                            "sources": [], "references": [target]}
                 if intent.action == "saved_links":
                     pins = self.workspace.bookmarks(session_id, 20)
                     refs = [{"url": p["url"], "title": p.get("title", ""),
