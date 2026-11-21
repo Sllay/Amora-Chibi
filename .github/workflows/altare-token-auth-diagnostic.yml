@@ -1,0 +1,85 @@
+name: Altare - diagnose saved token authentication without exposing token
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Sllay' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'issue_comment' &&
+        github.event.issue.number == 349 &&
+        github.event.comment.body == '/amora altare token diagnose'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check token format and Altare API GET endpoint; print fixed codes only
+        shell: bash
+        env:
+          ALTARE_TOKEN_CONFIG: ${{ secrets.ALTARE_TOKEN_CONFIG }}
+        run: |
+          set -euo pipefail
+          set +x
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.request
+          import urllib.error
+
+          t = os.getenv('ALTARE_TOKEN_CONFIG', '')
+          if not t:
+              print('ALTARE_TOKEN_DIAG=MISSING_GITHUB_SECRET')
+              raise SystemExit(2)
+          if not t.startswith('alt_'):
+              print('ALTARE_TOKEN_DIAG=INVALID_PREFIX_NOT_RAW_TOKEN')
+              raise SystemExit(2)
+          if t != t.strip() or any(c in t for c in ('\r', '\n', '\t', ' ')):
+              print('ALTARE_TOKEN_DIAG=HAS_WHITESPACE_OR_LINE_BREAK')
+              raise SystemExit(2)
+          if '"' in t or "'" in t or len(t) < 25 or len(t) > 512:
+              print('ALTARE_TOKEN_DIAG=MALFORMED_SECRET_VALUE')
+              raise SystemExit(2)
+          request = urllib.request.Request(
+              'https://console.altare.gg/api/api-tokens/self',
+              headers={'Authorization': 'Bearer ' + t, 'Accept': 'application/json'},
+              method='GET',
+          )
+          allowed = {'TOKEN_INVALID', 'TOKEN_EXPIRED', 'TOKEN_REVOKED',
+                     'TOKEN_WRONG_TEAM', 'TOKEN_ROUTE_NOT_ALLOWED'}
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+          opener = urllib.request.build_opener(NoRedirect())
+          try:
+              with opener.open(request, timeout=15) as response:
+                  payload = json.loads(response.read(16384))
+                  if not isinstance(payload, dict) or not isinstance(payload.get('team'), dict):
+                      print('ALTARE_TOKEN_DIAG=UNEXPECTED_SUCCESS_RESPONSE')
+                      raise SystemExit(2)
+                  scopes = payload.get('scopes', [])
+                  print('ALTARE_TOKEN_DIAG=AUTHENTICATED')
+                  print('ALTARE_REQUIRED_VIEW=' + str('servers:view' in scopes))
+                  print('ALTARE_REQUIRED_SETTINGS=' + str('servers:settings' in scopes))
+          except urllib.error.HTTPError as error:
+              # Only emit a documented enum from a bounded JSON response.
+              try:
+                  payload = json.loads(error.read(4096))
+                  code = payload.get('code') if isinstance(payload, dict) else None
+              except (ValueError, UnicodeError):
+                  code = None
+              if code not in allowed:
+                  code = 'UNCLASSIFIED'
+              print('ALTARE_TOKEN_DIAG=HTTP_' + str(error.code) + '_' + code)
+              raise SystemExit(2)
+          except (urllib.error.URLError, ValueError, TimeoutError, OSError):
+              print('ALTARE_TOKEN_DIAG=NETWORK_OR_RESPONSE_ERROR')
+              raise SystemExit(2)
+          PY
