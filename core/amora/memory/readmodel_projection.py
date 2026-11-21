@@ -124,10 +124,14 @@ def can_serve_projection(
         return False
     if current - item.materialized_at > max_staleness:
         return False
-    if item.valid_until is not None and current > item.valid_until:
+    try:
+        if item.valid_until is not None and current > _utc(item.valid_until):
+            return False
+        expected = _projection_digest(
+            item.memory_id, item.owner_entity_id, item.origin_sequence,
+            item.origin_updated_at, item.summary, item.archived,
+        )
+    except (ValueError, TypeError, AttributeError):
+        # Corrupt cache metadata must fall back to the authoritative Aiven.
         return False
-    expected = _projection_digest(
-        item.memory_id, item.owner_entity_id, item.origin_sequence,
-        item.origin_updated_at, item.summary, item.archived,
-    )
     return bool(item.summary and item.checksum == expected)
