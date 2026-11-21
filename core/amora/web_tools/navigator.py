@@ -798,6 +798,12 @@ class WebNavigator:
             topic = str(result.get("topic") or "").strip()
             if not topic and sources and isinstance(sources[0], dict):
                 topic = _page_topic(sources[0])
+            if not topic and result.get("action") in {
+                "saved_links", "web_history", "pin_results",
+            }:
+                prior = self.last_delivery.get(session_id)
+                if prior and asyncio.get_running_loop().time() - prior[0] < 900:
+                    topic = str(prior[1].get("focus") or "")
             projection = {
                 "action": result.get("action", ""),
                 "focus": _clean(topic, 90),
