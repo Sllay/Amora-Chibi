@@ -66,6 +66,7 @@ async def test_bookmark_by_number_is_durable_and_uses_canonical_verified_url(not
     saved = await nav.research("salva o link 2", "owner-dm")
     assert saved["status"] == "saved"
     assert notebook.bookmarks("owner-dm")[0]["url"] == "https://godotengine.org/article/release"
+    assert notebook.bookmarks("owner-dm")[0]["excerpt"].startswith("The Godot Engine")
     assert notebook.bookmarks("another-dm") == []
     restarted = WebNavigator(fetch_page=open_page, workspace=notebook)
     listed = await restarted.research("mostra meus links salvos", "owner-dm")
