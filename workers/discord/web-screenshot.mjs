@@ -142,6 +142,9 @@ export class WebScreenshotService {
       if (!data || !looksLikeImage(data, type)) return this._failed('image_bytes_invalid');
       return {
         bytes: data,
+        // Already verified against the small Microlink-owned CDN allowlist.
+        // Used only as a visible fallback if Discord rejects the file upload.
+        imageUrl: screenshotUrl,
         mime: type,
         filename: type === 'image/png' ? 'amora-web-print.png'
           : type === 'image/webp' ? 'amora-web-print.webp' : 'amora-web-print.jpg',
