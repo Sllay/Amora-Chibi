@@ -38,7 +38,7 @@ class MemoryRoles:
             raise ValueError("MEMORY_READMODEL_PG17_REQUIRED")
         if self.cache == "none" and self.cache_pg_major is not None:
             raise ValueError("MEMORY_CACHE_VERSION_WITHOUT_CACHE")
-        if not 1 <= self.max_cache_age_seconds <= 120:
+        if not 1 <= self.max_cache_age_seconds <= 30:
             raise ValueError("MEMORY_CACHE_STALENESS_UNSAFE")
 
 
