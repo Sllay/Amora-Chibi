@@ -104,3 +104,18 @@ def test_cli_does_not_expose_secret_values_in_output(tmp_path, capsys):
     assert "SECRET_" not in stdout
     assert (out / ".env.altare-core").exists()
     assert (out / ".env.altare-discord").exists()
+
+
+
+def test_altare_app_env_limits_fail_closed_before_private_output():
+    minimum = {
+        "AMORA_POSTGRES_DSN": "postgresql://host",
+        "AMORA_MESSAGING_SERVICE_TOKEN": "a" * 36,
+        "AMORA_SECRET_LOCAL_API_TOKEN": "b" * 36,
+    }
+    many = {f"TEST_KEY_{n}": "abc" for n in range(200)}
+    with pytest.raises(EnvHandoffError, match="VARIABLE_LIMIT"):
+        prepare({**minimum, **many}, kind="core")
+    huge = {"LARGE_" + str(i): "x" * 7000 for i in range(5)}
+    with pytest.raises(EnvHandoffError, match="ENV_SIZE_LIMIT"):
+        prepare({**minimum, **huge}, kind="core")
