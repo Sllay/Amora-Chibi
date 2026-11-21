@@ -145,7 +145,10 @@ def prepare(source: Mapping[str, str], *, kind: str) -> tuple[dict[str, str], tu
     )
     if encoded_size > MAX_ALTARE_ENV_BYTES:
         raise EnvHandoffError("HANDOFF_ALTARE_ENV_SIZE_LIMIT")
-    missing = tuple(sorted(REQUIRED[kind].difference(safe)))
+    # Exported JSON/dotenv may contain present but blank required values.
+    # A blank DSN/token is not a configured service; emit names only.
+    missing = tuple(sorted(key for key in REQUIRED[kind]
+                           if not safe.get(key, "").strip()))
     return safe, missing
 
 
