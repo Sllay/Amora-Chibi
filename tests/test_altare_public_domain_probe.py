@@ -1,4 +1,8 @@
 """No-network tests for public Altare domain output filtering."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.ops.altare_public_domain_probe import https_domains, HOSTNAME
 
 
