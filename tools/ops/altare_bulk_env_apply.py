@@ -125,16 +125,24 @@ def check_altare_access(service: str, token: str) -> None:
         raise EnvHandoffError("ALTARE_TARGET_APP_NOT_VISIBLE")
 
 
-def apply(service: str, variables: dict[str, str], token: str) -> int:
-    """Use only the documented altr docker env set API, with muted output."""
-    if not token:
-        raise EnvHandoffError("ALTARE_CONFIG_TOKEN_MISSING")
+def apply(service: str, variables: dict[str, str], token: str = "") -> int:
+    """Apply with a verified team token or an authenticated local altr login.
+
+    Never print CLI output. When the token is empty, inherit ONLY local CLI
+    login paths, not ambient credentials or secrets from an entire environment.
+    """
+    if service not in APP_NAMES:
+        raise EnvHandoffError("ALTARE_SERVICE_UNKNOWN")
     app = APP_NAMES[service]
     proc_env = {
-        "ALTARE_TOKEN": token,
         "PATH": os.environ.get("PATH", ""),
         "HOME": os.environ.get("HOME", ""),
     }
+    if token:
+        proc_env["ALTARE_TOKEN"] = token
+    for name in ("XDG_CONFIG_HOME", "ALTARE_TEAM"):
+        if os.environ.get(name):
+            proc_env[name] = os.environ[name]
     completed = 0
     for name in sorted(variables):
         value = variables[name]

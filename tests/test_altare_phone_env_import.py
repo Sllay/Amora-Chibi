@@ -120,3 +120,66 @@ def test_symlinked_sensitive_file_is_rejected(tmp_path):
     alias.symlink_to(original)
     with pytest.raises(EnvHandoffError, match="SYMLINK_DENIED"):
         module.prepare_local_files(core_file=alias, discord_file=discord)
+
+
+def test_apply_uses_signed_in_cli_when_no_team_token(tmp_path, monkeypatch, capsys):
+    core, discord = make_files(tmp_path)
+    monkeypatch.delenv("ALTARE_TOKEN_CONFIG", raising=False)
+    monkeypatch.setattr(module.shutil, "which", lambda exe: "/termux/usr/bin/altr")
+    events = []
+
+    def check(kind):
+        events.append(("cli-check", kind))
+
+    def write(kind, env, token):
+        assert token == ""
+        events.append(("apply", kind))
+        return len(env)
+
+    monkeypatch.setattr(module, "check_cli_session_access", check)
+    monkeypatch.setattr(module, "check_altare_access",
+                        lambda *_: pytest.fail("no team token: must use CLI login"))
+    monkeypatch.setattr(module, "apply", write)
+    assert module.main([
+        "--core-file", str(core), "--discord-file", str(discord),
+        "--mode", "apply", "--confirm", module.APPLY_CONFIRMATION,
+    ]) == 0
+    assert events == [
+        ("cli-check", "core"), ("cli-check", "discord"),
+        ("apply", "core"), ("apply", "discord"),
+    ]
+    result = capsys.readouterr().out
+    assert "discord-secret-value" not in result
+    assert "ALTARE_LOCAL_ENV_IMPORT_FINISHED" in result
+
+
+def test_cli_session_access_is_readonly_and_suppresses_output(monkeypatch):
+    import subprocess
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    module.check_cli_session_access("core")
+    assert seen[0][0] == ["altr", "docker", "info", "Core-Amora", "--json"]
+    assert seen[0][1]["stdout"] == subprocess.DEVNULL
+    assert seen[0][1]["stderr"] == subprocess.DEVNULL
+    assert "ALTARE_TOKEN" not in seen[0][1]["env"]
+
+
+def test_cli_session_check_fails_closed_before_write(tmp_path, monkeypatch, capsys):
+    import subprocess
+    core, discord = make_files(tmp_path)
+    monkeypatch.delenv("ALTARE_TOKEN_CONFIG", raising=False)
+    monkeypatch.setattr(module.shutil, "which", lambda exe: "/termux/usr/bin/altr")
+    monkeypatch.setattr(module.subprocess, "run",
+                        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1))
+    monkeypatch.setattr(module, "apply",
+                        lambda *_: pytest.fail("must not write without verified session"))
+    assert module.main([
+        "--core-file", str(core), "--discord-file", str(discord),
+        "--mode", "apply", "--confirm", module.APPLY_CONFIRMATION,
+    ]) == 2
+    assert "ALTARE_CLI_READ_ACCESS_FAILED:CORE" in capsys.readouterr().err

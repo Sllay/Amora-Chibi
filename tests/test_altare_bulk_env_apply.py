@@ -165,3 +165,21 @@ def test_altare_api_html_forbidden_is_not_mislabeled_as_scope_denial(monkeypatch
     monkeypatch.setattr(module, "build_opener", lambda *_: FakeOpener())
     with pytest.raises(EnvHandoffError, match="ALTARE_API_NON_JSON_403"):
         module._read_altare_json("/api-tokens/self", "alt_test-token")
+
+
+
+def test_logged_in_local_cli_session_does_not_require_team_token(monkeypatch):
+    import os
+    seen = []
+    def fake_run(cmd, **kwargs):
+        seen.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    count = apply("core", {"LOG_LEVEL": "debug"})
+    assert count == 1
+    cmd, kwargs = seen[0]
+    assert cmd == ["altr", "docker", "env", "set", "Core-Amora", "LOG_LEVEL=debug"]
+    assert "ALTARE_TOKEN" not in kwargs["env"]
+    assert kwargs["env"]["PATH"] == os.environ.get("PATH", "")
+    assert kwargs["stdout"] == subprocess.DEVNULL
+    assert kwargs["stderr"] == subprocess.DEVNULL
