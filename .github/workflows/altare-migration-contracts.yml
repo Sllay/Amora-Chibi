@@ -26,4 +26,4 @@ jobs:
         run: python -m pip install --disable-pip-version-check -c deploy/python.lock -e '.[dev]'
       - name: Test private env handoff and allowlisted Altare diagnostics
         run: |
-          python -m pytest tests/test_altare_env_handoff.py tests/test_altare_readonly_diagnostics.py -v
+          python -m pytest tests/test_altare_env_handoff.py tests/test_altare_readonly_diagnostics.py tests/test_altare_safe_report.py -v
