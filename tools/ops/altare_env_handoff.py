@@ -36,6 +36,15 @@ NOT_PORTABLE = {
     "AMORA_WEB_BROWSER_PRIVATE_HTTP",
 }
 NOT_PORTABLE_PREFIXES = ("NF_", "NORTHFLANK_", "ALTARE_", "GITHUB_")
+# Do not transfer chat-provider keys, Aiven credentials or admin secrets into
+# the Discord Worker just because they were present in an inherited NF group.
+DISCORD_ALLOWED = frozenset({
+    "DISCORD_BOT_TOKEN", "DISCORD_APPLICATION_ID", "DISCORD_TEST_GUILD_ID",
+    "AMORA_MESSAGING_SERVICE_TOKEN", "AMORA_PLATFORM_ACCOUNT_SCOPE",
+    "AMORA_PLATFORM_REMOTE_PROCESSING", "AMORA_WEB_SCREENSHOTS_ENABLED",
+    "AMORA_WEB_SCREENSHOT_MICROLINK_API_KEY",
+    "AMORA_WEB_SCREENSHOT_DAILY_LIMIT",
+})
 REQUIRED = {
     "core": {"AMORA_POSTGRES_DSN", "AMORA_MESSAGING_SERVICE_TOKEN",
              "AMORA_SECRET_LOCAL_API_TOKEN"},
@@ -121,21 +130,10 @@ def prepare(source: Mapping[str, str], *, kind: str) -> tuple[dict[str, str], tu
             # Complex secret-file values require mounted file preparation,
             # not an unreliable escaped env line.
             raise EnvHandoffError("HANDOFF_MULTILINE_VALUE_REQUIRES_SECRET_FILE")
+        if kind == "discord" and key not in DISCORD_ALLOWED:
+            continue
         if key.startswith("DISCORD_") and kind == "core":
             continue
-        if key.startswith("AMORA_POSTGRES_") and kind == "discord":
-            continue
-        if key.startswith("AMORA_SECRET_") and kind == "discord":
-            continue
-        if key.startswith("AMORA_GROQ_") and kind == "discord":
-            continue
-        if key.startswith("AMORA_") and kind == "discord":
-            if key not in {"AMORA_MESSAGING_SERVICE_TOKEN",
-                           "AMORA_PLATFORM_ACCOUNT_SCOPE",
-                           "AMORA_PLATFORM_REMOTE_PROCESSING",
-                           "AMORA_WEB_SCREENSHOTS_ENABLED",
-                           "AMORA_WEB_SCREENSHOT_MICROLINK_API_KEY"}:
-                continue
         safe[key] = value
     missing = tuple(sorted(REQUIRED[kind].difference(safe)))
     return safe, missing
