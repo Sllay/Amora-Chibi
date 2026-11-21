@@ -111,6 +111,13 @@ def test_cache_never_crosses_owner_or_outlives_canonical_revision():
                                     required_sequence=9,
                                     now=now() + timedelta(seconds=31))
     assert not check(max_staleness=timedelta(minutes=15))
+    tampered = replace(p, summary="Injected content", checksum=p.checksum)
+    assert not can_serve_projection(tampered, requester_owner_id="PERSON_BK",
+                                    required_sequence=9, now=now())
+    forged_revision = replace(p, origin_sequence=10)
+    assert not can_serve_projection(forged_revision,
+                                    requester_owner_id="PERSON_BK",
+                                    required_sequence=9, now=now())
 
 
 def test_archive_and_expiry_projections_cannot_be_served():
