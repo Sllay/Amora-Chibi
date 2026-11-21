@@ -238,7 +238,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 navigator.planner = GroqQueryPlanner(api_key)
             try:
                 evidence = await asyncio.wait_for(
-                    navigator.research(request.text, request.session_id),
+                    navigator.research(
+                        request.text, request.session_id,
+                        authorized_history=context.recent_messages,
+                        speaker_id=request.speaker_id,
+                    ),
                     timeout=16.0 if (navigator.reader is not None or navigator.browser is not None) else 11.0,
                 )
             except Exception:
