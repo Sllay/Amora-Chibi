@@ -9,7 +9,10 @@ import argparse
 import os
 import re
 import subprocess
+import json
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
+from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 from tools.ops.altare_env_handoff import (
     EnvHandoffError, MAX_ALTARE_ENV_BYTES, MAX_ALTARE_VARIABLES,
@@ -65,6 +68,55 @@ def plan(bundle: str, *, service: str, core_origin: str) -> dict[str, str]:
     return result
 
 
+class _BlockRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _read_altare_json(path: str, token: str) -> dict:
+    """Fixed-origin GET only; do not leak HTTP body or exception into logs."""
+    if not re.fullmatch(r"/[A-Za-z0-9/_-]+", path):
+        raise EnvHandoffError("ALTARE_API_PATH_INVALID")
+    req = Request(
+        "https://console.altare.gg/api" + path,
+        headers={"Authorization": "Bearer " + token, "Accept": "application/json"},
+    )
+    try:
+        with build_opener(_BlockRedirect()).open(req, timeout=12) as resp:
+            raw = resp.read(131073)
+            if len(raw) > 131072:
+                raise EnvHandoffError("ALTARE_API_TOO_LARGE")
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise EnvHandoffError("ALTARE_API_RESPONSE_INVALID")
+            return data
+    except HTTPError as exc:
+        if exc.code in (401, 403):
+            raise EnvHandoffError("ALTARE_API_TOKEN_REJECTED") from None
+        raise EnvHandoffError("ALTARE_API_UNAVAILABLE") from None
+    except (URLError, OSError, TimeoutError, UnicodeError, ValueError):
+        raise EnvHandoffError("ALTARE_API_UNAVAILABLE") from None
+
+
+def check_altare_access(service: str, token: str) -> None:
+    """Authenticate and verify least privileges + exact target app visibility."""
+    if service not in APP_NAMES or not token.startswith("alt_"):
+        raise EnvHandoffError("ALTARE_CONFIG_TOKEN_MISSING")
+    metadata = _read_altare_json("/api-tokens/self", token)
+    scopes = metadata.get("scopes")
+    team = metadata.get("team")
+    if not isinstance(scopes, list) or not {"servers:view", "servers:settings"} <= set(scopes):
+        raise EnvHandoffError("ALTARE_API_SCOPES_INSUFFICIENT")
+    team_id = team.get("id") if isinstance(team, dict) else None
+    if not isinstance(team_id, str) or not re.fullmatch(r"[A-Za-z0-9-]+", team_id):
+        raise EnvHandoffError("ALTARE_TEAM_NOT_RESOLVED")
+    apps = _read_altare_json(f"/tenants/{team_id}/servers", token).get("items")
+    if not isinstance(apps, list) or sum(
+        1 for app in apps if isinstance(app, dict) and app.get("name") == APP_NAMES[service]
+    ) != 1:
+        raise EnvHandoffError("ALTARE_TARGET_APP_NOT_VISIBLE")
+
+
 def apply(service: str, variables: dict[str, str], token: str) -> int:
     """Use only the documented altr docker env set API, with muted output."""
     if not token:
@@ -105,13 +157,15 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.get("AMORA_PRIVATE_ENV_BUNDLE", ""),
             service=args.service, core_origin=args.core_origin,
         )
+        token = os.environ.get("ALTARE_TOKEN_CONFIG", "")
+        check_altare_access(args.service, token)
         if args.mode == "apply":
             count = apply(
-                args.service, variables, os.environ.get("ALTARE_TOKEN_CONFIG", ""),
+                args.service, variables, token,
             )
             print(f"ALTARE_ENV_APPLIED service={args.service} count={count}")
         else:
-            print(f"ALTARE_ENV_CHECK_OK service={args.service} count={len(variables)}")
+            print(f"ALTARE_ENV_CHECK_OK service={args.service} count={len(variables)} access=verified")
         return 0
     except (EnvHandoffError, ValueError) as err:
         code = str(err)
