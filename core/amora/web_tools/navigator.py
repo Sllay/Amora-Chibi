@@ -957,6 +957,7 @@ class WebNavigator:
                     pins = self.workspace.bookmarks(session_id, 20)
                     refs = [{"url": p["url"], "title": p.get("title", ""),
                              "state": "saved"} for p in pins if p.get("url")]
+                    self._save_refs(session_id, refs[:12])
                     return self._record_delivery(session_id, {
                         "action": "saved_links",
                         "status": "results_only" if refs else "empty",
@@ -970,6 +971,7 @@ class WebNavigator:
                             if item.get("url") and item["url"] not in seen:
                                 seen.add(item["url"])
                                 found.append(item)
+                    self._save_refs(session_id, found[:12])
                     return self._record_delivery(session_id, {
                         "action": "web_history",
                         "status": "results_only" if found else "empty",
