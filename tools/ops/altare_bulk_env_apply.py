@@ -28,7 +28,7 @@ def validate_origin(origin: str) -> str:
         if (u.scheme == "https" and not u.username and not u.password
                 and not u.port and not u.query and not u.fragment
                 and u.path in ("", "/")
-                and re.fullmatch(r"[a-z0-9-]+\\.go\\.altare\\.global", host)):
+                and re.fullmatch(r"[a-z0-9-]+\.go\.altare\.global", host)):
             return f"https://{host}"
     except (TypeError, ValueError):
         pass
