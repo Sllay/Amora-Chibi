@@ -91,8 +91,10 @@ def _read_altare_json(path: str, token: str) -> dict:
                 raise EnvHandoffError("ALTARE_API_RESPONSE_INVALID")
             return data
     except HTTPError as exc:
-        if exc.code in (401, 403):
-            raise EnvHandoffError("ALTARE_API_TOKEN_REJECTED") from None
+        if exc.code == 401:
+            raise EnvHandoffError("ALTARE_API_TOKEN_UNAUTHORIZED_401") from None
+        if exc.code == 403:
+            raise EnvHandoffError("ALTARE_API_SCOPE_DENIED_403") from None
         raise EnvHandoffError("ALTARE_API_UNAVAILABLE") from None
     except (URLError, OSError, TimeoutError, UnicodeError, ValueError):
         raise EnvHandoffError("ALTARE_API_UNAVAILABLE") from None
