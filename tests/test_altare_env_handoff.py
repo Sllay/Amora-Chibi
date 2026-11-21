@@ -107,6 +107,20 @@ def test_cli_does_not_expose_secret_values_in_output(tmp_path, capsys):
 
 
 
+def test_required_values_cannot_be_blank_even_if_names_are_present():
+    core, missing = prepare({
+        "AMORA_POSTGRES_DSN": "   ",
+        "AMORA_MESSAGING_SERVICE_TOKEN": "m" * 40,
+        "AMORA_SECRET_LOCAL_API_TOKEN": "",
+    }, kind="core")
+    assert missing == ("AMORA_POSTGRES_DSN", "AMORA_SECRET_LOCAL_API_TOKEN")
+    discord, worker_missing = prepare({
+        "DISCORD_BOT_TOKEN": "",
+        "AMORA_MESSAGING_SERVICE_TOKEN": "m" * 40,
+    }, kind="discord")
+    assert worker_missing == ("DISCORD_BOT_TOKEN",)
+
+
 def test_altare_app_env_limits_fail_closed_before_private_output():
     minimum = {
         "AMORA_POSTGRES_DSN": "postgresql://host",
