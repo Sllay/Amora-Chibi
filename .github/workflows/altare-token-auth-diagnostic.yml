@@ -87,6 +87,7 @@ jobs:
               raise SystemExit(2)
           PY
       - name: Probe exact documented curl GET safely without response bodies
+        if: always()
         shell: bash
         env:
           ALTARE_TOKEN_CONFIG: ${{ secrets.ALTARE_TOKEN_CONFIG }}
