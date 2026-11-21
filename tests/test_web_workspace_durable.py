@@ -191,3 +191,19 @@ async def test_explicit_user_url_can_be_saved_but_is_not_falsely_marked_read(not
     )
     assert rejected["status"] == "failed"
     assert len(notebook.bookmarks("owner-dm")) == 1
+
+
+
+def test_bookmark_can_gain_verified_excerpt_after_initial_unread_save(notebook):
+    session = "owner-dm"
+    url = "https://godotengine.org/learn"
+    assert notebook.pin(session, {"url": url, "title": "Godot", "state": "found"})
+    assert notebook.pin(session, {"url": url, "title": "Godot", "state": "found"}) is False
+    assert notebook.bookmarks(session)[0]["excerpt"] == ""
+    assert notebook.pin(session, {
+        "url": url, "title": "Godot",
+        "state": "read", "excerpt": "Official Godot Engine tutorials and examples.",
+    })
+    bookmarks = notebook.bookmarks(session)
+    assert len(bookmarks) == 1
+    assert bookmarks[0]["excerpt"] == "Official Godot Engine tutorials and examples."
