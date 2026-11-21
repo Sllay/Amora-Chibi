@@ -17,6 +17,17 @@ _SOCIAL_ONLY = re.compile(
     r"continue|prossiga|pode continuar|entendi|aham|uhum|"
     r"kkkk+|ksksks+|haha+)[!?.\s]*)$"
 )
+# Acknowledgement + continuation is still the same conversation turn. It is
+# not evidence for selecting unrelated long-term memories. Require a complete
+# match so project-specific requests ("continue a animação do coelho") still
+# receive normal topic retrieval.
+_BRIEF_CONTINUATION = re.compile(
+    r"^(?:(?:sim|ss|ok|okay|certo|beleza|blz|ta|entao)[,!.\s]+)?"
+    r"(?:continue|continua|prossiga|segue|pode continuar|pode prosseguir|pode seguir)"
+    r"[!?.\s]*$"
+)
+
+
 _STOP = frozenset({
     "lembra", "lembrar", "recorda", "recordar", "acho", "penso",
     "diz", "disse", "falei", "falamos", "contei", "me", "te", "de",
@@ -32,7 +43,7 @@ _STOP = frozenset({
 
 def is_social_only(text: str) -> bool:
     normalized = " ".join(normalize_recall(text).strip(" !?.").split())
-    return bool(_SOCIAL_ONLY.fullmatch(normalized))
+    return bool(_SOCIAL_ONLY.fullmatch(normalized) or _BRIEF_CONTINUATION.fullmatch(normalized))
 
 
 def subject_terms(text: str) -> frozenset[str]:
