@@ -827,10 +827,59 @@ class WebNavigator:
         self.last_capture_requests.pop(session_id, None)
         return None
 
+    def _hydrate_workspace(self, session_id: str) -> None:
+        """Restore references after process restart without re-fetching URLs."""
+        if self.workspace is None or session_id in self._hydrated_sessions:
+            return
+        self._hydrated_sessions.add(session_id)
+        try:
+            rows = self.workspace.recent(session_id, limit=1)
+        except Exception:
+            _LOG.warning("WEB_WORKSPACE_RESTORE_FAILED")
+            return
+        if not rows:
+            return
+        record = rows[0]
+        entries = record.get("entries") or []
+        sources = [e for e in entries if isinstance(e, dict)
+                   and e.get("state") == "read" and e.get("url")]
+        refs = [e for e in entries if isinstance(e, dict) and e.get("url")]
+        projection = {
+            "action": str(record.get("action") or ""),
+            "focus": str(record.get("topic") or "")[:90]
+                or (_page_topic(sources[0]) if sources else ""),
+            "sources": [{"url": e["url"], "title": str(e.get("title") or "")}
+                        for e in sources[:2]],
+            "references": [{"url": e["url"], "title": str(e.get("title") or "")}
+                           for e in refs[:12]],
+        }
+        self.last_delivery[session_id] = (asyncio.get_running_loop().time(), projection)
+        self._save_refs(session_id, projection["references"])
+
+    def _workspace_notebook(self, session_id: str) -> dict[str, Any]:
+        if self.workspace is None:
+            return {}
+        try:
+            return self.workspace.notebook(session_id)
+        except Exception:
+            _LOG.warning("WEB_WORKSPACE_READ_FAILED")
+            return {}
+
     async def research(self, text: str, session_id: str | None) -> dict[str, Any] | None:
         intent = parse_web_intent(text)
         if intent is None:
             return None
+        if session_id:
+            self._hydrate_workspace(session_id)
+        result = await self._research_intent(text, session_id, intent)
+        if result is not None and session_id:
+            notebook = self._workspace_notebook(session_id)
+            if notebook:
+                result["research_notebook"] = notebook
+        return result
+
+    async def _research_intent(self, text: str, session_id: str | None,
+                               intent: WebIntent) -> dict[str, Any] | None:
         if not session_id:
             return {"action": intent.action, "status": "unavailable", "reason": "WEB_SESSION_REQUIRED",
                     "sources": [], "references": []}
