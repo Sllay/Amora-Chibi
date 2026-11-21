@@ -6,6 +6,7 @@ Run within each prospective Altare container before enabling the gateway.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -120,9 +121,9 @@ def _writable_folder(path: str) -> bool:
         return False
 
 
-def preflight(env: dict[str, str] | None = None, *, gateway_fenced: bool = False
+def preflight(env: dict[str, str] | None = None, *, candidate_altare: bool = False
               ) -> dict[str, object]:
-    """Do not trust a runtime env flag as proof the old bot was disabled."""
+    """Candidate checks do not change production host selection or gateway state."""
     provided = dict(os.environ if env is None else env)
     ca = provided.get("AMORA_POSTGRES_CA_FILE", "")
     ca_readable = False
@@ -136,6 +137,7 @@ def preflight(env: dict[str, str] | None = None, *, gateway_fenced: bool = False
     core = inspect_core(
         provided, ca_file_readable=ca_readable,
         data_folder_writable=_writable_folder(home),
+        profile="altare" if candidate_altare else "",
     )
     # This CLI runs inside the Core. Discord separately needs this same
     # routine with its env supplied by a trusted operator or staging gate.
@@ -144,8 +146,14 @@ def preflight(env: dict[str, str] | None = None, *, gateway_fenced: bool = False
             "note": "No claims about Docker host volume persistence or Discord fencing."}
 
 
-def main() -> int:
-    result = preflight()
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Check prospective Altare Core configuration")
+    parser.add_argument(
+        "--candidate-altare", action="store_true",
+        help="check isolated Altare staging without changing active host",
+    )
+    args = parser.parse_args(argv)
+    result = preflight(candidate_altare=args.candidate_altare)
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] == "ready" else 2
 
