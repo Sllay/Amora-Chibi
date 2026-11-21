@@ -94,6 +94,11 @@ def _read_altare_json(path: str, token: str) -> dict:
         if exc.code == 401:
             raise EnvHandoffError("ALTARE_API_TOKEN_UNAUTHORIZED_401") from None
         if exc.code == 403:
+            # Altare API errors are JSON. An HTML 403 is not proof of a scope
+            # failure; it can be returned by a CDN/WAF before token validation.
+            mime = (exc.headers.get("Content-Type", "") if exc.headers else "").lower()
+            if "text/html" in mime:
+                raise EnvHandoffError("ALTARE_API_NON_JSON_403") from None
             stage = "SELF" if path == "/api-tokens/self" else "APPS"
             raise EnvHandoffError("ALTARE_API_SCOPE_DENIED_403_" + stage) from None
         raise EnvHandoffError("ALTARE_API_UNAVAILABLE") from None

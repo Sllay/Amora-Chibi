@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   compare:
@@ -27,7 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           set +x
-          python - <<'PY'
+          python - <<'PY' | tee "$RUNNER_TEMP/altare-diagnostic.txt"
           import os
           import urllib.request
           import urllib.error
@@ -66,3 +67,61 @@ jobs:
           probe('ALTARE_WITHOUT_TOKEN', False)
           probe('ALTARE_WITH_SAVED_TOKEN', True)
           PY
+      - name: Probe documented API using curl as an independent HTTP client
+        if: always()
+        shell: bash
+        env:
+          ALTARE_TOKEN: ${{ secrets.ALTARE_TOKEN_CONFIG }}
+        run: |
+          set -euo pipefail
+          set +x
+          if [[ "$ALTARE_TOKEN" != alt_* ]]; then
+            echo 'ALTARE_CURL_WITH_SAVED_TOKEN=TOKEN_INVALID' | tee -a "$RUNNER_TEMP/altare-diagnostic.txt"
+            exit 0
+          fi
+          result="$(curl --silent --connect-timeout 8 --max-time 20 \
+            --output /dev/null --write-out '%{http_code}:%{content_type}' \
+            --header "Authorization: Bearer $ALTARE_TOKEN" \
+            --header 'Accept: application/json' \
+            'https://console.altare.gg/api/api-tokens/self' || true)"
+          code="$(printf '%s' "$result" | cut -d: -f1)"
+          mime="$(printf '%s' "$result" | cut -d: -f2-)"
+          if [[ ! "$code" =~ ^[0-9]{3}$ || "$code" == 000 ]]; then
+            out=NETWORK_ERROR
+          elif [[ "$mime" == application/json* ]]; then
+            out="HTTP_$code:JSON"
+          elif [[ "$mime" == text/html* ]]; then
+            out="HTTP_$code:HTML"
+          else
+            out="HTTP_$code:OTHER"
+          fi
+          echo "ALTARE_CURL_WITH_SAVED_TOKEN=$out" | tee -a "$RUNNER_TEMP/altare-diagnostic.txt"
+      - name: Publish sanitized diagnosis on issue 349
+        if: always() && github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const p = process.env.RUNNER_TEMP + '/altare-diagnostic.txt';
+            const lines = fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n') : [];
+            const safe = (name) => {
+              const prefix = name + '=';
+              const line = lines.find(x => x.startsWith(prefix));
+              const value = line ? line.slice(prefix.length).trim() : '';
+              return /^[A-Z0-9_:]{1,100}$/.test(value) ? value : 'NO_RESULT';
+            };
+            const shape = lines.includes('ALTARE_SECRET_FORMAT_MISSING_OR_INVALID') ? 'MISSING_OR_MALFORMED' : 'NOT_FLAGGED';
+            const body = [
+              '**Diagnóstico Altare (automático; sem segredos)**',
+              '- Token no GitHub: ' + shape,
+              '- Sem token: ' + safe('ALTARE_WITHOUT_TOKEN'),
+              '- Com token (Python): ' + safe('ALTARE_WITH_SAVED_TOKEN'),
+              '- Com token (curl): ' + safe('ALTARE_CURL_WITH_SAVED_TOKEN'),
+              'Nenhuma credencial, ID de equipe ou corpo HTTP foi publicado.'
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 349,
+              body
+            });
