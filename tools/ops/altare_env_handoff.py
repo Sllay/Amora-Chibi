@@ -15,8 +15,6 @@ import argparse
 import json
 import os
 import re
-import stat
-import sys
 from pathlib import Path
 from typing import Mapping
 
@@ -161,16 +159,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.output_dir.exists() and any(args.output_dir.iterdir()):
             raise EnvHandoffError("HANDOFF_OUTPUT_DIRECTORY_NOT_EMPTY")
+        prepared = {}
+        missing_by_service = {}
         for kind in ("core", "discord"):
             input_file = getattr(args, kind)
             values = parse_source(input_file.read_text(encoding="utf-8"))
             filtered, missing = prepare(values, kind=kind)
+            prepared[kind] = filtered
             if missing:
+                missing_by_service[kind] = missing
+        if missing_by_service:
+            for kind, missing in missing_by_service.items():
                 print(kind + ": missing variable NAMES " + ",".join(missing))
-                return 2
+            return 2
+        for kind, filtered in prepared.items():
             write_private(args.output_dir / (".env.altare-" + kind), filtered)
             print(kind + ": " + str(len(filtered)) + " names written to private file")
-        print("HANDOFF_READY: manually transfer privately, validate, securely remove source and output")
+        print("HANDOFF_READY: transfer privately, validate, delete sources and outputs")
         return 0
     except (OSError, ValueError, UnicodeError) as error:
         reason = str(error) if isinstance(error, EnvHandoffError) else "HANDOFF_IO_ERROR"
