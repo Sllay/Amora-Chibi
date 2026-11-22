@@ -20,6 +20,28 @@ async function run() {
   await page.goto("file://"+html,{waitUntil:"load",timeout:45000});
   await page.waitForFunction(()=>document.querySelector("#status")?.textContent.includes("prévia pronta"),{timeout:45000});
   await page.waitForFunction(()=>!!document.querySelector("canvas")?.getContext("2d")?.getImageData(600,600,1,1)?.data[3],{timeout:30000});
+  // Geometry tests in the real browser, not just "canvas hash changed".
+  const lidChecks=await page.evaluate(()=>{
+   const samples=[0,.18,.35,.5,.65,1].map(opening=>({
+    opening, progress:lidProgress(opening), closed:closedPoseAlpha(opening)
+   }));
+   const leftEye=box("eye_white_L"),rightEye=box("eye_white_R");
+   const leftPose=box("closed_smile_L"),rightPose=box("closed_smile_R");
+   return {samples,
+    leftLashReach:(leftEye.x-leftPose.x)/leftEye.w,
+    rightLashReach:(rightPose.x+rightPose.w-rightEye.x-rightEye.w)/rightEye.w,
+   };
+  });
+  if(lidChecks.leftLashReach<.2||lidChecks.rightLashReach<.2){
+   throw Error("Closed-eye lash hooks missing or pointed inward: "+JSON.stringify(lidChecks));
+  }
+  for(let i=1;i<lidChecks.samples.length;i++){
+   if(lidChecks.samples[i].progress>lidChecks.samples[i-1].progress||
+      lidChecks.samples[i].closed>lidChecks.samples[i-1].closed){
+    throw Error("Eyelid closing shape progression is not monotonic");
+   }
+  }
+
   await page.screenshot({path:path.join(path.dirname(html),"amora-browser-neutral.png"),fullPage:true});
   async function digest(){
    return page.evaluate(()=>{
@@ -76,7 +98,7 @@ async function run() {
   if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0||wink.corner!==0||half.corner!==0||near.corner!==0||closed.corner!==0)throw Error("Opaque background remains around Amora");
   if(!neutral.center||!sleepy.center||!surprised.center||!wink.center||!half.center||!near.center||!closed.center)throw Error("Center of Amora is not rendered");
   if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash||wink.hash===surprised.hash||half.hash===wink.hash||half.hash===neutral.hash||near.hash===half.hash||closed.hash===near.hash)throw Error("Expressions did not change canvas pixels");
-  console.log(JSON.stringify({ok:true,loaded_layers:12,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
+  console.log(JSON.stringify({ok:true,loaded_layers:14,lidChecks,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
  }finally{await browser.close();}
 }
 run().catch(err=>{console.error(err.stack||err);process.exitCode=1;});
