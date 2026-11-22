@@ -174,7 +174,7 @@ function lid(side,type,opening){
  ctx.save();
  // The lower mesh still rises to meet the top, then becomes the soft edge of
  // the one smiling line. Keeping it fully opaque leaves two separate strips.
- if(!upper)ctx.globalAlpha*=1-.62*Math.pow(shut,3);
+ ctx.globalAlpha*=upper?1-.72*Math.pow(shut,3):1-.82*Math.pow(shut,3);
  for(let i=0;i<strips;i++){
   const x=rect.x+i*stripW;
   const mid=x+stripW*.5;
@@ -188,6 +188,15 @@ function lid(side,type,opening){
   const destY=rect.y*(1-progress) + (target+(rect.y-rect.cy)*squeeze)*progress;
   ctx.drawImage(img,x,rect.y,stripW,rect.h,x,destY,stripW+.5,rect.h*sy);
  }
+ ctx.restore();
+}
+function happyClosedPose(side,opening){
+ const t=Math.max(0,Math.min(1,(.46-opening)/.46));
+ const opacity=t*t*(3-2*t);
+ if(opacity<=0)return;
+ ctx.save();
+ ctx.globalAlpha*=opacity;
+ draw("closed_smile_"+side);
  ctx.restore();
 }
 function mouthDraw(opening,form){
@@ -246,6 +255,9 @@ function tick(ms){
  // Exactly the visible render order: lower L, lower R, upper R, upper L.
  lid("L","lower",openL);lid("R","lower",openR);
  lid("R","upper",openR);lid("L","upper",openL);
+ // The final smiling arch is a proper expression keyform, not a stretched
+ // upper/lower eyelid texture. Both physical lids still meet underneath.
+ happyClosedPose("L",openL);happyClosedPose("R",openR);
  mouthDraw(smoothed.mouth,smoothed.form);
  ctx.restore();
  requestAnimationFrame(tick);
@@ -256,7 +268,7 @@ Promise.all(Object.entries(source.layers).map(([name,info])=>new Promise((resolv
  img.onload=resolve;img.onerror=()=>reject(new Error("Falha na camada "+name));
  img.src=info.src;
 }))).then(()=>{
- document.getElementById("status").textContent="10 camadas fonte + 2 patches técnicos carregados · prévia pronta";
+ document.getElementById("status").textContent="10 camadas fonte + 4 peças técnicas de rig carregadas · prévia pronta";
  requestAnimationFrame(tick);
 }).catch(error=>{document.getElementById("status").textContent=error.message;});
 </script>
