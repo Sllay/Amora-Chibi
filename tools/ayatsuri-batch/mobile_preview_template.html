@@ -140,7 +140,7 @@ function springGaze(delta){
  }
 }
 function eyeVisibility(opening){
- const t=Math.max(0,Math.min(1,(opening-.03)/.47));
+ const t=Math.max(0,Math.min(1,(opening-.15)/.35));
  return t*t*(3-2*t);
 }
 function eye(side, opening,lookX,lookY){
@@ -168,7 +168,7 @@ function lid(side,type,opening){
  const img=images[lidName],strips=48,stripW=rect.w/strips;
  const shut=Math.max(0,Math.min(1,1-opening));
  const upper=type==="upper";
- const progress=Math.pow(shut,upper?.75:1.35);
+ const progress=Math.pow(shut,upper?.75:1.15);
  const squeeze=upper?.048:.024;
  const seamOffset=upper?-.012:.010;
  ctx.save();
