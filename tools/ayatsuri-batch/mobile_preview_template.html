@@ -165,23 +165,30 @@ function eye(side, opening,lookX,lookY){
 }
 function lid(side,type,opening){
  const lidName=type+"_lid_"+side,rect=box(lidName),eye=box("eye_white_"+side);
- const shut=Math.pow(1-opening,.82);
- const img=images[lidName],strips=36,stripW=rect.w/strips;
- // Local piecewise mesh approximation; avoid moving each lid as a rigid card.
+ const img=images[lidName],strips=48,stripW=rect.w/strips;
+ const shut=Math.max(0,Math.min(1,1-opening));
+ const upper=type==="upper";
+ const progress=Math.pow(shut,upper?.75:1.35);
+ const squeeze=upper?.048:.024;
+ const seamOffset=upper?-.012:.010;
+ ctx.save();
+ // The lower mesh still rises to meet the top, then becomes the soft edge of
+ // the one smiling line. Keeping it fully opaque leaves two separate strips.
+ if(!upper)ctx.globalAlpha*=1-.62*Math.pow(shut,3);
  for(let i=0;i<strips;i++){
   const x=rect.x+i*stripW;
-  const u=((x+stripW*.5-eye.cx)/(eye.w*.55));
-  const arch=Math.pow(Math.max(0,1-Math.min(1,u*u)),2);
-  let dy=0,dx=0;
-  if(type==="upper"){
-   const target=eye.cy+eye.h*.10;
-   dy=(target-rect.cy)*shut*(.65+.35*arch)-eye.h*.105*shut*arch;
-   dx=(eye.cx-(x+stripW*.5))*.018*shut*arch;
-  }else{
-   dy=-eye.h*.055*shut*(.55+.45*arch)+eye.h*.016*shut*arch;
-  }
-  ctx.drawImage(img,x,rect.y,stripW,rect.h,x+dx,rect.y+dy,stripW+.4,rect.h);
+  const mid=x+stripW*.5;
+  const u=Math.max(-1,Math.min(1,(mid-eye.cx)/(eye.w*.55)));
+  const arch=Math.max(0,1-u*u);
+  const target=eye.cy+eye.h*(.035-.205*arch+seamOffset);
+  // Affine approximation of the Rust eyelid_vertex mesh in each thin strip.
+  // At open=1 it is the exact source art. At open=0 the two lips converge on
+  // the same arched seam with no loose upper/lower plates.
+  const sy=1-progress+progress*squeeze;
+  const destY=rect.y*(1-progress) + (target+(rect.y-rect.cy)*squeeze)*progress;
+  ctx.drawImage(img,x,rect.y,stripW,rect.h,x,destY,stripW+.5,rect.h*sy);
  }
+ ctx.restore();
 }
 function mouthDraw(opening,form){
  const b=box("mouth"),img=images.mouth,strips=24,part=b.h/strips;
