@@ -145,8 +145,8 @@ def face_patch(body: Image.Image, white: Image.Image, lower: Image.Image, upper:
     ImageDraw.Draw(mask).ellipse((round(w*.075),round(h*.075),
                                   round(w*.925),round(h*.925)), fill=255)
     mask = mask.filter(ImageFilter.GaussianBlur(radius=max(3,round(min(w,h)*.07))))
-    repaired = fill_eye_hole(body,white)
-    crop = repaired.crop((x0,y0,x1,y1)).copy()
+    # The derived body was already repaired before generating the skin mesh.
+    crop = body.crop((x0,y0,x1,y1)).copy()
     crop.putalpha(mask)
     result = Image.new("RGBA",body.size,(0,0,0,0))
     result.alpha_composite(crop,(x0,y0))
