@@ -73,6 +73,13 @@ jobs:
           for key in (refs["Moc"], refs["DisplayInfo"], *refs["Textures"]):
               assert (root / key).is_file(), f"Missing referenced file: {key}"
           assert (root / refs["Moc"]).read_bytes()[:4] == b"MOC3"
+          physics=root/refs["Physics"]
+          assert physics.is_file(), "Soft-body and iris physics config missing"
+          rig=json.loads(physics.read_text())
+          assert rig["Meta"]["PhysicsSettingCount"]==3
+          assert sum(len(x["Output"]) for x in rig["PhysicsSettings"])==3
+          destinations={out["Destination"]["Id"] for group in rig["PhysicsSettings"] for out in group["Output"]}
+          assert destinations=={"ParamIrisBounceX","ParamIrisBounceY","ParamBodySquash"}
           assert len(refs.get("Expressions", [])) >= 8, "Missing expression presets"
           motions=refs.get("Motions",{}).get("Idle",[])
           assert motions, "Missing idle demonstration motion"
