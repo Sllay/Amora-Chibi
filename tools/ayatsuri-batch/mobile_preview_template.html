@@ -137,11 +137,11 @@ function eye(side, opening,lookX,lookY){
  const ty=Math.max(b.h*.1,b.h-ib.h)*.32*lookY*opening;
  draw(irid,{py:b.cy,sy:scale,dx:tx,dy:ty});
  ctx.restore();
- for(const type of ["lower","upper"]){
-  const lid=type+"_lid_"+side,rect=box(lid),closed=1-opening;
-  const target=b.cy+(type==="upper"?-b.h*.065:b.h*.065);
-  draw(lid,{dy:(target-rect.cy)*closed,sx:1+.012*closed});
- }
+}
+function lid(side,type,opening){
+ const white=box("eye_white_"+side),lidName=type+"_lid_"+side,rect=box(lidName),closed=1-opening;
+ const target=white.cy+(type==="upper"?-white.h*.065:white.h*.065);
+ draw(lidName,{dy:(target-rect.cy)*closed,sx:1+.012*closed});
 }
 cv.addEventListener("pointermove",event=>{
  if(!document.getElementById("follow").checked)return;
@@ -168,14 +168,18 @@ function tick(ms){
  ctx.clearRect(0,0,W,H);
  ctx.save();
  ctx.translate(W*.5,H*.5);
- ctx.rotate((smoothed.angle+(idle?.8*Math.sin(t*.74):0))*Math.PI/180);
+ ctx.rotate((smoothed.angle+(idle ? 0.8*Math.sin(t*.74) : 0))*Math.PI/180);
  const pulse=idle?1+.008*Math.sin(t*1.7):1;
  ctx.scale(pulse,pulse);
  ctx.translate(-W*.5,-H*.5);
  draw("body_horns");
  // The JPEG is intentionally painted behind all transparent eye layers.
- eye("L",Math.max(0,smoothed.eyeL*blink),smoothed.lookX,smoothed.lookY);
- eye("R",Math.max(0,smoothed.eyeR*blink),smoothed.lookX,smoothed.lookY);
+ const openL=Math.max(0,smoothed.eyeL*blink),openR=Math.max(0,smoothed.eyeR*blink);
+ eye("L",openL,smoothed.lookX,smoothed.lookY);
+ eye("R",openR,smoothed.lookX,smoothed.lookY);
+ // Exactly the visible render order: lower L, lower R, upper R, upper L.
+ lid("L","lower",openL);lid("R","lower",openR);
+ lid("R","upper",openR);lid("L","upper",openL);
  const mouth=box("mouth");
  draw("mouth",{px:mouth.cx,py:mouth.cy,sx:1+.15*smoothed.form,sy:1+.6*smoothed.mouth});
  ctx.restore();
