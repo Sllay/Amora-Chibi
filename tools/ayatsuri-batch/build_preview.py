@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import sys
 from pathlib import Path
 
 from PIL import Image
+from prepare_assets import face_patch
 
 def build(manifest: Path, output: Path) -> None:
     data = json.loads(manifest.read_text(encoding="utf-8"))
     layers = {}
+    rgba = {}
     for layer in data["layers"]:
         source = manifest.parent / layer["file"]
         raw = source.read_bytes()
@@ -25,7 +28,9 @@ def build(manifest: Path, output: Path) -> None:
         with Image.open(source) as im:
             if im.size != (data["width"], data["height"]):
                 raise ValueError(f"Wrong canvas size: {source}")
-            a = im.convert("RGBA").getchannel("A")
+            pixels = im.convert("RGBA")
+            rgba[layer["name"]] = pixels
+            a = pixels.getchannel("A")
             box = a.getbbox()
             if box is None:
                 raise ValueError(f"Empty alpha channel: {source}")
@@ -34,6 +39,16 @@ def build(manifest: Path, output: Path) -> None:
                     ";base64," + base64.b64encode(raw).decode("ascii"),
                 "box": list(box),
             }
+    for side in ("L","R"):
+        generated = face_patch(rgba["body_horns"],rgba[f"eye_white_{side}"],
+                               rgba[f"lower_lid_{side}"],rgba[f"upper_lid_{side}"])
+        output_bytes = io.BytesIO()
+        generated.save(output_bytes,format="PNG")
+        binary = output_bytes.getvalue()
+        layers[f"skin_patch_{side}"] = {
+            "src":"data:image/png;base64,"+base64.b64encode(binary).decode("ascii"),
+            "box":list(generated.getchannel("A").getbbox()),
+        }
     payload = json.dumps({"width": data["width"], "height": data["height"], "layers": layers},
                          separators=(",", ":"))
     template = (Path(__file__).parent / "mobile_preview_template.html").read_text(encoding="utf-8")
