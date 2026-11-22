@@ -158,52 +158,47 @@ def face_patch(body: Image.Image, white: Image.Image, lower: Image.Image, upper:
 
 def eyelid_skin_art(body: Image.Image, white: Image.Image,
                     lid: Image.Image, upper: bool) -> Image.Image:
-    """Skin curtain whose edge comes from the REAL original eyelash artwork.
+    """Eye-local skin attached to the real upper/lower eyelash shape.
 
-    It shares the movement of its lash, but remains opaque over the iris.
-    Pixels come from the already repaired face; source artwork is unchanged.
+    Never sample cheek/blush or the entire face: a deformed full-face
+    texture duplicates blush and causes streaks below the eye. Only pixels
+    within the original sclera silhouette may become an opaque lid cover.
     """
     bbox = white.getchannel("A").getbbox()
     lidbox = lid.getchannel("A").getbbox()
     if bbox is None or lidbox is None:
-        raise ValueError("Cannot build eyelid skin from an empty eyelid or eye")
+        raise ValueError("Cannot derive skin from an empty eye or lid")
     x0,y0,x1,y1=bbox
-    cx,cy=(x0+x1)/2,(y0+y1)/2
+    cx,cy=(x0+x1)*.5,(y0+y1)*.5
     ew,eh=x1-x0,y1-y0
-    margin=max(5,round(ew*.065))
-    start=max(0,x0-margin)
-    end=min(body.width,x1+margin)
-    outer_top=max(0,round(y0-eh*.32))
-    outer_bottom=min(body.height,round(y1+eh*.32))
-    lid_alpha=lid.getchannel("A")
-    lp=lid_alpha.load()
+    # Expand just 4 px to avoid single-pixel fringe, never into the cheeks.
+    eye_alpha=white.getchannel("A").filter(ImageFilter.MaxFilter(9))
+    wa=eye_alpha.load()
+    lp=lid.getchannel("A").load()
     mask=Image.new("L",body.size,0)
     mp=mask.load()
-    for x in range(start,end):
-        u=max(-1.,min(1.,(x-cx)/max(1,ew*.55)))
-        arch=(max(0.,1.-u*u))**.5
-        default=round(cy+eh*((-.42 if upper else .42)*arch))
-        column=[
-            y for y in range(max(0,lidbox[1]), min(body.height,lidbox[3]))
+    for x in range(max(0,x0-4),min(body.width,x1+4)):
+        u=max(-1.,min(1.,(x-cx)/max(1.,ew*.55)))
+        arch=max(0.,1.-u*u)**.5
+        default=round(cy+eh*(-.39 if upper else .39)*arch)
+        found=[
+            y for y in range(max(0,lidbox[1]),min(body.height,lidbox[3]))
             if lp[x,y]>100 and (y<cy+eh*.10 if upper else y>cy-eh*.10)
         ]
-        border=(max(column) if upper else min(column)) if column else default
-        # The lash artwork is always rendered ON TOP of this skin boundary.
-        border=round(border+(1 if upper else -1))
-        side_distance=min(x-start,end-1-x)
-        side_alpha=max(0.,min(1.,side_distance/max(1,margin)))
-        alpha=round(255*side_alpha)
         if upper:
-            ya,yb=outer_top,max(outer_top,min(outer_bottom,border))
+            edge=(max(found)+1) if found else default
+            edge=max(y0+eh*.12,min(cy-eh*.08,edge))
         else:
-            ya,yb=min(outer_bottom,max(outer_top,border)),outer_bottom
-        for y in range(ya,yb):
-            mp[x,y]=alpha
+            edge=(min(found)-1) if found else default
+            edge=min(y1-eh*.12,max(cy+eh*.08,edge))
+        for y in range(max(0,y0-4),min(body.height,y1+4)):
+            if (y<=edge if upper else y>=edge):
+                mp[x,y]=wa[x,y]
     if mask.getbbox() is None:
-        raise ValueError("Empty generated eyelid-skin curtain")
-    skin=body.copy()
-    skin.putalpha(ImageChops.multiply(body.getchannel("A"),mask))
-    return skin
+        raise ValueError("Empty eye-local skin curtain")
+    result=body.copy()
+    result.putalpha(ImageChops.multiply(body.getchannel("A"),mask))
+    return result
 
 
 def closed_smile_art(eye_white: Image.Image, upper_lid: Image.Image, side: str) -> Image.Image:
