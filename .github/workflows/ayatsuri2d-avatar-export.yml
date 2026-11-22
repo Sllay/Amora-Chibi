@@ -35,7 +35,11 @@ jobs:
         run: |
           python tools/ayatsuri-batch/prepare_assets.py \
             assets/amora-live2d/manifest.json artifacts/amora-prepared
-      - name: Export actual Amora static MOC3 model
+      - name: Generate self-contained mobile expression preview
+        run: |
+          python tools/ayatsuri-batch/build_preview.py \
+            assets/amora-live2d/manifest.json artifacts/amora-mobile-preview.html
+      - name: Export actual Amora parameter-bound MOC3 model
         run: |
           cargo run --release --manifest-path tools/ayatsuri-batch/Cargo.toml -- \
             artifacts/amora-prepared/manifest.json artifacts/AmoraBolinha
@@ -50,16 +54,28 @@ jobs:
           for key in (refs["Moc"], refs["DisplayInfo"], *refs["Textures"]):
               assert (root / key).is_file(), f"Missing referenced file: {key}"
           assert (root / refs["Moc"]).read_bytes()[:4] == b"MOC3"
-          print("Static model bundle verified; NOT yet a deforming/binking physics rig.")
+          assert len(refs.get("Expressions", [])) >= 6, "Missing expression presets"
+          for expression in refs["Expressions"]:
+              exp = root / expression["File"]
+              assert exp.is_file(), f"Expression file missing: {exp}"
+              payload = json.loads(exp.read_text())
+              assert payload["Type"] == "Live2D Expression"
+              assert payload["Parameters"]
+          html = Path("artifacts/amora-mobile-preview.html").read_text()
+          assert "data:image/png;base64," in html, "Offline assets are not embedded"
+          assert "data:image/jpeg;base64," in html, "Original body JPEG missing"
+          assert "__AMORA_PREVIEW_DATA__" not in html
+          print("Rig bundle, expressions and offline mobile preview verified.")
           PY
-      - name: Publish static model, unchanged source files and preview
+      - name: Publish animated-parameter rig, unchanged source files and preview
         uses: actions/upload-artifact@v4
         with:
-          name: amora-bolinha-organizacao-e-moc3-estatico
+          name: amora-bolinha-rig-live2d-teste-mobile
           path: |
             assets/amora-live2d/manifest.json
             assets/amora-live2d/layers/
             artifacts/amora-prepared/amora_montada.png
+            artifacts/amora-mobile-preview.html
             artifacts/amora-prepared/source_order.json
             artifacts/AmoraBolinha/
           if-no-files-found: error
