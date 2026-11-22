@@ -176,7 +176,9 @@ fn key_mesh(
 // The sclera/iris are concealed by a narrow lid aperture. Fade the small
 // residual opening rather than exposing a flattened pink iris stripe.
 fn eye_visibility(opening: f32) -> f32 {
-    let t=((opening-0.15)/0.35).clamp(0.,1.);
+    // Do not fade the eyeball while a visible gap remains between lashes.
+    // Opaque skin curtains physically OCCLUDE the sclera and iris instead.
+    let t=(opening/0.06).clamp(0.,1.);
     t*t*(3.-2.*t)
 }
 
@@ -190,8 +192,9 @@ enum LidSide { Upper, Lower }
 // A dedicated pose supplies the thicker curved lash silhouette at full
 // closure. The original upper+lower art continues to deform toward it.
 fn closed_smile_visibility(opening:f32)->f32 {
-    // Blend final silhouette in alongside BOTH moving lids; neither leads.
-    let t=((0.50-opening)/0.50).clamp(0.,1.);
+    // Hand off from MOVING skin + lashes to the fully opaque pose only at
+    // the very end, when both borders have almost touched.
+    let t=((0.06-opening)/0.06).clamp(0.,1.);
     t*t*(3.-2.*t)
 }
 
@@ -216,6 +219,23 @@ fn eyelid_vertex(x:f32,y:f32,eye:Region,lid:Region,opening:f32,kind:LidSide)->(f
     (x,y+(target-y)*progress)
 }
 
+
+/// Extend face skin *from* the moving lash border, not as a separate
+/// translating card. Vertices next to the lash use the EXACT same deformation
+/// as the lash. Farther face vertices remain anchored to the skull.
+fn attached_skin_vertex(x:f32,y:f32,eye:Region,lid:Region,
+                        opening:f32,kind:LidSide)->(f32,f32) {
+    let (anchor,denom)=match kind {
+        LidSide::Upper=>(eye.cy-eye.h*0.95,eye.h*0.60),
+        LidSide::Lower=>(eye.cy+eye.h*0.95,eye.h*0.60),
+    };
+    let weight=match kind {
+        LidSide::Upper=>((y-anchor)/denom).clamp(0.,1.),
+        LidSide::Lower=>((anchor-y)/denom).clamp(0.,1.),
+    };
+    let (_,lash_y)=eyelid_vertex(x,y,eye,lid,opening,kind);
+    (x,y+(lash_y-y)*weight)
+}
 
 fn add_global_squash(model: &mut ayatsuri_format::model::Model, param: u32) {
     // One shared 4x4 lattice deforms all art consistently. This is more
@@ -331,7 +351,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
     let names = imported.mesh_names.clone();
     let regions: HashMap<String,Region> = names.iter().cloned().zip(imported.model.art_meshes.iter().map(Region::of)).collect();
     let idx = |name: &str| names.iter().position(|n| n==name);
-    let open_keys = [0., 0.18, 0.50, 1.];
+    let open_keys = [0., 0.06, 0.18, 0.50, 1.];
     let look_keys = [-1., 0., 1.];
     for (side, eye_param) in [("L",leye),("R",reye)] {
         let white_name = format!("eye_white_{side}");
@@ -352,11 +372,11 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         }
         let white = &mut imported.model.art_meshes[white_index];
         subdivide(white, 10, 6);
-        key_mesh(white, &[(eye_param,&open_keys)], |v,x,y| {
-            let opening = v[0];
-            let seam = eye.cy+eye.h*0.11;
-            (x, seam + (y-eye.cy)*(0.035 + 0.965*opening) - eye.h*0.11*opening)
-        }, |v| eye_visibility(v[0]));
+        // Sclera stays in position and fully readable behind the eyelids.
+        // A curtain of skin, attached to each lash, reduces the open gap.
+        // No more shrinking the white/iris to simulate closing.
+        key_mesh(white, &[(eye_param,&open_keys)],
+            |_,x,y|(x,y), |v| eye_visibility(v[0]));
         let iris_name=format!("iris_{side}");
         if let Some(i)=idx(&iris_name) {
             let iris_region=regions[&iris_name];
@@ -384,6 +404,23 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                     (iris_region.cx + rel_x*stretch_x + v[1]*travel_x*opening + bounce_x*eye.w*0.065*opening,
                      center_y + rel_y*stretch_y + v[2]*travel_y*opening + bounce_y*eye.h*0.055*opening)
                 }, |v| eye_visibility(v[0]));
+        }
+        // Keep the upper/lower skin attached to the actual eyelash mesh.
+        // Both covers render ABOVE the eye but BELOW the lash contours.
+        for kind in ["upper","lower"] {
+            let skin_name=format!("skin_{kind}_{side}");
+            let lid_name=format!("{kind}_lid_{side}");
+            if let (Some(i),Some(_))=(idx(&skin_name),idx(&lid_name)) {
+                let lid_box=regions[&lid_name];
+                let skin=&mut imported.model.art_meshes[i];
+                subdivide(skin,24,10);
+                let edge=if kind=="upper" {LidSide::Upper} else {LidSide::Lower};
+                key_mesh(skin,&[(eye_param,&open_keys)],
+                    |v,x,y| attached_skin_vertex(x,y,eye,lid_box,v[0],edge),
+                    |v| 1.-closed_smile_visibility(v[0]));
+            } else {
+                return Err(format!("missing attached eyelid skin or lash: {skin_name}").into());
+            }
         }
         for (kind, upper) in [("upper",true),("lower",false)] {
             let name = format!("{kind}_lid_{side}");
@@ -642,7 +679,34 @@ mod tests {
     fn closed_happy_eyelid_pose_is_visible_only_during_closure() {
         assert_eq!(closed_smile_visibility(1.),0.);
         assert_eq!(closed_smile_visibility(0.5),0.);
-        assert!(closed_smile_visibility(0.18)>0.5);
+        assert_eq!(closed_smile_visibility(0.18),0.);
+        assert_eq!(closed_smile_visibility(0.),1.);
+    }
+
+    #[test]
+    fn attached_face_skin_does_not_outrun_or_lag_eyelash_border() {
+        let eye=Region{cx:0.,cy:0.,w:2.,h:2.};
+        for (kind,lid,y_edge,y_anchor) in [
+            (LidSide::Upper,Region{cx:0.,cy:-0.60,w:2.,h:.3},-.50,-1.9),
+            (LidSide::Lower,Region{cx:0.,cy:0.60,w:2.,h:.3},.50,1.9),
+        ] {
+            for opening in [0.,0.06,0.18,0.5,1.] {
+                let (_,skin_y)=attached_skin_vertex(0.,y_edge,eye,lid,opening,kind);
+                let (_,lash_y)=eyelid_vertex(0.,y_edge,eye,lid,opening,kind);
+                assert!((skin_y-lash_y).abs()<1e-5,"skin detached from lash");
+                let (_,anchor_y)=attached_skin_vertex(0.,y_anchor,eye,lid,opening,kind);
+                assert!((anchor_y-y_anchor).abs()<1e-5,"face anchor moved");
+            }
+        }
+    }
+
+    #[test]
+    fn eyeball_only_fades_at_complete_closure() {
+        for open in [0.06,0.18,0.35,0.5,1.] {
+            assert_eq!(eye_visibility(open),1.,"early iris fading");
+            assert_eq!(closed_smile_visibility(open),0.,"early closed pose");
+        }
+        assert_eq!(eye_visibility(0.),0.);
         assert_eq!(closed_smile_visibility(0.),1.);
     }
 
@@ -687,8 +751,7 @@ mod tests {
     #[test]
     fn eyelid_aperture_visibility_is_smooth() {
         assert_eq!(eye_visibility(0.0), 0.0);
-        assert!(eye_visibility(0.18) < eye_visibility(0.5));
-        assert!(eye_visibility(0.18) < 0.35);
+        assert_eq!(eye_visibility(0.18),1.0);
         assert_eq!(eye_visibility(0.5), 1.0);
         assert_eq!(eye_visibility(1.0), 1.0);
     }
