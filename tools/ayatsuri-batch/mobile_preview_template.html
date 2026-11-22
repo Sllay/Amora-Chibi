@@ -163,27 +163,31 @@ function eye(side, opening,lookX,lookY){
  draw(irid,{py:ib.cy,dx:tx,dy:ty+(seam-b.cy)*.05,sy:1-kinetic*.36,sx:1+kinetic});
  ctx.restore();
 }
+function closedPoseAlpha(opening){
+ const t=Math.max(0,Math.min(1,(.50-opening)/.50));
+ return t*t*(3-2*t);
+}
+function lidProgress(opening){
+ const shut=Math.max(0,Math.min(1,1-opening));
+ return shut*shut*(3-2*shut);
+}
 function lid(side,type,opening){
  const lidName=type+"_lid_"+side,rect=box(lidName),eye=box("eye_white_"+side);
  const img=images[lidName],strips=48,stripW=rect.w/strips;
- const shut=Math.max(0,Math.min(1,1-opening));
  const upper=type==="upper";
- const progress=Math.pow(shut,upper?.75:1.15);
- const squeeze=upper?.048:.024;
- const seamOffset=upper?-.012:.010;
+ // One timing curve shared with the exported Cubism mesh. Never allow the
+ // upper layer to lead while the lower one trails behind.
+ const progress=lidProgress(opening);
+ const squeeze=.048;
+ const seamOffset=upper?-.005:.005;
  ctx.save();
- // The lower mesh still rises to meet the top, then becomes the soft edge of
- // the one smiling line. Keeping it fully opaque leaves two separate strips.
- ctx.globalAlpha*=upper?1-.72*Math.pow(shut,3):1-.82*Math.pow(shut,3);
+ ctx.globalAlpha*=1-closedPoseAlpha(opening);
  for(let i=0;i<strips;i++){
   const x=rect.x+i*stripW;
   const mid=x+stripW*.5;
   const u=Math.max(-1,Math.min(1,(mid-eye.cx)/(eye.w*.55)));
   const arch=Math.max(0,1-u*u);
   const target=eye.cy+eye.h*(.035-.205*arch+seamOffset);
-  // Affine approximation of the Rust eyelid_vertex mesh in each thin strip.
-  // At open=1 it is the exact source art. At open=0 the two lips converge on
-  // the same arched seam with no loose upper/lower plates.
   const sy=1-progress+progress*squeeze;
   const destY=rect.y*(1-progress) + (target+(rect.y-rect.cy)*squeeze)*progress;
   ctx.drawImage(img,x,rect.y,stripW,rect.h,x,destY,stripW+.5,rect.h*sy);
@@ -191,8 +195,7 @@ function lid(side,type,opening){
  ctx.restore();
 }
 function happyClosedPose(side,opening){
- const t=Math.max(0,Math.min(1,(.46-opening)/.46));
- const opacity=t*t*(3-2*t);
+ const opacity=closedPoseAlpha(opening);
  if(opacity<=0)return;
  ctx.save();
  ctx.globalAlpha*=opacity;
@@ -244,12 +247,11 @@ function tick(ms){
  ctx.scale(1+.02*wave,1-.024*wave);
  ctx.translate(-W*.5,-H*.5);
  draw("body_horns");
- // Only technical skin patches (sampled from the same JPEG) shift around eyes.
- // Source file order and ten original images remain unchanged.
+ // Source images and their order remain unchanged; eyelids are rigged only.
  const openL=Math.max(0,smoothed.eyeL*blink),openR=Math.max(0,smoothed.eyeR*blink);
- for(const [side,opening] of [["L",openL],["R",openR]]){
-  draw("skin_patch_"+side,{py:box("eye_white_"+side).cy,sy:1-0.04*(1-opening)});
- }
+ // The repaired body is already a solid, continuous face behind the eyes.
+ // Do NOT draw duplicate feathered skin patches: they used to lag and leave
+ // detached seams while the lids were moving.
  eye("L",openL,bounce.x,bounce.y);
  eye("R",openR,bounce.x,bounce.y);
  // Exactly the visible render order: lower L, lower R, upper R, upper L.
