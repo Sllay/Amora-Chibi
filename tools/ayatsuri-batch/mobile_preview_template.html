@@ -40,6 +40,7 @@ footer{font-size:.74rem;color:#aaa7ba;line-height:1.5;margin-top:12px}
 <h1>Amora Bolinha · Rig Lab</h1>
 <div class="sub">Prévia interativa com as 10 camadas originais. Não é o renderizador Cubism.</div>
 </header>
+<div id="js-disabled" role="alert" style="padding:10px;margin-bottom:10px;border:1px solid #a58db6;border-radius:8px;color:#e7d7f7;background:#35283c">Se esta mensagem permanecer na tela, o visualizador do iPhone não executou JavaScript. Abra a versão online no Safari para testar as animações.</div>
 <main>
 <section class="stage" aria-label="Prévia da Amora">
 <canvas id="amora" width="1254" height="1254" aria-label="Avatar animado da Amora"></canvas>
@@ -73,6 +74,7 @@ Esta prévia representa a lógica visual das expressões. A exportação <code>.
 </main>
 <script>
 "use strict";
+document.getElementById("js-disabled").remove();
 const source=__AMORA_PREVIEW_DATA__;
 const W=source.width,H=source.height, cv=document.getElementById("amora"),ctx=cv.getContext("2d",{alpha:true});
 cv.width=W;cv.height=H;
