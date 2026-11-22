@@ -357,6 +357,17 @@ fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
     if !moc.starts_with(b"MOC3") {
         return Err("ayatsuri export does not have MOC3 header".into());
     }
+    // Prove the generated binary can be read as a Cubism model, not merely
+    // identified by the magic header. Check that the active key bindings survive.
+    let reopened = ayatsuri_import::from_moc3(&moc)?;
+    let authored = imported.model.art_meshes.iter().filter(|m| !m.binding.axes.is_empty()).count();
+    let recovered = reopened.art_meshes.iter().filter(|m| !m.binding.axes.is_empty()).count();
+    if authored != recovered || reopened.parameters.len() != imported.model.parameters.len() {
+        return Err(format!("MOC3 lost keyforms or parameters: {authored} keyed meshes authored, {recovered} recovered").into());
+    }
+    if reopened.deformers.len() != imported.model.deformers.len() {
+        return Err("MOC3 lost the root motion deformer".into());
+    }
     fs::write(out.join(format!("{name}.moc3")), &moc)?;
 
     let tex_dir_name = format!("{name}.textures");
