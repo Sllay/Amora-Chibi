@@ -226,8 +226,10 @@ fn eyelid_vertex(x:f32,y:f32,eye:Region,lid:Region,opening:f32,kind:LidSide)->(f
 fn attached_skin_vertex(x:f32,y:f32,eye:Region,lid:Region,
                         opening:f32,kind:LidSide)->(f32,f32) {
     let (anchor,denom)=match kind {
-        LidSide::Upper=>(eye.cy-eye.h*0.95,eye.h*0.60),
-        LidSide::Lower=>(eye.cy+eye.h*0.95,eye.h*0.60),
+        // Lock the outer edge of the skin to the original white-of-eye
+        // silhouette; only the lash-side edge travels.
+        LidSide::Upper=>(eye.cy-eye.h*0.53,eye.h*0.22),
+        LidSide::Lower=>(eye.cy+eye.h*0.53,eye.h*0.22),
     };
     let weight=match kind {
         LidSide::Upper=>((y-anchor)/denom).clamp(0.,1.),
@@ -688,7 +690,7 @@ mod tests {
         let eye=Region{cx:0.,cy:0.,w:2.,h:2.};
         for (kind,lid,y_edge,y_anchor) in [
             (LidSide::Upper,Region{cx:0.,cy:-0.60,w:2.,h:0.3},-0.50,-1.9),
-            (LidSide::Lower,Region{cx:0.,cy:0.60,w:2.,h:0.3},0.50,1.9),
+            (LidSide::Lower,Region{cx:0.,cy:0.60,w:2.,h:0.3},0.50,1.06),
         ] {
             for opening in [0.,0.06,0.18,0.5,1.] {
                 let (_,skin_y)=attached_skin_vertex(0.,y_edge,eye,lid,opening,kind);
