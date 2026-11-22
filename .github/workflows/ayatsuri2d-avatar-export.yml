@@ -12,6 +12,9 @@ on:
       - ".github/workflows/ayatsuri2d-avatar-export.yml"
       - "tools/ayatsuri-batch/**"
       - "assets/amora-live2d/**"
+concurrency:
+  group: amora-ayatsuri-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 permissions:
   contents: write
 jobs:
