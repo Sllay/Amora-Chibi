@@ -10,11 +10,92 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import deque
 import shutil
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
+
+
+
+def fill_eye_hole(body: Image.Image, white: Image.Image) -> Image.Image:
+    """Repair the original JPEG's pure-white eye socket behind an eyelid.
+
+    The underlying artwork deliberately has white eye holes. They MUST be
+    covered when the animated eye mesh becomes fully closed. Reconstruct just
+    this technical hidden region from skin pixels directly above/below it;
+    never change the source JPEG or user-supplied eye art.
+    """
+    bounds = white.getchannel("A").getbbox()
+    if bounds is None:
+        raise ValueError("eye white has no painted area")
+    x0,y0,x1,y1 = bounds
+    cx,cy = (x0+x1)//2,(y0+y1)//2
+    pix = body.load()
+    def pure_white(x: int,y: int) -> bool:
+        r,g,b = pix[x,y][:3]
+        return min(r,g,b) >= 251 and max(r,g,b)-min(r,g,b) <= 2
+
+    seed = next(((x,y) for radius in range(0,35,4)
+                 for y in range(max(y0,cy-radius),min(y1,cy+radius+1),max(1,radius//2 or 1))
+                 for x in range(max(x0,cx-radius),min(x1,cx+radius+1),max(1,radius//2 or 1))
+                 if pure_white(x,y)),None)
+    if seed is None:
+        raise ValueError("body eye hole not found: refuse invisible blink")
+    q = deque([seed])
+    seen = {seed}
+    mask = Image.new("L",body.size,0)
+    px_mask = mask.load()
+    while q:
+        x,y = q.popleft()
+        if not pure_white(x,y):
+            continue
+        px_mask[x,y] = 255
+        for point in ((x-1,y),(x+1,y),(x,y-1),(x,y+1)):
+            nx,ny=point
+            if x0 <= nx < x1 and y0 <= ny < y1 and point not in seen:
+                seen.add(point)
+                q.append(point)
+        if len(seen) > (x1-x0)*(y1-y0)*.75:
+            raise ValueError("eye hole flood filled too much of the face")
+    filled_bounds = mask.getbbox()
+    if filled_bounds is None:
+        raise ValueError("eye hole mask unexpectedly empty")
+    bx0,by0,bx1,by1=filled_bounds
+    if (bx1-bx0)*(by1-by0) < 250:
+        raise ValueError("eye hole detected area is suspiciously small")
+    broad = mask.filter(ImageFilter.MaxFilter(19))
+    bb=broad.getbbox()
+    if bb is None:
+        raise ValueError("eye socket expansion failed")
+    output = body.copy()
+    edited = output.load()
+    broad_pix = broad.load()
+    def skin_sample(x: int,y: int) -> tuple[int,int,int,int]:
+        # Average neighboring JPEG pixels to avoid vertical sampling stripes.
+        samples=[]
+        for dx in (-6,-3,0,3,6):
+            for dy in (-2,0,2):
+                xx=min(body.width-1,max(0,x+dx))
+                yy=min(body.height-1,max(0,y+dy))
+                samples.append(pix[xx,yy])
+        return tuple(round(sum(c[i] for c in samples)/len(samples)) for i in range(4))
+    for x in range(bb[0],bb[2]):
+        ys=[y for y in range(bb[1],bb[3]) if broad_pix[x,y]]
+        if not ys:
+            continue
+        top,bottom=ys[0],ys[-1]
+        a=skin_sample(x,max(0,top-11))
+        b=skin_sample(x,min(body.height-1,bottom+11))
+        for y in ys:
+            ratio=(y-top)/max(1,bottom-top)
+            # smoothstep avoids a visible seam against the top/bottom skin.
+            t=ratio*ratio*(3-2*ratio)
+            edited[x,y]=tuple(round((1-t)*a[i]+t*b[i]) for i in range(4))
+    # Blend only the reconstructed eye hole into the unchanged source.
+    feather=broad.filter(ImageFilter.GaussianBlur(4))
+    return Image.composite(output,body,feather)
 
 
 def face_patch(body: Image.Image, white: Image.Image, lower: Image.Image, upper: Image.Image) -> Image.Image:
@@ -37,7 +118,8 @@ def face_patch(body: Image.Image, white: Image.Image, lower: Image.Image, upper:
     ImageDraw.Draw(mask).ellipse((round(w*.075),round(h*.075),
                                   round(w*.925),round(h*.925)), fill=255)
     mask = mask.filter(ImageFilter.GaussianBlur(radius=max(3,round(min(w,h)*.07))))
-    crop = body.crop((x0,y0,x1,y1)).copy()
+    repaired = fill_eye_hole(body,white)
+    crop = repaired.crop((x0,y0,x1,y1)).copy()
     crop.putalpha(mask)
     result = Image.new("RGBA",body.size,(0,0,0,0))
     result.alpha_composite(crop,(x0,y0))
@@ -118,7 +200,7 @@ def prepare(manifest_path: Path, out: Path) -> None:
                     "Body source is opaque JPEG. Preview places body behind eyes; source files untouched."},
                    indent=2) + "\n", encoding="utf-8")
     print("Validated 10 source layers. Only eye whites #1 and #3 replaced.")
-    print("Prepared 12 art meshes: ten untouched inputs plus two technical feathered skin patches.")
+    print("Prepared 12 art meshes: 10 untouched inputs plus 2 technical skin patches covering JPEG white eye holes.")
 
 
 if __name__ == "__main__":
