@@ -113,9 +113,11 @@ jobs:
           cp artifacts/amora-browser-surprised.png preview/surprised.png
           cp artifacts/amora-browser-wink-left.png preview/wink-left.png
           cp artifacts/amora-browser-half-blink.png preview/half-blink.png
+          cp artifacts/amora-browser-nearly-closed.png preview/nearly-closed.png
+          cp artifacts/amora-browser-closed-smile.png preview/closed-smile.png
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png preview/wink-left.png preview/half-blink.png
+          git add preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png preview/wink-left.png preview/half-blink.png preview/nearly-closed.png preview/closed-smile.png
           if ! git diff --cached --quiet; then
             git commit -m "ci(live2d): publish browser animation test [skip ci]"
             git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" || echo "Branch advanced while building; keeping artifact only."
@@ -134,6 +136,8 @@ jobs:
             artifacts/amora-browser-surprised.png
             artifacts/amora-browser-wink-left.png
             artifacts/amora-browser-half-blink.png
+            artifacts/amora-browser-nearly-closed.png
+            artifacts/amora-browser-closed-smile.png
             artifacts/amora-prepared/source_order.json
             artifacts/AmoraBolinha/
           if-no-files-found: error
