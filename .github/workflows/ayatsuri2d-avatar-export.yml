@@ -51,6 +51,9 @@ jobs:
           for side in ("L","R"):
               with Image.open(root/f"skin_patch_{side}.png") as patch:
                   assert patch.getchannel("A").getbbox(), f"Skin patch {side} empty"
+              with Image.open(root/f"closed_smile_{side}.png") as pose:
+                  bounds=pose.getchannel("A").getbbox()
+                  assert bounds and bounds[2]-bounds[0]>100 and bounds[3]-bounds[1]>30, f"Closure shape {side} invalid"
           print("Transparent body and eyelid skin patches verified.")
           PY
       - name: Generate self-contained mobile expression preview
@@ -99,7 +102,7 @@ jobs:
               assert payload["Parameters"]
           html = Path("artifacts/amora-mobile-preview.html").read_text()
           assert "data:image/png;base64," in html, "Offline assets are not embedded"
-          assert html.count("data:image/png;base64,") >= 12, "Missing technical transparent body or eye layers"
+          assert html.count("data:image/png;base64,") >= 14, "Missing technical closed-eye pose layers"
           assert "__AMORA_PREVIEW_DATA__" not in html
           print("Rig bundle, expressions and offline mobile preview verified.")
           PY
