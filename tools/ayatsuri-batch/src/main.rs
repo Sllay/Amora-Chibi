@@ -220,23 +220,16 @@ fn eyelid_vertex(x:f32,y:f32,eye:Region,lid:Region,opening:f32,kind:LidSide)->(f
 }
 
 
-/// Extend face skin *from* the moving lash border, not as a separate
-/// translating card. Vertices next to the lash use the EXACT same deformation
-/// as the lash. Farther face vertices remain anchored to the skull.
-fn attached_skin_vertex(x:f32,y:f32,eye:Region,lid:Region,
-                        opening:f32,kind:LidSide)->(f32,f32) {
-    let (anchor,denom)=match kind {
-        // Lock the outer edge of the skin to the original white-of-eye
-        // silhouette; only the lash-side edge travels.
-        LidSide::Upper=>(eye.cy-eye.h*0.53,eye.h*0.22),
-        LidSide::Lower=>(eye.cy+eye.h*0.53,eye.h*0.22),
-    };
-    let weight=match kind {
-        LidSide::Upper=>((y-anchor)/denom).clamp(0.,1.),
-        LidSide::Lower=>((anchor-y)/denom).clamp(0.,1.),
-    };
-    let (_,lash_y)=eyelid_vertex(x,y,eye,lid,opening,kind);
-    (x,y+(lash_y-y)*weight)
+/// The white-of-eye is an OPENING in the face, not a second skin card.
+/// Its upper and lower mesh rows follow the same deformation as the
+/// corresponding eyelash. The original repaired body underneath becomes
+/// visible where the opening contracts; the iris keeps its native shape.
+fn aperture_vertex(x:f32,y:f32,eye:Region,
+                   upper_lid:Region,lower_lid:Region,opening:f32)->(f32,f32) {
+    let v=((y-eye.cy)/eye.h+0.5).clamp(0.,1.);
+    let (_,top)=eyelid_vertex(x,y,eye,upper_lid,opening,LidSide::Upper);
+    let (_,bottom)=eyelid_vertex(x,y,eye,lower_lid,opening,LidSide::Lower);
+    (x,top*(1.-v)+bottom*v)
 }
 
 fn add_global_squash(model: &mut ayatsuri_format::model::Model, param: u32) {
@@ -374,11 +367,14 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         }
         let white = &mut imported.model.art_meshes[white_index];
         subdivide(white, 10, 6);
-        // Sclera stays in position and fully readable behind the eyelids.
-        // A curtain of skin, attached to each lash, reduces the open gap.
-        // No more shrinking the white/iris to simulate closing.
+        // Deform ONLY the sclera's silhouette: its top/bottom edges follow
+        // the matching eyelash. Behind it is the clean original face skin.
+        // The iris itself NEVER stretches and is clipped to this aperture.
+        let top=regions[&format!("upper_lid_{side}")];
+        let bottom=regions[&format!("lower_lid_{side}")];
         key_mesh(white, &[(eye_param,&open_keys)],
-            |_,x,y|(x,y), |v| eye_visibility(v[0]));
+            |v,x,y| aperture_vertex(x,y,eye,top,bottom,v[0]),
+            |v| eye_visibility(v[0]));
         let iris_name=format!("iris_{side}");
         if let Some(i)=idx(&iris_name) {
             let iris_region=regions[&iris_name];
@@ -406,23 +402,6 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                     (iris_region.cx + rel_x*stretch_x + v[1]*travel_x*opening + bounce_x*eye.w*0.065*opening,
                      center_y + rel_y*stretch_y + v[2]*travel_y*opening + bounce_y*eye.h*0.055*opening)
                 }, |v| eye_visibility(v[0]));
-        }
-        // Keep the upper/lower skin attached to the actual eyelash mesh.
-        // Both covers render ABOVE the eye but BELOW the lash contours.
-        for kind in ["upper","lower"] {
-            let skin_name=format!("skin_{kind}_{side}");
-            let lid_name=format!("{kind}_lid_{side}");
-            if let (Some(i),Some(_))=(idx(&skin_name),idx(&lid_name)) {
-                let lid_box=regions[&lid_name];
-                let skin=&mut imported.model.art_meshes[i];
-                subdivide(skin,24,10);
-                let edge=if kind=="upper" {LidSide::Upper} else {LidSide::Lower};
-                key_mesh(skin,&[(eye_param,&open_keys)],
-                    |v,x,y| attached_skin_vertex(x,y,eye,lid_box,v[0],edge),
-                    |v| 1.-closed_smile_visibility(v[0]));
-            } else {
-                return Err(format!("missing attached eyelid skin or lash: {skin_name}").into());
-            }
         }
         for (kind, upper) in [("upper",true),("lower",false)] {
             let name = format!("{kind}_lid_{side}");
@@ -686,18 +665,20 @@ mod tests {
     }
 
     #[test]
-    fn attached_face_skin_does_not_outrun_or_lag_eyelash_border() {
+    fn aperture_edges_follow_upper_and_lower_lash_exactly() {
         let eye=Region{cx:0.,cy:0.,w:2.,h:2.};
-        for (kind,lid,y_edge,y_anchor) in [
-            (LidSide::Upper,Region{cx:0.,cy:-0.60,w:2.,h:0.3},-0.50,-1.9),
-            (LidSide::Lower,Region{cx:0.,cy:0.60,w:2.,h:0.3},0.50,1.06),
-        ] {
-            for opening in [0.,0.06,0.18,0.5,1.] {
-                let (_,skin_y)=attached_skin_vertex(0.,y_edge,eye,lid,opening,kind);
-                let (_,lash_y)=eyelid_vertex(0.,y_edge,eye,lid,opening,kind);
-                assert!((skin_y-lash_y).abs()<1e-5,"skin detached from lash");
-                let (_,anchor_y)=attached_skin_vertex(0.,y_anchor,eye,lid,opening,kind);
-                assert!((anchor_y-y_anchor).abs()<1e-5,"face anchor moved");
+        let upper=Region{cx:0.,cy:-0.6,w:2.,h:0.3};
+        let lower=Region{cx:0.,cy:0.6,w:2.,h:0.3};
+        for opening in [0.,0.06,0.18,0.35,0.5,1.] {
+            for x in [-0.5,0.,0.5] {
+                for (y,lid,kind) in [
+                    (-eye.h*.5,upper,LidSide::Upper),
+                    (eye.h*.5,lower,LidSide::Lower)
+                ] {
+                    let (_,edge)=aperture_vertex(x,y,eye,upper,lower,opening);
+                    let (_,lash)=eyelid_vertex(x,y,eye,lid,opening,kind);
+                    assert!((edge-lash).abs()<1e-5,"white edge detached from eyelash");
+                }
             }
         }
     }
