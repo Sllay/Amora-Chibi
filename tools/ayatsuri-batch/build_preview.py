@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from PIL import Image
-from prepare_assets import face_patch
+from prepare_assets import face_patch, prepared_body
 
 def build(manifest: Path, output: Path) -> None:
     data = json.loads(manifest.read_text(encoding="utf-8"))
@@ -39,8 +39,13 @@ def build(manifest: Path, output: Path) -> None:
                     ";base64," + base64.b64encode(raw).decode("ascii"),
                 "box": list(box),
             }
+    body = prepared_body(rgba["body_horns"], rgba["eye_white_L"], rgba["eye_white_R"])
+    body_binary = io.BytesIO()
+    body.save(body_binary, format="PNG")
+    layers["body_horns"]["src"] = "data:image/png;base64,"+base64.b64encode(body_binary.getvalue()).decode("ascii")
+    layers["body_horns"]["box"] = list(body.getchannel("A").getbbox())
     for side in ("L","R"):
-        generated = face_patch(rgba["body_horns"],rgba[f"eye_white_{side}"],
+        generated = face_patch(body,rgba[f"eye_white_{side}"],
                                rgba[f"lower_lid_{side}"],rgba[f"upper_lid_{side}"])
         output_bytes = io.BytesIO()
         generated.save(output_bytes,format="PNG")
