@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from collections import deque
 import shutil
 import sys
@@ -153,6 +154,56 @@ def face_patch(body: Image.Image, white: Image.Image, lower: Image.Image, upper:
     return result
 
 
+
+def closed_smile_art(eye_white: Image.Image, upper_lid: Image.Image) -> Image.Image:
+    """A technical closed-eye keyform derived from the original lid pigment.
+
+    The 10 approved source images remain byte-identical. The upper and lower
+    meshes still deform toward their common seam. This mesh only supplies
+    the bold closed-expression silhouette missing from the input layer art.
+    """
+    bbox = eye_white.getchannel("A").getbbox()
+    top = upper_lid.getchannel("A").getbbox()
+    if bbox is None or top is None:
+        raise ValueError("Cannot derive closed-eye arc from empty source art")
+    x0,y0,x1,y1=bbox
+    cx,cy=(x0+x1)*0.5,(y0+y1)*0.5
+    width,height=x1-x0,y1-y0
+    # Pick the actual dark-pink/oxblood pigment from this eye's upper lid.
+    samples = Counter(
+        tuple((v//8)*8 for v in pixel[:3])
+        for pixel in upper_lid.crop(top).getdata()
+        if pixel[3]>=240 and pixel[0]<175 and pixel[1]<95 and pixel[2]<130
+    )
+    if not samples:
+        raise ValueError("No solid eyelid pigment found for closed-eye pose")
+    base=samples.most_common(1)[0][0]
+    color=(*base,255)
+    points_top,points_bottom=[],[]
+    for i in range(101):
+        u=-1.0+2*i/100
+        x=cx+u*width*0.63
+        arch=max(0.0,1.0-u*u)
+        center=cy+height*(0.035-0.205*arch)
+        thickness=height*(0.013+0.115*arch**0.7)
+        points_top.append((x,center-thickness*.46))
+        points_bottom.append((x,center+thickness*.54))
+    outline=points_top+list(reversed(points_bottom))
+    bx0=max(0,int(min(x for x,y in outline)-5))
+    by0=max(0,int(min(y for x,y in outline)-5))
+    bx1=min(eye_white.width,int(max(x for x,y in outline)+6))
+    by1=min(eye_white.height,int(max(y for x,y in outline)+6))
+    super_scale=4
+    patch=Image.new("RGBA",((bx1-bx0)*super_scale,(by1-by0)*super_scale),(0,0,0,0))
+    ImageDraw.Draw(patch).polygon(
+        [((x-bx0)*super_scale,(y-by0)*super_scale) for x,y in outline],fill=color
+    )
+    patch=patch.resize((bx1-bx0,by1-by0),Image.Resampling.LANCZOS)
+    result=Image.new("RGBA",eye_white.size,(0,0,0,0))
+    result.alpha_composite(patch,(bx0,by0))
+    return result
+
+
 def prepare(manifest_path: Path, out: Path) -> None:
     src = json.loads(manifest_path.read_text(encoding="utf-8"))
     if (src["width"], src["height"]) != (1254, 1254):
@@ -194,6 +245,10 @@ def prepare(manifest_path: Path, out: Path) -> None:
                          rgba[f"lower_lid_{side}"], rgba[f"upper_lid_{side}"])
         for side in ("L", "R")
     }
+    closed = {
+        side: closed_smile_art(rgba[f"eye_white_{side}"],rgba[f"upper_lid_{side}"])
+        for side in ("L","R")
+    }
     prepared_layers = []
     preview = Image.new("RGBA", (1254, 1254), (0, 0, 0, 0))
     for spec in ordered:
@@ -215,20 +270,27 @@ def prepare(manifest_path: Path, out: Path) -> None:
                 skin[side].save(out / technical_file)
                 preview.alpha_composite(skin[side])
                 prepared_layers.append({"name":technical,"group":"Face", "file":technical_file})
+        # The bold smiling eye exists only as a hidden animated expression
+        # pose; do not add it to the static open-eye assembled preview.
+        if spec["name"] in ("upper_lid_L","upper_lid_R"):
+            side=spec["name"][-1]
+            technical=f"closed_smile_{side}"
+            technical_file=f"layers/{technical}.png"
+            closed[side].save(out/technical_file)
+            prepared_layers.append({"name":technical,"group":"Eyes","file":technical_file})
 
     preview.save(out / "amora_montada.png")
     (out / "manifest.json").write_text(
         json.dumps({"name": src["name"], "width": 1254, "height": 1254,
                     "layers": prepared_layers}, indent=2) + "\n", encoding="utf-8")
     (out / "source_order.json").write_text(
-        json.dumps({"source_order": expected_names, "render_order":
-                    ["body_horns", "skin_patch_L", "skin_patch_R",
-                     *[v["name"] for v in ordered if v["name"] != "body_horns"]],
-                    "technical_derived_layers": ["skin_patch_L","skin_patch_R"], "warning":
+        json.dumps({"source_order": expected_names, "render_order": [v["name"] for v in prepared_layers],
+                    "technical_derived_layers": ["skin_patch_L","skin_patch_R",
+                                                  "closed_smile_L","closed_smile_R"], "warning":
                     "Body source is opaque JPEG. Preview places body behind eyes; source files untouched."},
                    indent=2) + "\n", encoding="utf-8")
     print("Validated 10 source layers. Only eye whites #1 and #3 replaced.")
-    print("Prepared 12 art meshes: 10 untouched inputs plus 2 technical skin patches covering JPEG white eye holes.")
+    print("Prepared 14 art meshes: ten untouched art inputs, two skin patches and two closed-expression keyforms.")
 
 
 if __name__ == "__main__":
