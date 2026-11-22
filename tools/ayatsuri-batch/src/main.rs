@@ -249,7 +249,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         key_mesh(white, &[(eye_param,&open_keys)], |v,x,y| {
             let opening = v[0];
             (x, eye.cy + (y-eye.cy)*(0.045 + 0.955*opening))
-        }, |v| v[0].min(1.));
+        }, |v| (v[0]*4.).min(1.));
         let iris_name=format!("iris_{side}");
         if let Some(i)=idx(&iris_name) {
             let iris_region=regions[&iris_name];
@@ -264,7 +264,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                     let opening=v[0];
                     (x + v[1]*travel_x*opening,
                      eye.cy + (y-eye.cy)*(0.045+0.955*opening) + v[2]*travel_y*opening)
-                }, |v| v[0].min(1.));
+                }, |v| (v[0]*4.).min(1.));
         }
         for (kind, upper) in [("upper",true),("lower",false)] {
             let name = format!("{kind}_lid_{side}");
@@ -315,6 +315,8 @@ fn export_expressions(root: &Path, name: &str) -> Result<Vec<serde_json::Value>>
         ("Annoyed",&[("ParamEyeLOpen",0.54),("ParamEyeROpen",0.54),("ParamMouthForm",-0.85),("ParamMouthOpenY",0.)]),
         ("WinkLeft",&[("ParamEyeLOpen",0.),("ParamEyeROpen",1.),("ParamMouthForm",0.7)]),
         ("WinkRight",&[("ParamEyeLOpen",1.),("ParamEyeROpen",0.),("ParamMouthForm",0.7)]),
+        ("Shy",&[("ParamEyeLOpen",0.58),("ParamEyeROpen",0.58),("ParamMouthForm",0.6),("ParamMouthOpenY",0.08),("ParamEyeBallY",0.3)]),
+        ("Curious",&[("ParamEyeLOpen",1.),("ParamEyeROpen",0.76),("ParamMouthForm",0.2),("ParamMouthOpenY",0.1),("ParamEyeBallX",0.42)]),
     ];
     let mut files=Vec::new();
     for (preset, params) in presets {
