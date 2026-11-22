@@ -173,6 +173,13 @@ fn key_mesh(
 
 
 
+// The sclera/iris are concealed by a narrow lid aperture. Fade the small
+// residual opening rather than exposing a flattened pink iris stripe.
+fn eye_visibility(opening: f32) -> f32 {
+    let t=((opening-0.03)/0.47).clamp(0.,1.);
+    t*t*(3.-2.*t)
+}
+
 fn add_global_squash(model: &mut ayatsuri_format::model::Model, param: u32) {
     // One shared 4x4 lattice deforms all art consistently. This is more
     // efficient than multiplying every eye/iris mesh's Cartesian keyform axes.
@@ -315,7 +322,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
             let opening = v[0];
             let seam = eye.cy+eye.h*0.11;
             (x, seam + (y-eye.cy)*(0.035 + 0.965*opening) - eye.h*0.11*opening)
-        }, |v| (v[0]*5.0).min(1.));
+        }, |v| eye_visibility(v[0]));
         let iris_name=format!("iris_{side}");
         if let Some(i)=idx(&iris_name) {
             let iris_region=regions[&iris_name];
@@ -336,11 +343,13 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                     let bounce_x=v[3]; let bounce_y=v[4];
                     let stretch_x=1.0+(bounce_x.abs()*0.055 + v[1].abs()*0.018);
                     let stretch_y=1.0+(bounce_y.abs()*0.065 - bounce_x.abs()*0.022);
-                    let squash=(0.035 + 0.965*opening);
-                    let center_y = eye.cy + (iris_region.cy-eye.cy)*squash;
+                    // Eyelid opening is the APERTURE, not an iris scale.
+                    // Preserve iris anatomy through the blink and let the
+                    // changing sclera mask reveal/hide it naturally.
+                    let center_y = iris_region.cy + (eye.cy-iris_region.cy)*(1.-opening)*0.05;
                     (iris_region.cx + rel_x*stretch_x + v[1]*travel_x*opening + bounce_x*eye.w*0.065*opening,
-                     center_y + rel_y*stretch_y*squash + v[2]*travel_y*opening + bounce_y*eye.h*0.055*opening)
-                }, |v| (v[0]*5.0).min(1.));
+                     center_y + rel_y*stretch_y + v[2]*travel_y*opening + bounce_y*eye.h*0.055*opening)
+                }, |v| eye_visibility(v[0]));
         }
         for (kind, upper) in [("upper",true),("lower",false)] {
             let name = format!("{kind}_lid_{side}");
@@ -593,6 +602,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn eyelid_aperture_visibility_is_smooth() {
+        assert_eq!(eye_visibility(0.0), 0.0);
+        assert!(eye_visibility(0.18) < eye_visibility(0.5));
+        assert!(eye_visibility(0.18) < 0.35);
+        assert_eq!(eye_visibility(0.5), 1.0);
+        assert_eq!(eye_visibility(1.0), 1.0);
+    }
+
     #[test]
     fn can_export_two_synthetic_layers_without_a_gui() {
         let layer = |name: &str| Layer {
