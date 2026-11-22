@@ -14,7 +14,7 @@ from collections import deque
 import shutil
 import sys
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 
 
@@ -98,6 +98,33 @@ def fill_eye_hole(body: Image.Image, white: Image.Image) -> Image.Image:
     return Image.composite(output,body,feather)
 
 
+
+def remove_border_background(image: Image.Image) -> Image.Image:
+    """Cut near-white canvas background only if connected to the border."""
+    rgb = image.convert("RGB")
+    red, green, blue = rgb.split()
+    cutoff = lambda channel: channel.point(lambda p: 255 if p >= 244 else 0)
+    near_white = ImageChops.multiply(
+        ImageChops.multiply(cutoff(red), cutoff(green)), cutoff(blue)
+    )
+    if near_white.getpixel((0, 0)) != 255:
+        raise ValueError("Expected white JPEG background at image corner")
+    ImageDraw.floodfill(near_white, (0, 0), 128, thresh=0)
+    alpha = near_white.point(lambda p: 0 if p == 128 else 255)
+    alpha = alpha.filter(ImageFilter.MinFilter(3))
+    alpha = alpha.filter(ImageFilter.GaussianBlur(radius=0.45))
+    output = image.convert("RGBA")
+    output.putalpha(alpha)
+    return output
+
+
+def prepared_body(body: Image.Image, eye_white_l: Image.Image, eye_white_r: Image.Image) -> Image.Image:
+    """Replace white holes with skin, then remove the white JPEG background."""
+    repaired = fill_eye_hole(body, eye_white_l)
+    repaired = fill_eye_hole(repaired, eye_white_r)
+    return remove_border_background(repaired)
+
+
 def face_patch(body: Image.Image, white: Image.Image, lower: Image.Image, upper: Image.Image) -> Image.Image:
     """Feathered patch sampled ONLY from original body JPEG; no painted pixels."""
     bounds = [im.getchannel("A").getbbox() for im in (white, lower, upper)]
@@ -161,8 +188,9 @@ def prepare(manifest_path: Path, out: Path) -> None:
     # Source list remains ten items. Derived skin pieces render immediately
     # after the original body; the user's images / hashes remain untouched.
     ordered = [src["layers"][4], *src["layers"][0:4], *src["layers"][5:]]
+    clean_body = prepared_body(rgba["body_horns"], rgba["eye_white_L"], rgba["eye_white_R"])
     skin = {
-        side: face_patch(rgba["body_horns"], rgba[f"eye_white_{side}"],
+        side: face_patch(clean_body, rgba[f"eye_white_{side}"],
                          rgba[f"lower_lid_{side}"], rgba[f"upper_lid_{side}"])
         for side in ("L", "R")
     }
@@ -173,10 +201,10 @@ def prepare(manifest_path: Path, out: Path) -> None:
         filename = Path(spec["file"]).stem + ".png"
         target = out / "layers" / filename
         if spec["name"] == "body_horns":
-            rgba[spec["name"]].save(target)
+            clean_body.save(target)
         else:
             shutil.copyfile(orig, target)  # exact unchanged original PNG bytes
-        preview.alpha_composite(rgba[spec["name"]])
+        preview.alpha_composite(clean_body if spec["name"] == "body_horns" else rgba[spec["name"]])
         prepared_layers.append({
             "name": spec["name"], "group": spec["group"], "file": f"layers/{filename}"
         })
