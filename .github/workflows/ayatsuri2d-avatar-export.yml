@@ -13,7 +13,7 @@ on:
       - "tools/ayatsuri-batch/**"
       - "assets/amora-live2d/**"
 permissions:
-  contents: read
+  contents: write
 jobs:
   ayatsuri-headless:
     runs-on: ubuntu-24.04
@@ -27,7 +27,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: tools/ayatsuri-batch
-      - name: Test real Ayatsuri2D Rust static exporter
+      - name: Test Ayatsuri2D live parameter exporter
         run: cargo test --manifest-path tools/ayatsuri-batch/Cargo.toml --all-targets
       - name: Install Pillow for lossless layer validation
         run: python -m pip install --disable-pip-version-check --user pillow==11.3.0
@@ -35,10 +35,29 @@ jobs:
         run: |
           python tools/ayatsuri-batch/prepare_assets.py \
             assets/amora-live2d/manifest.json artifacts/amora-prepared
+      - name: Validate technical PNG background and repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          root=Path("artifacts/amora-prepared/layers")
+          with Image.open(root/"05_body_horns.png") as body:
+              assert body.mode == "RGBA"
+              assert body.getpixel((0, 0))[3] == 0, "Opaque white JPEG background remains"
+              assert body.getpixel((625, 925))[3] > 240, "Face interior was cut away"
+          for side in ("L","R"):
+              with Image.open(root/f"skin_patch_{side}.png") as patch:
+                  assert patch.getchannel("A").getbbox(), f"Skin patch {side} empty"
+          print("Transparent body and eyelid skin patches verified.")
+          PY
       - name: Generate self-contained mobile expression preview
         run: |
           python tools/ayatsuri-batch/build_preview.py \
             assets/amora-live2d/manifest.json artifacts/amora-mobile-preview.html
+      - name: Browser-test animated HTML with Chromium
+        run: |
+          npm install --prefix tools/ayatsuri-batch --no-save puppeteer-core@24.24.1
+          node tools/ayatsuri-batch/validate_preview.cjs artifacts/amora-mobile-preview.html
       - name: Export actual Amora parameter-bound MOC3 model
         run: |
           cargo run --release --manifest-path tools/ayatsuri-batch/Cargo.toml -- \
@@ -54,7 +73,14 @@ jobs:
           for key in (refs["Moc"], refs["DisplayInfo"], *refs["Textures"]):
               assert (root / key).is_file(), f"Missing referenced file: {key}"
           assert (root / refs["Moc"]).read_bytes()[:4] == b"MOC3"
-          assert len(refs.get("Expressions", [])) >= 6, "Missing expression presets"
+          assert len(refs.get("Expressions", [])) >= 8, "Missing expression presets"
+          motions=refs.get("Motions",{}).get("Idle",[])
+          assert motions, "Missing idle demonstration motion"
+          for motion in motions:
+              p=root/motion["File"]
+              assert p.is_file(), f"Missing motion {p}"
+              m=json.loads(p.read_text())
+              assert m["Meta"]["Loop"] and m["Meta"]["CurveCount"] >= 5
           for expression in refs["Expressions"]:
               exp = root / expression["File"]
               assert exp.is_file(), f"Expression file missing: {exp}"
@@ -63,10 +89,22 @@ jobs:
               assert payload["Parameters"]
           html = Path("artifacts/amora-mobile-preview.html").read_text()
           assert "data:image/png;base64," in html, "Offline assets are not embedded"
-          assert "data:image/jpeg;base64," in html, "Original body JPEG missing"
+          assert html.count("data:image/png;base64,") >= 12, "Missing technical transparent body or eye layers"
           assert "__AMORA_PREVIEW_DATA__" not in html
           print("Rig bundle, expressions and offline mobile preview verified.")
           PY
+      - name: Publish self-contained HTML on public GitHub branch for Safari
+        if: github.event_name == 'push' && github.ref_name == 'feat/ayatsuri2d-actions-prototype'
+        run: |
+          mkdir -p preview
+          cp artifacts/amora-mobile-preview.html preview/index.html
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add preview/index.html
+          if ! git diff --cached --quiet; then
+            git commit -m "ci(live2d): publish browser animation test [skip ci]"
+            git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" || echo "Branch advanced while building; keeping artifact only."
+          fi
       - name: Publish animated-parameter rig, unchanged source files and preview
         uses: actions/upload-artifact@v4
         with:
@@ -76,6 +114,9 @@ jobs:
             assets/amora-live2d/layers/
             artifacts/amora-prepared/amora_montada.png
             artifacts/amora-mobile-preview.html
+            artifacts/amora-browser-neutral.png
+            artifacts/amora-browser-sleepy.png
+            artifacts/amora-browser-surprised.png
             artifacts/amora-prepared/source_order.json
             artifacts/AmoraBolinha/
           if-no-files-found: error
