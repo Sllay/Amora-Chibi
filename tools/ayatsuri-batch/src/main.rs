@@ -334,6 +334,55 @@ fn export_expressions(root: &Path, name: &str) -> Result<Vec<serde_json::Value>>
     Ok(files)
 }
 
+
+fn create_idle_motion(out: &Path, name: &str) -> Result<String> {
+    /// A diagnostic loop: the MOC3 must move even if tracking is disabled.
+    /// It is selectable as an idle animation in VTube Studio, not enabled
+    /// automatically (so facial tracking is not silently overridden).
+    let filename = format!("{name}_IdleTest.motion3.json");
+    let path = out.join("motions");
+    fs::create_dir_all(&path)?;
+    let loops: &[(&str, &[(f32, f32)])] = &[
+        ("ParamEyeLOpen",&[(0.,1.),(1.5,1.),(1.61,0.),(1.78,1.),(4.7,1.),(4.82,0.),(4.99,1.),(6.,1.)]),
+        ("ParamEyeROpen",&[(0.,1.),(1.5,1.),(1.61,0.),(1.78,1.),(4.7,1.),(4.82,0.),(4.99,1.),(6.,1.)]),
+        ("ParamEyeBallX",&[(0.,0.),(2.,0.),(2.8,0.7),(3.7,0.7),(4.3,-0.5),(5.2,0.),(6.,0.)]),
+        ("ParamEyeBallY",&[(0.,0.),(1.,0.),(2.,-0.3),(3.,0.),(6.,0.)]),
+        ("ParamMouthOpenY",&[(0.,0.),(2.,0.),(2.4,0.5),(2.9,0.),(6.,0.)]),
+        ("ParamBreath",&[(0.,0.5),(1.5,0.85),(3.,0.5),(4.5,0.15),(6.,0.5)]),
+        ("ParamBodyAngleZ",&[(0.,0.),(1.5,1.4),(3.,0.),(4.5,-1.4),(6.,0.)]),
+    ];
+    let mut curves=Vec::new();
+    let mut points=0usize;
+    let mut segments=0usize;
+    for (id, keys) in loops {
+        let mut data=vec![keys[0].0,keys[0].1];
+        points+=keys.len();
+        segments+=keys.len()-1;
+        for &(time,value) in &keys[1..] {
+            data.extend([0.,time,value]);
+        }
+        curves.push(json!({"Target":"Parameter","Id":id,"Segments":data}));
+    }
+    let doc=json!({
+        "Version":3,
+        "Meta":{
+            "Duration":6.0,"Fps":30.0,"Loop":true,
+            "AreBeziersRestricted":true,
+            "CurveCount":curves.len(),"TotalSegmentCount":segments,
+            "TotalPointCount":points,"UserDataCount":0,"TotalUserDataSize":0,
+        },
+        "Curves":curves
+    });
+    let bytes=serde_json::to_vec_pretty(&doc)?;
+    // Validate actual Cubism motion3 syntax through Ayatsuri's decoder.
+    let reopened=ayatsuri_import::from_motion3(&bytes,"diagnostic")?;
+    if reopened.curves.len()!=loops.len() || !reopened.looped {
+        return Err("diagnostic idle motion lost curves or loop metadata".into());
+    }
+    fs::write(path.join(&filename),bytes)?;
+    Ok(format!("motions/{filename}"))
+}
+
 fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
     let mut imported = from_layers(doc)?;
     if imported.skipped != 0 || imported.scaled != 0 {
@@ -395,6 +444,7 @@ fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
     let cdi_file = format!("{name}.cdi3.json");
     fs::write(out.join(&cdi_file), serde_json::to_vec_pretty(&display_info)?)?;
     let expressions = export_expressions(out, name)?;
+    let idle_motion = create_idle_motion(out, name)?;
     let model3 = json!({
         "Version": 3,
         "FileReferences": {
@@ -402,6 +452,7 @@ fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
             "Textures": texture_refs,
             "DisplayInfo": cdi_file,
             "Expressions": expressions,
+            "Motions": { "Idle": [{"File":idle_motion, "FadeInTime":0.3, "FadeOutTime":0.3}] },
         },
         "Groups": [
             { "Target": "Parameter", "Name": "EyeBlink", "Ids": ["ParamEyeLOpen", "ParamEyeROpen"] },
