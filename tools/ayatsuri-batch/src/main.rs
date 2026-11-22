@@ -180,6 +180,29 @@ fn eye_visibility(opening: f32) -> f32 {
     t*t*(3.-2.*t)
 }
 
+#[derive(Clone, Copy)]
+enum LidSide { Upper, Lower }
+
+/// ParamEyeOpen: 1=original art, 0=upper and lower lid meet on one
+/// smile-shaped arc. The CLOSED target is intentionally a narrow shared
+/// curved band (not two separate rigid eyelids translated past each other).
+/// Uses the measured original eye and lid bounds. No new source texture.
+fn eyelid_vertex(x:f32,y:f32,eye:Region,lid:Region,opening:f32,kind:LidSide)->(f32,f32) {
+    let shut=(1.-opening.clamp(0.,1.)).clamp(0.,1.);
+    let u=((x-eye.cx)/(eye.w*0.55).max(0.0001)).clamp(-1.,1.);
+    let arch=(1.-u*u).max(0.);
+    // Ends are slightly lower than the crown, like the supplied happy-eye
+    // reference. Both lids converge on the SAME curve at full closure.
+    let smile=eye.cy + eye.h*(0.035-0.205*arch);
+    let (progress, squeeze, seam_offset)=match kind {
+        LidSide::Upper=>(shut.powf(0.75),0.048,-0.012),
+        LidSide::Lower=>(shut.powf(1.35),0.024, 0.010),
+    };
+    let target=smile+eye.h*seam_offset+(y-lid.cy)*squeeze;
+    (x,y+(target-y)*progress)
+}
+
+
 fn add_global_squash(model: &mut ayatsuri_format::model::Model, param: u32) {
     // One shared 4x4 lattice deforms all art consistently. This is more
     // efficient than multiplying every eye/iris mesh's Cartesian keyform axes.
@@ -357,22 +380,14 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                 let old=regions[&name];
                 let lid=&mut imported.model.art_meshes[i];
                 subdivide(lid, 12, 5);
-                key_mesh(lid,&[(eye_param,&open_keys)],|v,x,y| {
-                    let shut=(1.-v[0]).powf(0.82);
-                    let norm=((x-eye.cx)/(eye.w*0.55).max(0.0001)).clamp(-1.,1.);
-                    let arc=(1.-norm*norm).max(0.).powi(2);
-                    // Upper lashes create the final smiling arch and lead the
-                    // blink. Lower lid barely moves: no opposing sliding plates.
-                    if upper {
-                        let target=eye.cy+eye.h*0.10;
-                        let travel=(target-old.cy)*shut*(0.65+0.35*arc);
-                        let smile=-eye.h*0.105*shut*arc;
-                        (x+(eye.cx-x)*0.018*shut*arc, y+travel+smile)
-                    } else {
-                        let travel=-eye.h*0.055*shut*(0.55+0.45*arc);
-                        (x, y+travel+eye.h*0.016*shut*arc)
-                    }
-                }, |_| 1.);
+                // Retarget BOTH lid meshes to the same smiling closure
+                // seam. At 0 they form one curved line; at 1 the original
+                // upper and lower art geometry is reproduced exactly.
+                let kind=if upper {LidSide::Upper} else {LidSide::Lower};
+                key_mesh(lid,&[(eye_param,&open_keys)],
+                    |v,x,y| eyelid_vertex(x,y,eye,old,v[0],kind),
+                    |v| if upper {1.} else {1.-0.62*(1.-v[0]).powi(3)});
+
             }
         }
     }
@@ -602,6 +617,30 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn happy_blink_upper_and_lower_lids_meet_on_same_arch() {
+        let eye=Region {cx:0.,cy:0.,w:2.,h:2.};
+        let top=Region {cx:0.,cy:-0.6,w:2.,h:0.8};
+        let bottom=Region {cx:0.,cy:0.65,w:2.,h:0.45};
+        for &open in &[0.,0.18,0.5,1.] {
+            let (_,uy)=eyelid_vertex(0.,top.cy,eye,top,open,LidSide::Upper);
+            let (_,ly)=eyelid_vertex(0.,bottom.cy,eye,bottom,open,LidSide::Lower);
+            assert!(uy.is_finite()&&ly.is_finite());
+            if open==1. {
+                assert!((uy-top.cy).abs()<1e-6);
+                assert!((ly-bottom.cy).abs()<1e-6);
+            }
+            if open==0. {
+                assert!((uy-ly).abs() < eye.h*0.04, "closed lids must meet");
+                let (_,edge)=eyelid_vertex(eye.w*0.51,top.cy,eye,top,open,LidSide::Upper);
+                assert!(uy < edge-eye.h*0.12, "closed smile crown is above corners");
+            }
+        }
+        let (_,upper_mid)=eyelid_vertex(0.,top.cy,eye,top,0.5,LidSide::Upper);
+        let (_,lower_mid)=eyelid_vertex(0.,bottom.cy,eye,bottom,0.5,LidSide::Lower);
+        assert!(upper_mid>top.cy && lower_mid<bottom.cy, "both lids must participate");
+    }
+
     #[test]
     fn eyelid_aperture_visibility_is_smooth() {
         assert_eq!(eye_visibility(0.0), 0.0);
