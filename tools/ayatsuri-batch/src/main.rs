@@ -672,8 +672,8 @@ mod tests {
         for opening in [0.,0.06,0.18,0.35,0.5,1.] {
             for x in [-0.5,0.,0.5] {
                 for (y,lid,kind) in [
-                    (-eye.h*.5,upper,LidSide::Upper),
-                    (eye.h*.5,lower,LidSide::Lower)
+                    (-eye.h*0.5,upper,LidSide::Upper),
+                    (eye.h*0.5,lower,LidSide::Lower)
                 ] {
                     let (_,edge)=aperture_vertex(x,y,eye,upper,lower,opening);
                     let (_,lash)=eyelid_vertex(x,y,eye,lid,opening,kind);
