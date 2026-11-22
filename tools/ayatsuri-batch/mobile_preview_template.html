@@ -173,8 +173,12 @@ function tick(ms){
  ctx.scale(pulse,pulse);
  ctx.translate(-W*.5,-H*.5);
  draw("body_horns");
- // The JPEG is intentionally painted behind all transparent eye layers.
+ // Only technical skin patches (sampled from the same JPEG) shift around eyes.
+ // Source file order and ten original images remain unchanged.
  const openL=Math.max(0,smoothed.eyeL*blink),openR=Math.max(0,smoothed.eyeR*blink);
+ for(const [side,opening] of [["L",openL],["R",openR]]){
+  draw("skin_patch_"+side,{py:box("eye_white_"+side).cy,sy:1-0.04*(1-opening)});
+ }
  eye("L",openL,smoothed.lookX,smoothed.lookY);
  eye("R",openR,smoothed.lookX,smoothed.lookY);
  // Exactly the visible render order: lower L, lower R, upper R, upper L.
@@ -191,7 +195,7 @@ Promise.all(Object.entries(source.layers).map(([name,info])=>new Promise((resolv
  img.onload=resolve;img.onerror=()=>reject(new Error("Falha na camada "+name));
  img.src=info.src;
 }))).then(()=>{
- document.getElementById("status").textContent="10 camadas carregadas · parâmetros ativos · prévia pronta";
+ document.getElementById("status").textContent="10 camadas fonte + 2 patches técnicos carregados · prévia pronta";
  requestAnimationFrame(tick);
 }).catch(error=>{document.getElementById("status").textContent=error.message;});
 </script>
