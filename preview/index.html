@@ -139,20 +139,28 @@ function springGaze(delta){
   bounce[axis]=Math.max(-1.25,Math.min(1.25,bounce[axis]));
  }
 }
+function eyeVisibility(opening){
+ const t=Math.max(0,Math.min(1,(opening-.03)/.47));
+ return t*t*(3-2*t);
+}
 function eye(side, opening,lookX,lookY){
  const id="eye_white_"+side,irid="iris_"+side;
  const b=box(id),ib=box(irid);
+ // Only the eye OPENING collapses. The iris itself keeps its original
+ // round shape and is clipped by the diminishing sclera aperture.
  const scale=.035+.965*opening;
  const seam=b.cy+b.h*.11*(1-opening);
- draw(id,{py:b.cy,dy:seam-b.cy,sy:scale});
+ const visibility=eyeVisibility(opening);
  ctx.save();
+ ctx.globalAlpha*=visibility;
+ draw(id,{py:b.cy,dy:seam-b.cy,sy:scale});
  ctx.beginPath();
  ctx.ellipse(b.cx,seam,Math.max(1,b.w*.49),Math.max(1,b.h*scale*.49),0,0,Math.PI*2);
  ctx.clip();
  const tx=Math.max(b.w*.1,b.w-ib.w)*.36*lookX*opening;
  const ty=Math.max(b.h*.1,b.h-ib.h)*.29*lookY*opening;
  const kinetic=Math.min(.085,Math.abs(bounce.vx)*.008+Math.abs(bounce.vy)*.006);
- draw(irid,{py:b.cy,dx:tx,dy:ty+seam-b.cy,sy:scale*(1-kinetic*.36),sx:1+kinetic});
+ draw(irid,{py:ib.cy,dx:tx,dy:ty+(seam-b.cy)*.05,sy:1-kinetic*.36,sx:1+kinetic});
  ctx.restore();
 }
 function lid(side,type,opening){
