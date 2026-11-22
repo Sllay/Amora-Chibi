@@ -190,20 +190,27 @@ enum LidSide { Upper, Lower }
 // A dedicated pose supplies the thicker curved lash silhouette at full
 // closure. The original upper+lower art continues to deform toward it.
 fn closed_smile_visibility(opening:f32)->f32 {
-    let t=((0.46-opening)/0.46).clamp(0.,1.);
+    // Blend final silhouette in alongside BOTH moving lids; neither leads.
+    let t=((0.50-opening)/0.50).clamp(0.,1.);
     t*t*(3.-2.*t)
 }
 
+fn lid_close_progress(opening:f32)->f32 {
+    // Exactly the same timing for upper and lower lids: no upper-ahead,
+    // lower-behind drift from mismatched nonlinear easing functions.
+    let shut=(1.-opening).clamp(0.,1.);
+    shut*shut*(3.-2.*shut)
+}
+
 fn eyelid_vertex(x:f32,y:f32,eye:Region,lid:Region,opening:f32,kind:LidSide)->(f32,f32) {
-    let shut=(1.-opening.clamp(0.,1.)).clamp(0.,1.);
+    let progress=lid_close_progress(opening);
     let u=((x-eye.cx)/(eye.w*0.55).max(0.0001)).clamp(-1.,1.);
     let arch=(1.-u*u).max(0.);
-    // Ends are slightly lower than the crown, like the supplied happy-eye
-    // reference. Both lids converge on the SAME curve at full closure.
+    // A shared smile-shaped seam, exactly the same in both lid meshes.
     let smile=eye.cy + eye.h*(0.035-0.205*arch);
-    let (progress, squeeze, seam_offset)=match kind {
-        LidSide::Upper=>(shut.powf(0.75),0.048,-0.012),
-        LidSide::Lower=>(shut.powf(1.15),0.024, 0.010),
+    let (squeeze, seam_offset)=match kind {
+        LidSide::Upper=>(0.048,-0.005),
+        LidSide::Lower=>(0.048, 0.005),
     };
     let target=smile+eye.h*seam_offset+(y-lid.cy)*squeeze;
     (x,y+(target-y)*progress)
@@ -336,15 +343,12 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         if let Some(i) = idx(&format!("skin_patch_{side}")) {
             let skin=&mut imported.model.art_meshes[i];
             subdivide(skin, 16, 12);
-            key_mesh(skin, &[(eye_param,&open_keys)], |v,x,y| {
-                let shut=1.-v[0];
-                let nx=((x-eye.cx)/(eye.w*0.8).max(0.0001)).abs();
-                let ny=((y-eye.cy)/(eye.h*0.85).max(0.0001)).abs();
-                let weight=(1.-nx).max(0.)*(1.-ny).max(0.);
-                let push=eye.h*0.085*shut*weight;
-                (x-(x-eye.cx)*0.045*shut*weight,
-                 y + if y<eye.cy {push} else {-push})
-            }, |_|1.);
+            // The cleaned body already fills the original white JPEG eye
+            // holes. Moving a duplicated patch over that same face created
+            // visible detached skin and out-of-sync edges in VTube Studio.
+            // Keep the legacy mesh for package continuity, but make it inert.
+            key_mesh(skin, &[(eye_param,&open_keys)],
+                |_,x,y|(x,y), |_|0.);
         }
         let white = &mut imported.model.art_meshes[white_index];
         subdivide(white, 10, 6);
@@ -393,8 +397,9 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                 let kind=if upper {LidSide::Upper} else {LidSide::Lower};
                 key_mesh(lid,&[(eye_param,&open_keys)],
                     |v,x,y| eyelid_vertex(x,y,eye,old,v[0],kind),
-                    |v| if upper {1.-0.72*(1.-v[0]).powi(3)}
-                         else {1.-0.82*(1.-v[0]).powi(3)});
+                    // Both physical lid meshes hand over to the bold
+                    // closed eyelash shape at the SAME rate.
+                    |v| 1.-closed_smile_visibility(v[0]));
 
             }
         }
@@ -639,6 +644,20 @@ mod tests {
         assert_eq!(closed_smile_visibility(0.5),0.);
         assert!(closed_smile_visibility(0.18)>0.5);
         assert_eq!(closed_smile_visibility(0.),1.);
+    }
+
+    #[test]
+    fn lids_share_exact_closure_easing_and_overlay_handoff() {
+        for opening in [0.0,0.18,0.35,0.50,0.75,1.0] {
+            let p=lid_close_progress(opening);
+            assert!((0.0..=1.0).contains(&p));
+            let alpha=closed_smile_visibility(opening);
+            assert!((1.0-alpha+alpha-1.0).abs() < 1e-6);
+        }
+        assert_eq!(lid_close_progress(0.),1.);
+        assert_eq!(lid_close_progress(1.),0.);
+        assert_eq!(closed_smile_visibility(0.),1.);
+        assert_eq!(closed_smile_visibility(1.),0.);
     }
 
     #[test]
