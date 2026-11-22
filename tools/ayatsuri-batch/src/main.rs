@@ -3,7 +3,7 @@
 //! This is still a test rig, not a finalized facial mesh or soft-body simulation.
 
 use std::{collections::{HashMap, HashSet}, env, fs, path::{Component, Path, PathBuf}};
-use ayatsuri_format::model::{ArtMesh, BindingAxis, Deformer, DeformerKind, Parameter, RotationData, Binding};
+use ayatsuri_format::model::{ArtMesh, BindingAxis, Deformer, DeformerKind, Parameter, RotationData, Binding, PhysicsIo, PhysicsInput, PhysicsOutput, PhysicsNode, PhysicsGroup, PhysicsRig, PhysicsRange};
 use ayatsuri_import::{Blend, Document, ExportVersion, Layer, from_layers, to_moc3};
 use serde::Deserialize;
 use serde_json::json;
@@ -171,6 +171,50 @@ fn key_mesh(
     }
 }
 
+
+fn add_squash_axis(mesh: &mut ArtMesh, squash: u32) {
+    let old_positions=mesh.positions.clone();
+    let old_opacities=mesh.opacities.clone();
+    let old_orders=mesh.draw_orders.clone();
+    let old_n=mesh.binding.keyform_count();
+    assert_eq!(old_n * mesh.vertex_count as usize * 2, old_positions.len());
+    mesh.binding.axes.push(BindingAxis {parameter:squash,keys:vec![-1.,0.,1.]});
+    mesh.positions=Vec::with_capacity(old_positions.len()*3);
+    mesh.opacities=Vec::with_capacity(old_n*3);
+    mesh.draw_orders=Vec::with_capacity(old_n*3);
+    for amount in [-1.0f32,0.,1.] {
+        let sx=1.-amount*0.027;
+        let sy=1.+amount*0.038;
+        for p in old_positions.chunks_exact(2) {
+            mesh.positions.extend([p[0]*sx, p[1]*sy]);
+        }
+        mesh.opacities.extend(&old_opacities);
+        mesh.draw_orders.extend(&old_orders);
+    }
+}
+
+fn attach_soft_physics(model: &mut ayatsuri_format::model::Model) {
+    let nodes=|| vec![
+        PhysicsNode {x:0.,y:0.,mobility:0.95,delay:1.0,acceleration:1.,radius:0.},
+        PhysicsNode {x:0.,y:1.,mobility:0.84,delay:1.25,acceleration:0.75,radius:1.},
+        PhysicsNode {x:0.,y:1.75,mobility:0.89,delay:1.5,acceleration:0.75,radius:0.75},
+    ];
+    let norm_position=PhysicsRange {min:-1.,default:0.,max:1.};
+    let norm_angle=PhysicsRange {min:-30.,default:0.,max:30.};
+    let sources=[
+        ("IrisInertiaX","ParamEyeBallX","ParamIrisBounceX",PhysicsIo::X,0.55),
+        ("IrisInertiaY","ParamEyeBallY","ParamIrisBounceY",PhysicsIo::Y,0.52),
+        ("AmoraBodySquash","ParamBodyAngleZ","ParamBodySquash",PhysicsIo::Angle,0.35),
+    ];
+    let groups=sources.into_iter().map(|(id,source,target,kind,scale)| PhysicsGroup {
+        id:id.into(),name:id.into(),
+        inputs:vec![PhysicsInput {param:source.into(),weight:100.,kind,reflect:false}],
+        outputs:vec![PhysicsOutput {param:target.into(),vertex:2,scale,weight:100.,kind,reflect:false}],
+        nodes:nodes(),norm_position,norm_angle,
+    }).collect();
+    model.physics=Some(PhysicsRig {fps:60.,gravity_x:0.,gravity_y:-1.,wind_x:0.,wind_y:0.,groups});
+}
+
 fn add_root_motion(model: &mut ayatsuri_format::model::Model, angle: u32, body_angle: u32, breath: u32) {
     let angles = [-30., 0., 30.];
     let leans = [-10., 0., 10.];
@@ -219,10 +263,13 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
     let mouth_form=par("ParamMouthForm")?;
     let angle=par("ParamAngleZ")?; let body_angle=par("ParamBodyAngleZ")?;
     let breath=par("ParamBreath")?;
+    let iris_bounce_x=par("ParamIrisBounceX")?;
+    let iris_bounce_y=par("ParamIrisBounceY")?;
+    let squash=par("ParamBodySquash")?;
     let names = imported.mesh_names.clone();
     let regions: HashMap<String,Region> = names.iter().cloned().zip(imported.model.art_meshes.iter().map(Region::of)).collect();
     let idx = |name: &str| names.iter().position(|n| n==name);
-    let open_keys = [0., 0.25, 0.6, 1.];
+    let open_keys = [0., 0.18, 0.50, 1.];
     let look_keys = [-1., 0., 1.];
     for (side, eye_param) in [("L",leye),("R",reye)] {
         let white_name = format!("eye_white_{side}");
@@ -248,8 +295,9 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         subdivide(white, 10, 6);
         key_mesh(white, &[(eye_param,&open_keys)], |v,x,y| {
             let opening = v[0];
-            (x, eye.cy + (y-eye.cy)*(0.045 + 0.955*opening))
-        }, |v| (v[0]*4.).min(1.));
+            let seam = eye.cy+eye.h*0.11;
+            (x, seam + (y-eye.cy)*(0.035 + 0.965*opening) - eye.h*0.11*opening)
+        }, |v| (v[0]*5.0).min(1.));
         let iris_name=format!("iris_{side}");
         if let Some(i)=idx(&iris_name) {
             let iris_region=regions[&iris_name];
@@ -259,12 +307,22 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
             iris.masks=vec![white_index as u32];
             let travel_x = (eye.w-iris_region.w).max(eye.w*0.10).min(eye.w*0.20)*0.42;
             let travel_y = (eye.h-iris_region.h).max(eye.h*0.10).min(eye.h*0.25)*0.32;
-            key_mesh(iris, &[(eye_param,&open_keys),(look_x,&look_keys),(look_y,&look_keys)],
+            // Inertial bounce channels are driven by exported Cubism physics3.
+            // Gentle overshoot and elastic squash accompany gaze transitions.
+            key_mesh(iris, &[(eye_param,&open_keys),(look_x,&look_keys),(look_y,&look_keys),
+                             (iris_bounce_x,&look_keys),(iris_bounce_y,&look_keys)],
                 |v,x,y| {
                     let opening=v[0];
-                    (x + v[1]*travel_x*opening,
-                     eye.cy + (y-eye.cy)*(0.045+0.955*opening) + v[2]*travel_y*opening)
-                }, |v| (v[0]*4.).min(1.));
+                    let rel_x=x-iris_region.cx;
+                    let rel_y=y-iris_region.cy;
+                    let bounce_x=v[3]; let bounce_y=v[4];
+                    let stretch_x=1.0+(bounce_x.abs()*0.055 + v[1].abs()*0.018);
+                    let stretch_y=1.0+(bounce_y.abs()*0.065 - bounce_x.abs()*0.022);
+                    let squash=(0.035 + 0.965*opening);
+                    let center_y = eye.cy + (iris_region.cy-eye.cy)*squash;
+                    (iris_region.cx + rel_x*stretch_x + v[1]*travel_x*opening + bounce_x*eye.w*0.065*opening,
+                     center_y + rel_y*stretch_y*squash + v[2]*travel_y*opening + bounce_y*eye.h*0.055*opening)
+                }, |v| (v[0]*5.0).min(1.));
         }
         for (kind, upper) in [("upper",true),("lower",false)] {
             let name = format!("{kind}_lid_{side}");
@@ -273,11 +331,20 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                 let lid=&mut imported.model.art_meshes[i];
                 subdivide(lid, 12, 5);
                 key_mesh(lid,&[(eye_param,&open_keys)],|v,x,y| {
-                    let shut=1.-v[0];
-                    let target=eye.cy + if upper { -eye.h*0.065 } else { eye.h*0.065 };
-                    let arch=(1.-((x-eye.cx)/(eye.w*0.55).max(0.0001)).powi(2)).max(0.)
-                        * eye.h * 0.09 * if upper {-1.} else {1.};
-                    (x, y+(target-old.cy)*shut+arch*shut)
+                    let shut=(1.-v[0]).powf(0.82);
+                    let norm=((x-eye.cx)/(eye.w*0.55).max(0.0001)).clamp(-1.,1.);
+                    let arc=(1.-norm*norm).max(0.).powi(2);
+                    // Upper lashes create the final smiling arch and lead the
+                    // blink. Lower lid barely moves: no opposing sliding plates.
+                    if upper {
+                        let target=eye.cy+eye.h*0.10;
+                        let travel=(target-old.cy)*shut*(0.65+0.35*arc);
+                        let smile=-eye.h*0.105*shut*arc;
+                        (x+(eye.cx-x)*0.018*shut*arc, y+travel+smile)
+                    } else {
+                        let travel=-eye.h*0.055*shut*(0.55+0.45*arc);
+                        (x, y+travel+eye.h*0.016*shut*arc)
+                    }
                 }, |_| 1.);
             }
         }
@@ -290,11 +357,23 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         let form_keys = [-1., 0., 1.];
         key_mesh(mouth,&[(mouth_open,&open_keys),(mouth_form,&form_keys)],
             |v,x,y| {
-                (mouth_region.cx+(x-mouth_region.cx)*(1.+0.15*v[1]),
-                 mouth_region.cy+(y-mouth_region.cy)*(1.+0.60*v[0]))
+                let vertical=((y-mouth_region.cy)/(mouth_region.h*0.5).max(0.0001)).clamp(-1.,1.);
+                let upper=(1.-vertical)*0.5;
+                let lower=(1.+vertical)*0.5;
+                let horizontal=((x-mouth_region.cx)/(mouth_region.w*0.5).max(0.0001)).clamp(-1.,1.);
+                let center=(1.-horizontal.abs()).max(0.);
+                let spread=1.+0.09*v[0]+0.12*v[1];
+                let lip_shift=mouth_region.h*v[0]*(0.12*upper+0.44*lower);
+                let arch=-mouth_region.h*v[1]*center*0.13;
+                (mouth_region.cx+(x-mouth_region.cx)*spread,
+                 y+lip_shift+arch)
             }, |_|1.);
     }
+    // Global squash preserves alignment: every existing keyform is repeated
+    // under the same additional axis rather than deforming the body alone.
+    for mesh in &mut imported.model.art_meshes { add_squash_axis(mesh,squash); }
     add_root_motion(&mut imported.model,angle,body_angle,breath);
+    attach_soft_physics(&mut imported.model);
     for m in &imported.model.art_meshes {
         let n=m.binding.keyform_count();
         if m.positions.len()!=n*m.vertex_count as usize*2 ||
@@ -396,11 +475,14 @@ fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
         parameter("ParamEyeROpen", 0.0, 1.0, 1.0),
         parameter("ParamEyeBallX", -1.0, 1.0, 0.0),
         parameter("ParamEyeBallY", -1.0, 1.0, 0.0),
+        parameter("ParamIrisBounceX", -1.0, 1.0, 0.0),
+        parameter("ParamIrisBounceY", -1.0, 1.0, 0.0),
         parameter("ParamMouthOpenY", 0.0, 1.0, 0.0),
         parameter("ParamMouthForm", -1.0, 1.0, 0.0),
         parameter("ParamAngleZ", -30.0, 30.0, 0.0),
         parameter("ParamBodyAngleZ", -10.0, 10.0, 0.0),
         parameter("ParamBreath", 0.0, 1.0, 0.5),
+        parameter("ParamBodySquash", -1.0, 1.0, 0.0),
     ]);
     attach_live_rig(&mut imported)?;
     fs::create_dir_all(out)?;
@@ -444,6 +526,14 @@ fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
     let cdi_file = format!("{name}.cdi3.json");
     fs::write(out.join(&cdi_file), serde_json::to_vec_pretty(&display_info)?)?;
     let expressions = export_expressions(out, name)?;
+    let physics_filename=format!("{name}.physics3.json");
+    let rig=imported.model.physics.as_ref().ok_or("soft-body physics missing")?;
+    let physics_data=ayatsuri_import::to_physics3(rig);
+    let parsed=ayatsuri_import::from_physics3(&physics_data)?;
+    if parsed.groups.len()!=3 || parsed.groups.iter().any(|g| g.inputs.is_empty()||g.outputs.is_empty()) {
+        return Err("physics3 did not roundtrip all three inertial controllers".into());
+    }
+    fs::write(out.join(&physics_filename),physics_data)?;
     let idle_motion = create_idle_motion(out, name)?;
     let model3 = json!({
         "Version": 3,
@@ -452,6 +542,7 @@ fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
             "Textures": texture_refs,
             "DisplayInfo": cdi_file,
             "Expressions": expressions,
+            "Physics": physics_filename,
             "Motions": { "Idle": [{"File":idle_motion, "FadeInTime":0.3, "FadeOutTime":0.3}] },
         },
         "Groups": [
