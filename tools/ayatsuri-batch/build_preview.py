@@ -56,7 +56,7 @@ def build(manifest: Path, output: Path) -> None:
         }
         # Same procedurally derived closed pose as the actual MOC3 importer:
         # never use different artwork in the HTML demonstration.
-        closure = closed_smile_art(rgba[f"eye_white_{side}"],rgba[f"upper_lid_{side}"])
+        closure = closed_smile_art(rgba[f"eye_white_{side}"],rgba[f"upper_lid_{side}"],side)
         closed_data=io.BytesIO()
         closure.save(closed_data,format="PNG")
         layers[f"closed_smile_{side}"] = {
