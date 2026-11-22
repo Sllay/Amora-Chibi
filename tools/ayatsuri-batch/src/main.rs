@@ -3,7 +3,7 @@
 //! This is still a test rig, not a finalized facial mesh or soft-body simulation.
 
 use std::{collections::{HashMap, HashSet}, env, fs, path::{Component, Path, PathBuf}};
-use ayatsuri_format::model::{ArtMesh, BindingAxis, Deformer, DeformerKind, Parameter, RotationData, Binding, PhysicsIo, PhysicsInput, PhysicsOutput, PhysicsNode, PhysicsGroup, PhysicsRig, PhysicsRange};
+use ayatsuri_format::model::{ArtMesh, BindingAxis, Deformer, DeformerKind, Parameter, RotationData, WarpData, Binding, PhysicsIo, PhysicsInput, PhysicsOutput, PhysicsNode, PhysicsGroup, PhysicsRig, PhysicsRange};
 use ayatsuri_import::{Blend, Document, ExportVersion, Layer, from_layers, to_moc3};
 use serde::Deserialize;
 use serde_json::json;
@@ -172,24 +172,42 @@ fn key_mesh(
 }
 
 
-fn add_squash_axis(mesh: &mut ArtMesh, squash: u32) {
-    let old_positions=mesh.positions.clone();
-    let old_opacities=mesh.opacities.clone();
-    let old_orders=mesh.draw_orders.clone();
-    let old_n=mesh.binding.keyform_count();
-    assert_eq!(old_n * mesh.vertex_count as usize * 2, old_positions.len());
-    mesh.binding.axes.push(BindingAxis {parameter:squash,keys:vec![-1.,0.,1.]});
-    mesh.positions=Vec::with_capacity(old_positions.len()*3);
-    mesh.opacities=Vec::with_capacity(old_n*3);
-    mesh.draw_orders=Vec::with_capacity(old_n*3);
+
+fn add_global_squash(model: &mut ayatsuri_format::model::Model, param: u32) {
+    // One shared 4x4 lattice deforms all art consistently. This is more
+    // efficient than multiplying every eye/iris mesh's Cartesian keyform axes.
+    let (extent, cols, rows)=(0.65f32,4u32,4u32);
+    let mut positions=Vec::new();
     for amount in [-1.0f32,0.,1.] {
-        let sx=1.-amount*0.027;
-        let sy=1.+amount*0.038;
-        for p in old_positions.chunks_exact(2) {
-            mesh.positions.extend([p[0]*sx, p[1]*sy]);
+        for row in 0..=rows {
+            for col in 0..=cols {
+                let x=-extent+2.*extent*(col as f32/cols as f32);
+                let y=-extent+2.*extent*(row as f32/rows as f32);
+                positions.extend([x*(1.-0.027*amount),y*(1.+0.038*amount)]);
+            }
         }
-        mesh.opacities.extend(&old_opacities);
-        mesh.draw_orders.extend(&old_orders);
+    }
+    let parent=0u32; // Root rotation/respiration deformer was already added.
+    let warp_index=model.deformers.len() as u32;
+    model.deformers.push(Deformer {
+        id:"AmoraSoftBodyLattice".into(),parent_part:None,
+        parent_deformer:Some(parent),visible:true,enabled:true,
+        binding:Binding {axes:vec![BindingAxis {
+            parameter:param,keys:vec![-1.,0.,1.]
+        }],curves:vec![]},
+        kind:DeformerKind::Warp(WarpData {
+            rows,cols,quad:true,opacities:vec![1.;3],positions,
+        }),
+        multiply:Vec::new(),screen:Vec::new(),blend_shapes:Vec::new(),
+    });
+    // Meshes below a warp are expressed in the warp's [0,1]^2 domain,
+    // not canvas coordinates; all of their keyforms require conversion.
+    for mesh in &mut model.art_meshes {
+        for p in mesh.positions.chunks_exact_mut(2) {
+            p[0]=(p[0]+extent)/(2.*extent);
+            p[1]=(p[1]+extent)/(2.*extent);
+        }
+        mesh.parent_deformer=Some(warp_index);
     }
 }
 
@@ -369,10 +387,8 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                  y+lip_shift+arch)
             }, |_|1.);
     }
-    // Global squash preserves alignment: every existing keyform is repeated
-    // under the same additional axis rather than deforming the body alone.
-    for mesh in &mut imported.model.art_meshes { add_squash_axis(mesh,squash); }
     add_root_motion(&mut imported.model,angle,body_angle,breath);
+    add_global_squash(&mut imported.model,squash);
     attach_soft_physics(&mut imported.model);
     for m in &imported.model.art_meshes {
         let n=m.binding.keyform_count();
