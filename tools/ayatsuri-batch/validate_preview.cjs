@@ -40,11 +40,15 @@ async function run() {
   await new Promise(resolve=>setTimeout(resolve,500));
   const surprised=await digest();
   await page.screenshot({path:path.join(path.dirname(html),"amora-browser-surprised.png"),fullPage:true});
+  await page.click('[data-expr="WinkLeft"]');
+  await new Promise(resolve=>setTimeout(resolve,500));
+  const wink=await digest();
+  await page.screenshot({path:path.join(path.dirname(html),"amora-browser-wink-left.png"),fullPage:true});
   if(errors.length)throw Error("Browser errors: "+errors.join(" | "));
-  if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0)throw Error("Opaque background remains around Amora");
-  if(!neutral.center||!sleepy.center||!surprised.center)throw Error("Center of Amora is not rendered");
-  if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash)throw Error("Expressions did not change canvas pixels");
-  console.log(JSON.stringify({ok:true,loaded_layers:12,neutral,sleepy,surprised,errors},null,2));
+  if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0||wink.corner!==0)throw Error("Opaque background remains around Amora");
+  if(!neutral.center||!sleepy.center||!surprised.center||!wink.center)throw Error("Center of Amora is not rendered");
+  if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash||wink.hash===surprised.hash)throw Error("Expressions did not change canvas pixels");
+  console.log(JSON.stringify({ok:true,loaded_layers:12,neutral,sleepy,surprised,wink,errors},null,2));
  }finally{await browser.close();}
 }
 run().catch(err=>{console.error(err.stack||err);process.exitCode=1;});
