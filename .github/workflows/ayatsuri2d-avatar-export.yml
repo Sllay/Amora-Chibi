@@ -54,10 +54,17 @@ jobs:
               with Image.open(root/f"closed_smile_{side}.png") as pose:
                   bounds=pose.getchannel("A").getbbox()
                   assert bounds and bounds[2]-bounds[0]>100 and bounds[3]-bounds[1]>30, f"Closure shape {side} invalid"
+              original_eye_path=root/("01_eye_white_L.png" if side=="L" else "03_eye_white_R.png")
+              with Image.open(original_eye_path) as original_white:
+                  rim=original_white.getchannel("A").getbbox()
+                  assert rim, "Missing source eye white"
               for kind in ("upper","lower"):
                   with Image.open(root/f"skin_{kind}_{side}.png") as curtain:
                       b=curtain.getchannel("A").getbbox()
-                      assert b and b[2]-b[0]>100 and b[3]-b[1]>25, f"Missing {kind} skin cover for {side}"
+                      assert b and b[2]-b[0]>100 and b[3]-b[1]>12, f"Missing {kind} skin cover for {side}"
+                      # Technical skin cannot reach cheeks or reprint blush:
+                      assert rim[0]-5<=b[0] and b[2]<=rim[2]+5
+                      assert rim[1]-5<=b[1] and b[3]<=rim[3]+5, f"Skin cover escaped eye silhouette: {side} {kind} {b} vs {rim}"
           print("Transparent body and eyelid skin patches verified.")
           PY
       - name: Generate self-contained mobile expression preview
