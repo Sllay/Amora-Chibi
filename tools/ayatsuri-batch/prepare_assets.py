@@ -155,7 +155,7 @@ def face_patch(body: Image.Image, white: Image.Image, lower: Image.Image, upper:
 
 
 
-def closed_smile_art(eye_white: Image.Image, upper_lid: Image.Image) -> Image.Image:
+def closed_smile_art(eye_white: Image.Image, upper_lid: Image.Image, side: str) -> Image.Image:
     """A technical closed-eye keyform derived from the original lid pigment.
 
     The 10 approved source images remain byte-identical. The upper and lower
@@ -189,15 +189,38 @@ def closed_smile_art(eye_white: Image.Image, upper_lid: Image.Image) -> Image.Im
         points_top.append((x,center-thickness*.46))
         points_bottom.append((x,center+thickness*.54))
     outline=points_top+list(reversed(points_bottom))
-    bx0=max(0,int(min(x for x,y in outline)-5))
-    by0=max(0,int(min(y for x,y in outline)-5))
-    bx1=min(eye_white.width,int(max(x for x,y in outline)+6))
-    by1=min(eye_white.height,int(max(y for x,y in outline)+6))
+    # Preserve the distinctive outward eyelash "puxadinho" of the original
+    # upper lid instead of terminating the closed eye as a plain almond.
+    # Left eye flicks left, right eye flicks right; pigment is sampled from
+    # the original upper lid and geometry is generated only for the rig.
+    if side not in ("L","R"):
+        raise ValueError("closed-eye side must be L or R")
+    outward=-1 if side=="L" else 1
+    x_outer=cx+outward*width*.63
+    y_outer=cy+height*.035
+    x_inner=cx+outward*width*.49
+    y_inner=cy+height*(.035-.205*(1-(.49/.63)**2))
+    lash_primary=[
+        (x_inner,y_inner-height*.058),
+        (cx+outward*width*.77, y_outer-height*.082),
+        (cx+outward*width*.685,y_outer+height*.020),
+        (x_inner,y_inner+height*.058),
+    ]
+    lash_secondary=[
+        (cx+outward*width*.60,y_outer-height*.010),
+        (cx+outward*width*.71,y_outer+height*.088),
+        (cx+outward*width*.55,y_outer+height*.055),
+    ]
+    shapes=[outline,lash_primary,lash_secondary]
+    bx0=max(0,int(min(x for shape in shapes for x,y in shape)-5))
+    by0=max(0,int(min(y for shape in shapes for x,y in shape)-5))
+    bx1=min(eye_white.width,int(max(x for shape in shapes for x,y in shape)+6))
+    by1=min(eye_white.height,int(max(y for shape in shapes for x,y in shape)+6))
     super_scale=4
     patch=Image.new("RGBA",((bx1-bx0)*super_scale,(by1-by0)*super_scale),(0,0,0,0))
-    ImageDraw.Draw(patch).polygon(
-        [((x-bx0)*super_scale,(y-by0)*super_scale) for x,y in outline],fill=color
-    )
+    drawer=ImageDraw.Draw(patch)
+    for shape in shapes:
+        drawer.polygon([((x-bx0)*super_scale,(y-by0)*super_scale) for x,y in shape],fill=color)
     patch=patch.resize((bx1-bx0,by1-by0),Image.Resampling.LANCZOS)
     result=Image.new("RGBA",eye_white.size,(0,0,0,0))
     result.alpha_composite(patch,(bx0,by0))
@@ -246,7 +269,7 @@ def prepare(manifest_path: Path, out: Path) -> None:
         for side in ("L", "R")
     }
     closed = {
-        side: closed_smile_art(rgba[f"eye_white_{side}"],rgba[f"upper_lid_{side}"])
+        side: closed_smile_art(rgba[f"eye_white_{side}"],rgba[f"upper_lid_{side}"],side)
         for side in ("L","R")
     }
     prepared_layers = []
