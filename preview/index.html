@@ -127,23 +127,66 @@ function draw(id, opts={}){
  ctx.drawImage(img,b.x,b.y,b.w,b.h,b.x-px,b.y-py,b.w,b.h);
  ctx.restore();
 }
+const bounce={x:0,y:0,vx:0,vy:0};
+function springGaze(delta){
+ const dt=Math.min(.025,Math.max(.001,delta));
+ for(const axis of ["x","y"]){
+  const target=wanted[axis==="x"?"lookX":"lookY"];
+  const vel="v"+axis;
+  bounce[vel]+=(target-bounce[axis])*95*dt;
+  bounce[vel]*=Math.exp(-11*dt);
+  bounce[axis]+=bounce[vel]*dt;
+  bounce[axis]=Math.max(-1.25,Math.min(1.25,bounce[axis]));
+ }
+}
 function eye(side, opening,lookX,lookY){
- const id="eye_white_"+side, irid="iris_"+side;
- const b=box(id),ib=box(irid),scale=.045+.955*opening;
- draw(id,{py:b.cy,sy:scale});
+ const id="eye_white_"+side,irid="iris_"+side;
+ const b=box(id),ib=box(irid);
+ const scale=.035+.965*opening;
+ const seam=b.cy+b.h*.11*(1-opening);
+ draw(id,{py:b.cy,dy:seam-b.cy,sy:scale});
  ctx.save();
  ctx.beginPath();
- ctx.ellipse(b.cx,b.cy,Math.max(1,b.w*.49),Math.max(1,b.h*scale*.49),0,0,Math.PI*2);
+ ctx.ellipse(b.cx,seam,Math.max(1,b.w*.49),Math.max(1,b.h*scale*.49),0,0,Math.PI*2);
  ctx.clip();
- const tx=Math.max(b.w*.1,b.w-ib.w)*.42*lookX*opening;
- const ty=Math.max(b.h*.1,b.h-ib.h)*.32*lookY*opening;
- draw(irid,{py:b.cy,sy:scale,dx:tx,dy:ty});
+ const tx=Math.max(b.w*.1,b.w-ib.w)*.36*lookX*opening;
+ const ty=Math.max(b.h*.1,b.h-ib.h)*.29*lookY*opening;
+ const kinetic=Math.min(.085,Math.abs(bounce.vx)*.008+Math.abs(bounce.vy)*.006);
+ draw(irid,{py:b.cy,dx:tx,dy:ty+seam-b.cy,sy:scale*(1-kinetic*.36),sx:1+kinetic});
  ctx.restore();
 }
 function lid(side,type,opening){
- const white=box("eye_white_"+side),lidName=type+"_lid_"+side,rect=box(lidName),closed=1-opening;
- const target=white.cy+(type==="upper"?-white.h*.065:white.h*.065);
- draw(lidName,{dy:(target-rect.cy)*closed,sx:1+.012*closed});
+ const lidName=type+"_lid_"+side,rect=box(lidName),eye=box("eye_white_"+side);
+ const shut=Math.pow(1-opening,.82);
+ const img=images[lidName],strips=36,stripW=rect.w/strips;
+ // Local piecewise mesh approximation; avoid moving each lid as a rigid card.
+ for(let i=0;i<strips;i++){
+  const x=rect.x+i*stripW;
+  const u=((x+stripW*.5-eye.cx)/(eye.w*.55));
+  const arch=Math.pow(Math.max(0,1-Math.min(1,u*u)),2);
+  let dy=0,dx=0;
+  if(type==="upper"){
+   const target=eye.cy+eye.h*.10;
+   dy=(target-rect.cy)*shut*(.65+.35*arch)-eye.h*.105*shut*arch;
+   dx=(eye.cx-(x+stripW*.5))*.018*shut*arch;
+  }else{
+   dy=-eye.h*.055*shut*(.55+.45*arch)+eye.h*.016*shut*arch;
+  }
+  ctx.drawImage(img,x,rect.y,stripW,rect.h,x+dx,rect.y+dy,stripW+.4,rect.h);
+ }
+}
+function mouthDraw(opening,form){
+ const b=box("mouth"),img=images.mouth,strips=24,part=b.h/strips;
+ for(let i=0;i<strips;i++){
+  const y=b.y+i*part;
+  const n=((y+part*.5-b.cy)/(b.h*.5));
+  const upper=(1-n)*.5,lower=(1+n)*.5;
+  const dy=b.h*opening*(.12*upper+.44*lower)-b.h*form*.03;
+  const width=1+.09*opening+.12*form;
+  const destW=b.w*width;
+  const destX=b.cx-destW*.5;
+  ctx.drawImage(img,b.x,y,b.w,part,destX,y+dy,destW,part+1);
+ }
 }
 cv.addEventListener("pointermove",event=>{
  if(!document.getElementById("follow").checked)return;
@@ -158,6 +201,7 @@ let previous=0,nextBlink=2,blinkStart=-100;
 function tick(ms){
  const t=ms/1000,delta=Math.min(.05,Math.max(0,t-previous));previous=t;
  for(const id in wanted)smoothed[id]+= (wanted[id]-smoothed[id])*(1-Math.exp(-delta*13));
+ springGaze(delta);
  let blink=1;
  if(document.getElementById("autoBlink").checked){
   if(t>nextBlink){blinkStart=t;nextBlink=t+2.5+Math.random()*3.3;}
@@ -171,8 +215,9 @@ function tick(ms){
  ctx.save();
  ctx.translate(W*.5,H*.5);
  ctx.rotate((smoothed.angle+(idle ? 0.8*Math.sin(t*.74) : 0))*Math.PI/180);
- const pulse=idle?1+.008*Math.sin(t*1.7):1;
- ctx.scale(pulse,pulse);
+ const wave=idle?Math.sin(t*1.7):0;
+ // Soft-body elastic breathing: horizontal and vertical axes oppose each other.
+ ctx.scale(1+.02*wave,1-.024*wave);
  ctx.translate(-W*.5,-H*.5);
  draw("body_horns");
  // Only technical skin patches (sampled from the same JPEG) shift around eyes.
@@ -181,13 +226,12 @@ function tick(ms){
  for(const [side,opening] of [["L",openL],["R",openR]]){
   draw("skin_patch_"+side,{py:box("eye_white_"+side).cy,sy:1-0.04*(1-opening)});
  }
- eye("L",openL,smoothed.lookX,smoothed.lookY);
- eye("R",openR,smoothed.lookX,smoothed.lookY);
+ eye("L",openL,bounce.x,bounce.y);
+ eye("R",openR,bounce.x,bounce.y);
  // Exactly the visible render order: lower L, lower R, upper R, upper L.
  lid("L","lower",openL);lid("R","lower",openR);
  lid("R","upper",openR);lid("L","upper",openL);
- const mouth=box("mouth");
- draw("mouth",{px:mouth.cx,py:mouth.cy,sx:1+.15*smoothed.form,sy:1+.6*smoothed.mouth});
+ mouthDraw(smoothed.mouth,smoothed.form);
  ctx.restore();
  requestAnimationFrame(tick);
 }
