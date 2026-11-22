@@ -228,6 +228,22 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         let white_name = format!("eye_white_{side}");
         let Some(white_index) = idx(&white_name) else { continue; };
         let eye = regions[&white_name];
+        // Local skin from the *original* JPEG: a feathered patch follows the
+        // area above/below the sclera as the eyelids meet. This avoids
+        // stretching the complete face or horns to close one eye.
+        if let Some(i) = idx(&format!("skin_patch_{side}")) {
+            let skin=&mut imported.model.art_meshes[i];
+            subdivide(skin, 16, 12);
+            key_mesh(skin, &[(eye_param,&open_keys)], |v,x,y| {
+                let shut=1.-v[0];
+                let nx=((x-eye.cx)/(eye.w*.8).max(0.0001)).abs();
+                let ny=((y-eye.cy)/(eye.h*.85).max(0.0001)).abs();
+                let weight=(1.-nx).max(0.)*(1.-ny).max(0.);
+                let push=eye.h*.085*shut*weight;
+                (x-(x-eye.cx)*.045*shut*weight,
+                 y + if y<eye.cy {push} else {-push})
+            }, |_|1.);
+        }
         let white = &mut imported.model.art_meshes[white_index];
         subdivide(white, 10, 6);
         key_mesh(white, &[(eye_param,&open_keys)], |v,x,y| {
