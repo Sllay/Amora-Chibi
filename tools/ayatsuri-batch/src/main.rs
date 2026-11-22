@@ -187,6 +187,13 @@ enum LidSide { Upper, Lower }
 /// smile-shaped arc. The CLOSED target is intentionally a narrow shared
 /// curved band (not two separate rigid eyelids translated past each other).
 /// Uses the measured original eye and lid bounds. No new source texture.
+// A dedicated pose supplies the thicker curved lash silhouette at full
+// closure. The original upper+lower art continues to deform toward it.
+fn closed_smile_visibility(opening:f32)->f32 {
+    let t=((0.46-opening)/0.46).clamp(0.,1.);
+    t*t*(3.-2.*t)
+}
+
 fn eyelid_vertex(x:f32,y:f32,eye:Region,lid:Region,opening:f32,kind:LidSide)->(f32,f32) {
     let shut=(1.-opening.clamp(0.,1.)).clamp(0.,1.);
     let u=((x-eye.cx)/(eye.w*0.55).max(0.0001)).clamp(-1.,1.);
@@ -386,9 +393,18 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                 let kind=if upper {LidSide::Upper} else {LidSide::Lower};
                 key_mesh(lid,&[(eye_param,&open_keys)],
                     |v,x,y| eyelid_vertex(x,y,eye,old,v[0],kind),
-                    |v| if upper {1.} else {1.-0.62*(1.-v[0]).powi(3)});
+                    |v| if upper {1.-0.72*(1.-v[0]).powi(3)}
+                         else {1.-0.82*(1.-v[0]).powi(3)});
 
             }
+        }
+        // The reference's happy closed eye is a bold arch, not a hairline.
+        // This technical keyform draws that silhouette as BOTH existing lid
+        // meshes finish converging onto it; no source image is replaced.
+        if let Some(i)=idx(&format!("closed_smile_{side}")) {
+            let pose=&mut imported.model.art_meshes[i];
+            key_mesh(pose,&[(eye_param,&open_keys)],
+                |_,x,y|(x,y),|v|closed_smile_visibility(v[0]));
         }
     }
     if let Some(i)=idx("mouth") {
@@ -617,6 +633,14 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn closed_happy_eyelid_pose_is_visible_only_during_closure() {
+        assert_eq!(closed_smile_visibility(1.),0.);
+        assert_eq!(closed_smile_visibility(0.5),0.);
+        assert!(closed_smile_visibility(0.18)>0.5);
+        assert_eq!(closed_smile_visibility(0.),1.);
+    }
+
     #[test]
     fn happy_blink_upper_and_lower_lids_meet_on_same_arch() {
         let eye=Region {cx:0.,cy:0.,w:2.,h:2.};
