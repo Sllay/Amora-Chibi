@@ -687,8 +687,8 @@ mod tests {
     fn attached_face_skin_does_not_outrun_or_lag_eyelash_border() {
         let eye=Region{cx:0.,cy:0.,w:2.,h:2.};
         for (kind,lid,y_edge,y_anchor) in [
-            (LidSide::Upper,Region{cx:0.,cy:-0.60,w:2.,h:.3},-.50,-1.9),
-            (LidSide::Lower,Region{cx:0.,cy:0.60,w:2.,h:.3},.50,1.9),
+            (LidSide::Upper,Region{cx:0.,cy:-0.60,w:2.,h:0.3},-0.50,-1.9),
+            (LidSide::Lower,Region{cx:0.,cy:0.60,w:2.,h:0.3},0.50,1.9),
         ] {
             for opening in [0.,0.06,0.18,0.5,1.] {
                 let (_,skin_y)=attached_skin_vertex(0.,y_edge,eye,lid,opening,kind);
