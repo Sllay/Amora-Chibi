@@ -196,22 +196,21 @@ def closed_smile_art(eye_white: Image.Image, upper_lid: Image.Image, side: str) 
     if side not in ("L","R"):
         raise ValueError("closed-eye side must be L or R")
     outward=-1 if side=="L" else 1
-    x_outer=cx+outward*width*.63
     y_outer=cy+height*.035
-    x_inner=cx+outward*width*.49
-    y_inner=cy+height*(.035-.205*(1-(.49/.63)**2))
+    x_inner=cx+outward*width*.46
+    y_inner=cy+height*(.035-.205*(1-(.46/.63)**2))
+    # A narrow, tapered outward lash is part of the upper lid's silhouette.
+    # One joined flick instead of two rectangular/star-shaped spikes.
     lash_primary=[
-        (x_inner,y_inner-height*.058),
-        (cx+outward*width*.77, y_outer-height*.082),
-        (cx+outward*width*.685,y_outer+height*.020),
-        (x_inner,y_inner+height*.058),
+        (x_inner,y_inner-height*.045),
+        (cx+outward*width*.57, y_outer-height*.054),
+        (cx+outward*width*.655,y_outer-height*.042),
+        (cx+outward*width*.735,y_outer-height*.061),
+        (cx+outward*width*.670,y_outer+height*.009),
+        (cx+outward*width*.565,y_outer+height*.032),
+        (x_inner,y_inner+height*.035),
     ]
-    lash_secondary=[
-        (cx+outward*width*.60,y_outer-height*.010),
-        (cx+outward*width*.71,y_outer+height*.088),
-        (cx+outward*width*.55,y_outer+height*.055),
-    ]
-    shapes=[outline,lash_primary,lash_secondary]
+    shapes=[outline,lash_primary]
     bx0=max(0,int(min(x for shape in shapes for x,y in shape)-5))
     by0=max(0,int(min(y for shape in shapes for x,y in shape)-5))
     bx1=min(eye_white.width,int(max(x for shape in shapes for x,y in shape)+6))
