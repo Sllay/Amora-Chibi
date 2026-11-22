@@ -144,13 +144,27 @@ function eyeVisibility(opening){
  const t=Math.max(0,Math.min(1,opening/.06));
  return t*t*(3-2*t);
 }
-function eye(side, opening,lookX,lookY){
+function eye(side,opening,lookX,lookY){
  const id="eye_white_"+side,irid="iris_"+side;
  const b=box(id),ib=box(irid);
- // The iris and sclera remain in their ORIGINAL shape and keep
- // full opacity while skin moves across them from the lash boundaries.
+ const top=box("upper_lid_"+side),bottom=box("lower_lid_"+side);
+ const strips=60;
+ // Cut the visible aperture out of the untouched face. Its two edges
+ // exactly follow the upper/lower lash transforms. The iris remains ROUND.
  ctx.save();
  ctx.globalAlpha*=eyeVisibility(opening);
+ ctx.beginPath();
+ for(let i=0;i<=strips;i++){
+  const x=b.x+b.w*i/strips;
+  const y=apertureY(x,b.y,b,top,bottom,opening);
+  if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+ }
+ for(let i=strips;i>=0;i--){
+  const x=b.x+b.w*i/strips;
+  const y=apertureY(x,b.y+b.h,b,top,bottom,opening);
+  ctx.lineTo(x,y);
+ }
+ ctx.closePath();ctx.clip();
  draw(id);
  ctx.beginPath();
  ctx.ellipse(b.cx,b.cy,Math.max(1,b.w*.49),Math.max(1,b.h*.49),0,0,Math.PI*2);
@@ -177,28 +191,9 @@ function lidY(x,y,eye,lid,opening,upper){
  const progress=lidProgress(opening);
  return y+(target+.048*(y-lid.cy)-y)*progress;
 }
-function skinY(x,y,eye,lid,opening,upper){
- const anchor=eye.cy+(upper?-.53:.53)*eye.h;
- const distance=(upper?y-anchor:anchor-y)/(eye.h*.22);
- const weight=Math.max(0,Math.min(1,distance));
- return y+(lidY(x,y,eye,lid,opening,upper)-y)*weight;
-}
-function drawAttachedSkin(side,kind,opening){
- const upper=kind==="upper",name="skin_"+kind+"_"+side;
- const b=box(name),lidbox=box(kind+"_lid_"+side),eye=box("eye_white_"+side);
- const img=images[name],strips=48,rows=12,sw=b.w/strips,sh=b.h/rows;
- ctx.save();
- ctx.globalAlpha*=1-closedPoseAlpha(opening);
- for(let i=0;i<strips;i++){
-  const x=b.x+i*sw,mid=x+sw*.5;
-  for(let j=0;j<rows;j++){
-   const sy=b.y+j*sh;
-   const ty0=skinY(mid,sy,eye,lidbox,opening,upper);
-   const ty1=skinY(mid,sy+sh,eye,lidbox,opening,upper);
-   ctx.drawImage(img,x,sy,sw,sh,x,ty0,sw+.4,Math.max(0,ty1-ty0)+.4);
-  }
- }
- ctx.restore();
+function apertureY(x,y,eye,top,bottom,opening){
+ const v=Math.max(0,Math.min(1,(y-eye.cy)/eye.h+.5));
+ return lidY(x,y,eye,top,opening,true)*(1-v)+lidY(x,y,eye,bottom,opening,false)*v;
 }
 function lid(side,type,opening){
  const lidName=type+"_lid_"+side,rect=box(lidName),eye=box("eye_white_"+side);
@@ -283,12 +278,8 @@ function tick(ms){
  // detached seams while the lids were moving.
  eye("L",openL,bounce.x,bounce.y);
  eye("R",openR,bounce.x,bounce.y);
- // Both opaque skin curtains paint IN FRONT of the eye but BEHIND lash
- // artwork, with skin boundaries driven by the SAME lash deformation.
- for(const [side,open] of [["L",openL],["R",openR]]){
-  drawAttachedSkin(side,"upper",open);
-  drawAttachedSkin(side,"lower",open);
- }
+ // The repaired body is the skin. The animated eye's aperture bounds
+ // reveal it directly, so no floating overlays can lag behind the lashes.
  // Exactly the visible render order: lower L, lower R, upper R, upper L.
  lid("L","lower",openL);lid("R","lower",openR);
  lid("R","upper",openR);lid("L","upper",openL);
@@ -305,7 +296,7 @@ Promise.all(Object.entries(source.layers).map(([name,info])=>new Promise((resolv
  img.onload=resolve;img.onerror=()=>reject(new Error("Falha na camada "+name));
  img.src=info.src;
 }))).then(()=>{
- document.getElementById("status").textContent="10 camadas fonte + 8 peças técnicas carregadas · prévia pronta";
+ document.getElementById("status").textContent="10 camadas fonte + 4 peças técnicas carregadas · prévia pronta";
  requestAnimationFrame(tick);
 }).catch(error=>{document.getElementById("status").textContent=error.message;});
 </script>
