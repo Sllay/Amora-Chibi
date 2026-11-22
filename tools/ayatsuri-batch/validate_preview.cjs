@@ -40,15 +40,25 @@ async function run() {
   await new Promise(resolve=>setTimeout(resolve,500));
   const surprised=await digest();
   await page.screenshot({path:path.join(path.dirname(html),"amora-browser-surprised.png"),fullPage:true});
+  // Turn off random blink to make the transition capture deterministic.
+  await page.click("#autoBlink");
   await page.click('[data-expr="WinkLeft"]');
-  await new Promise(resolve=>setTimeout(resolve,500));
+  await new Promise(resolve=>setTimeout(resolve,700));
   const wink=await digest();
   await page.screenshot({path:path.join(path.dirname(html),"amora-browser-wink-left.png"),fullPage:true});
+  await page.evaluate(()=>{
+   const el=document.querySelector("#eyeL");
+   el.value="0.35";
+   el.dispatchEvent(new Event("input",{bubbles:true}));
+  });
+  await new Promise(resolve=>setTimeout(resolve,700));
+  const half=await digest();
+  await page.screenshot({path:path.join(path.dirname(html),"amora-browser-half-blink.png"),fullPage:true});
   if(errors.length)throw Error("Browser errors: "+errors.join(" | "));
-  if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0||wink.corner!==0)throw Error("Opaque background remains around Amora");
-  if(!neutral.center||!sleepy.center||!surprised.center||!wink.center)throw Error("Center of Amora is not rendered");
-  if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash||wink.hash===surprised.hash)throw Error("Expressions did not change canvas pixels");
-  console.log(JSON.stringify({ok:true,loaded_layers:12,neutral,sleepy,surprised,wink,errors},null,2));
+  if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0||wink.corner!==0||half.corner!==0)throw Error("Opaque background remains around Amora");
+  if(!neutral.center||!sleepy.center||!surprised.center||!wink.center||!half.center)throw Error("Center of Amora is not rendered");
+  if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash||wink.hash===surprised.hash||half.hash===wink.hash||half.hash===neutral.hash)throw Error("Expressions did not change canvas pixels");
+  console.log(JSON.stringify({ok:true,loaded_layers:12,neutral,sleepy,surprised,wink,half,errors},null,2));
  }finally{await browser.close();}
 }
 run().catch(err=>{console.error(err.stack||err);process.exitCode=1;});
