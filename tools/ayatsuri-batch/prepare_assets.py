@@ -156,51 +156,6 @@ def face_patch(body: Image.Image, white: Image.Image, lower: Image.Image, upper:
 
 
 
-def eyelid_skin_art(body: Image.Image, white: Image.Image,
-                    lid: Image.Image, upper: bool) -> Image.Image:
-    """Eye-local skin attached to the real upper/lower eyelash shape.
-
-    Never sample cheek/blush or the entire face: a deformed full-face
-    texture duplicates blush and causes streaks below the eye. Only pixels
-    within the original sclera silhouette may become an opaque lid cover.
-    """
-    bbox = white.getchannel("A").getbbox()
-    lidbox = lid.getchannel("A").getbbox()
-    if bbox is None or lidbox is None:
-        raise ValueError("Cannot derive skin from an empty eye or lid")
-    x0,y0,x1,y1=bbox
-    cx,cy=(x0+x1)*.5,(y0+y1)*.5
-    ew,eh=x1-x0,y1-y0
-    # Expand just 4 px to avoid single-pixel fringe, never into the cheeks.
-    eye_alpha=white.getchannel("A").filter(ImageFilter.MaxFilter(9))
-    wa=eye_alpha.load()
-    lp=lid.getchannel("A").load()
-    mask=Image.new("L",body.size,0)
-    mp=mask.load()
-    for x in range(max(0,x0-4),min(body.width,x1+4)):
-        u=max(-1.,min(1.,(x-cx)/max(1.,ew*.55)))
-        arch=max(0.,1.-u*u)**.5
-        default=round(cy+eh*(-.39 if upper else .39)*arch)
-        found=[
-            y for y in range(max(0,lidbox[1]),min(body.height,lidbox[3]))
-            if lp[x,y]>100 and (y<cy+eh*.10 if upper else y>cy-eh*.10)
-        ]
-        if upper:
-            edge=(max(found)+1) if found else default
-            edge=max(y0+eh*.12,min(cy-eh*.08,edge))
-        else:
-            edge=(min(found)-1) if found else default
-            edge=min(y1-eh*.12,max(cy+eh*.08,edge))
-        for y in range(max(0,y0-4),min(body.height,y1+4)):
-            if (y<=edge if upper else y>=edge):
-                mp[x,y]=wa[x,y]
-    if mask.getbbox() is None:
-        raise ValueError("Empty eye-local skin curtain")
-    result=body.copy()
-    result.putalpha(ImageChops.multiply(body.getchannel("A"),mask))
-    return result
-
-
 def closed_smile_art(eye_white: Image.Image, upper_lid: Image.Image, side: str) -> Image.Image:
     """A technical closed-eye keyform derived from the original lid pigment.
 
@@ -317,13 +272,6 @@ def prepare(manifest_path: Path, out: Path) -> None:
         side: closed_smile_art(rgba[f"eye_white_{side}"],rgba[f"upper_lid_{side}"],side)
         for side in ("L","R")
     }
-    eyelid_skin = {
-        (side,kind): eyelid_skin_art(
-            clean_body,rgba[f"eye_white_{side}"],rgba[f"{kind}_lid_{side}"],
-            kind=="upper"
-        )
-        for side in ("L","R") for kind in ("upper","lower")
-    }
     prepared_layers = []
     preview = Image.new("RGBA", (1254, 1254), (0, 0, 0, 0))
     for spec in ordered:
@@ -345,17 +293,6 @@ def prepare(manifest_path: Path, out: Path) -> None:
                 skin[side].save(out / technical_file)
                 preview.alpha_composite(skin[side])
                 prepared_layers.append({"name":technical,"group":"Face", "file":technical_file})
-        # Real upper and lower skin covers render ABOVE the whites/irises
-        # but BELOW both sets of lashes. Their deformation is attached to
-        # precisely the same eye-open parameter as their lash border.
-        if spec["name"] == "lower_lid_L":
-            for side in ("L","R"):
-                for kind in ("upper","lower"):
-                    technical=f"skin_{kind}_{side}"
-                    technical_file=f"layers/{technical}.png"
-                    eyelid_skin[(side,kind)].save(out/technical_file)
-                    prepared_layers.append({"name":technical,"group":"Face",
-                                            "file":technical_file})
         # The bold smiling eye exists only as a hidden animated expression
         # pose; do not add it to the static open-eye assembled preview.
         if spec["name"] in ("upper_lid_L","upper_lid_R"):
@@ -372,13 +309,11 @@ def prepare(manifest_path: Path, out: Path) -> None:
     (out / "source_order.json").write_text(
         json.dumps({"source_order": expected_names, "render_order": [v["name"] for v in prepared_layers],
                     "technical_derived_layers": ["skin_patch_L","skin_patch_R",
-                                                  "closed_smile_L","closed_smile_R",
-                                                  "skin_upper_L","skin_lower_L",
-                                                  "skin_upper_R","skin_lower_R"], "warning":
+                                                  "closed_smile_L","closed_smile_R"], "warning":
                     "Body source is opaque JPEG. Preview places body behind eyes; source files untouched."},
                    indent=2) + "\n", encoding="utf-8")
     print("Validated 10 source layers. Only eye whites #1 and #3 replaced.")
-    print("Prepared 18 art meshes: ten untouched inputs, two legacy patches, two closed poses, four attached skin curtains.")
+    print("Prepared 14 art meshes: ten unchanged inputs, two inactive legacy patches and two closed-eye poses.")
 
 
 if __name__ == "__main__":
