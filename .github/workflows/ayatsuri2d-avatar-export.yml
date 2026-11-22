@@ -111,7 +111,7 @@ jobs:
           cp artifacts/amora-browser-wink-left.png preview/wink-left.png
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png
+          git add preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png preview/wink-left.png
           if ! git diff --cached --quiet; then
             git commit -m "ci(live2d): publish browser animation test [skip ci]"
             git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" || echo "Branch advanced while building; keeping artifact only."
