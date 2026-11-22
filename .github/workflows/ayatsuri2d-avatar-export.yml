@@ -108,6 +108,7 @@ jobs:
           cp artifacts/amora-browser-neutral.png preview/neutral.png
           cp artifacts/amora-browser-sleepy.png preview/sleepy.png
           cp artifacts/amora-browser-surprised.png preview/surprised.png
+          cp artifacts/amora-browser-wink-left.png preview/wink-left.png
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png
@@ -127,6 +128,7 @@ jobs:
             artifacts/amora-browser-neutral.png
             artifacts/amora-browser-sleepy.png
             artifacts/amora-browser-surprised.png
+            artifacts/amora-browser-wink-left.png
             artifacts/amora-prepared/source_order.json
             artifacts/AmoraBolinha/
           if-no-files-found: error
