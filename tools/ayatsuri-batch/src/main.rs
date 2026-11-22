@@ -176,7 +176,7 @@ fn key_mesh(
 // The sclera/iris are concealed by a narrow lid aperture. Fade the small
 // residual opening rather than exposing a flattened pink iris stripe.
 fn eye_visibility(opening: f32) -> f32 {
-    let t=((opening-0.03)/0.47).clamp(0.,1.);
+    let t=((opening-0.15)/0.35).clamp(0.,1.);
     t*t*(3.-2.*t)
 }
 
@@ -203,7 +203,7 @@ fn eyelid_vertex(x:f32,y:f32,eye:Region,lid:Region,opening:f32,kind:LidSide)->(f
     let smile=eye.cy + eye.h*(0.035-0.205*arch);
     let (progress, squeeze, seam_offset)=match kind {
         LidSide::Upper=>(shut.powf(0.75),0.048,-0.012),
-        LidSide::Lower=>(shut.powf(1.35),0.024, 0.010),
+        LidSide::Lower=>(shut.powf(1.15),0.024, 0.010),
     };
     let target=smile+eye.h*seam_offset+(y-lid.cy)*squeeze;
     (x,y+(target-y)*progress)
