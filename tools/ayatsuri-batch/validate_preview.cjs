@@ -54,11 +54,29 @@ async function run() {
   await new Promise(resolve=>setTimeout(resolve,700));
   const half=await digest();
   await page.screenshot({path:path.join(path.dirname(html),"amora-browser-half-blink.png"),fullPage:true});
+  // Snapshot the exact reference target: two happy CLOSED eyes that meet in
+  // one shared curved line. Also exercise the transition at 18% openness.
+  const setBoth=async (opening)=>{
+   await page.evaluate(value=>{
+    for(const id of ["eyeL","eyeR"]){
+     const el=document.querySelector("#"+id);
+     el.value=String(value);
+     el.dispatchEvent(new Event("input",{bubbles:true}));
+    }
+   },opening);
+   await new Promise(resolve=>setTimeout(resolve,650));
+  };
+  await setBoth(0.18);
+  const near=await digest();
+  await page.screenshot({path:path.join(path.dirname(html),"amora-browser-nearly-closed.png"),fullPage:true});
+  await setBoth(0);
+  const closed=await digest();
+  await page.screenshot({path:path.join(path.dirname(html),"amora-browser-closed-smile.png"),fullPage:true});
   if(errors.length)throw Error("Browser errors: "+errors.join(" | "));
-  if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0||wink.corner!==0||half.corner!==0)throw Error("Opaque background remains around Amora");
-  if(!neutral.center||!sleepy.center||!surprised.center||!wink.center||!half.center)throw Error("Center of Amora is not rendered");
-  if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash||wink.hash===surprised.hash||half.hash===wink.hash||half.hash===neutral.hash)throw Error("Expressions did not change canvas pixels");
-  console.log(JSON.stringify({ok:true,loaded_layers:12,neutral,sleepy,surprised,wink,half,errors},null,2));
+  if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0||wink.corner!==0||half.corner!==0||near.corner!==0||closed.corner!==0)throw Error("Opaque background remains around Amora");
+  if(!neutral.center||!sleepy.center||!surprised.center||!wink.center||!half.center||!near.center||!closed.center)throw Error("Center of Amora is not rendered");
+  if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash||wink.hash===surprised.hash||half.hash===wink.hash||half.hash===neutral.hash||near.hash===half.hash||closed.hash===near.hash)throw Error("Expressions did not change canvas pixels");
+  console.log(JSON.stringify({ok:true,loaded_layers:12,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
  }finally{await browser.close();}
 }
 run().catch(err=>{console.error(err.stack||err);process.exitCode=1;});
