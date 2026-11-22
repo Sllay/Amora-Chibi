@@ -178,8 +178,8 @@ function lidY(x,y,eye,lid,opening,upper){
  return y+(target+.048*(y-lid.cy)-y)*progress;
 }
 function skinY(x,y,eye,lid,opening,upper){
- const anchor=eye.cy+(upper?-.95:.95)*eye.h;
- const distance=(upper?y-anchor:anchor-y)/(eye.h*.60);
+ const anchor=eye.cy+(upper?-.53:.53)*eye.h;
+ const distance=(upper?y-anchor:anchor-y)/(eye.h*.22);
  const weight=Math.max(0,Math.min(1,distance));
  return y+(lidY(x,y,eye,lid,opening,upper)-y)*weight;
 }
