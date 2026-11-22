@@ -236,11 +236,11 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
             subdivide(skin, 16, 12);
             key_mesh(skin, &[(eye_param,&open_keys)], |v,x,y| {
                 let shut=1.-v[0];
-                let nx=((x-eye.cx)/(eye.w*.8).max(0.0001)).abs();
-                let ny=((y-eye.cy)/(eye.h*.85).max(0.0001)).abs();
+                let nx=((x-eye.cx)/(eye.w*0.8).max(0.0001)).abs();
+                let ny=((y-eye.cy)/(eye.h*0.85).max(0.0001)).abs();
                 let weight=(1.-nx).max(0.)*(1.-ny).max(0.);
-                let push=eye.h*.085*shut*weight;
-                (x-(x-eye.cx)*.045*shut*weight,
+                let push=eye.h*0.085*shut*weight;
+                (x-(x-eye.cx)*0.045*shut*weight,
                  y + if y<eye.cy {push} else {-push})
             }, |_|1.);
         }
