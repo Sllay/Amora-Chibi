@@ -32,7 +32,7 @@ gate próprio em PLAN.md. Status de produção deve ser verificado separadamente
 
 | RUN | Área | Estado inicial em RUN 00 |
 |---|---|---|
-| 00 | Preparação e continuidade | Documentação registrada nesta revisão; conferir merge |
+| 00 | Preparação e continuidade | Gate documental aprovado; PR #377 (conclusão condicionada ao merge) |
 | 01 | Durable Cognitive Runtime | PLANNED — próxima |
 | 02 | Intelligent Provider Orchestrator | PLANNED |
 | 03 | Adaptive Context & Comprehension Engine | PLANNED |
@@ -71,8 +71,13 @@ O problema de instalação no Altare é outro assunto, fora do escopo.
 
 **Validação RUN 00:** conferir leitura dos documentos no GitHub, links relativos,
 cobertura I01–I10/RUN 01–07, gates, regras obrigatórias e instruções de continuidade.
-Registrar SHA/PR e conclusão do merge no comentário de #376 e na revisão
-correspondente; o histórico Git é a evidência de persistência.
+Releitura das seis alterações no GitHub e verificação estrutural: PASS para
+7 seções RUN, 10 ideias, regras obrigatórias, 16 cenários RUN 01, modelo de
+diário e referências cruzadas. [PR #377](https://github.com/Sllay/Amora-Chibi/pull/377),
+base de main 41754f8709ec6760bf85c935641d99e4cf205b8f. Nenhum workflow de CI
+associado foi retornado na consulta inicial; não declarar CI/runtime PASS.
+A conclusão da RUN 00 é efetiva após merge e releitura em main; registrar
+SHA final no comentário de #376. O histórico Git prova a persistência.
 
 **Próximo passo:** iniciar RUN 01 com [RUN01_HANDOFF.md](RUN01_HANDOFF.md).
 Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
