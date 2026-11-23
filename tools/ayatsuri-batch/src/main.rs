@@ -178,7 +178,7 @@ fn key_mesh(
 fn eye_visibility(opening: f32) -> f32 {
     // Do not fade the eyeball while a visible gap remains between lashes.
     // Opaque skin curtains physically OCCLUDE the sclera and iris instead.
-    let t=(opening/0.024).clamp(0.,1.);
+    let t=((opening-0.010)/0.105).clamp(0.,1.);
     t*t*(3.-2.*t)
 }
 
@@ -194,8 +194,12 @@ enum LidSide { Upper, Lower }
 fn closed_smile_visibility(opening:f32)->f32 {
     // Hand off from MOVING skin + lashes to the fully opaque pose only at
     // the very end, when both borders have almost touched.
-    let t=((0.024-opening)/0.024).clamp(0.,1.);
+    let t=((0.115-opening)/0.105).clamp(0.,1.);
     t*t*(3.-2.*t)
+}
+
+fn mouth_pose_weight(pose:f32,target:f32)->f32 {
+    (1.-(pose-target).abs()).clamp(0.,1.)
 }
 
 fn smoothstep(value:f32)->f32 {
@@ -363,7 +367,7 @@ fn add_root_motion(model: &mut ayatsuri_format::model::Model, angle: u32, body_a
         for l in leans {
             for a in angles {
                 all_angles.push(a + l);
-                scales.push(1. + (b - 0.5) * 0.018);
+                scales.push(1. + (b - 0.5) * 0.085);
             }
         }
     }
@@ -406,11 +410,15 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
     let iris_bounce_x=par("ParamIrisBounceX")?;
     let iris_bounce_y=par("ParamIrisBounceY")?;
     let squash=par("ParamBodySquash")?;
+    let blush=par("ParamBlush")?;
+    let mouth_pose=par("ParamMouthPose")?;
     let names = imported.mesh_names.clone();
     let regions: HashMap<String,Region> = names.iter().cloned().zip(imported.model.art_meshes.iter().map(Region::of)).collect();
     let idx = |name: &str| names.iter().position(|n| n==name);
-    let open_keys = [0., 0.024, 0.18, 0.50, 1.];
+    let open_keys = [0.,0.010,0.06,0.115,0.18,0.50,1.];
     let look_keys = [-1., 0., 1.];
+    let tears_keys=[0.,0.5,1.];
+    let pose_keys=[0.,1.,2.,3.];
     for (side, eye_param) in [("L",leye),("R",reye)] {
         let iris_recoil=par(&format!("ParamIrisRecoil{side}"))?;
         let white_name = format!("eye_white_{side}");
@@ -496,6 +504,24 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
             key_mesh(pose,&[(eye_param,&open_keys)],
                 |_,x,y|(x,y),|v|closed_smile_visibility(v[0]));
         }
+        // Supplied tear sprites remain anchored to the lower eyelash.
+        // They follow its deformation even at 0 eye-open and remain semi-
+        // transparent while closed, rather than floating on the canvas.
+        if let Some(i)=idx(&format!("extra_tear_{side}")) {
+            let tear=&mut imported.model.art_meshes[i];
+            let region=regions[&format!("extra_tear_{side}")];
+            let lid=regions[&format!("lower_lid_{side}")];
+            let tear_control=par(&format!("ParamTear{side}"))?;
+            key_mesh(tear,&[(eye_param,&open_keys),(tear_control,&tears_keys)],
+                |v,x,y| {
+                    let (_,edge)=eyelid_vertex(region.cx,lid.cy,eye,lid,v[0],LidSide::Lower);
+                    (x,y+edge-lid.cy)
+                }, |v|v[1]*(0.55+0.30*v[0]));
+        }
+    }
+    if let Some(i)=idx("extra_blush") {
+        let mesh=&mut imported.model.art_meshes[i];
+        key_mesh(mesh,&[(blush,&tears_keys)],|_,x,y|(x,y),|v|v[0]);
     }
     if let Some(i)=idx("mouth") {
         let mouth_region=regions["mouth"];
@@ -503,7 +529,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         subdivide(mouth, 8, 5);
         let open_keys = [0., 0.5, 1.];
         let form_keys = [-1., 0., 1.];
-        key_mesh(mouth,&[(mouth_open,&open_keys),(mouth_form,&form_keys)],
+        key_mesh(mouth,&[(mouth_open,&open_keys),(mouth_form,&form_keys),(mouth_pose,&pose_keys)],
             |v,x,y| {
                 let vertical=((y-mouth_region.cy)/(mouth_region.h*0.5).max(0.0001)).clamp(-1.,1.);
                 let upper=(1.-vertical)*0.5;
@@ -515,7 +541,23 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                 let arch=-mouth_region.h*v[1]*center*0.13;
                 (mouth_region.cx+(x-mouth_region.cx)*spread,
                  y+lip_shift+arch)
-            }, |_|1.);
+            }, |v|mouth_pose_weight(v[2],0.));
+    }
+    for (name,position) in [
+        ("extra_mouth_talk",1.),
+        ("extra_mouth_open_wide",2.),
+        ("extra_mouth_sad",3.),
+    ] {
+        if let Some(i)=idx(name) {
+            let region=regions[name];
+            let mesh=&mut imported.model.art_meshes[i];
+            key_mesh(mesh,&[(mouth_pose,&pose_keys),(mouth_open,&[0.,0.5,1.])],
+                |v,x,y| {
+                    let sx=1.+0.035*v[1];
+                    let sy=1.+0.045*v[1];
+                    (region.cx+(x-region.cx)*sx,region.cy+(y-region.cy)*sy)
+                },|v|mouth_pose_weight(v[0],position));
+        }
     }
     add_root_motion(&mut imported.model,angle,body_angle,breath);
     add_global_squash(&mut imported.model,squash,head_x,head_y,body_x,body_y);
@@ -534,14 +576,19 @@ fn export_expressions(root: &Path, name: &str) -> Result<Vec<serde_json::Value>>
     let dir=root.join("expressions");
     fs::create_dir_all(&dir)?;
     let presets: &[(&str,&[(&str,f32)])]=&[
-        ("Happy",&[("ParamEyeLOpen",0.87),("ParamEyeROpen",0.87),("ParamMouthForm",0.8),("ParamMouthOpenY",0.28)]),
-        ("Surprised",&[("ParamEyeLOpen",1.),("ParamEyeROpen",1.),("ParamMouthForm",-0.5),("ParamMouthOpenY",1.)]),
+        ("Happy",&[("ParamEyeLOpen",0.87),("ParamEyeROpen",0.87),("ParamMouthForm",0.8),("ParamMouthOpenY",0.28),("ParamMouthPose",1.),("ParamBlush",0.30)]),
+        ("Surprised",&[("ParamEyeLOpen",1.),("ParamEyeROpen",1.),("ParamMouthForm",-0.5),("ParamMouthOpenY",1.),("ParamMouthPose",2.)]),
         ("Sleepy",&[("ParamEyeLOpen",0.27),("ParamEyeROpen",0.27),("ParamMouthForm",-0.3),("ParamMouthOpenY",0.)]),
-        ("Annoyed",&[("ParamEyeLOpen",0.54),("ParamEyeROpen",0.54),("ParamMouthForm",-0.85),("ParamMouthOpenY",0.)]),
+        ("Annoyed",&[("ParamEyeLOpen",0.54),("ParamEyeROpen",0.54),("ParamMouthForm",-0.85),("ParamMouthOpenY",0.),("ParamMouthPose",3.),("ParamBlush",0.58)]),
         ("WinkLeft",&[("ParamEyeLOpen",0.),("ParamEyeROpen",1.),("ParamMouthForm",0.7)]),
         ("WinkRight",&[("ParamEyeLOpen",1.),("ParamEyeROpen",0.),("ParamMouthForm",0.7)]),
-        ("Shy",&[("ParamEyeLOpen",0.58),("ParamEyeROpen",0.58),("ParamMouthForm",0.6),("ParamMouthOpenY",0.08),("ParamEyeBallY",0.3)]),
+        ("Shy",&[("ParamEyeLOpen",0.58),("ParamEyeROpen",0.58),("ParamMouthForm",0.6),("ParamMouthOpenY",0.08),("ParamEyeBallY",0.3),("ParamBlush",1.),("ParamMouthPose",1.)]),
         ("Curious",&[("ParamEyeLOpen",1.),("ParamEyeROpen",0.76),("ParamMouthForm",0.2),("ParamMouthOpenY",0.1),("ParamEyeBallX",0.42)]),
+        ("Sad",&[("ParamEyeLOpen",0.52),("ParamEyeROpen",0.52),("ParamMouthPose",3.),("ParamBlush",0.20)]),
+        ("Crying",&[("ParamEyeLOpen",0.38),("ParamEyeROpen",0.38),("ParamMouthPose",3.),("ParamBlush",0.22),("ParamTearL",0.92),("ParamTearR",0.92)]),
+        ("Sobbing",&[("ParamEyeLOpen",0.16),("ParamEyeROpen",0.16),("ParamMouthPose",2.),("ParamMouthOpenY",1.),("ParamBlush",0.38),("ParamTearL",1.),("ParamTearR",1.)]),
+        ("Angry",&[("ParamEyeLOpen",0.63),("ParamEyeROpen",0.63),("ParamMouthPose",1.),("ParamBlush",0.73)]),
+        ("Shouting",&[("ParamMouthPose",2.),("ParamMouthOpenY",1.),("ParamBlush",0.40)]),
     ];
     let mut files=Vec::new();
     for (preset, params) in presets {
@@ -579,6 +626,9 @@ fn create_idle_motion(out: &Path, name: &str) -> Result<String> {
         ("ParamBodyAngleZ",&[(0.,0.),(1.5,4.),(3.,0.),(4.5,-4.),(6.,0.)]),
         ("ParamAngleZ",&[(0.,0.),(1.5,2.),(3.,0.),(4.5,-2.),(6.,0.)]),
         ("ParamMouthForm",&[(0.,0.),(2.,0.),(2.4,0.75),(2.9,0.),(6.,0.)]),
+        ("ParamIrisRecoilL",&[(0.,0.),(1.60,0.),(1.79,0.),(1.85,0.86),(1.96,0.),(2.03,0.45),(2.14,0.),(2.23,0.18),(2.30,0.),(6.,0.)]),
+        ("ParamIrisRecoilR",&[(0.,0.),(1.60,0.),(1.79,0.),(1.85,0.86),(1.96,0.),(2.03,0.45),(2.14,0.),(2.23,0.18),(2.30,0.),(6.,0.)]),
+        ("ParamMouthPose",&[(0.,0.),(2.,0.),(2.35,1.),(3.,0.),(6.,0.)]),
     ];
     let mut curves=Vec::new();
     let mut points=0usize;
@@ -631,6 +681,10 @@ fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
         parameter("ParamIrisBounceY", -1.0, 1.0, 0.0),
         parameter("ParamMouthOpenY", 0.0, 1.0, 0.0),
         parameter("ParamMouthForm", -1.0, 1.0, 0.0),
+        parameter("ParamMouthPose", 0.0, 3.0, 0.0),
+        parameter("ParamBlush", 0.0, 1.0, 0.0),
+        parameter("ParamTearL", 0.0, 1.0, 0.0),
+        parameter("ParamTearR", 0.0, 1.0, 0.0),
         parameter("ParamAngleZ", -30.0, 30.0, 0.0),
         parameter("ParamAngleX", -30.0, 30.0, 0.0),
         parameter("ParamAngleY", -30.0, 30.0, 0.0),
@@ -736,6 +790,8 @@ mod tests {
         assert_eq!(closed_smile_visibility(1.),0.);
         assert_eq!(closed_smile_visibility(0.5),0.);
         assert_eq!(closed_smile_visibility(0.18),0.);
+        assert!(closed_smile_visibility(0.06)>0.);
+        assert!(closed_smile_visibility(0.02)>0.9);
         assert_eq!(closed_smile_visibility(0.),1.);
     }
 
@@ -762,7 +818,7 @@ mod tests {
     fn eyeball_only_fades_at_complete_closure() {
         for open in [0.06,0.18,0.35,0.5,1.] {
             assert_eq!(eye_visibility(open),1.,"early iris fading");
-            assert_eq!(closed_smile_visibility(open),0.,"early closed pose");
+            if open>=0.18 {assert_eq!(closed_smile_visibility(open),0.,"early closed pose");}
         }
         assert_eq!(eye_visibility(0.),0.);
         assert_eq!(closed_smile_visibility(0.),1.);
@@ -804,6 +860,14 @@ mod tests {
         let (_,upper_mid)=eyelid_vertex(0.,top.cy,eye,top,0.5,LidSide::Upper);
         let (_,lower_mid)=eyelid_vertex(0.,bottom.cy,eye,bottom,0.5,LidSide::Lower);
         assert!(upper_mid>top.cy && lower_mid<bottom.cy, "both lids must participate");
+    }
+
+    #[test]
+    fn mouth_and_emotion_crossfades_preserve_neutral() {
+        assert_eq!(mouth_pose_weight(0.,0.),1.);
+        assert_eq!(mouth_pose_weight(0.,1.),0.);
+        assert_eq!(mouth_pose_weight(3.,3.),1.);
+        assert!((mouth_pose_weight(1.5,1.)+mouth_pose_weight(1.5,2.)-1.).abs()<1e-6);
     }
 
     #[test]
