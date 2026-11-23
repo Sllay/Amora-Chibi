@@ -1,5 +1,20 @@
 # AMORA — Project State / Checkpoint Operacional
 
+## Adendo 2026-11-23 — Cognitive Evolution V2 / RUN 00
+
+Programa transversal de sete RUNs aprovado para resiliência, contexto,
+percepção, web e diálogo, sem renumerar a linhagem de versões.
+
+- [Plano persistente](docs/engineering/cognitive-evolution-v2/PLAN.md)
+- [Diário de execução](docs/engineering/cognitive-evolution-v2/RUN_LOG.md)
+- [Próxima ação: RUN 01](docs/engineering/cognitive-evolution-v2/RUN01_HANDOFF.md)
+- Issue [#376](https://github.com/Sllay/Amora-Chibi/issues/376).
+
+RUN 00 é documental; nenhuma mudança de runtime/schema/deploy nesta etapa.
+RUNs 01–07 ainda não implementadas. Northflank permanece operacional; Altare
+fora desta frente até estabilização. Confirmar backend, HEAD e schema reais
+antes de iniciar. Os checkpoints históricos abaixo não certificam estado atual.
+
 ## Adendo 2026-11-09 — Fase 3, perspectiva
 
 Base verificada: main `f71ac4b` (PR #171), branch de trabalho
