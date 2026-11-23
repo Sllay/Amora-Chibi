@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from PIL import Image
-from prepare_assets import face_patch, prepared_body, closed_smile_art
+from prepare_assets import face_patch, prepared_body, closed_smile_art, load_extra_assets
 
 def build(manifest: Path, output: Path) -> None:
     data = json.loads(manifest.read_text(encoding="utf-8"))
@@ -62,6 +62,15 @@ def build(manifest: Path, output: Path) -> None:
         layers[f"closed_smile_{side}"] = {
             "src":"data:image/png;base64,"+base64.b64encode(closed_data.getvalue()).decode("ascii"),
             "box":list(closure.getchannel("A").getbbox()),
+        }
+    # Embed the exact same six extra art layers used in the .moc3 export,
+    # keeping this self-contained HTML functional offline on iOS.
+    for name,im in load_extra_assets(manifest).items():
+        data_bytes=io.BytesIO()
+        im.save(data_bytes,format="PNG",optimize=True)
+        layers[name]={
+            "src":"data:image/png;base64,"+base64.b64encode(data_bytes.getvalue()).decode("ascii"),
+            "box":list(im.getchannel("A").getbbox()),
         }
     payload = json.dumps({"width": data["width"], "height": data["height"], "layers": layers},
                          separators=(",", ":"))
