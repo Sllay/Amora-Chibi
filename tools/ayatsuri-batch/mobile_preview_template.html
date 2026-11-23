@@ -140,7 +140,7 @@ function irisSpringScale(side,open,delta){
  if(open<.15)state.armed=true;
  if(state.armed&&open>.29){state.armed=false;state.age=0;}
  state.age+=Math.max(0,delta);
- const pulse=state.age<1.45?.105*Math.exp(-3*state.age)*Math.sin(22*state.age):0;
+ const pulse=state.age<1.45 ? 0.105*Math.exp(-3*state.age)*Math.sin(22*state.age) : 0;
  const t=Math.max(0,Math.min(1,open/.35));
  const squeeze=.945+.055*t*t*(3-2*t);
  state.scale=squeeze*(1+pulse);
