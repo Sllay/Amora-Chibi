@@ -587,6 +587,8 @@ fn export_expressions(root: &Path, name: &str) -> Result<Vec<serde_json::Value>>
     let dir=root.join("expressions");
     fs::create_dir_all(&dir)?;
     let presets: &[(&str,&[(&str,f32)])]=&[
+        ("Neutral",&[("ParamEyeLOpen",1.),("ParamEyeROpen",1.),("ParamMouthPose",0.),("ParamMouthOpenY",0.),("ParamMouthForm",0.),("ParamBlush",0.),("ParamTearL",0.),("ParamTearR",0.)]),
+        ("Blushing",&[("ParamBlush",0.8),("ParamMouthPose",1.),("ParamEyeLOpen",0.76),("ParamEyeROpen",0.76)]),
         ("Happy",&[("ParamEyeLOpen",0.87),("ParamEyeROpen",0.87),("ParamMouthForm",0.8),("ParamMouthOpenY",0.28),("ParamMouthPose",1.),("ParamBlush",0.30)]),
         ("Surprised",&[("ParamEyeLOpen",1.),("ParamEyeROpen",1.),("ParamMouthForm",-0.5),("ParamMouthOpenY",1.),("ParamMouthPose",2.)]),
         ("Sleepy",&[("ParamEyeLOpen",0.27),("ParamEyeROpen",0.27),("ParamMouthForm",-0.3),("ParamMouthOpenY",0.)]),
@@ -604,11 +606,20 @@ fn export_expressions(root: &Path, name: &str) -> Result<Vec<serde_json::Value>>
     let mut files=Vec::new();
     for (preset, params) in presets {
         let filename=format!("{name}_{preset}.exp3.json");
+        let mut param_values:Vec<(&str,f32)>=params.to_vec();
+        // Each emotion explicitly resets independent overlays to prevent
+        // stale tears, blush or mouth pose persisting after a preset switch.
+        for (id,value) in [("ParamBlush",0.),("ParamTearL",0.),
+                           ("ParamTearR",0.),("ParamMouthPose",0.)] {
+            if !param_values.iter().any(|(key,_)|*key==id){
+                param_values.push((id,value));
+            }
+        }
         fs::write(dir.join(&filename),serde_json::to_vec_pretty(&json!({
             "Type":"Live2D Expression",
             "FadeInTime":0.25,
             "FadeOutTime":0.25,
-            "Parameters": params.iter().map(|(id,value)|json!({
+            "Parameters": param_values.iter().map(|(id,value)|json!({
                 "Id":id,"Value":value,"Blend":"Overwrite"
             })).collect::<Vec<_>>(),
         }))?)?;
