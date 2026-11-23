@@ -584,7 +584,7 @@ fn create_idle_motion(out: &Path, name: &str) -> Result<String> {
     let mut points=0usize;
     let mut segments=0usize;
     for (id, keys) in loops {
-        let mut data=vec![keys[0]0.0,keys[0]0.1];
+        let mut data=vec![keys[0].0,keys[0].1];
         points+=keys.len();
         segments+=keys.len()-1;
         for &(time,value) in &keys[1..] {
