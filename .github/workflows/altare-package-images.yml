@@ -75,7 +75,10 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ghcr.io/sllay/amora-chibi-${{ matrix.name }}:${{ github.sha }}
-          provenance: true
+          # Altare currently consumes linux/amd64 images; avoid GHCR OCI index
+          # with an extra unknown/unknown attestation platform for a single arch.
+          provenance: false
+          sbom: false
           labels: |
             org.opencontainers.image.source=https://github.com/Sllay/Amora-Chibi
             org.opencontainers.image.revision=${{ github.sha }}
@@ -105,4 +108,7 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ghcr.io/sllay/amora-chibi-browser:${{ github.sha }}
-          provenance: true
+          # Altare currently consumes linux/amd64 images; avoid GHCR OCI index
+          # with an extra unknown/unknown attestation platform for a single arch.
+          provenance: false
+          sbom: false
