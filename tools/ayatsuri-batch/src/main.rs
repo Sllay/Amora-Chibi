@@ -257,8 +257,8 @@ fn turn_warp_point(x:f32,y:f32,extent:f32,amount:f32,
     let follow_y=(body_pitch_deg/10.).clamp(-1.,1.);
     let nx=x/extent;
     let ny=y/extent;
-    let yaw_all=yaw+follow_x*.20;
-    let pitch_all=pitch+follow_y*.20;
+    let yaw_all=yaw+follow_x*0.20;
+    let pitch_all=pitch+follow_y*0.20;
     let width=1.-0.072*yaw_all.abs().min(1.);
     let height=1.-0.058*pitch_all.abs().min(1.);
     // A mild asymmetric cheek and forehead offset makes a believable
@@ -572,7 +572,7 @@ fn create_idle_motion(out: &Path, name: &str) -> Result<String> {
         ("ParamEyeROpen",&[(0.,1.),(1.5,1.),(1.61,0.),(1.78,1.),(4.7,1.),(4.82,0.),(4.99,1.),(6.,1.)]),
         ("ParamEyeBallX",&[(0.,0.),(2.,0.),(2.8,0.7),(3.7,0.7),(4.3,-0.5),(5.2,0.),(6.,0.)]),
         ("ParamEyeBallY",&[(0.,0.),(1.,0.),(2.,-0.3),(3.,0.),(6.,0.)]),
-        ("ParamAngleX",&[(0.,0.),(.8,0.),(1.4,12.),(2.2,18.),(3.0,0.),(4.0,-16.),(5.1,0.),(6.,0.)]),
+        ("ParamAngleX",&[(0.,0.),(0.8,0.),(1.4,12.),(2.2,18.),(3.0,0.),(4.0,-16.),(5.1,0.),(6.,0.)]),
         ("ParamAngleY",&[(0.,0.),(1.2,0.),(2.0,9.),(3.2,0.),(4.3,-9.),(5.4,0.),(6.,0.)]),
         ("ParamMouthOpenY",&[(0.,0.),(2.,0.),(2.4,0.5),(2.9,0.),(6.,0.)]),
         ("ParamBreath",&[(0.,0.5),(1.5,0.85),(3.,0.5),(4.5,0.15),(6.,0.5)]),
@@ -584,7 +584,7 @@ fn create_idle_motion(out: &Path, name: &str) -> Result<String> {
     let mut points=0usize;
     let mut segments=0usize;
     for (id, keys) in loops {
-        let mut data=vec![keys[0].0,keys[0].1];
+        let mut data=vec![keys[0]0.0,keys[0]0.1];
         points+=keys.len();
         segments+=keys.len()-1;
         for &(time,value) in &keys[1..] {
