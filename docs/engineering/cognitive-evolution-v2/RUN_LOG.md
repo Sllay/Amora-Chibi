@@ -33,7 +33,7 @@ gate próprio em PLAN.md. Status de produção deve ser verificado separadamente
 | RUN | Área | Estado inicial em RUN 00 |
 |---|---|---|
 | 00 | Preparação e continuidade | Gate documental aprovado; PR #377 (conclusão condicionada ao merge) |
-| 01 | Durable Cognitive Runtime | PLANNED — próxima |
+| 01 | Durable Cognitive Runtime | IN_PROGRESS — contrato e persistência candidata |
 | 02 | Intelligent Provider Orchestrator | PLANNED |
 | 03 | Adaptive Context & Comprehension Engine | PLANNED |
 | 04 | Advanced Multimodal Perception | PLANNED |
@@ -81,6 +81,14 @@ SHA final no comentário de #376. O histórico Git prova a persistência.
 
 **Próximo passo:** iniciar RUN 01 com [RUN01_HANDOFF.md](RUN01_HANDOFF.md).
 Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
+
+## RUN 01 — 2026-11-23 — início / subetapas A–B
+
+- Status: IN_PROGRESS; gate aberto. Base documental main 079c42e83760b5e9f15032c7496d5bc19780acda (PR #377); branch feat/cognitive-evolution-run01-durable-runtime; issue #376.
+- Inventário: schema.py mantém 18 default e 19 opt-in certificado. migrations_v108.py já contém reflection jobs e generation lease/staging. O lease existente não representa uma fila de respostas. storage_lane.py usa ownership dedicado para SQL remoto. PostgreSQL exige registry de SQL revisado. Worker inbound ainda aguarda receive síncrono.
+- Decisão inicial: não modificar schema ativo nem aplicar DDL no Northflank. Começar contrato candidato isolado, testável, que referencia input já persistido e não duplica texto, anexos, tokens ou URLs. Reusar padrões de episode_work/InboundGeneration; integrar ownership/fencing/outbox em etapas seguintes desta mesma RUN, com migration explícita e prova PG.
+- Baseline live não medido nesta etapa; confirmar backend efetivo e revisão implantada antes de rollout. Não trocar host nem desativar gateway.
+- Gate: aberto; subetapas C–E e integração real pendentes. Nenhuma execução de produção autorizada por este registro.
 
 ## Modelo obrigatório de registro para cada RUN
 
