@@ -11,6 +11,22 @@ Antes de alterar arquitetura, comportamento, voz, providers, roadmap ou persist�
 5. ADRs relevantes em `docs/decisions/`;
 6. documentação específica da versão/módulo afetado.
 
+## Programa Cognitive Evolution V2 (RUN 00–07)
+
+Para qualquer alteração no fluxo de recebimento, resposta, providers,
+contexto, visão, web ou continuidade de diálogo, ler também:
+
+- [Plano e gates das sete RUNs](docs/engineering/cognitive-evolution-v2/PLAN.md)
+- [Diário obrigatório de execução](docs/engineering/cognitive-evolution-v2/RUN_LOG.md)
+- [Handoff da RUN 01](docs/engineering/cognitive-evolution-v2/RUN01_HANDOFF.md)
+
+A documentação é especificação de trabalho aprovada, não estado implementado.
+Cada RUN deve atualizar o diário no próprio PR (erros, correções, decisões,
+testes, SHA, resultados live, pendências e próximo passo) e comentar a issue
+de acompanhamento. Não avançar sem gate comprovado ou exceção expressamente
+aprovada. Não confundir CI verde com certificação live. O canon continua
+autoridade para identidade, memória, privacidade e comportamento.
+
 ## Autoridade documental
 
 - `docs/canon/*` = especificação atual.
