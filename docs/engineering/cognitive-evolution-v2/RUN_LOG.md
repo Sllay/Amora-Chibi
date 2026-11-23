@@ -33,7 +33,7 @@ gate próprio em PLAN.md. Status de produção deve ser verificado separadamente
 | RUN | Área | Estado inicial em RUN 00 |
 |---|---|---|
 | 00 | Preparação e continuidade | Gate documental aprovado; PR #377 (conclusão condicionada ao merge) |
-| 01 | Durable Cognitive Runtime | IN_PROGRESS — contrato e persistência candidata |
+| 01 | Durable Cognitive Runtime | IN_PROGRESS — SQLite inicial CI PASS; candidato PG18 e lease compartilhada em validação |
 | 02 | Intelligent Provider Orchestrator | PLANNED |
 | 03 | Adaptive Context & Comprehension Engine | PLANNED |
 | 04 | Advanced Multimodal Perception | PLANNED |
@@ -103,6 +103,27 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Falha: test_candidate_dedupes_and_recovers_expired_lease_across_connections, linha 108. As etapas anteriores (dedupe, lease expirada, retomada, fencing, atraso) passaram. A asserção final usava ConversationMessage.text, atributo inexistente.
 - Causa confirmada em cognition/models.py: campo de entrada original é raw_text. Commit 05f019e corrige a asserção para comparar raw_text == request.text sem enfraquecer a verificação nem alterar runtime.
 - Nova certificação CI necessária; gate RUN 01 aberto. PostgreSQL, integração Core/Discord, migration e live seguem pendentes.
+
+### RUN 01 — incremento PostgreSQL e ownership compartilhado (23/11/2026)
+
+- Baseline de validação do recorte anterior: HEAD 2084e3c, 5/5 workflows PASS,
+  matriz Python 3.11–3.14 PASS; 2.118 passed / 128 skipped no 3.11.
+  [Core tests 45284563242](https://github.com/Sllay/Amora-Chibi/actions/runs/45284563242).
+- Implementação seguinte: SQL fixo SQLite + 14 operações PG revisadas
+  (13 operações e lock de claim), DDL PG18 sintético explícito, CI lab
+  reaproveitado. Repository único; registry padrão não importa os SQLs
+  candidatos. Claims/renovação/release usam a mesma autoridade/token de
+  InboundGeneration na transação, preservando prepared em retry.
+- Testes: suíte parametrizada com 11 cenários por backend, mais contrato
+  de statements. Inclui disputa de jobs de sessões distintas, rejeição de
+  metadados, lease preexistente, checkpoint recuperado e stale owner no outbox.
+  Novos testes adicionados; não declarar PASS até execução no HEAD atualizado.
+- Commits e detalhes em [ADR candidato](RUN01_DURABLE_REPLY_ADR.md).
+- Próximos gates: CI real PG18, migration/rollback, produtor e reidratação
+  de input autorizado, dispatcher, finalização/reconciliação atômica,
+  invalidação e cancelamento concorrentes, ACK do worker, matriz D01–D16
+  e live. Nenhum deploy, alteração de schema ativo ou troca de banco.
+  RUN 01 permanece IN_PROGRESS.
 
 ## Modelo obrigatório de registro para cada RUN
 
