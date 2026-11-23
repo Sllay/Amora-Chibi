@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install tested project tooling, no secret credentials
-        run: python -m pip install --disable-pip-version-check -c deploy/python.lock -e '.[dev]' 'cryptography==46.0.3'
+        run: python -m pip install --disable-pip-version-check -c deploy/python.lock -e '.[dev]' 'cryptography==50.0.2'
       - name: Test private env handoff and allowlisted Altare diagnostics
         run: |
           python -m pytest tests/test_altare_env_handoff.py tests/test_altare_readonly_diagnostics.py tests/test_altare_safe_report.py tests/test_altare_host_portability.py tests/test_altare_bulk_env_apply.py tests/test_altare_phone_env_import.py tests/test_altare_sealed_image_crypto.py -v
