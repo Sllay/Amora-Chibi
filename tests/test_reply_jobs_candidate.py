@@ -105,7 +105,7 @@ def test_candidate_dedupes_and_recovers_expired_lease_across_connections(lab):
         assert third.input_id == input_id
         assert core.cognition.store.get_message_by_dedupe(
             f"cognitive-input:{request.turn_id}"
-        ).text == request.text
+        ).raw_text == request.text
     finally:
         reopened.close()
 
