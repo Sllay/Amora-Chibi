@@ -1,3 +1,4 @@
+import { loadSealedDiscordEnv } from './env-bundle.mjs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 
@@ -38,6 +39,16 @@ function startHealthServer(port) {
 }
 
 async function main() {
+  // No health endpoint or Discord Gateway until the envelope authenticates.
+  try {
+    const recovered = loadSealedDiscordEnv();
+    if (recovered) Object.assign(process.env, recovered);
+    delete process.env.AMORA_IMAGE_ENV_PRIVATE_KEY;
+  } catch {
+    safeLog('SEALED_ENV_DECRYPT_FAILED');
+    process.exitCode = 78;
+    return;
+  }
   const port = resolveHealthPort();
   const health = startHealthServer(port);
   safeLog('ENTRYPOINT_START');
