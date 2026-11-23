@@ -95,11 +95,20 @@ def reply_job_statements() -> dict[str, ReviewedStatement]:
             "SELECT COUNT(*) FROM amora_pg_v18_lab.messaging_reply_jobs "
             "WHERE status='running' AND lease_until>%s", 1, 1),
         "PG_REPLY_JOB_SELECT_DUE": ReviewedStatement("""
-            SELECT turn_id,input_id,session_id,attempts
+            SELECT turn_id,input_id,session_id,attempts,native_message_hash,transport_revision
             FROM amora_pg_v18_lab.messaging_reply_jobs
             WHERE ((status IN ('pending','retry_wait') AND available_at<=%s)
                 OR (status='running' AND lease_until<=%s))
               AND """ + _VALID_SOURCE + """
+              AND NOT EXISTS (
+                  SELECT 1 FROM amora_pg_v18_lab.messaging_inbound_generation g
+                  WHERE g.turn_id=messaging_reply_jobs.turn_id AND (
+                      g.session_id<>messaging_reply_jobs.session_id
+                      OR g.native_message_hash<>messaging_reply_jobs.native_message_hash
+                      OR g.transport_revision<>messaging_reply_jobs.transport_revision
+                      OR (g.lease_token IS NOT NULL AND g.lease_until>%s)
+                  )
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM amora_pg_v18_lab.messaging_reply_jobs active
                 WHERE active.session_id=messaging_reply_jobs.session_id
@@ -115,7 +124,7 @@ def reply_job_statements() -> dict[str, ReviewedStatement]:
                         AND earlier.turn_id<messaging_reply_jobs.turn_id))
               )
             ORDER BY available_at,created_at,turn_id LIMIT 1
-            """, 3, 1),
+            """, 4, 1),
         "PG_REPLY_JOB_CLAIM": ReviewedStatement("""
             UPDATE amora_pg_v18_lab.messaging_reply_jobs
             SET status='running',attempts=attempts+1,lease_token=%s,lease_until=%s
