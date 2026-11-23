@@ -12,7 +12,7 @@ RUN --mount=type=secret,id=proxy_ca \
     pip install --only-binary=:all: --no-cache-dir pip==26.2.2 setuptools==83.0.0 wheel==0.46.2 && \
     pip wheel --no-cache-dir --no-deps --no-build-isolation -w /tmp/wheels . && \
     python -m venv /opt/venv && \
-    /opt/venv/bin/pip install --only-binary=:all: --no-cache-dir -c deploy/python.lock /tmp/wheels/amora_chibi*.whl 'psycopg[binary]==3.3.9' 'cryptography==46.0.3' && \
+    /opt/venv/bin/pip install --only-binary=:all: --no-cache-dir -c deploy/python.lock /tmp/wheels/amora_chibi*.whl 'psycopg[binary]==3.3.9' 'cryptography==50.0.2' && \
     /opt/venv/bin/python -m pip uninstall -y pip
 
 FROM ${PYTHON_BASE} AS runtime
