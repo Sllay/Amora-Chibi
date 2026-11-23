@@ -3,8 +3,8 @@
 References canonical inputs; no message bodies, provider output or media are
 copied into the queue. The trusted Core must persist reply_enqueue_requested
 and reply_outbound_id after authorizing ingress. This repository is not itself
-an authorization grant. PostgreSQL reviewed SQL and the shared generation/
-outbound fence must be integrated before enabling the dispatcher.
+an authorization grant. The queue shares the existing generation lease; the finalization/invalidation
+transaction and serving dispatcher still require integration.
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 from amora.latency_trace import trace_lock
 from amora.storage.reply_job_sql import SQLITE_STATEMENTS
+from .generation_lifecycle import InboundGeneration
 
 
 class ReplyReason(StrEnum):
@@ -37,6 +38,8 @@ class ReplyClaim:
     attempts: int
 
 
+class _LeaseConflict(RuntimeError):
+    """Rollback both sides of a failed paired lease transition."""
 
 
 class ReplyJobRepository:
@@ -61,6 +64,7 @@ class ReplyJobRepository:
         self.clock = clock
         self.lease_seconds = lease_seconds
         self.max_running = max_running
+        self.generations = InboundGeneration(database, clock)
 
     def _sql(self, operation: str) -> str:
         sql = SQLITE_STATEMENTS[operation]  # reject unknown operations
@@ -96,40 +100,74 @@ class ReplyJobRepository:
 
     def claim(self) -> ReplyClaim | None:
         db = self.database
-        with trace_lock(db._lock), db._conn:
-            # PostgreSQL read-committed alone cannot serialize a global capacity
-            # predicate across different jobs. Lock this small candidate table
-            # only for the claim transaction; no provider work under the lock.
-            # SQLite uses BEGIN IMMEDIATE from its existing connection class.
-            if self._postgres:
-                db._conn.execute("PG_REPLY_JOB_CLAIM_LOCK")
-            now = self._now()
-            stamp = now.isoformat()
-            count = db._conn.execute(
-                self._sql("RUNNING_COUNT"), (stamp,),
-            ).fetchone()[0]
-            if count >= self.max_running:
-                return None
-            row = db._conn.execute(self._sql("SELECT_DUE"), (stamp, stamp, stamp)).fetchone()
-            if row is None:
-                return None
-            token = str(uuid4())
-            until = (now + timedelta(seconds=self.lease_seconds)).isoformat()
-            won = db._conn.execute(self._sql("CLAIM"),
-                (token, until, row["turn_id"], row["attempts"], stamp, stamp),
-            ).rowcount
-            if won != 1:
-                return None
-            return ReplyClaim(row["turn_id"], row["input_id"], row["session_id"],
-                              token, int(row["attempts"]) + 1)
+        try:
+            with trace_lock(db._lock), db._conn:
+                # PostgreSQL needs a transaction-scoped lock for its global
+                # count/claim predicate. SQLite already uses BEGIN IMMEDIATE.
+                if self._postgres:
+                    db._conn.execute("PG_REPLY_JOB_CLAIM_LOCK")
+                now = self._now()
+                stamp = now.isoformat()
+                count = db._conn.execute(
+                    self._sql("RUNNING_COUNT"), (stamp,),
+                ).fetchone()[0]
+                if count >= self.max_running:
+                    return None
+                row = db._conn.execute(
+                    self._sql("SELECT_DUE"), (stamp, stamp, stamp, stamp),
+                ).fetchone()
+                if row is None:
+                    return None
+                token = str(uuid4())
+                until = (now + timedelta(seconds=self.lease_seconds)).isoformat()
+                won = db._conn.execute(
+                    self._sql("CLAIM"),
+                    (token, until, row["turn_id"], row["attempts"], stamp, stamp),
+                ).rowcount
+                if won != 1:
+                    return None
+                # The queue and the *existing* generation/outbound fence use
+                # exactly the same token and deadline, in one transaction.
+                if not self.generations.claim(
+                    row["turn_id"], row["session_id"], row["native_message_hash"],
+                    row["transport_revision"], token, seconds=self.lease_seconds,
+                    now=now,
+                ):
+                    raise _LeaseConflict()
+                return ReplyClaim(row["turn_id"], row["input_id"], row["session_id"],
+                                  token, int(row["attempts"]) + 1)
+        except _LeaseConflict:
+            return None
+
+    def _paired_write(self, claim, operation, args, *, renew_now=None, completed=False):
+        db = self.database
+        try:
+            with trace_lock(db._lock), db._conn:
+                if db._conn.execute(self._sql(operation), args).rowcount != 1:
+                    return False
+                if renew_now is not None:
+                    won = self.generations.renew(
+                        claim.turn_id, claim.token, seconds=self.lease_seconds,
+                        now=renew_now,
+                    )
+                else:
+                    won = self.generations.release(
+                        claim.turn_id, claim.token, completed=completed,
+                    )
+                if not won:
+                    raise _LeaseConflict()
+                return True
+        except _LeaseConflict:
+            return False
 
     def renew(self, claim: ReplyClaim) -> bool:
         now = self._now()
-        return self._write(
-            self._sql("RENEW"),
+        return self._paired_write(
+            claim, "RENEW",
             ((now + timedelta(seconds=self.lease_seconds)).isoformat(),
              claim.turn_id, claim.token, now.isoformat()),
-        ) == 1
+            renew_now=now,
+        )
 
     def defer(self, claim: ReplyClaim, reason: ReplyReason, *, delay_seconds: int) -> bool:
         reason = ReplyReason(reason)
@@ -139,21 +177,22 @@ class ReplyJobRepository:
         if type(delay_seconds) is not int or not 1 <= delay_seconds <= 900:
             raise ValueError("REPLY_JOB_DELAY_INVALID")
         now = self._now()
-        return self._write(
-            self._sql("DEFER"),
+        return self._paired_write(
+            claim, "DEFER",
             ((now + timedelta(seconds=delay_seconds)).isoformat(), reason.value,
              claim.turn_id, claim.token, now.isoformat()),
-        ) == 1
+        )
 
     def block(self, claim: ReplyClaim, reason: ReplyReason) -> bool:
         reason = ReplyReason(reason)
         if reason not in {ReplyReason.CONFIGURATION_BLOCKED, ReplyReason.CONTEXT_BLOCKED,
                           ReplyReason.AUTHORIZATION_REVOKED}:
             raise ValueError("REPLY_JOB_BLOCK_REASON_INVALID")
-        return self._write(
-            self._sql("BLOCK"),
+        return self._paired_write(
+            claim, "BLOCK",
             (reason.value, claim.turn_id, claim.token, self._now().isoformat()),
-        ) == 1
+            completed=reason is ReplyReason.AUTHORIZATION_REVOKED,
+        )
 
     def resume_blocked(self, turn_id: str) -> bool:
         # Internal operation only; real ingress/dispatcher must reauthorize.
@@ -165,13 +204,15 @@ class ReplyJobRepository:
     def mark_ready(self, claim: ReplyClaim, outbound_id: str) -> bool:
         """Observe durable outbox; does NOT itself write or deliver a reply.
 
-        Full integration must fence the original outbox write with the same
-        job ownership, and reconcile commit-unknown/prepared response crashes.
+        Full integration must stage and publish with this same generation token,
+        and reconcile commit-unknown/prepared response crashes.
         """
         oid = str(UUID(str(outbound_id)))
-        return self._write(
-            self._sql("MARK_READY"), (oid, claim.turn_id, claim.token, self._now().isoformat(), oid),
-        ) == 1
+        return self._paired_write(
+            claim, "MARK_READY",
+            (oid, claim.turn_id, claim.token, self._now().isoformat(), oid),
+            completed=True,
+        )
 
     def observe_sent(self, turn_id: str) -> bool:
         # Never equate generated/queued text with successful transport ACK.
