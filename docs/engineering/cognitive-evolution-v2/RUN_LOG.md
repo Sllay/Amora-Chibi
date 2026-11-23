@@ -90,6 +90,13 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Baseline live não medido nesta etapa; confirmar backend efetivo e revisão implantada antes de rollout. Não trocar host nem desativar gateway.
 - Gate: aberto; subetapas C–E e integração real pendentes. Nenhuma execução de produção autorizada por este registro.
 
+### RUN 01 — incremento inicial A–B (SQLite candidato)
+
+- Implementação: [ADR e evidências](RUN01_DURABLE_REPLY_ADR.md); DDL em core/amora/storage/reply_job_schema.py e repository em core/amora/messaging/reply_jobs.py. Commits c1fe272, 7b6f3bd, b7928c4, 52bd482 e e4c92c6. Não registrado nas migrations; não ligado ao Core.
+- Correções na revisão: FK CASCADE para permitir exclusão autorizada do input; claim impede concorrência dentro da sessão mesmo se job bloqueado antigo voltar à fila. Precisamos provar o fence comum com o outbox antes de ativar.
+- Testes adicionados: tests/test_reply_jobs_candidate.py, sete cenários unitários/integração de armazenamento SQLite, relógio simulado, reconciliação, dedupe, lease expirada, duas conexões, retry, invalidação, bloqueio e ACK. Execução CI ainda não comprovada neste registro.
+- Pendências desta mesma RUN: SQL PG revisado, prova no lab real, migration/restore/rollback, produtor de entrada com registro original e envelope recuperável, dispatcher/ownership compartilhado, status/outbox, transporte, matriz D01–D16, benchmark e certificação live. Não começar RUN 02. Nenhuma alteração em produção.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
