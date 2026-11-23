@@ -79,11 +79,20 @@ SQLITE_STATEMENTS = {
     "RUNNING_COUNT": ("SELECT COUNT(*) FROM messaging_reply_jobs "
                 "WHERE status='running' AND lease_until>?"),
     "SELECT_DUE": ("""
-                SELECT turn_id,input_id,session_id,attempts
+                SELECT turn_id,input_id,session_id,attempts,native_message_hash,transport_revision
                 FROM messaging_reply_jobs
                 WHERE ((status IN ('pending','retry_wait') AND available_at<=?)
                     OR (status='running' AND lease_until<=?))
                   AND """ + _VALID_SOURCE + """
+                  AND NOT EXISTS (
+                      SELECT 1 FROM messaging_inbound_generation g
+                      WHERE g.turn_id=messaging_reply_jobs.turn_id AND (
+                          g.session_id<>messaging_reply_jobs.session_id
+                          OR g.native_message_hash<>messaging_reply_jobs.native_message_hash
+                          OR g.transport_revision<>messaging_reply_jobs.transport_revision
+                          OR (g.lease_token IS NOT NULL AND g.lease_until>?)
+                      )
+                  )
                   AND NOT EXISTS (
                     SELECT 1 FROM messaging_reply_jobs active
                     WHERE active.session_id=messaging_reply_jobs.session_id
