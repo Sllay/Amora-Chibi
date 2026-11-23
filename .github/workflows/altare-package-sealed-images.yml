@@ -34,7 +34,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install pinned sealing crypto for ephemeral runner
-        run: python -m pip install --disable-pip-version-check --only-binary=:all: cryptography==46.0.3
+        run: python -m pip install --disable-pip-version-check --only-binary=:all: cryptography==50.0.2
       - name: Check both source bundles and both public keys, without printing values
         shell: bash
         env:
@@ -95,7 +95,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install pinned sealing crypto
-        run: python -m pip install --disable-pip-version-check --only-binary=:all: cryptography==46.0.3
+        run: python -m pip install --disable-pip-version-check --only-binary=:all: cryptography==50.0.2
       - name: Encrypt the selected app environment outside Docker context
         shell: bash
         env:
