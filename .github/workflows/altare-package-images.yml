@@ -82,6 +82,25 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/Sllay/Amora-Chibi
             org.opencontainers.image.revision=${{ github.sha }}
+      - name: Verify registry manifest is a plain linux/amd64 image (no attestation pseudo-platform)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect --raw "ghcr.io/sllay/amora-chibi-${{ matrix.name }}:${{ github.sha }}" | python -c '
+          import json, sys
+          obj = json.load(sys.stdin)
+          allowed = {"application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json"}
+          media = obj.get("mediaType", "")
+          if media in allowed and "config" in obj and "layers" in obj:
+              print("ALTARE_MANIFEST_SINGLE_IMAGE_OK")
+              raise SystemExit(0)
+          entries = obj.get("manifests", [])
+          if len(entries) == 1 and entries[0].get("platform") == {"architecture":"amd64", "os":"linux"} and entries[0].get("mediaType") in allowed:
+              print("ALTARE_MANIFEST_SINGLE_PLATFORM_OK")
+              raise SystemExit(0)
+          print("ALTARE_MANIFEST_UNEXPECTED_FORMAT")
+          raise SystemExit(2)
+          '
       - name: Confirm image tag (no secrets)
         run: echo 'Built ${{ matrix.name }} from ${{ github.sha }}'
 
