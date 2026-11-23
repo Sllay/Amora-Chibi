@@ -128,7 +128,9 @@ jobs:
             AMORA_SEALED_ENV=1
           secret-files: |
             amora_sealed_env=${{ runner.temp }}/amora-sealed-${{ matrix.name }}.json
-          provenance: true
+          # Keep one real linux/amd64 manifest in GHCR for Altare installs.
+          provenance: false
+          sbom: false
           labels: |
             org.opencontainers.image.source=https://github.com/Sllay/Amora-Chibi
             org.opencontainers.image.revision=${{ github.sha }}
