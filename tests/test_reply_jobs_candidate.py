@@ -1,5 +1,7 @@
-"""RUN 01 candidate: isolated SQLite tests, no remote provider or production."""
+"""RUN 01 candidate parity: SQLite and opt-in disposable PG18; no providers."""
+from contextlib import closing
 from datetime import timedelta
+import os
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,6 +15,12 @@ from amora.messaging.reply_jobs import ReplyJobRepository, ReplyReason
 from amora.storage.database import AmoraDatabase
 from amora.storage.reply_job_schema import REPLY_JOB_CANDIDATE_SQL
 from amora.storage.schema import LATEST_SCHEMA_VERSION
+from amora.storage.reply_job_sql import SQLITE_STATEMENTS
+from amora.storage.postgres_runtime_reply_jobs import reply_job_statements
+from amora.storage.postgres_runtime_registry import compiled_domain_registry
+from amora.storage.postgres_runtime_connection import PostgresBackendCandidate, PostgresTargetPolicy
+from amora.storage.postgres_runtime_synthetic_setup import prepare_disposable_core_v18
+from amora.storage.postgres_reply_job_lab_schema import install_reply_job_lab
 from amora.time import SimulatedClock
 
 
@@ -38,23 +46,65 @@ def _record(core, request):
     return str(row.id)
 
 
-@pytest.fixture
-def lab(tmp_path, monkeypatch):
+def _raw():
+    psycopg = pytest.importorskip("psycopg")
+    return psycopg.connect(host="127.0.0.1", port=5432, dbname="amora_pg_synthetic",
+        user="amora_ci", password="synthetic_only", connect_timeout=5, autocommit=True)
+
+
+@pytest.fixture(params=["sqlite", pytest.param("pg18", marks=pytest.mark.skipif(
+    os.getenv("AMORA_PG_SYNTHETIC_LAB") != "1",
+    reason="Requires disposable local PostgreSQL 18 service"))])
+def lab(request, tmp_path, monkeypatch):
     monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    monkeypatch.setenv("AMORA_MODE", "local")
     monkeypatch.setenv("AMORA_STORAGE_BACKEND", "sqlite")
     monkeypatch.delenv("AMORA_RUNTIME_SCHEMA_TARGET", raising=False)
     monkeypatch.delenv("AMORA_RUNTIME_SCHEMA_CONFIRMATION", raising=False)
     clock = SimulatedClock()
-    core = AmoraCore.bootstrap(clock=clock)
-    try:
-        assert LATEST_SCHEMA_VERSION == 18
-        assert core.database._conn.execute(
-            "SELECT name FROM sqlite_master WHERE name='messaging_reply_jobs'"
-        ).fetchone() is None
-        core.database._conn.executescript(REPLY_JOB_CANDIDATE_SQL)
-        yield core, clock, ReplyJobRepository(core.database, clock, lease_seconds=10)
-    finally:
-        core.close()
+    assert LATEST_SCHEMA_VERSION == 18
+    if request.param == "sqlite":
+        core = AmoraCore.bootstrap(clock=clock)
+        try:
+            assert core.database._conn.execute(
+                "SELECT name FROM sqlite_master WHERE name='messaging_reply_jobs'"
+            ).fetchone() is None
+            core.database._conn.executescript(REPLY_JOB_CANDIDATE_SQL)
+            yield core, clock, ReplyJobRepository(core.database, clock, lease_seconds=10)
+        finally:
+            core.close()
+        return
+    with closing(_raw()) as manager:
+        # Same explicit disposable schema used by existing PG18 tests.
+        manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
+        try:
+            prepare_disposable_core_v18(manager)
+            install_reply_job_lab(manager)
+            registry = compiled_domain_registry()
+            candidate = reply_job_statements()
+            assert not (registry.keys() & candidate.keys())
+            registry.update(candidate)
+            backend = PostgresBackendCandidate(_raw, registry,
+                target=PostgresTargetPolicy(), max_connections=16)
+            core = AmoraCore.bootstrap(clock=clock, storage=backend)
+            try:
+                yield core, clock, ReplyJobRepository(core.database, clock, lease_seconds=10)
+            finally:
+                core.close()
+            assert backend.opened_connections == 0
+        finally:
+            manager.execute("DROP SCHEMA IF EXISTS amora_pg_v18_lab CASCADE")
+
+
+def test_candidate_reviewed_sql_complete_and_not_in_default_registry():
+    pg = reply_job_statements()
+    assert set(pg) == {"PG_REPLY_JOB_CLAIM_LOCK"} | {
+        "PG_REPLY_JOB_" + operation for operation in SQLITE_STATEMENTS}
+    assert not (set(pg) & set(compiled_domain_registry()))
+    for operation, sql in SQLITE_STATEMENTS.items():
+        reviewed = pg["PG_REPLY_JOB_" + operation]
+        assert reviewed.parameter_count == sql.count("?")
+        assert reviewed.postgres_sql.count("%s") == reviewed.parameter_count
 
 
 def test_candidate_recovers_record_enqueue_crash_without_old_history(lab):
@@ -70,9 +120,16 @@ def test_candidate_recovers_record_enqueue_crash_without_old_history(lab):
     for request in (old, denied, test):
         assert queue.state(request.turn_id) is None
     assert queue.state(accepted.turn_id)["status"] == "pending"
-    columns = {row[1] for row in core.database._conn.execute(
-        "PRAGMA table_info(messaging_reply_jobs)"
-    )}
+    if core.database.backend.capabilities.name == "sqlite":
+        columns = {row[1] for row in core.database._conn.execute(
+            "PRAGMA table_info(messaging_reply_jobs)"
+        )}
+    else:
+        with closing(_raw()) as raw:
+            columns = {row[0] for row in raw.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema='amora_pg_v18_lab' AND table_name='messaging_reply_jobs'"
+            )}
     assert not columns.intersection({"text","payload","metadata_json","image","prompt"})
 
 
@@ -139,6 +196,9 @@ def test_candidate_concurrent_claim_has_one_winner(lab):
     core, clock, queue = lab
     request = _request()
     assert queue.enqueue(_record(core, request))
+    clock.advance(timedelta(seconds=1))
+    independent = _request(session="second-concurrent-session", native="b"*20)
+    assert queue.enqueue(_record(core, independent))
     second = AmoraDatabase(core.database.path, backend=core.database.backend)
     try:
         other = ReplyJobRepository(second, clock, lease_seconds=10)
@@ -211,3 +271,36 @@ def test_candidate_revoked_job_cannot_be_resumed(lab):
     assert queue.block(claim, ReplyReason.AUTHORIZATION_REVOKED)
     assert not queue.resume_blocked(request.turn_id)
     assert queue.claim() is None
+
+
+def test_candidate_same_session_never_runs_twice_even_with_spare_capacity(lab):
+    core, clock, queue = lab
+    multi = ReplyJobRepository(core.database, clock, lease_seconds=10, max_running=2)
+    first = _request()
+    assert multi.enqueue(_record(core, first))
+    older = multi.claim()
+    assert older
+    assert multi.block(older, ReplyReason.CONTEXT_BLOCKED)
+    clock.advance(timedelta(seconds=1))
+    later = _request(native="b"*20)
+    assert multi.enqueue(_record(core, later))
+    active = multi.claim()
+    assert active and active.turn_id == str(later.turn_id)
+    assert multi.resume_blocked(first.turn_id)
+    assert multi.claim() is None
+    other = _request(session="unrelated-session", native="c"*20)
+    assert multi.enqueue(_record(core, other))
+    independent = multi.claim()
+    assert independent and independent.turn_id == str(other.turn_id)
+
+
+def test_candidate_rejects_malformed_revision_and_non_dm_marker(lab):
+    core, clock, queue = lab
+    for key, value in (("transport_revision", "1"), ("transport_revision", 0),
+                       ("transport_revision", 1.5), ("native_message_id_hash", "z"*20),
+                       ("channel_type", "group"), ("platform", "web")):
+        req = _request()
+        req.metadata[key] = value
+        source = _record(core, req)
+        assert not queue.enqueue(source)
+    assert queue.reconcile_missing() == 0
