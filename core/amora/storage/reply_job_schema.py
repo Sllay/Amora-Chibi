@@ -8,7 +8,7 @@ additive candidate for isolated migration/recovery tests only. Runtime schema
 REPLY_JOB_CANDIDATE_SQL = """
 CREATE TABLE IF NOT EXISTS messaging_reply_jobs (
     turn_id TEXT PRIMARY KEY,
-    input_id TEXT NOT NULL UNIQUE REFERENCES conversation_messages(id) ON DELETE RESTRICT,
+    input_id TEXT NOT NULL UNIQUE REFERENCES conversation_messages(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL,
     native_message_hash TEXT NOT NULL,
     transport_revision INTEGER NOT NULL CHECK(transport_revision >= 1),
