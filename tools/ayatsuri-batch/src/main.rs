@@ -201,6 +201,13 @@ fn closed_smile_visibility(opening:f32)->f32 {
 fn mouth_pose_weight(pose:f32,target:f32)->f32 {
     (1.-(pose-target).abs()).clamp(0.,1.)
 }
+fn mouth_auto_weights(open:f32)->(f32,f32,f32) {
+    // On neutral, VTube Studio's default lip sync drives closed -> talk ->
+    // shout automatically; explicit emotional mouth poses take priority.
+    let base=1.-smoothstep(open/0.24);
+    let wide=smoothstep((open-0.55)/0.34);
+    (base,(1.-base)*(1.-wide),(1.-base)*wide)
+}
 
 fn smoothstep(value:f32)->f32 {
     let v=value.clamp(0.,1.);
@@ -508,10 +515,10 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         // They follow its deformation even at 0 eye-open and remain semi-
         // transparent while closed, rather than floating on the canvas.
         if let Some(i)=idx(&format!("extra_tear_{side}")) {
-            let tear=&mut imported.model.art_meshes[i];
+            let tear_control=par(&format!("ParamTear{side}"))?;
             let region=regions[&format!("extra_tear_{side}")];
             let lid=regions[&format!("lower_lid_{side}")];
-            let tear_control=par(&format!("ParamTear{side}"))?;
+            let tear=&mut imported.model.art_meshes[i];
             key_mesh(tear,&[(eye_param,&open_keys),(tear_control,&tears_keys)],
                 |v,x,y| {
                     let (_,edge)=eyelid_vertex(region.cx,lid.cy,eye,lid,v[0],LidSide::Lower);
@@ -541,7 +548,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                 let arch=-mouth_region.h*v[1]*center*0.13;
                 (mouth_region.cx+(x-mouth_region.cx)*spread,
                  y+lip_shift+arch)
-            }, |v|mouth_pose_weight(v[2],0.));
+            }, |v|mouth_pose_weight(v[2],0.)*mouth_auto_weights(v[0]).0);
     }
     for (name,position) in [
         ("extra_mouth_talk",1.),
@@ -556,7 +563,11 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                     let sx=1.+0.035*v[1];
                     let sy=1.+0.045*v[1];
                     (region.cx+(x-region.cx)*sx,region.cy+(y-region.cy)*sy)
-                },|v|mouth_pose_weight(v[0],position));
+                },|v| {
+                    let (base,talk,wide)=mouth_auto_weights(v[1]);
+                    let auto=if position==1. {talk} else if position==2. {wide} else {0.};
+                    mouth_pose_weight(v[0],position)+mouth_pose_weight(v[0],0.)*auto
+                });
         }
     }
     add_root_motion(&mut imported.model,angle,body_angle,breath);
@@ -867,6 +878,10 @@ mod tests {
         assert_eq!(mouth_pose_weight(0.,0.),1.);
         assert_eq!(mouth_pose_weight(0.,1.),0.);
         assert_eq!(mouth_pose_weight(3.,3.),1.);
+        let (base,talk,wide)=mouth_auto_weights(0.);
+        assert_eq!((base,talk,wide),(1.,0.,0.));
+        let (base,talk,wide)=mouth_auto_weights(1.);
+        assert!((base+talk+wide-1.).abs()<1e-5 && wide>0.99);
         assert!((mouth_pose_weight(1.5,1.)+mouth_pose_weight(1.5,2.)-1.).abs()<1e-6);
     }
 
