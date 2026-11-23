@@ -9,7 +9,7 @@ from datetime import timedelta
 from amora.storage.backend import execute_atomic_statement
 from amora.storage.postgres_runtime_generation import (
     CLAIM as PG_CLAIM, RELEASE as PG_RELEASE, STAGE as PG_STAGE,
-    PREPARED as PG_PREPARED, INVALIDATE as PG_INVALIDATE,
+    PREPARED as PG_PREPARED, INVALIDATE as PG_INVALIDATE, RENEW as PG_RENEW,
 )
 from .models import AttentionDecision, OutboundMessage
 
@@ -33,8 +33,8 @@ class InboundGeneration:
             return execute_atomic_statement(db.backend, db._conn, sql, args).rowcount
 
     @trace_stage("generation_claim")
-    def claim(self, turn_id, session_id, native_hash, revision, token, *, seconds=180):
-        now = self.clock.now()
+    def claim(self, turn_id, session_id, native_hash, revision, token, *, seconds=180, now=None):
+        now = self.clock.now() if now is None else now
         if self.database.backend.capabilities.name == "postgres-candidate":
             return bool(self._write(PG_CLAIM, (
                 str(turn_id),session_id,native_hash,revision,token,
@@ -50,6 +50,24 @@ class InboundGeneration:
                   OR messaging_inbound_generation.lease_until<=?""",
             (str(turn_id), session_id, native_hash, revision, token,
              (now + timedelta(seconds=seconds)).isoformat(), now.isoformat()),
+        ))
+
+    @trace_stage("generation_renew")
+    def renew(self, turn_id, token, *, seconds=180, now=None):
+        """Extend only the current, unexpired and non-invalidated owner."""
+        now = self.clock.now() if now is None else now
+        args = ((now + timedelta(seconds=seconds)).isoformat(),
+                str(turn_id), token, now.isoformat())
+        if self.database.backend.capabilities.name == "postgres-candidate":
+            return bool(self._write(PG_RENEW, args))
+        return bool(self._write(
+            """UPDATE messaging_inbound_generation SET lease_until=?
+               WHERE turn_id=? AND lease_token=? AND lease_until>?
+                 AND NOT EXISTS (SELECT 1 FROM memory_reflection_invalidations x
+                     WHERE x.session_id=messaging_inbound_generation.session_id
+                     AND x.native_message_hash=messaging_inbound_generation.native_message_hash
+                     AND x.invalidated_through>=messaging_inbound_generation.transport_revision)""",
+            args,
         ))
 
     @trace_stage("generation_release")
