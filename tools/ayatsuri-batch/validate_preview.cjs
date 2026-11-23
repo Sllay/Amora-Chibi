@@ -71,6 +71,60 @@ async function run() {
    });
   }
   const neutral=await digest();
+  // A responsive face is not just an image spinning in the Z axis. Verify
+  // independent left/right and up/down head+body turn controls in Chrome.
+  const setSlider=async(id,value)=>{
+   await page.evaluate(({id,value})=>{
+    const e=document.getElementById(id);
+    e.value=String(value);
+    e.dispatchEvent(new Event("input",{bubbles:true}));
+   },{id,value});
+   await new Promise(resolve=>setTimeout(resolve,460));
+  };
+  const poses={};
+  for(const [id,value,name] of [
+    ["headX",-26,"head-left"],["headX",26,"head-right"],
+    ["headY",-25,"head-up"],["headY",25,"head-down"],
+  ]){
+   await setSlider("headX",id==="headX"?value:0);
+   await setSlider("headY",id==="headY"?value:0);
+   poses[name]=await digest();
+   await page.screenshot({path:path.join(path.dirname(html),"amora-browser-"+name+".png"),fullPage:true});
+  }
+  await setSlider("headY",0);
+  await setSlider("headX",0);
+  for(const [value,name] of [[-1,"gaze-left"],[1,"gaze-right"]]){
+   await setSlider("lookX",value);
+   poses[name]=await digest();
+   await page.screenshot({path:path.join(path.dirname(html),"amora-browser-"+name+".png"),fullPage:true});
+  }
+  await setSlider("lookX",0);
+  if(poses["head-left"].hash===poses["head-right"].hash||
+     poses["head-up"].hash===poses["head-down"].hash||
+     poses["gaze-left"].hash===poses["gaze-right"].hash){
+   throw Error("3/4 head/body turn or eye gaze does not change canvas rendering");
+  }
+  const irisChecks=await page.evaluate(()=>{
+    const state=irisSpring.L;
+    state.armed=false;state.age=99;
+    const closed=irisSpringScale("L",0,0);
+    const samples=[];
+    for(let i=0;i<90;i++)samples.push(irisSpringScale("L",1,.01));
+    state.armed=false;state.age=99;state.scale=1;
+    const peaks=[
+      Math.max(...samples.slice(0,15)),
+      Math.max(...samples.slice(28,46)),
+      Math.max(...samples.slice(57,76))
+    ];
+    const b=box("eye_white_L"),ib=box("iris_L");
+    const travelX=Math.min(b.w*.22,Math.max(b.w*.12,b.w-ib.w)*.56);
+    return {closed,peaks,atEnd:samples[samples.length-1],travelRatio:travelX/b.w};
+  });
+  if(irisChecks.closed<.94||irisChecks.closed>.96||
+      irisChecks.peaks[0]<1.05||!(irisChecks.peaks[0]>irisChecks.peaks[1]&&irisChecks.peaks[1]>irisChecks.peaks[2])||
+      irisChecks.peaks[2]<1.005||irisChecks.travelRatio<.09){
+   throw Error("Iris shrink, damped multi-pulse rebound or gaze travel invalid: "+JSON.stringify(irisChecks));
+  }
   await page.click('[data-expr="Sleepy"]');
   await new Promise(resolve=>setTimeout(resolve,500));
   const sleepy=await digest();
@@ -115,7 +169,7 @@ async function run() {
   if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0||wink.corner!==0||half.corner!==0||near.corner!==0||closed.corner!==0)throw Error("Opaque background remains around Amora");
   if(!neutral.center||!sleepy.center||!surprised.center||!wink.center||!half.center||!near.center||!closed.center)throw Error("Center of Amora is not rendered");
   if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash||wink.hash===surprised.hash||half.hash===wink.hash||half.hash===neutral.hash||near.hash===half.hash||closed.hash===near.hash)throw Error("Expressions did not change canvas pixels");
-  console.log(JSON.stringify({ok:true,loaded_layers:14,lidChecks,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
+  console.log(JSON.stringify({ok:true,loaded_layers:14,lidChecks,irisChecks,poses,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
  }finally{await browser.close();}
 }
 run().catch(err=>{console.error(err.stack||err);process.exitCode=1;});
