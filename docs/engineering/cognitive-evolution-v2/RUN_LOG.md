@@ -97,6 +97,13 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Testes adicionados: tests/test_reply_jobs_candidate.py, sete cenários unitários/integração de armazenamento SQLite, relógio simulado, reconciliação, dedupe, lease expirada, duas conexões, retry, invalidação, bloqueio e ACK. Execução CI ainda não comprovada neste registro.
 - Pendências desta mesma RUN: SQL PG revisado, prova no lab real, migration/restore/rollback, produtor de entrada com registro original e envelope recuperável, dispatcher/ownership compartilhado, status/outbox, transporte, matriz D01–D16, benchmark e certificação live. Não começar RUN 02. Nenhuma alteração em produção.
 
+### RUN 01 — CI inicial e correção (23/11/2026)
+
+- PR #378, HEAD inicial b310a4a4. Workflows de memória/percepção, modalidade, segurança e containers: PASS. Core tests #45283534381: Python 3.11 com 2.117 passed, 128 skipped e 1 failed; outras versões canceladas pela matriz.
+- Falha: test_candidate_dedupes_and_recovers_expired_lease_across_connections, linha 108. As etapas anteriores (dedupe, lease expirada, retomada, fencing, atraso) passaram. A asserção final usava ConversationMessage.text, atributo inexistente.
+- Causa confirmada em cognition/models.py: campo de entrada original é raw_text. Commit 05f019e corrige a asserção para comparar raw_text == request.text sem enfraquecer a verificação nem alterar runtime.
+- Nova certificação CI necessária; gate RUN 01 aberto. PostgreSQL, integração Core/Discord, migration e live seguem pendentes.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
