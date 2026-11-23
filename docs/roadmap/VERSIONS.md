@@ -7,6 +7,17 @@ Este arquivo registra **linhagem, destino e ordem de grandes frentes**. Detalhe 
 
 ---
 
+## Programa transversal — Cognitive Evolution V2 (23/11/2026)
+
+Frente de engenharia planejada para confiabilidade, contexto, multimodalidade,
+web e conversa. Não constitui versão de produto nem altera destinos V1.x/V2/V3
+implicitamente. Fonte operacional:
+[plano RUN 00–07](../engineering/cognitive-evolution-v2/PLAN.md) e
+[diário](../engineering/cognitive-evolution-v2/RUN_LOG.md).
+O trabalho começa por RUN 01 (fila cognitiva durável); cada RUN tem gate
+próprio e status comprovado no diário. Atualizar este roadmap se uma entrega
+efetiva mudar o escopo/versionamento canônico.
+
 ## 1. Semântica de status
 
 | Status | Significado |
