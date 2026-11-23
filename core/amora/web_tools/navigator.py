@@ -510,6 +510,85 @@ def _rank_search_results(results: list[dict[str, str]], query: str) -> list[dict
     return [item[2] for item in scored[:5]]
 
 
+# Short referential search instructions are NOT standalone research subjects.
+# Only the verified Core context compiler may provide the conversation history
+# below. Do not fetch global chat, other DMs or private messages here.
+_CONTEXTUAL_TERMS = frozenset({
+    "aquilo", "isso", "isto", "coisa", "parada", "negocio", "assunto",
+    "tema", "mesmo", "anterior", "anteriormente", "antes", "ontem",
+    "que", "eu", "te", "nos", "nossa", "nossas", "gente", "a", "o", "aquela", "aquele", "aquele", "aquilo", "essa", "esse",
+    "umas", "uns", "uma", "um", "sobre", "da", "de", "do", "das", "dos", "la",
+    "ai", "aqui", "ok", "okay", "certo", "conversamos", "falamos",
+    "tava", "estava", "estavamos", "falando", "dizendo", "falei",
+    "contei", "comentei", "vimos", "viu", "ver", "pesquisa",
+    "pesquisando", "busca", "buscando", "pesquisar", "novamente",
+    "continuar", "continue", "continua", "relembra",
+    "mensagem", "mensagens", "anteriores", "anterior", "historico",
+    "conversa", "conversas", "ultima", "ultimas", "ultimo", "ultimos",
+    "passada", "passado", "naquelas", "naquela", "naquele",
+    "nosso", "nossos", "nossa", "nossas", "discutimos", "comentamos",
+    "falou", "to", "ta", "ligado",
+})
+_CONTEXT_HISTORY_FILLER = _CONTEXTUAL_TERMS | frozenset({
+    "amora", "voce", "voce", "vc", "pra", "para", "quero",
+    "queria", "preciso", "precisamos", "vamos", "sera", "seria",
+    "pode", "faz", "fazer", "veja", "olha", "achei", "acho",
+    "tipo", "tudo", "mais", "muito", "mesma", "mesmas", "agora",
+    "dps", "depois", "sim", "nao", "n", "ss", "pq", "porque",
+    "entao", "ainda", "tambem", "entendeu", "entendi", "ksksks",
+    "cade", "ia", "tem", "tinha", "temos", "ta", "estou",
+    "es", "esta", "estar", "foi", "era", "bem", "bom", "boa",
+    "coisas", "paradas", "problema", "pergunta", "mensagem",
+})
+# A topic sourced from a conversation must never accidentally broadcast
+# credentials, DSNs, private links or raw media identifiers to a search engine.
+_CONTEXT_SECRET = re.compile(
+    r"(?i)\b(?:senha|password|passphrase|token|api[_ -]?key|"
+    r"segredo|secret|credencial|bearer|authorization|private[_ -]?key)\b|"
+    r"(?:postgres(?:ql)?|mongodb|redis)://|"
+    r"https?://[^\s]{1,100}@[^\s]{1,100}"
+)
+
+
+def _is_contextual_search_subject(subject: str) -> bool:
+    """Detect anaphora even when the extractor left 'coisa/antes' behind."""
+    if not subject.strip():
+        return True
+    tokens = _topic_terms(subject)
+    return bool(tokens) and not any(
+        token not in _CONTEXTUAL_TERMS for token in tokens
+    )
+
+
+def _topic_from_authorized_history(
+    history: list[dict[str, Any]] | None, speaker_id: str | None,
+    current_text: str,
+) -> str:
+    """Use only recent, authorized user utterances, never third-party chat.
+
+    This is a bounded, deterministic fallback; not a claim of understanding an
+    arbitrary old discussion, and never a second history/database read.
+    """
+    if not speaker_id or not isinstance(history, list):
+        return ""
+    for entry in reversed(history[-12:]):
+        if not isinstance(entry, dict) or entry.get("speaker_id") != speaker_id:
+            continue
+        candidate = str(entry.get("text") or "")[:800]
+        if not candidate or candidate == current_text or _CONTEXT_SECRET.search(candidate):
+            continue
+        tokens = [
+            term for term in _topic_terms(candidate)
+            if term not in _CONTEXT_HISTORY_FILLER and len(term) >= 3
+        ]
+        if len(tokens) < 2:
+            continue
+        # Same text always produces the same compact, source-derived topic.
+        # No history text, URLs, other users or model guesses reach the engine.
+        return " ".join(tokens[:12])[:160]
+    return ""
+
+
 def parse_web_intent(text: str) -> WebIntent | None:
     raw = str(text or "")[:12000]
     urls = _LINK_RE.findall(raw)
@@ -909,13 +988,27 @@ class WebNavigator:
             _LOG.warning("WEB_WORKSPACE_READ_FAILED")
             return {}
 
-    async def research(self, text: str, session_id: str | None) -> dict[str, Any] | None:
+    async def research(
+        self, text: str, session_id: str | None, *,
+        authorized_history: list[dict[str, Any]] | None = None,
+        speaker_id: str | None = None,
+    ) -> dict[str, Any] | None:
         intent = parse_web_intent(text)
         if intent is None:
             return None
         if session_id:
             self._hydrate_workspace(session_id)
-        result = await self._research_intent(text, session_id, intent)
+        # The context compiler already restricted history to this speaker's
+        # allowed conversation. Only a referential search may read its compact
+        # subject, and a named request ALWAYS wins over old context.
+        context_subject = ""
+        if intent.action == "search" and _is_contextual_search_subject(intent.argument):
+            context_subject = _topic_from_authorized_history(
+                authorized_history, speaker_id, text,
+            )
+        result = await self._research_intent(
+            text, session_id, intent, context_subject=context_subject,
+        )
         if result is not None and session_id:
             notebook = self._workspace_notebook(session_id)
             if notebook:
@@ -923,7 +1016,8 @@ class WebNavigator:
         return result
 
     async def _research_intent(self, text: str, session_id: str | None,
-                               intent: WebIntent) -> dict[str, Any] | None:
+                               intent: WebIntent, *,
+                               context_subject: str = "") -> dict[str, Any] | None:
         if not session_id:
             return {"action": intent.action, "status": "unavailable", "reason": "WEB_SESSION_REQUIRED",
                     "sources": [], "references": []}
@@ -1089,12 +1183,18 @@ class WebNavigator:
         # cannot silently search some random earlier subject.
         search_topic = intent.argument
         contextual_search = (
-            intent.action == "search" and not search_topic
-            and (_CONTEXT_SEARCH_RE.search(text) is not None
+            intent.action == "search"
+            and _is_contextual_search_subject(search_topic)
+            and (bool(search_topic) or _CONTEXT_SEARCH_RE.search(text) is not None
                  or _WEB_CONTINUE_RE.search(text) is not None)
         )
         if contextual_search:
-            search_topic = self.current_delivery(session_id).get("focus", "")
+            # Prefer the authorized live conversation over old web workspace
+            # focus. Neither source exists? Fail with a clear missing-context
+            # status rather than searching for "coisa" or "aquilo".
+            search_topic = (
+                context_subject or self.current_delivery(session_id).get("focus", "")
+            )
             # Safe diagnostic event only: never log the subject, URL,
             # Discord conversation, user content or session identifier.
             _LOG.info(
