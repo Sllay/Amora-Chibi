@@ -273,6 +273,36 @@ def load_extra_assets(manifest_path: Path) -> dict[str, Image.Image]:
     return extras
 
 
+def load_user_closed_eyes(manifest_path: Path) -> dict[str, Image.Image]:
+    """Use the user's edited closed-eye assets, never procedural substitutes."""
+    payload=manifest_path.parent / "extras" / "user_closed_eyes_rgba.jsonl"
+    if not payload.is_file():
+        raise FileNotFoundError(f"missing the user-edited eyes: {payload}")
+    result={}
+    for line in payload.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        item=json.loads(line)
+        side=item["side"]
+        if side not in ("L","R") or side in result:
+            raise ValueError(f"invalid/duplicate edited eye: {side}")
+        x0,y0,x1,y1=item["bbox"]
+        if not (0<=x0<x1<=1254 and 0<=y0<y1<=1254):
+            raise ValueError(f"edited closed eye {side} bounds invalid")
+        raw=base64.b85decode(item["b85"].encode("ascii"))
+        with Image.open(io.BytesIO(raw)) as decoded:
+            decoded.load()
+            if decoded.format!="PNG" or decoded.size!=(x1-x0,y1-y0):
+                raise ValueError(f"edited closed eye {side} has corrupted PNG data")
+            im=decoded.convert("RGBA")
+        full=Image.new("RGBA",(1254,1254),(0,0,0,0))
+        full.alpha_composite(im,(x0,y0))
+        result[side]=full
+    if set(result)!={"L","R"}:
+        raise ValueError("both corrected closed-eye PNGs are required")
+    return result
+
+
 def prepare(manifest_path: Path, out: Path) -> None:
     src = json.loads(manifest_path.read_text(encoding="utf-8"))
     if (src["width"], src["height"]) != (1254, 1254):
@@ -314,10 +344,8 @@ def prepare(manifest_path: Path, out: Path) -> None:
                          rgba[f"lower_lid_{side}"], rgba[f"upper_lid_{side}"])
         for side in ("L", "R")
     }
-    closed = {
-        side: closed_smile_art(rgba[f"eye_white_{side}"],rgba[f"upper_lid_{side}"],side)
-        for side in ("L","R")
-    }
+    # Closed-eye silhouettes are exactly the user's latest two edited PNGs.
+    closed=load_user_closed_eyes(manifest_path)
     extras=load_extra_assets(manifest_path)
     prepared_layers = []
     preview = Image.new("RGBA", (1254, 1254), (0, 0, 0, 0))
@@ -367,7 +395,8 @@ def prepare(manifest_path: Path, out: Path) -> None:
         json.dumps({"source_order": expected_names, "render_order": [v["name"] for v in prepared_layers],
                     "technical_derived_layers": ["skin_patch_L","skin_patch_R",
                                                   "closed_smile_L","closed_smile_R"],
-                    "user_expression_assets": list(EXTRA_NAMES), "warning":
+                    "user_expression_assets": list(EXTRA_NAMES),
+                    "user_closed_eye_assets": ["closed_smile_L","closed_smile_R"], "warning":
                     "Body source is opaque JPEG. Preview places body behind eyes; source files untouched."},
                    indent=2) + "\n", encoding="utf-8")
     print("Validated 10 source layers. Only eye whites #1 and #3 replaced.")
