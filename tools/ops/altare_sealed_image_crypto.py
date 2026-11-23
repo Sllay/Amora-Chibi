@@ -11,6 +11,7 @@ import os
 import re
 from typing import Mapping
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -51,7 +52,10 @@ def _check_payload(payload: object, *, service: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for name, value in payload.items():
         if (not isinstance(name, str) or not NAME.fullmatch(name)
-                or name.startswith("ALTARE_") or name == "AMORA_IMAGE_ENV_PRIVATE_KEY"
+                or name.startswith(("ALTARE_", "LD_"))
+                or name in {"AMORA_IMAGE_ENV_PRIVATE_KEY", "PATH", "NODE_OPTIONS",
+                            "NODE_PATH", "PYTHONPATH", "PYTHONHOME", "ENV", "BASH_ENV",
+                            "__proto__", "constructor", "prototype"}
                 or not isinstance(value, str) or "\0" in value or "\n" in value
                 or "\r" in value):
             raise SealedEnvError("SEALED_ENV_INVALID_VARIABLE")
@@ -141,6 +145,6 @@ def unseal(envelope_bytes: bytes, *, service: str, private_key_b64: str) -> dict
         if len(plain) > MAX_PLAINTEXT:
             raise ValueError("plaintext too large")
         payload = json.loads(plain)
-    except (KeyError, TypeError, ValueError, UnicodeError):
+    except (KeyError, TypeError, ValueError, UnicodeError, InvalidTag):
         raise SealedEnvError("SEALED_ENV_DECRYPT_OR_FORMAT_FAILED") from None
     return _check_payload(payload, service=service)
