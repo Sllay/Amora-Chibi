@@ -54,6 +54,7 @@ jobs:
               with Image.open(root/f"closed_smile_{side}.png") as pose:
                   bounds=pose.getchannel("A").getbbox()
                   assert bounds and bounds[2]-bounds[0]>100 and bounds[3]-bounds[1]>30, f"Closure shape {side} invalid"
+          assert Path("assets/amora-live2d/extras/user_closed_eyes_rgba.jsonl").is_file()
           print("Transparent body and closed-eye keyforms verified.")
           PY
       - name: Generate self-contained mobile expression preview
@@ -153,6 +154,7 @@ jobs:
             assets/amora-live2d/manifest.json
             assets/amora-live2d/layers/
             assets/amora-live2d/extras/source_rgba.jsonl
+            assets/amora-live2d/extras/user_closed_eyes_rgba.jsonl
             artifacts/amora-prepared/layers/
             artifacts/amora-prepared/amora_montada.png
             artifacts/amora-mobile-preview.html
