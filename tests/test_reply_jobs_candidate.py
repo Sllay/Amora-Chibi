@@ -10,7 +10,8 @@ import pytest
 from amora.app import AmoraCore
 from amora.cognition import CognitiveRequest
 from amora.events import PrivacyScope
-from amora.messaging.models import MessagingPlatform, OutboundMessage
+from amora.messaging.models import AttentionDecision, MessagingPlatform, OutboundMessage, RoutingAction
+from amora.messaging.generation_lifecycle import InboundGenerationLost
 from amora.messaging.reply_jobs import ReplyJobRepository, ReplyReason
 from amora.storage.database import AmoraDatabase
 from amora.storage.reply_job_schema import REPLY_JOB_CANDIDATE_SQL
@@ -243,12 +244,13 @@ def test_candidate_ready_is_not_sent_and_requires_expected_outbox(lab):
     expected = request.metadata["reply_outbound_id"]
     assert not queue.mark_ready(claim, expected)
     assert not queue.mark_ready(claim, str(uuid4()))
-    # Synthetic outbox only: the shared generation/outbox transaction fence is
-    # still a pending integration task, not proven by this repository test.
+    # Use the existing outbound fence with the candidate claim's token.
+    # The serving dispatcher and atomic finalization remain pending.
     msg = OutboundMessage(id=expected, platform=MessagingPlatform.DISCORD,
         account_scope="synthetic", conversation_id="synthetic-conversation",
         target_entity_id="PERSON_BK", text="Resposta sintética.", created_at=clock.now())
-    assert core.messaging.store.put_outbound(msg)
+    assert core.messaging.store.put_outbound(
+        msg, generation_lease=(claim.turn_id, claim.token))
     assert queue.mark_ready(claim, expected)
     assert queue.state(request.turn_id)["status"] == "ready"
     assert not queue.observe_sent(request.turn_id)
@@ -304,3 +306,71 @@ def test_candidate_rejects_malformed_revision_and_non_dm_marker(lab):
         source = _record(core, req)
         assert not queue.enqueue(source)
     assert queue.reconcile_missing() == 0
+
+
+def test_candidate_reuses_prepared_response_and_fences_expired_owner(lab):
+    core, clock, queue = lab
+    request = _request()
+    assert queue.enqueue(_record(core, request))
+    old = queue.claim()
+    assert old
+    outbound = OutboundMessage(
+        id=request.metadata["reply_outbound_id"], platform=MessagingPlatform.DISCORD,
+        account_scope="synthetic", conversation_id="synthetic-conversation",
+        target_entity_id="PERSON_BK", text="Resposta preparada antes do crash.",
+        created_at=clock.now())
+    decision = AttentionDecision(action=RoutingAction.RESPOND,
+        speaker_entity_id="PERSON_BK", speaker_actor_ref="synthetic-actor")
+    assert core.messaging.generations.stage(old.turn_id, old.token,
+        outbound, decision, ["SYNTHETIC_CHECKPOINT"])
+    clock.advance(timedelta(seconds=11))
+    assert not core.messaging.generations.stage(old.turn_id, old.token,
+        outbound, decision, ["STALE_CHECKPOINT"])
+    new = queue.claim()
+    assert new and new.turn_id == old.turn_id and new.token != old.token
+    prepared = core.messaging.generations.prepared(new.turn_id, new.token)
+    assert prepared is not None and prepared[0] == outbound
+    assert not queue.renew(old)
+    with pytest.raises(InboundGenerationLost):
+        core.messaging.store.put_outbound(outbound,
+            generation_lease=(old.turn_id, old.token))
+    assert core.messaging.store.get_outbound(outbound.id) is None
+    assert queue.renew(new)
+    assert core.messaging.store.put_outbound(prepared[0],
+        generation_lease=(new.turn_id, new.token))
+    assert queue.mark_ready(new, str(outbound.id))
+    assert core.messaging.generations.prepared(new.turn_id, new.token) is None
+    assert not core.messaging.generations.stage(new.turn_id, new.token,
+        outbound, decision, ["AFTER_READY"])
+    assert not queue.claim()
+
+
+def test_candidate_respects_existing_generation_lease_and_retains_checkpoint_on_retry(lab):
+    core, clock, queue = lab
+    request = _request()
+    assert queue.enqueue(_record(core, request))
+    # Legacy ownership may exist during a staged rollout; the queue must not
+    # override a valid owner or increment its own attempt counter in that case.
+    assert core.messaging.generations.claim(
+        str(request.turn_id), request.session_id,
+        request.metadata["native_message_id_hash"], 1, "legacy-owner", seconds=30)
+    assert queue.claim() is None
+    assert queue.state(request.turn_id)["attempts"] == 0
+    assert core.messaging.generations.release(request.turn_id, "legacy-owner")
+    first = queue.claim()
+    assert first and first.attempts == 1
+    outbound = OutboundMessage(
+        id=request.metadata["reply_outbound_id"], platform=MessagingPlatform.DISCORD,
+        conversation_id="synthetic-conversation", text="Checkpoint preservado.",
+        created_at=clock.now())
+    decision = AttentionDecision(action=RoutingAction.RESPOND,
+        speaker_actor_ref="synthetic-actor")
+    assert core.messaging.generations.stage(first.turn_id, first.token,
+        outbound, decision, [])
+    assert queue.defer(first, ReplyReason.STORAGE_TEMPORARY, delay_seconds=10)
+    assert not core.messaging.generations.stage(first.turn_id, first.token,
+        outbound, decision, [])
+    clock.advance(timedelta(seconds=10))
+    second = queue.claim()
+    assert second and second.attempts == 2
+    assert core.messaging.generations.prepared(second.turn_id, second.token)[0] == outbound
