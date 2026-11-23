@@ -89,3 +89,45 @@ existing 19 candidate and exact production state.
 
 No production data, secret, config, schema or deploy changed. CI results and
 subsequent corrections must be recorded in RUN_LOG.md. Full gate remains open.
+
+
+## Incremento A–B.2 — PG18 e ownership compartilhado (23/11/2026)
+
+A correção da primeira suíte (HEAD 2084e3c) foi validada: 5/5 workflows,
+Core Python 3.11–3.14 PASS, 2.118 passed / 128 skipped em 3.11. Evidência:
+[Core tests 45284563242](https://github.com/Sllay/Amora-Chibi/actions/runs/45284563242).
+Isso certifica o recorte SQLite anterior, não esta nova revisão.
+
+- 5b5b8c6 / 6c684ce: extrair SQL fixo SQLite e operações nomeadas,
+  preservando repository único. PG utiliza chaves explícitas, nunca
+  transformação de SQL de entrada em runtime.
+- 1420f96 / f986d16: SQL revisado PostgreSQL e instalador exclusivo do lab
+  local PG18, após fixture sintética v18. Registry de produção não recebe
+  as chaves PG_REPLY_JOB_*. Schema 18 default e 19 opt-in intactos.
+- fc3c1b6 / 16d462f: paridade via mesma suíte parametrizada SQLite/PG18,
+  workflow Aiven PostgreSQL lab existente; checagem de cobertura e
+  parâmetros dos statements e ausência no registry padrão. Rejeição de
+  metadados inválidos, concorrência real em duas conexões, sessões distintas.
+- 8e9d9c9 / 509e042 / 5e09044 / bae1a43 / 7dff950: **mesmo token e
+  deadline** na fila e em InboundGeneration, claim/renew/release pareados
+  em uma transação. PG usa lock SHARE ROW EXCLUSIVE apenas na curta
+  transação de claim para serializar limite global, inclusive jobs
+  distintos; SQLite mantém BEGIN IMMEDIATE. Sem operação remota de modelo
+  durante lock. Se lease existente estiver ativa, fila não pode tomá-la.
+  Retry preserva resposta preparada; ready libera e limpa checkpoint
+  somente após observar o outbound esperado.
+- 722570b: testes de checkpoint reaproveitado após lease expirada, rejeição
+  de stale owner no stage/outbox existente, respeito à lease legada,
+  checkpoint preservado após retry. 11 cenários de repository por backend
+  mais contrato de mapeamento. CI novo pendente.
+
+**Limite importante:** ownership inicial pareado não é ainda certificação
+da publicação atômica completa. Precisamos conectar produtor, reconstrução
+do inbound original, revalidação de autorização, geração e finalização
+com o mesmo token (inclusive locks adequados no PG), reconciliar prepared/
+outbox já existente após crash e impedir publicação/claim de fonte
+invalidada ou revogada em todas as janelas concorrentes. Cancelamento
+do job isolado não substitui tombstone e invalidação do transporte; não
+permitir exclusão destrutiva sem essas garantias. Medir custo/latência
+do lock e política de backpressure. Não ativar a fila ou aplicar migração
+antes dos gates da RUN 01. Não iniciar RUN 02.
