@@ -178,7 +178,7 @@ fn key_mesh(
 fn eye_visibility(opening: f32) -> f32 {
     // Do not fade the eyeball while a visible gap remains between lashes.
     // Opaque skin curtains physically OCCLUDE the sclera and iris instead.
-    let t=(opening/0.06).clamp(0.,1.);
+    let t=(opening/0.024).clamp(0.,1.);
     t*t*(3.-2.*t)
 }
 
@@ -194,8 +194,20 @@ enum LidSide { Upper, Lower }
 fn closed_smile_visibility(opening:f32)->f32 {
     // Hand off from MOVING skin + lashes to the fully opaque pose only at
     // the very end, when both borders have almost touched.
-    let t=((0.06-opening)/0.06).clamp(0.,1.);
+    let t=((0.024-opening)/0.024).clamp(0.,1.);
     t*t*(3.-2.*t)
+}
+
+fn smoothstep(value:f32)->f32 {
+    let v=value.clamp(0.,1.);
+    v*v*(3.-2.*v)
+}
+
+fn iris_blink_scale(opening:f32, recoil:f32)->f32 {
+    // 5.5% squeeze through a blink; a spring can briefly expand the iris
+    // by up to 9% on reopening, then settle with progressively smaller pulses.
+    let base=0.945+0.055*smoothstep(opening/0.35);
+    base*(1.+0.09*recoil.clamp(-1.,1.))
 }
 
 fn lid_close_progress(opening:f32)->f32 {
@@ -232,35 +244,80 @@ fn aperture_vertex(x:f32,y:f32,eye:Region,
     (x,top*(1.-v)+bottom*v)
 }
 
-fn add_global_squash(model: &mut ayatsuri_format::model::Model, param: u32) {
-    // One shared 4x4 lattice deforms all art consistently. This is more
-    // efficient than multiplying every eye/iris mesh's Cartesian keyform axes.
-    let (extent, cols, rows)=(0.65f32,4u32,4u32);
-    let mut positions=Vec::new();
-    for amount in [-1.0f32,0.,1.] {
+/// Lightweight 2.5D face turn: the entire fluffy body, horns, eyes and
+/// mouth share one gentle pseudo-perspective lattice. This bends the body
+/// horizontally/vertically rather than rotating the flat image around Z.
+/// BodyAngleX/Y are small physics-driven follow-through channels.
+fn turn_warp_point(x:f32,y:f32,extent:f32,amount:f32,
+                   yaw_deg:f32,pitch_deg:f32,body_yaw_deg:f32,body_pitch_deg:f32)
+                  ->(f32,f32) {
+    let yaw=(yaw_deg/30.).clamp(-1.,1.);
+    let pitch=(pitch_deg/30.).clamp(-1.,1.);
+    let follow_x=(body_yaw_deg/10.).clamp(-1.,1.);
+    let follow_y=(body_pitch_deg/10.).clamp(-1.,1.);
+    let nx=x/extent;
+    let ny=y/extent;
+    let yaw_all=yaw+follow_x*.20;
+    let pitch_all=pitch+follow_y*.20;
+    let width=1.-0.072*yaw_all.abs().min(1.);
+    let height=1.-0.058*pitch_all.abs().min(1.);
+    // A mild asymmetric cheek and forehead offset makes a believable
+    // three-quarter pose without shearing the eyes or separating the lids.
+    let x_new=x*width + extent*(
+        0.042*yaw + 0.018*follow_x
+        +0.025*yaw*nx*nx +0.028*yaw*(-ny)
+        +0.018*amount*(-nx)
+    );
+    let y_new=y*height + extent*(
+        0.032*pitch + 0.014*follow_y
+        +0.018*pitch*ny*ny
+        +0.014*yaw*nx
+        +0.024*amount*ny
+    );
+    (x_new,y_new)
+}
+
+fn add_global_squash(model: &mut ayatsuri_format::model::Model,
+                     squash:u32, head_x:u32,head_y:u32,body_x:u32,body_y:u32) {
+    // Keyform axis zero changes fastest as required by Cubism.
+    // 3^5=243 poses, each only a 5x5 control lattice, not 243 body meshes.
+    let (extent,cols,rows)=(0.65f32,4u32,4u32);
+    let axes=[
+        BindingAxis{parameter:squash,keys:vec![-1.,0.,1.]},
+        BindingAxis{parameter:head_x,keys:vec![-30.,0.,30.]},
+        BindingAxis{parameter:head_y,keys:vec![-30.,0.,30.]},
+        BindingAxis{parameter:body_x,keys:vec![-10.,0.,10.]},
+        BindingAxis{parameter:body_y,keys:vec![-10.,0.,10.]},
+    ];
+    let n=axes.iter().map(|a|a.keys.len()).product::<usize>();
+    let mut positions=Vec::with_capacity(n*(cols as usize+1)*(rows as usize+1)*2);
+    for index in 0..n {
+        let mut key=index;
+        let values:Vec<f32>=axes.iter().map(|a|{
+            let v=a.keys[key%a.keys.len()];
+            key/=a.keys.len();
+            v
+        }).collect();
         for row in 0..=rows {
             for col in 0..=cols {
                 let x=-extent+2.*extent*(col as f32/cols as f32);
                 let y=-extent+2.*extent*(row as f32/rows as f32);
-                positions.extend([x*(1.-0.027*amount),y*(1.+0.038*amount)]);
+                let (tx,ty)=turn_warp_point(x,y,extent,
+                   values[0],values[1],values[2],values[3],values[4]);
+                positions.extend([tx,ty]);
             }
         }
     }
-    let parent=0u32; // Root rotation/respiration deformer was already added.
     let warp_index=model.deformers.len() as u32;
     model.deformers.push(Deformer {
-        id:"AmoraSoftBodyLattice".into(),parent_part:None,
-        parent_deformer:Some(parent),visible:true,enabled:true,
-        binding:Binding {axes:vec![BindingAxis {
-            parameter:param,keys:vec![-1.,0.,1.]
-        }],curves:vec![]},
-        kind:DeformerKind::Warp(WarpData {
-            rows,cols,quad:true,opacities:vec![1.;3],positions,
+        id:"AmoraHeadBodyThreeQuarter".into(),parent_part:None,
+        parent_deformer:Some(0),visible:true,enabled:true,
+        binding:Binding{axes:axes.to_vec(),curves:vec![]},
+        kind:DeformerKind::Warp(WarpData{
+            rows,cols,quad:true,opacities:vec![1.;n],positions,
         }),
         multiply:Vec::new(),screen:Vec::new(),blend_shapes:Vec::new(),
     });
-    // Meshes below a warp are expressed in the warp's [0,1]^2 domain,
-    // not canvas coordinates; all of their keyforms require conversion.
     for mesh in &mut model.art_meshes {
         for p in mesh.positions.chunks_exact_mut(2) {
             p[0]=(p[0]+extent)/(2.*extent);
@@ -282,6 +339,10 @@ fn attach_soft_physics(model: &mut ayatsuri_format::model::Model) {
         ("IrisInertiaX","ParamEyeBallX","ParamIrisBounceX",PhysicsIo::X,0.55),
         ("IrisInertiaY","ParamEyeBallY","ParamIrisBounceY",PhysicsIo::Y,0.52),
         ("AmoraBodySquash","ParamBodyAngleZ","ParamBodySquash",PhysicsIo::Angle,0.35),
+        ("AmoraBodyYawFollow","ParamAngleX","ParamBodyAngleX",PhysicsIo::Angle,0.23),
+        ("AmoraBodyPitchFollow","ParamAngleY","ParamBodyAngleY",PhysicsIo::Angle,0.23),
+        ("AmoraBlinkRecoilLeft","ParamEyeLOpen","ParamIrisRecoilL",PhysicsIo::X,0.48),
+        ("AmoraBlinkRecoilRight","ParamEyeROpen","ParamIrisRecoilR",PhysicsIo::X,0.48),
     ];
     let groups=sources.into_iter().map(|(id,source,target,kind,scale)| PhysicsGroup {
         id:id.into(),name:id.into(),
@@ -339,6 +400,8 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
     let mouth_open=par("ParamMouthOpenY")?;
     let mouth_form=par("ParamMouthForm")?;
     let angle=par("ParamAngleZ")?; let body_angle=par("ParamBodyAngleZ")?;
+    let head_x=par("ParamAngleX")?;let head_y=par("ParamAngleY")?;
+    let body_x=par("ParamBodyAngleX")?;let body_y=par("ParamBodyAngleY")?;
     let breath=par("ParamBreath")?;
     let iris_bounce_x=par("ParamIrisBounceX")?;
     let iris_bounce_y=par("ParamIrisBounceY")?;
@@ -346,9 +409,10 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
     let names = imported.mesh_names.clone();
     let regions: HashMap<String,Region> = names.iter().cloned().zip(imported.model.art_meshes.iter().map(Region::of)).collect();
     let idx = |name: &str| names.iter().position(|n| n==name);
-    let open_keys = [0., 0.06, 0.18, 0.50, 1.];
+    let open_keys = [0., 0.024, 0.18, 0.50, 1.];
     let look_keys = [-1., 0., 1.];
     for (side, eye_param) in [("L",leye),("R",reye)] {
+        let iris_recoil=par(&format!("ParamIrisRecoil{side}"))?;
         let white_name = format!("eye_white_{side}");
         let Some(white_index) = idx(&white_name) else { continue; };
         let eye = regions[&white_name];
@@ -382,25 +446,28 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
             subdivide(iris, 8, 6);
             // Clip pupils to the white: they cannot stick out on side glances.
             iris.masks=vec![white_index as u32];
-            let travel_x = (eye.w-iris_region.w).max(eye.w*0.10).min(eye.w*0.20)*0.42;
-            let travel_y = (eye.h-iris_region.h).max(eye.h*0.10).min(eye.h*0.25)*0.32;
+            // Real eye movement: drive toward the outer rim but clip to the
+            // original sclera. At maximum look, an iris reaches ~55% of the
+            // available edge gap, instead of barely shifting at all.
+            let travel_x=((eye.w-iris_region.w).max(eye.w*0.12)*0.56).min(eye.w*0.22);
+            let travel_y=((eye.h-iris_region.h).max(eye.h*0.12)*0.48).min(eye.h*0.16);
             // Inertial bounce channels are driven by exported Cubism physics3.
             // Gentle overshoot and elastic squash accompany gaze transitions.
             key_mesh(iris, &[(eye_param,&open_keys),(look_x,&look_keys),(look_y,&look_keys),
-                             (iris_bounce_x,&look_keys),(iris_bounce_y,&look_keys)],
+                             (iris_bounce_x,&look_keys),(iris_bounce_y,&look_keys),
+                             (iris_recoil,&look_keys)],
                 |v,x,y| {
                     let opening=v[0];
                     let rel_x=x-iris_region.cx;
                     let rel_y=y-iris_region.cy;
                     let bounce_x=v[3]; let bounce_y=v[4];
-                    let stretch_x=1.0+(bounce_x.abs()*0.055 + v[1].abs()*0.018);
-                    let stretch_y=1.0+(bounce_y.abs()*0.065 - bounce_x.abs()*0.022);
-                    // Eyelid opening is the APERTURE, not an iris scale.
-                    // Preserve iris anatomy through the blink and let the
-                    // changing sclera mask reveal/hide it naturally.
-                    let center_y = iris_region.cy + (eye.cy-iris_region.cy)*(1.-opening)*0.05;
-                    (iris_region.cx + rel_x*stretch_x + v[1]*travel_x*opening + bounce_x*eye.w*0.065*opening,
-                     center_y + rel_y*stretch_y + v[2]*travel_y*opening + bounce_y*eye.h*0.055*opening)
+                    let spring=iris_blink_scale(opening,v[5]);
+                    let stretch_x=spring*(1.0+bounce_x.abs()*0.035 + v[1].abs()*0.010);
+                    let stretch_y=spring*(1.0+bounce_y.abs()*0.040 - bounce_x.abs()*0.018);
+                    // Recoil is centered on each iris: squash at closure,
+                    // then overshoot and settle. The white remains the mask.
+                    (iris_region.cx + rel_x*stretch_x + v[1]*travel_x*opening + bounce_x*eye.w*0.040*opening,
+                     iris_region.cy + rel_y*stretch_y + v[2]*travel_y*opening + bounce_y*eye.h*0.035*opening)
                 }, |v| eye_visibility(v[0]));
         }
         for (kind, upper) in [("upper",true),("lower",false)] {
@@ -451,7 +518,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
             }, |_|1.);
     }
     add_root_motion(&mut imported.model,angle,body_angle,breath);
-    add_global_squash(&mut imported.model,squash);
+    add_global_squash(&mut imported.model,squash,head_x,head_y,body_x,body_y);
     attach_soft_physics(&mut imported.model);
     for m in &imported.model.art_meshes {
         let n=m.binding.keyform_count();
@@ -505,6 +572,8 @@ fn create_idle_motion(out: &Path, name: &str) -> Result<String> {
         ("ParamEyeROpen",&[(0.,1.),(1.5,1.),(1.61,0.),(1.78,1.),(4.7,1.),(4.82,0.),(4.99,1.),(6.,1.)]),
         ("ParamEyeBallX",&[(0.,0.),(2.,0.),(2.8,0.7),(3.7,0.7),(4.3,-0.5),(5.2,0.),(6.,0.)]),
         ("ParamEyeBallY",&[(0.,0.),(1.,0.),(2.,-0.3),(3.,0.),(6.,0.)]),
+        ("ParamAngleX",&[(0.,0.),(.8,0.),(1.4,12.),(2.2,18.),(3.0,0.),(4.0,-16.),(5.1,0.),(6.,0.)]),
+        ("ParamAngleY",&[(0.,0.),(1.2,0.),(2.0,9.),(3.2,0.),(4.3,-9.),(5.4,0.),(6.,0.)]),
         ("ParamMouthOpenY",&[(0.,0.),(2.,0.),(2.4,0.5),(2.9,0.),(6.,0.)]),
         ("ParamBreath",&[(0.,0.5),(1.5,0.85),(3.,0.5),(4.5,0.15),(6.,0.5)]),
         ("ParamBodyAngleZ",&[(0.,0.),(1.5,4.),(3.,0.),(4.5,-4.),(6.,0.)]),
@@ -556,11 +625,17 @@ fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
         parameter("ParamEyeROpen", 0.0, 1.0, 1.0),
         parameter("ParamEyeBallX", -1.0, 1.0, 0.0),
         parameter("ParamEyeBallY", -1.0, 1.0, 0.0),
+        parameter("ParamIrisRecoilL", -1.0, 1.0, 0.0),
+        parameter("ParamIrisRecoilR", -1.0, 1.0, 0.0),
         parameter("ParamIrisBounceX", -1.0, 1.0, 0.0),
         parameter("ParamIrisBounceY", -1.0, 1.0, 0.0),
         parameter("ParamMouthOpenY", 0.0, 1.0, 0.0),
         parameter("ParamMouthForm", -1.0, 1.0, 0.0),
         parameter("ParamAngleZ", -30.0, 30.0, 0.0),
+        parameter("ParamAngleX", -30.0, 30.0, 0.0),
+        parameter("ParamAngleY", -30.0, 30.0, 0.0),
+        parameter("ParamBodyAngleX", -10.0, 10.0, 0.0),
+        parameter("ParamBodyAngleY", -10.0, 10.0, 0.0),
         parameter("ParamBodyAngleZ", -10.0, 10.0, 0.0),
         parameter("ParamBreath", 0.0, 1.0, 0.5),
         parameter("ParamBodySquash", -1.0, 1.0, 0.0),
@@ -611,7 +686,7 @@ fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
     let rig=imported.model.physics.as_ref().ok_or("soft-body physics missing")?;
     let physics_data=ayatsuri_import::to_physics3(rig);
     let parsed=ayatsuri_import::from_physics3(&physics_data)?;
-    if parsed.groups.len()!=3 || parsed.groups.iter().any(|g| g.inputs.is_empty()||g.outputs.is_empty()) {
+    if parsed.groups.len()!=7 || parsed.groups.iter().any(|g| g.inputs.is_empty()||g.outputs.is_empty()) {
         return Err("physics3 did not roundtrip all three inertial controllers".into());
     }
     fs::write(out.join(&physics_filename),physics_data)?;
@@ -729,6 +804,38 @@ mod tests {
         let (_,upper_mid)=eyelid_vertex(0.,top.cy,eye,top,0.5,LidSide::Upper);
         let (_,lower_mid)=eyelid_vertex(0.,bottom.cy,eye,bottom,0.5,LidSide::Lower);
         assert!(upper_mid>top.cy && lower_mid<bottom.cy, "both lids must participate");
+    }
+
+    #[test]
+    fn iris_recoil_is_small_and_recovers_to_original_scale() {
+        assert!((iris_blink_scale(0.,0.)-0.945).abs()<1e-5);
+        assert!((iris_blink_scale(1.,0.)-1.).abs()<1e-5);
+        assert!(iris_blink_scale(1.,1.)<=1.09+1e-5);
+        assert!(iris_blink_scale(1.,-1.)>=0.90);
+        assert!(iris_blink_scale(0.15,0.)<1.);
+    }
+
+    #[test]
+    fn head_body_warp_is_centered_small_and_bidirectional() {
+        let extent=0.65;
+        let at=|yaw,pitch|{
+            turn_warp_point(0.22,-0.16,extent,0.,yaw,pitch,0.,0.)
+        };
+        let (x0,y0)=at(0.,0.);
+        let (xl,_) =at(-30.,0.);
+        let (xr,_) =at(30.,0.);
+        assert!((x0-0.22).abs()<1e-5 && (y0+0.16).abs()<1e-5);
+        assert!(xl<x0&&x0<xr,"head yaw must turn in both directions");
+        let (_,yu)=at(0.,-30.);
+        let (_,yd)=at(0.,30.);
+        assert!(yu<y0&&yd>y0,"pitch must move the complete head");
+        for yaw in [-30.,0.,30.] {
+            for pitch in [-30.,0.,30.] {
+                let (x,y)=at(yaw,pitch);
+                assert!(x.is_finite()&&y.is_finite());
+                assert!((x-0.22).abs()<0.16 && (y+0.16).abs()<0.16);
+            }
+        }
     }
 
     #[test]
