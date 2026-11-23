@@ -564,7 +564,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                     let sy=1.+0.045*v[1];
                     (region.cx+(x-region.cx)*sx,region.cy+(y-region.cy)*sy)
                 },|v| {
-                    let (base,talk,wide)=mouth_auto_weights(v[1]);
+                    let (_base,talk,wide)=mouth_auto_weights(v[1]);
                     let auto=if position==1. {talk} else if position==2. {wide} else {0.};
                     mouth_pose_weight(v[0],position)+mouth_pose_weight(v[0],0.)*auto
                 });
@@ -826,10 +826,16 @@ mod tests {
     }
 
     #[test]
-    fn eyeball_only_fades_at_complete_closure() {
-        for open in [0.06,0.18,0.35,0.5,1.] {
-            assert_eq!(eye_visibility(open),1.,"early iris fading");
-            if open>=0.18 {assert_eq!(closed_smile_visibility(open),0.,"early closed pose");}
+    fn eyeball_only_fades_during_matching_closed_pose_handoff() {
+        for open in [0.,0.010,0.035,0.06,0.095,0.115,0.18,0.35,0.5,1.] {
+            let visible=eye_visibility(open);
+            let closed=closed_smile_visibility(open);
+            assert!((visible+closed-1.).abs()<1e-5,
+                    "closed sprite and original eye must crossfade complementarily");
+            if open>=0.115 {
+                assert_eq!(visible,1.,"early iris fading");
+                assert_eq!(closed,0.,"early closed sprite");
+            }
         }
         assert_eq!(eye_visibility(0.),0.);
         assert_eq!(closed_smile_visibility(0.),1.);
