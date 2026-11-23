@@ -1,0 +1,138 @@
+name: Altare - package sealed Core and Discord images
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type PACKAGE_SEALED_ALTARE (build GHCR images only; no deploy)
+        required: true
+        type: string
+      core_origin:
+        description: Exact Altare Core HTTPS origin
+        required: true
+        default: https://core-amora.go.altare.global
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: altare-sealed-image-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Sllay' &&
+      inputs.confirmation == 'PACKAGE_SEALED_ALTARE'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned sealing crypto for ephemeral runner
+        run: python -m pip install --disable-pip-version-check --only-binary=:all: cryptography==50.0.2
+      - name: Check both source bundles and both public keys, without printing values
+        shell: bash
+        env:
+          AMORA_CORE_BUNDLE: ${{ secrets.AMORA_CORE_ENV_BUNDLE }}
+          AMORA_DISCORD_BUNDLE: ${{ secrets.AMORA_DISCORD_ENV_BUNDLE }}
+          AMORA_IMAGE_CORE_PUBLIC_KEY: ${{ vars.AMORA_IMAGE_CORE_PUBLIC_KEY }}
+          AMORA_IMAGE_DISCORD_PUBLIC_KEY: ${{ vars.AMORA_IMAGE_DISCORD_PUBLIC_KEY }}
+          AMORA_CORE_ORIGIN: ${{ inputs.core_origin }}
+        run: |
+          set -euo pipefail
+          set +x
+          python - <<'PY'
+          import os
+          from tools.ops.altare_bulk_env_apply import plan
+          from tools.ops.altare_sealed_image_crypto import seal
+
+          try:
+              core = plan(os.environ["AMORA_CORE_BUNDLE"], service="core",
+                          core_origin=os.environ["AMORA_CORE_ORIGIN"])
+              discord = plan(os.environ["AMORA_DISCORD_BUNDLE"], service="discord",
+                             core_origin=os.environ["AMORA_CORE_ORIGIN"])
+              if (core["AMORA_MESSAGING_SERVICE_TOKEN"] !=
+                      discord["AMORA_MESSAGING_SERVICE_TOKEN"]):
+                  raise ValueError("unequal worker token")
+              if len(core["AMORA_MESSAGING_SERVICE_TOKEN"]) < 32:
+                  raise ValueError("weak worker token")
+              if len(core["AMORA_SECRET_LOCAL_API_TOKEN"]) < 32:
+                  raise ValueError("weak Core admin token")
+              seal(core, service="core",
+                   public_key_b64=os.environ["AMORA_IMAGE_CORE_PUBLIC_KEY"])
+              seal(discord, service="discord",
+                   public_key_b64=os.environ["AMORA_IMAGE_DISCORD_PUBLIC_KEY"])
+          except (KeyError, ValueError, TypeError, OSError):
+              print("SEALED_IMAGE_PREFLIGHT_BLOCKED")
+              raise SystemExit(2)
+          print("SEALED_IMAGE_PREFLIGHT_PASS core_vars=" + str(len(core))
+                + " discord_vars=" + str(len(discord)))
+          PY
+
+  package:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: core
+            dockerfile: Dockerfile
+          - name: discord
+            dockerfile: workers/discord/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned sealing crypto
+        run: python -m pip install --disable-pip-version-check --only-binary=:all: cryptography==50.0.2
+      - name: Encrypt the selected app environment outside Docker context
+        shell: bash
+        env:
+          AMORA_PRIVATE_ENV_BUNDLE: ${{ matrix.name == 'core' && secrets.AMORA_CORE_ENV_BUNDLE || secrets.AMORA_DISCORD_ENV_BUNDLE }}
+          AMORA_IMAGE_PUBLIC_KEY: ${{ matrix.name == 'core' && vars.AMORA_IMAGE_CORE_PUBLIC_KEY || vars.AMORA_IMAGE_DISCORD_PUBLIC_KEY }}
+          AMORA_CORE_ORIGIN: ${{ inputs.core_origin }}
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          python -m tools.ops.altare_sealed_image_pack \
+            --service "${{ matrix.name }}" \
+            --core-origin "$AMORA_CORE_ORIGIN" \
+            --output "$RUNNER_TEMP/amora-sealed-${{ matrix.name }}.json"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable encrypted-only linux/amd64 Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/sllay/amora-chibi-${{ matrix.name }}:sealed-${{ github.sha }}
+          build-args: |
+            AMORA_SEALED_ENV=1
+          secret-files: |
+            amora_sealed_env=${{ runner.temp }}/amora-sealed-${{ matrix.name }}.json
+          provenance: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/Sllay/Amora-Chibi
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Clean sealed runner file (no raw env was ever written)
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/amora-sealed-${{ matrix.name }}.json"
