@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import base64
+import io
 from collections import Counter
 from collections import deque
 import shutil
@@ -227,6 +229,50 @@ def closed_smile_art(eye_white: Image.Image, upper_lid: Image.Image, side: str) 
     return result
 
 
+EXTRA_NAMES = (
+    "extra_blush", "extra_mouth_open_wide", "extra_mouth_sad",
+    "extra_mouth_talk", "extra_tear_L", "extra_tear_R"
+)
+
+def load_extra_assets(manifest_path: Path) -> dict[str, Image.Image]:
+    """Rehydrate lossless user PNG pixels from cropped RGBA source payloads.
+
+    Keeping a compact source archive in Git allows remote GitHub Actions to
+    build the genuine Cubism model without requiring phone-side uploads.
+    """
+    payload=manifest_path.parent / "extras" / "source_rgba.jsonl"
+    if not payload.is_file():
+        raise FileNotFoundError(f"missing approved extra art payload: {payload}")
+    extras={}
+    for line in payload.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row=json.loads(line)
+        name=row["name"]
+        if name not in EXTRA_NAMES or name in extras:
+            raise ValueError(f"invalid/duplicate extra asset {name!r}")
+        bb=row["bbox"]
+        if len(bb)!=4 or not all(isinstance(v,int) for v in bb):
+            raise ValueError(f"{name}: malformed bounds")
+        x0,y0,x1,y1=bb
+        if not (0<=x0<x1<=1254 and 0<=y0<y1<=1254):
+            raise ValueError(f"{name}: out-of-range bounds")
+        raw=base64.b85decode(row["b85"].encode("ascii"))
+        with Image.open(io.BytesIO(raw)) as src:
+            src.load()
+            if src.format!="PNG" or src.size!=(x1-x0,y1-y0):
+                raise ValueError(f"{name}: corrupt approved PNG data")
+            crop=src.convert("RGBA")
+        full=Image.new("RGBA",(1254,1254),(0,0,0,0))
+        full.alpha_composite(crop,(x0,y0))
+        if full.getchannel("A").getbbox() is None:
+            raise ValueError(f"{name}: empty extra")
+        extras[name]=full
+    if set(extras)!=set(EXTRA_NAMES):
+        raise ValueError(f"expected six user extras, found {sorted(extras)}")
+    return extras
+
+
 def prepare(manifest_path: Path, out: Path) -> None:
     src = json.loads(manifest_path.read_text(encoding="utf-8"))
     if (src["width"], src["height"]) != (1254, 1254):
@@ -272,6 +318,7 @@ def prepare(manifest_path: Path, out: Path) -> None:
         side: closed_smile_art(rgba[f"eye_white_{side}"],rgba[f"upper_lid_{side}"],side)
         for side in ("L","R")
     }
+    extras=load_extra_assets(manifest_path)
     prepared_layers = []
     preview = Image.new("RGBA", (1254, 1254), (0, 0, 0, 0))
     for spec in ordered:
@@ -302,6 +349,16 @@ def prepare(manifest_path: Path, out: Path) -> None:
             closed[side].save(out/technical_file)
             prepared_layers.append({"name":technical,"group":"Eyes","file":technical_file})
 
+    # Preserve the original neutral composite. Extras are hidden until the
+    # corresponding mouth/blush/tears parameter is explicitly enabled.
+    for name in EXTRA_NAMES:
+        target=out/"layers"/f"{name}.png"
+        extras[name].save(target,optimize=True)
+        prepared_layers.append({
+            "name":name,
+            "group":"Face" if name=="extra_blush" else "Eyes" if name.startswith("extra_tear") else "Mouth",
+            "file":f"layers/{name}.png"
+        })
     preview.save(out / "amora_montada.png")
     (out / "manifest.json").write_text(
         json.dumps({"name": src["name"], "width": 1254, "height": 1254,
@@ -309,11 +366,12 @@ def prepare(manifest_path: Path, out: Path) -> None:
     (out / "source_order.json").write_text(
         json.dumps({"source_order": expected_names, "render_order": [v["name"] for v in prepared_layers],
                     "technical_derived_layers": ["skin_patch_L","skin_patch_R",
-                                                  "closed_smile_L","closed_smile_R"], "warning":
+                                                  "closed_smile_L","closed_smile_R"],
+                    "user_expression_assets": list(EXTRA_NAMES), "warning":
                     "Body source is opaque JPEG. Preview places body behind eyes; source files untouched."},
                    indent=2) + "\n", encoding="utf-8")
     print("Validated 10 source layers. Only eye whites #1 and #3 replaced.")
-    print("Prepared 14 art meshes: ten unchanged inputs, two inactive legacy patches and two closed-eye poses.")
+    print("Prepared 20 art meshes: ten approved inputs, six expression assets, four technical layers.")
 
 
 if __name__ == "__main__":
