@@ -172,3 +172,25 @@ def test_sealed_pack_writes_only_ciphertext(tmp_path, monkeypatch, capsys):
     assert "SENSITIVE_CORE_ONLY" not in capsys.readouterr().out
     assert unseal(output.read_bytes(), service="core", private_key_b64=private)["GROQ_API_KEY"] == "SENSITIVE_CORE_ONLY"
     assert output.stat().st_mode & 0o077 == 0
+
+
+def test_private_termux_keygen_writes_distinct_pairs_mode_0600(tmp_path):
+    if shutil.which("openssl") is None:
+        pytest.skip("openssl binary unavailable")
+    from tools.ops.altare_sealed_image_keygen import generate
+    output = tmp_path / "phone-private-home" / "keys"
+    generate(output)
+    assert output.stat().st_mode & 0o077 == 0
+    private_keys = []
+    for service in ("core", "discord"):
+        private_path = output / (service + "-private.b64")
+        public_path = output / (service + "-public.b64")
+        assert private_path.stat().st_mode & 0o077 == 0
+        private = private_path.read_text().strip()
+        public = public_path.read_text().strip()
+        private_keys.append(private)
+        sealed = seal(vars_for(service), service=service, public_key_b64=public)
+        assert unseal(sealed, service=service, private_key_b64=private) == vars_for(service)
+    assert private_keys[0] != private_keys[1]
+    with pytest.raises(Exception, match="SEALED_KEYGEN_REFUSE_OVERWRITE"):
+        generate(output)
