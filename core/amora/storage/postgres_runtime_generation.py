@@ -10,6 +10,7 @@ from .postgres_runtime_connection import ReviewedStatement
 
 CLAIM="PG_GENERATION_CLAIM"
 RELEASE="PG_GENERATION_RELEASE"
+RENEW="PG_GENERATION_RENEW"
 STAGE="PG_GENERATION_STAGE"
 PREPARED="PG_GENERATION_PREPARED"
 INVALIDATE="PG_GENERATION_INVALIDATE"
@@ -28,6 +29,17 @@ def generation_statements()->dict[str,ReviewedStatement]:
             WHERE messaging_inbound_generation.lease_token IS NULL
               OR messaging_inbound_generation.lease_until<=%s
         """,7),
+        RENEW: ReviewedStatement("""
+            UPDATE amora_pg_v18_lab.messaging_inbound_generation g
+            SET lease_until=%s
+            WHERE g.turn_id=%s AND g.lease_token=%s AND g.lease_until>%s
+              AND NOT EXISTS (
+                  SELECT 1 FROM amora_pg_v18_lab.memory_reflection_invalidations x
+                  WHERE x.session_id=g.session_id
+                    AND x.native_message_hash=g.native_message_hash
+                    AND x.invalidated_through>=g.transport_revision
+              )
+        """,4),
         RELEASE: ReviewedStatement("""
             UPDATE amora_pg_v18_lab.messaging_inbound_generation
             SET lease_token=NULL,lease_until=NULL,
