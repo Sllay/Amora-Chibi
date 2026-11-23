@@ -12,7 +12,7 @@ RUN --mount=type=secret,id=proxy_ca \
     pip install --only-binary=:all: --no-cache-dir pip==26.2.2 setuptools==83.0.0 wheel==0.46.2 && \
     pip wheel --no-cache-dir --no-deps --no-build-isolation -w /tmp/wheels . && \
     python -m venv /opt/venv && \
-    /opt/venv/bin/pip install --only-binary=:all: --no-cache-dir -c deploy/python.lock /tmp/wheels/amora_chibi*.whl 'psycopg[binary]==3.3.9' && \
+    /opt/venv/bin/pip install --only-binary=:all: --no-cache-dir -c deploy/python.lock /tmp/wheels/amora_chibi*.whl 'psycopg[binary]==3.3.9' 'cryptography==46.0.3' && \
     /opt/venv/bin/python -m pip uninstall -y pip
 
 FROM ${PYTHON_BASE} AS runtime
@@ -49,7 +49,21 @@ COPY web ./web
 # Static modules must be readable by the non-root runtime even from a private checkout.
 RUN chmod -R a+rX /opt/amora/web
 COPY avatar ./avatar
+# Optional sealed env mode. Only ciphertext enters a Docker image layer.
+# BuildKit secret-files mounts the sealed JSON without adding it to context.
+COPY --chmod=0444 tools/ops/altare_sealed_image_crypto.py /opt/amora/altare_sealed_image_crypto.py
+COPY --chmod=0444 tools/ops/altare_sealed_image_core_entrypoint.py /opt/amora/altare_sealed_image_core_entrypoint.py
+ARG AMORA_SEALED_ENV=0
+RUN --mount=type=secret,id=amora_sealed_env,required=false \
+    set -eu; \
+    if [ "$AMORA_SEALED_ENV" = "1" ]; then \
+      test -s /run/secrets/amora_sealed_env; \
+      install -d -m 0755 /opt/amora/secrets; \
+      install -m 0444 /run/secrets/amora_sealed_env /opt/amora/secrets/core.json; \
+    else \
+      test "$AMORA_SEALED_ENV" = "0"; \
+    fi
 USER 10001:10001
 EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8765')+'/ready',timeout=8)"
-CMD ["amora", "serve"]
+CMD ["python", "/opt/amora/altare_sealed_image_core_entrypoint.py"]
