@@ -79,13 +79,15 @@ const source=__AMORA_PREVIEW_DATA__;
 const W=source.width,H=source.height, cv=document.getElementById("amora"),ctx=cv.getContext("2d",{alpha:true});
 cv.width=W;cv.height=H;
 const images={}, boxes={};
-const wanted={eyeL:1,eyeR:1,lookX:0,lookY:0,mouth:0,form:0,angle:0};
+const wanted={eyeL:1,eyeR:1,lookX:0,lookY:0,mouth:0,form:0,angle:0,headX:0,headY:0,bodyX:0,bodyY:0};
 const smoothed={...wanted};
 const spec=[
  ["eyeL","Olho E",0,1,.01],["eyeR","Olho D",0,1,.01],
  ["lookX","Olhar X",-1,1,.01],["lookY","Olhar Y",-1,1,.01],
  ["mouth","Boca",0,1,.01],["form","Sorriso",-1,1,.01],
- ["angle","Inclinação",-30,30,.5]
+ ["angle","Inclinação Z",-30,30,.5],
+ ["headX","Virar rosto X",-30,30,.5],["headY","Rosto cima/baixo Y",-30,30,.5],
+ ["bodyX","Corpo 3/4 X",-10,10,.25],["bodyY","Corpo 3/4 Y",-10,10,.25]
 ];
 const controls=document.getElementById("controls");
 for(const [id,title,min,max,step] of spec){
@@ -105,12 +107,12 @@ const presets={
  WinkLeft:{eyeL:0,eyeR:1,mouth:.05,form:.7},
  WinkRight:{eyeL:1,eyeR:0,mouth:.05,form:.7},
  Shy:{eyeL:.58,eyeR:.58,mouth:.08,form:.6,lookY:.3},
- Curious:{eyeL:1,eyeR:.76,mouth:.1,form:.2,lookX:.42}
+ Curious:{eyeL:1,eyeR:.76,mouth:.1,form:.2,lookX:.56,headX:10}
 };
 for(const btn of document.querySelectorAll("[data-expr]")){
  btn.addEventListener("click",()=>{
   const values=presets[btn.dataset.expr];
-  Object.assign(wanted,{eyeL:1,eyeR:1,lookX:0,lookY:0,mouth:0,form:0},values);
+  Object.assign(wanted,{eyeL:1,eyeR:1,lookX:0,lookY:0,mouth:0,form:0,headX:0,headY:0,bodyX:0,bodyY:0},values);
   for(const [id] of spec){document.getElementById(id).value=wanted[id];document.getElementById(id+"-value").textContent=wanted[id].toFixed(2);}
   document.querySelectorAll("[data-expr]").forEach(b=>b.classList.toggle("active",b===btn));
  });
@@ -128,23 +130,40 @@ function draw(id, opts={}){
  ctx.restore();
 }
 const bounce={x:0,y:0,vx:0,vy:0};
+// Damped spring pulse with three successively smaller iris overshoots.
+const irisSpring={
+ L:{armed:false,age:99,scale:1},R:{armed:false,age:99,scale:1}
+};
+const bodyFollow={x:0,y:0};
+function irisSpringScale(side,open,delta){
+ const state=irisSpring[side];
+ if(open<.15)state.armed=true;
+ if(state.armed&&open>.29){state.armed=false;state.age=0;}
+ state.age+=Math.max(0,delta);
+ const pulse=state.age<1.45?.105*Math.exp(-3*state.age)*Math.sin(22*state.age):0;
+ const t=Math.max(0,Math.min(1,open/.35));
+ const squeeze=.945+.055*t*t*(3-2*t);
+ state.scale=squeeze*(1+pulse);
+ return state.scale;
+}
+
 function springGaze(delta){
  const dt=Math.min(.025,Math.max(.001,delta));
  for(const axis of ["x","y"]){
   const target=wanted[axis==="x"?"lookX":"lookY"];
   const vel="v"+axis;
-  bounce[vel]+=(target-bounce[axis])*95*dt;
-  bounce[vel]*=Math.exp(-11*dt);
+  bounce[vel]+=(target-bounce[axis])*110*dt;
+  bounce[vel]*=Math.exp(-10.5*dt);
   bounce[axis]+=bounce[vel]*dt;
   bounce[axis]=Math.max(-1.25,Math.min(1.25,bounce[axis]));
  }
 }
 function eyeVisibility(opening){
  // Opaque eye stays visible until its actual skin curtains meet.
- const t=Math.max(0,Math.min(1,opening/.06));
+ const t=Math.max(0,Math.min(1,opening/.024));
  return t*t*(3-2*t);
 }
-function eye(side,opening,lookX,lookY){
+function eye(side,opening,lookX,lookY,irisScale){
  const id="eye_white_"+side,irid="iris_"+side;
  const b=box(id),ib=box(irid);
  const top=box("upper_lid_"+side),bottom=box("lower_lid_"+side);
@@ -169,15 +188,15 @@ function eye(side,opening,lookX,lookY){
  ctx.beginPath();
  ctx.ellipse(b.cx,b.cy,Math.max(1,b.w*.49),Math.max(1,b.h*.49),0,0,Math.PI*2);
  ctx.clip();
- const tx=Math.max(b.w*.1,b.w-ib.w)*.36*lookX*opening;
- const ty=Math.max(b.h*.1,b.h-ib.h)*.29*lookY*opening;
+ const tx=Math.min(b.w*.22,Math.max(b.w*.12,b.w-ib.w)*.56)*lookX*opening;
+ const ty=Math.min(b.h*.16,Math.max(b.h*.12,b.h-ib.h)*.48)*lookY*opening;
  const kinetic=Math.min(.085,Math.abs(bounce.vx)*.008+Math.abs(bounce.vy)*.006);
- draw(irid,{py:ib.cy,dx:tx,dy:ty,sy:1-kinetic*.36,sx:1+kinetic});
+ draw(irid,{py:ib.cy,dx:tx,dy:ty,sy:irisScale*(1-kinetic*.20),sx:irisScale*(1+kinetic*.30)});
  ctx.restore();
 }
 function closedPoseAlpha(opening){
  // Closed-eye sprite only takes over in the FINAL six percent of closure.
- const t=Math.max(0,Math.min(1,(.06-opening)/.06));
+ const t=Math.max(0,Math.min(1,(.024-opening)/.024));
  return t*t*(3-2*t);
 }
 function lidProgress(opening){
@@ -262,13 +281,23 @@ function tick(ms){
   }
  }
  const idle=document.getElementById("idle").checked;
+ // Head turns drive a small delayed body motion in the same direction.
+ const follow=1-Math.exp(-delta*5.7);
+ bodyFollow.x+=(smoothed.headX*.27-bodyFollow.x)*follow;
+ bodyFollow.y+=(smoothed.headY*.27-bodyFollow.y)*follow;
+ const yaw=Math.max(-1,Math.min(1,smoothed.headX/30+(smoothed.bodyX+bodyFollow.x)/50));
+ const pitch=Math.max(-1,Math.min(1,smoothed.headY/30+(smoothed.bodyY+bodyFollow.y)/50));
+ const scaleL=irisSpringScale("L",Math.max(0,smoothed.eyeL*blink),delta);
+ const scaleR=irisSpringScale("R",Math.max(0,smoothed.eyeR*blink),delta);
  ctx.clearRect(0,0,W,H);
  ctx.save();
  ctx.translate(W*.5,H*.5);
  ctx.rotate((smoothed.angle+(idle ? 0.8*Math.sin(t*.74) : 0))*Math.PI/180);
  const wave=idle?Math.sin(t*1.7):0;
- // Soft-body elastic breathing: horizontal and vertical axes oppose each other.
- ctx.scale(1+.02*wave,1-.024*wave);
+ // Browser approximation of exported Cubism 5-axis pseudo-3/4 mesh warp.
+ ctx.transform((1-.065*Math.abs(yaw))*(1+.012*wave),.014*yaw,
+   .030*yaw,(1-.058*Math.abs(pitch))*(1-.020*wave),
+   W*.042*yaw,H*.031*pitch);
  ctx.translate(-W*.5,-H*.5);
  draw("body_horns");
  // Source images and their order remain unchanged; eyelids are rigged only.
@@ -276,8 +305,8 @@ function tick(ms){
  // The repaired body is already a solid, continuous face behind the eyes.
  // Do NOT draw duplicate feathered skin patches: they used to lag and leave
  // detached seams while the lids were moving.
- eye("L",openL,bounce.x,bounce.y);
- eye("R",openR,bounce.x,bounce.y);
+ eye("L",openL,bounce.x,bounce.y,scaleL);
+ eye("R",openR,bounce.x,bounce.y,scaleR);
  // The repaired body is the skin. The animated eye's aperture bounds
  // reveal it directly, so no floating overlays can lag behind the lashes.
  // Exactly the visible render order: lower L, lower R, upper R, upper L.
