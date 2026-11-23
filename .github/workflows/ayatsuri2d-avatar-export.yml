@@ -82,11 +82,14 @@ jobs:
           physics=root/refs["Physics"]
           assert physics.is_file(), "Soft-body and iris physics config missing"
           rig=json.loads(physics.read_text())
-          assert rig["Meta"]["PhysicsSettingCount"]==3
-          assert sum(len(x["Output"]) for x in rig["PhysicsSettings"])==3
+          assert rig["Meta"]["PhysicsSettingCount"]==7
+          assert sum(len(x["Output"]) for x in rig["PhysicsSettings"])==7
           destinations={out["Destination"]["Id"] for group in rig["PhysicsSettings"] for out in group["Output"]}
-          assert destinations=={"ParamIrisBounceX","ParamIrisBounceY","ParamBodySquash"}
+          assert destinations=={"ParamIrisBounceX","ParamIrisBounceY","ParamBodySquash","ParamBodyAngleX","ParamBodyAngleY","ParamIrisRecoilL","ParamIrisRecoilR"}
           assert len(refs.get("Expressions", [])) >= 8, "Missing expression presets"
+          cdi=json.loads((root/refs["DisplayInfo"]).read_text())
+          param_ids={x["Id"] for x in cdi["Parameters"]}
+          assert {"ParamAngleX","ParamAngleY","ParamBodyAngleX","ParamBodyAngleY","ParamIrisRecoilL","ParamIrisRecoilR"}.issubset(param_ids), "Missing 3/4 turn or recoil rig channels"
           motions=refs.get("Motions",{}).get("Idle",[])
           assert motions, "Missing idle demonstration motion"
           for motion in motions:
@@ -118,9 +121,15 @@ jobs:
           cp artifacts/amora-browser-half-blink.png preview/half-blink.png
           cp artifacts/amora-browser-nearly-closed.png preview/nearly-closed.png
           cp artifacts/amora-browser-closed-smile.png preview/closed-smile.png
+          cp artifacts/amora-browser-head-left.png preview/head-left.png
+          cp artifacts/amora-browser-head-right.png preview/head-right.png
+          cp artifacts/amora-browser-head-up.png preview/head-up.png
+          cp artifacts/amora-browser-head-down.png preview/head-down.png
+          cp artifacts/amora-browser-gaze-left.png preview/gaze-left.png
+          cp artifacts/amora-browser-gaze-right.png preview/gaze-right.png
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png preview/wink-left.png preview/half-blink.png preview/nearly-closed.png preview/closed-smile.png
+          git add preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png preview/wink-left.png preview/half-blink.png preview/nearly-closed.png preview/closed-smile.png preview/head-left.png preview/head-right.png preview/head-up.png preview/head-down.png preview/gaze-left.png preview/gaze-right.png
           if ! git diff --cached --quiet; then
             git commit -m "ci(live2d): publish browser animation test [skip ci]"
             git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" || echo "Branch advanced while building; keeping artifact only."
@@ -141,6 +150,12 @@ jobs:
             artifacts/amora-browser-half-blink.png
             artifacts/amora-browser-nearly-closed.png
             artifacts/amora-browser-closed-smile.png
+            artifacts/amora-browser-head-left.png
+            artifacts/amora-browser-head-right.png
+            artifacts/amora-browser-head-up.png
+            artifacts/amora-browser-head-down.png
+            artifacts/amora-browser-gaze-left.png
+            artifacts/amora-browser-gaze-right.png
             artifacts/amora-prepared/source_order.json
             artifacts/AmoraBolinha/
           if-no-files-found: error
