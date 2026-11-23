@@ -265,10 +265,21 @@ function drawMouthPose(opening,form,pose){
  // Four source-art mouths: base closed, talk, wide shout, sad.
  // Blend only adjacent states; preserve centered alignment and oral cavity.
  const mouthIds=["mouth","extra_mouth_talk","extra_mouth_open_wide","extra_mouth_sad"];
- const positions=[0,1,2,3];
+ // Match the Cubism rig: VTube Studio lip sync in neutral automatically
+ // traverses closed -> talk -> shouting; an explicit emotion overrides it.
  const value=Math.max(0,Math.min(3,pose));
- const lo=Math.floor(value),hi=Math.min(3,lo+1),k=smoother(value-lo);
- for(const [idx,weight] of [[lo,1-k],[hi,k]]){
+ const poseWeight=id=>Math.max(0,1-Math.abs(value-id));
+ const autoBase=1-smoother(opening/.24);
+ const autoWide=smoother((opening-.55)/.34);
+ const autoTalk=(1-autoBase)*(1-autoWide);
+ const autoShout=(1-autoBase)*autoWide;
+ const weights=[
+  poseWeight(0)*autoBase,
+  poseWeight(1)+poseWeight(0)*autoTalk,
+  poseWeight(2)+poseWeight(0)*autoShout,
+  poseWeight(3)
+ ];
+ for(const [idx,weight] of weights.entries()){
   if(weight<.001)continue;
   ctx.save();ctx.globalAlpha*=weight;
   if(idx===0){
