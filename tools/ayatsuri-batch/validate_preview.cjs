@@ -48,8 +48,11 @@ async function run() {
     if(a.delta>0.001||a.anchorDelta>0.001)throw Error("Sclera aperture detached from eyelash boundary: "+JSON.stringify(a));
   }
   for(const p of lidChecks.samples){
-   if(p.opening>=.06 && (p.eyeAlpha<.999||p.closed>.001)) {
-    throw Error("Iris faded before lashes met: "+JSON.stringify(p));
+   if(p.opening>=.115 && (p.eyeAlpha<.999||p.closed>.001)) {
+    throw Error("Closed pose appeared while eye was still open: "+JSON.stringify(p));
+   }
+   if(Math.abs(p.eyeAlpha+p.closed-1)>0.002){
+    throw Error("Closed pose and open-eye opacities are not complementary: "+JSON.stringify(p));
    }
   }
   for(let i=1;i<lidChecks.samples.length;i++){
@@ -125,6 +128,20 @@ async function run() {
       irisChecks.peaks[2]<1.005||irisChecks.travelRatio<.09){
    throw Error("Iris shrink, damped multi-pulse rebound or gaze travel invalid: "+JSON.stringify(irisChecks));
   }
+  // Regression snapshots for the newly supplied PNG art and emotion weights.
+  const emotional={};
+  for(const name of ["Shy","Crying","Sobbing","Sad","Angry","Shouting"]){
+   await page.click('[data-expr="'+name+'"]');
+   await new Promise(resolve=>setTimeout(resolve,680));
+   emotional[name]=await digest();
+   await page.screenshot({path:path.join(path.dirname(html),"amora-browser-"+name.toLowerCase()+".png"),fullPage:true});
+   if(emotional[name].hash===neutral.hash)throw Error("Emotion "+name+" did not affect canvas");
+  }
+  const sixExtras=await page.evaluate(()=>[
+     "extra_blush","extra_tear_L","extra_tear_R",
+     "extra_mouth_talk","extra_mouth_open_wide","extra_mouth_sad"
+   ].every(name=>images[name]&&images[name].complete&&box(name).w>0));
+  if(!sixExtras)throw Error("User-supplied expression PNG not loaded");
   await page.click('[data-expr="Sleepy"]');
   await new Promise(resolve=>setTimeout(resolve,500));
   const sleepy=await digest();
@@ -169,7 +186,7 @@ async function run() {
   if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0||wink.corner!==0||half.corner!==0||near.corner!==0||closed.corner!==0)throw Error("Opaque background remains around Amora");
   if(!neutral.center||!sleepy.center||!surprised.center||!wink.center||!half.center||!near.center||!closed.center)throw Error("Center of Amora is not rendered");
   if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash||wink.hash===surprised.hash||half.hash===wink.hash||half.hash===neutral.hash||near.hash===half.hash||closed.hash===near.hash)throw Error("Expressions did not change canvas pixels");
-  console.log(JSON.stringify({ok:true,loaded_layers:14,lidChecks,irisChecks,poses,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
+  console.log(JSON.stringify({ok:true,loaded_layers:20,sixExtras,lidChecks,irisChecks,poses,emotional,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
  }finally{await browser.close();}
 }
 run().catch(err=>{console.error(err.stack||err);process.exitCode=1;});
