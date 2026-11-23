@@ -174,6 +174,12 @@ class ReplyJobRepository:
                     OR (status='running' AND lease_until<=?))
                   AND """ + _VALID_SOURCE + """
                   AND NOT EXISTS (
+                    SELECT 1 FROM messaging_reply_jobs active
+                    WHERE active.session_id=messaging_reply_jobs.session_id
+                      AND active.turn_id<>messaging_reply_jobs.turn_id
+                      AND active.status='running' AND active.lease_until>?
+                  )
+                  AND NOT EXISTS (
                     SELECT 1 FROM messaging_reply_jobs earlier
                     WHERE earlier.session_id=messaging_reply_jobs.session_id
                       AND earlier.status IN ('pending','retry_wait','running','ready')
@@ -182,7 +188,7 @@ class ReplyJobRepository:
                            AND earlier.turn_id<messaging_reply_jobs.turn_id))
                   )
                 ORDER BY available_at,created_at,turn_id LIMIT 1
-            """, (stamp, stamp)).fetchone()
+            """, (stamp, stamp, stamp)).fetchone()
             if row is None:
                 return None
             token = str(uuid4())
