@@ -256,7 +256,7 @@ async def test_run02_groq_413_sends_only_one_smaller_authorized_request(monkeypa
     ctx.recent_messages = [
         {"turn_id": str(uuid4()), "speaker_id": "PERSON_BK",
          "addressee_id": "ENTITY_AMORA", "source": "platform_messaging",
-         "text": "historico opcional " + "a" * 2000}
+         "text": "historico opcional " + "a" * 400}
         for _ in range(12)
     ]
     history = ctx.model_copy(deep=True).recent_messages
@@ -276,3 +276,5 @@ async def test_run02_groq_413_sends_only_one_smaller_authorized_request(monkeypa
     assert len(json.dumps(sent[1]).encode()) < len(json.dumps(sent[0]).encode())
     assert all(ctx.user_text in str(item["input"]) for item in sent)
     assert ctx.recent_messages == history
+    # A second rejection is terminal for this candidate; never a third call.
+    assert len(sent) == 2
