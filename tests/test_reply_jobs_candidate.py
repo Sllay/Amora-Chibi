@@ -13,7 +13,7 @@ from amora.cognition import CognitiveRequest
 from amora.events import PrivacyScope
 from amora.messaging.models import (AttentionDecision, MessagingPlatform, OutboundMessage,
     RoutingAction, InboundMessage, ChannelType, ExternalActorRef, TransportInvalidation)
-from amora.messaging.generation_lifecycle import InboundGenerationLost
+from amora.messaging.generation_lifecycle import InboundGenerationBusy, InboundGenerationLost
 from amora.messaging.store import MessagingStore
 from amora.messaging.reply_jobs import ReplyJobRepository, ReplyReason
 from amora.storage.database import AmoraDatabase
@@ -553,5 +553,39 @@ async def test_integrated_unknown_sender_and_local_only_never_join_queue(lab):
         assert await runtime.call("state", core.messaging._turn_id(local)) is None
         assert not await runtime.run_once()
         assert provider.calls == 0
+    finally:
+        await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_integrated_atomic_admission_rolls_back_and_worker_can_retry(lab, monkeypatch):
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-admission")
+    core.cognition.register_provider(provider)
+    msg = _dm(core)
+    turn = core.messaging._turn_id(msg)
+    original = ReplyJobRepository._sql
+
+    def fail_enqueue(repo, operation):
+        if operation == "ENQUEUE_TURN":
+            raise RuntimeError("SYNTHETIC_ADMISSION_FAILURE")
+        return original(repo, operation)
+
+    try:
+        monkeypatch.setattr(ReplyJobRepository, "_sql", fail_enqueue)
+        with pytest.raises(InboundGenerationBusy):
+            await core.messaging.receive(msg)
+        assert core.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn}") is None
+        assert await runtime.call("state", turn) is None
+        assert provider.calls == 0
+        monkeypatch.setattr(ReplyJobRepository, "_sql", original)
+        accepted = await core.messaging.receive(msg)
+        assert "DURABLE_REPLY_ACCEPTED" in accepted.decision.reason_codes
+        assert core.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn}").raw_text == msg.text
+        assert (await runtime.call("state", turn))["status"] == "pending"
+        assert await runtime.run_once()
+        assert provider.calls == 1
+        assert (await runtime.call("state", turn))["status"] == "ready"
     finally:
         await _stop_runtime(core)
