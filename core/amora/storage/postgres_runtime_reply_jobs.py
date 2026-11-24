@@ -224,6 +224,10 @@ def reply_job_statements() -> dict[str, ReviewedStatement]:
                     AND b.identifier_type IN ('user_id','discord_user_id')
                     AND b.enabled=1 AND b.entity_id<>'PERSON_BK')
               AND """ + _VALID_SOURCE + " LIMIT 1", 4, 1),
+        "PG_REPLY_JOB_JOURNAL_INSERT": ReviewedStatement("""INSERT INTO amora_pg_v18_lab.cognitive_journal(
+            id,turn_id,stage,timestamp,source,summary,reason_codes_json,payload_json,
+            privacy_scope,provider,model,duration_ms,correlation_id,error_code,metadata_json,dedupe_key
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(dedupe_key) DO NOTHING""", 16),
         "PG_REPLY_JOB_STATE": ReviewedStatement(
             "SELECT status,attempts,available_at,lease_until,last_reason,outbound_id "
             "FROM amora_pg_v18_lab.messaging_reply_jobs WHERE turn_id=%s", 1, 1),
