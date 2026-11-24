@@ -6,10 +6,12 @@ import asyncio
 import base64
 from collections import OrderedDict
 from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 import hmac
 import ipaddress
 import os
+from pathlib import Path
 import re
 import secrets
 from urllib.parse import urlsplit
@@ -24,6 +26,40 @@ CSP = (
     "worker-src 'self' blob:; object-src 'none'; base-uri 'none'; "
     "frame-ancestors 'none'; form-action 'self'"
 )
+
+
+@lru_cache(maxsize=4)
+def _visual_engine_csp(html_path: str) -> str:
+    """Grant only the checked-in inline JS of the public avatar laboratory.
+
+    /web and all authenticated Core endpoints keep the strict shared CSP.
+    Never use 'unsafe-inline' or blanket data: script permission here.
+    """
+    try:
+        file = Path(html_path)
+        if file.stat().st_size > 16 * 1024 * 1024:
+            return CSP
+        markup = file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return CSP
+    inline_scripts = [
+        script for script in re.findall(
+            r"<script(?:\\s+[^>]*)?>(.*?)</script\\s*>", markup,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if script.strip()
+    ]
+    if not inline_scripts:
+        return CSP
+    digests = [
+        "'sha256-" + base64.b64encode(
+            hashlib.sha256(script.encode("utf-8")).digest()
+        ).decode("ascii") + "'"
+        for script in inline_scripts
+    ]
+    return CSP.replace(
+        "script-src 'self';", "script-src 'self' " + " ".join(digests) + ";"
+    )
 
 
 def origin(value: str) -> str:
@@ -219,8 +255,18 @@ class SecurityMiddleware:
         async def secured_send(message):
             if message["type"] == "http.response.start":
                 existing = {k.lower() for k, v in message.get("headers", [])}
+                visual_html = path in {"/visual-engine/", "/visual-engine/index.html"}
+                web_root = Path(
+                    os.environ.get(
+                        "AMORA_WEB_ROOT",
+                        str(Path(__file__).resolve().parents[2] / "web"),
+                    )
+                )
+                policy = _visual_engine_csp(
+                    str(web_root / "visual-engine" / "index.html")
+                ) if visual_html else CSP
                 security = {
-                    b"content-security-policy": CSP.encode(),
+                    b"content-security-policy": policy.encode(),
                     b"x-content-type-options": b"nosniff",
                     b"referrer-policy": b"no-referrer",
                     b"permissions-policy": b"camera=(), microphone=(self), geolocation=(), payment=(), usb=()",
