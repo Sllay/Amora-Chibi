@@ -129,12 +129,18 @@ def compact_rejected_payload(context, make_payload, rejected_payload):
     """
     previous = estimate_payload(rejected_payload)
     ceiling = max(1, int(previous * 0.8))
-    try:
-        _, payload = fit_provider_payload(context, make_payload, ceiling=ceiling, strict=True)
-    except ContextBudgetExceeded:
-        return None
     def size(item):
         return len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-    if estimate_payload(payload) >= previous or size(payload) >= size(rejected_payload):
-        return None
-    return payload
+    # First seek the preferred reduction. If the irreducible causal exchange
+    # prevents it, a strictly smaller projection is still useful. Neither
+    # path may resend the rejected envelope or cut the protected context.
+    for target in dict.fromkeys((ceiling, previous - 1)):
+        if target < 1:
+            continue
+        try:
+            _, payload = fit_provider_payload(context, make_payload, ceiling=target, strict=True)
+        except ContextBudgetExceeded:
+            continue
+        if estimate_payload(payload) < previous and size(payload) < size(rejected_payload):
+            return payload
+    return None
