@@ -102,6 +102,21 @@ def register_avatar_routes(app: FastAPI, core: object, require_auth: Callable[..
     if web_root.is_dir():
         app.mount("/avatar", StaticFiles(directory=str(web_root), html=True), name="avatar")
 
+    # New independent, read-only expression laboratory. Serve it through the
+    # existing Northflank Core and port, without starting a third service or
+    # replacing /avatar (the established V0.9 Avatar Studio).
+    # Source is a single self-contained HTML with embedded user artwork:
+    # no Python image generation, Chromium, tokens or external dependencies.
+    visual_root = Path(
+        os.environ.get("AMORA_WEB_ROOT", str(Path(__file__).resolve().parents[3] / "web"))
+    ) / "visual-engine"
+    if visual_root.is_dir():
+        app.mount(
+            "/visual-engine",
+            StaticFiles(directory=str(visual_root), html=True),
+            name="visual-engine",
+        )
+
     # Browser surfaces share Core contracts but remain separate platform adapters.
     # Keep the assembly near the existing static-surface hook until API composition
     # is split into a dedicated platform registry.
