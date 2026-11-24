@@ -379,6 +379,19 @@ class MessagingStore:
             ).fetchall()
             for row in rows:
                 candidate = self._outbound_from_row(row)
+                if candidate.metadata.get("durable_native_hash"):
+                    from amora.storage.reply_job_sql import SQLITE_STATEMENTS
+                    sql = ("PG_REPLY_JOB_DELIVERY_ALLOWED"
+                           if self.database.backend.capabilities.name == "postgres-candidate"
+                           else SQLITE_STATEMENTS["DELIVERY_ALLOWED"])
+                    allowed = (candidate.target_entity_id == "PERSON_BK"
+                               and self.database._conn.execute(sql, (
+                                   str(candidate.id), candidate.account_scope,
+                                   candidate.conversation_id, candidate.source_message_id,
+                               )).fetchone() is not None)
+                    if not allowed:
+                        self.cancel_outbound(candidate.id, reason="DURABLE_REPLY_STALE_OR_UNAUTHORIZED")
+                        continue
                 if candidate.metadata.get("agenda_id"):
                     from amora.agenda.service import agenda_claim_allowed
                     # A previously claimed send is ambiguous after a lost ACK:
