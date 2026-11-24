@@ -174,7 +174,7 @@ class ReplyJobRepository:
         if reason not in {ReplyReason.PROVIDER_TEMPORARY, ReplyReason.PROVIDER_BACKOFF,
                           ReplyReason.GENERATION_TIMEOUT, ReplyReason.STORAGE_TEMPORARY}:
             raise ValueError("REPLY_JOB_RETRY_REASON_INVALID")
-        if type(delay_seconds) is not int or not 1 <= delay_seconds <= 900:
+        if type(delay_seconds) is not int or not 1 <= delay_seconds <= 604800:
             raise ValueError("REPLY_JOB_DELAY_INVALID")
         now = self._now()
         return self._paired_write(
