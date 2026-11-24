@@ -113,6 +113,12 @@ class PlatformMessagingService:
         return self.durable_replies
 
     async def start_durable_replies(self):
+        from amora.storage.reply_job_rollout import durable_reply_mode
+        mode = durable_reply_mode()
+        if mode != "off":
+            runtime = self.configure_durable_replies()
+            if mode == "drain":
+                runtime.stop_admissions()
         if self.durable_replies is not None:
             await self.durable_replies.start()
 
@@ -127,6 +133,7 @@ class PlatformMessagingService:
             receipt = await self.durable_replies.existing_ack(message)
             if receipt is not None:
                 return receipt
+            await self.durable_replies.admission_guard(message)
         key = self._inbound_key(message)
         task = self._inflight.get(key)
         if task is None or task.done():
