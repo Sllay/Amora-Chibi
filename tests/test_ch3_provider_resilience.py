@@ -368,3 +368,58 @@ async def test_run02_account_admission_releases_on_cancellation_and_is_fifo():
     await asyncio.gather(first, second)
     assert order == ["groq_memory", "groq_vision"]
     assert not quota.snapshot()["groq"]["in_flight"]
+
+
+@pytest.mark.asyncio
+async def test_run02_groq_model_limit_preserves_distinct_model_fallback():
+    from amora.cognition.provider_quota import ProviderQuotaCoordinator, ProviderQuotaDeferred
+    from amora.time import SimulatedClock
+    clock = SimulatedClock(datetime(2026, 11, 24, tzinfo=timezone.utc))
+    quota = ProviderQuotaCoordinator(clock)
+    gpt = "openai/gpt-oss-120b"
+    qwen = "qwen/qwen3.8-27b"
+    with pytest.raises(ProviderError):
+        async with quota.admission("groq_memory", model=gpt):
+            raise ProviderError("synthetic", status_code=429, retry_after="60")
+    assert quota.remaining("groq_memory", model=gpt) == 60
+    assert quota.remaining("groq", model=qwen) == 0
+    with pytest.raises(ProviderQuotaDeferred):
+        async with quota.admission("groq", model=gpt):
+            pytest.fail("same model must respect cooldown across roles")
+    async with quota.admission("groq", model=qwen):
+        pass
+    quota.observe("groq_web", 429, "120", model=qwen)
+    for name in ("groq", "groq_web", "groq_vision"):
+        with pytest.raises(ProviderQuotaDeferred):
+            async with quota.admission(name, model=qwen):
+                pytest.fail("Qwen roles share the same model cooldown")
+    clock.advance(timedelta(seconds=61))
+    async with quota.admission("groq_memory", model=gpt):
+        pass
+    assert quota.remaining("groq", model=qwen) == 59
+
+
+@pytest.mark.asyncio
+async def test_run02_explicit_account_limit_blocks_all_models_and_keeps_other_providers():
+    from amora.cognition.provider_quota import ProviderQuotaCoordinator, ProviderQuotaDeferred
+    from amora.time import SimulatedClock
+    clock = SimulatedClock(datetime(2026, 11, 24, tzinfo=timezone.utc))
+    quota = ProviderQuotaCoordinator(clock)
+    gpt = "openai/gpt-oss-120b"
+    qwen = "qwen/qwen3.8-27b"
+    quota.block_for("groq", 180, model=qwen)
+    with pytest.raises(ProviderError):
+        async with quota.admission("groq_memory", model=gpt):
+            raise ProviderError("synthetic account limit", status_code=429, retry_after="60",
+                                diagnostics={"quota_scope": "account"})
+    for model in (gpt, qwen, "another-model", None):
+        with pytest.raises(ProviderQuotaDeferred):
+            async with quota.admission("groq", model=model):
+                pytest.fail("account-wide cooldown must win")
+    async with quota.admission("numes", model="other"):
+        pass
+    clock.advance(timedelta(seconds=61))
+    async with quota.admission("groq_memory", model=gpt):
+        pass
+    assert quota.remaining("groq", model=qwen) == 119
+    assert quota.snapshot()["groq"]["model_cooldowns_seconds"][qwen] == 119
