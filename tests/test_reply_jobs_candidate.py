@@ -657,6 +657,25 @@ def test_candidate_schema_verified_and_refuses_missing_index(lab):
         queue.verify_schema()
 
 
+
+def test_pg_candidate_schema_refuses_weakened_check_with_same_count(lab):
+    core, _, queue = lab
+    if core.database.backend.capabilities.name != "postgres-candidate":
+        pytest.skip("PG18 catalog regression")
+    assert queue.verify_schema()["version"] == 1
+    from psycopg import sql
+    with closing(_raw()) as raw:
+        constraint = raw.execute("""SELECT conname FROM pg_constraint
+            WHERE conrelid='amora_pg_v18_lab.messaging_reply_jobs'::regclass
+            AND contype='c' AND pg_get_constraintdef(oid) LIKE '%transport_revision%'"""
+        ).fetchone()[0]
+        raw.execute(sql.SQL("ALTER TABLE amora_pg_v18_lab.messaging_reply_jobs "
+                            "DROP CONSTRAINT {}, ADD CONSTRAINT {} CHECK (transport_revision >= 0)")
+                    .format(sql.Identifier(constraint), sql.Identifier(constraint)))
+    with pytest.raises(ValueError, match="REPLY_SCHEMA_STRUCTURAL_MISMATCH"):
+        queue.verify_schema()
+
+
 @pytest.mark.asyncio
 async def test_integrated_native_backup_restore_new_core_preserves_ready_and_pending(lab, tmp_path, monkeypatch):
     """Synthetic snapshot + new Core instance, never a production destination."""
