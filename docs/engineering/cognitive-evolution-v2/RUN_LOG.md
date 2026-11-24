@@ -33,8 +33,8 @@ gate próprio em PLAN.md. Status de produção deve ser verificado separadamente
 | RUN | Área | Estado inicial em RUN 00 |
 |---|---|---|
 | 00 | Preparação e continuidade | Gate documental aprovado; PR #377 (conclusão condicionada ao merge) |
-| 01 | Durable Cognitive Runtime | IN_PROGRESS — integração candidata Core/outbox; CI pós-correção pendente |
-| 02 | Intelligent Provider Orchestrator | PLANNED |
+| 01 | Durable Cognitive Runtime | CI_PASS — 9/9 no 6163c34; LIVE_PENDING até bateria final |
+| 02 | Intelligent Provider Orchestrator | IN_PROGRESS — branch empilhada sobre RUN 01 |
 | 03 | Adaptive Context & Comprehension Engine | PLANNED |
 | 04 | Advanced Multimodal Perception | PLANNED |
 | 05 | Autonomous Web Intelligence | PLANNED |
@@ -161,6 +161,17 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Lacuna encontrada: a revisão PG18 aceitava cinco CHECKs mesmo quando uma expressão era substituída por uma versão mais permissiva. Correção 678ec00: comparar as definições canônicas do catálogo, exigir constraints validadas/enforced e conferir a identidade real da tabela referenciada pela FK.
 - Regressão 7edeac7: alterar o CHECK da revisão de transporte de >=1 para >=0 sem mudar o número de constraints; a revisão deve rejeitar o schema. Teste no laboratório PG18 ainda pendente, incluindo confirmação da representação canônica real do catálogo.
 - Gate: aguardar evidência de PASS do Core e PG18 no HEAD, corrigir eventuais divergências e registrar contagens efetivas; sem merge, deploy, flags ou migração de produção. Os gates de ACK físico, causalidade, invalidação concorrente, recursos e certificação real permanecem abertos.
+
+### RUN 01 — encerramento do gate de desenvolvimento (24/11/2026)
+
+- HEAD 6163c34202eeffcd1a82a768a69e40e02d6bb913: 9/9 workflows PASS; Core 45311388003, PG18 45311388024. Proprietário aprovou avanço com CI verde e bateria profunda/live após RUN 07. A antiga exigência de live individual está supersedida pelo PLAN.md; preservar pendências de causalidade, ACK físico, concorrência, recursos e rollback real para certificação integrada. PR #378 permanece draft, não integrado em main.
+
+### RUN 02 — início (24/11/2026)
+
+- Status IN_PROGRESS. Branch feat/cognitive-evolution-run02-provider-orchestrator, baseada no HEAD aprovado da RUN 01, sem alterar produção.
+- Inventário: provider_resilience.py repete transporte dentro do proxy; resilience_runtime.py e provider_circuit.py mantêm cooldown e half-open; structured_runtime.py faz failover e graça Numes de 12s; durable_reply_runtime.py aplica retry fixo e só conhece causas genéricas; context_budget.py já projeta opcionalmente sem reescrever original.
+- Decisão: evoluir esses contratos existentes, preservar adapters/rotas e gates de privacidade. Prioridade: autoridade única de retry durável, classificação de HTTP, Retry-After, compactação corretiva, SSE com progresso e limite finito. Quotas reais e integração dos especialistas precisam de revisão; não inventar limites de conta.
+- Gate: testes do novo comportamento + CI integral verde; bateria profunda e live só após RUN 07.
 
 ## Modelo obrigatório de registro para cada RUN
 
