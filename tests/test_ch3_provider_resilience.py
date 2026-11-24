@@ -244,3 +244,44 @@ def test_failed_half_open_probe_reopens_until_new_deadline() -> None:
     )
     assert reopened.state is CircuitState.OPEN
     assert registry.routing_decision(task, now=now + timedelta(seconds=1)).excluded_names == frozenset({"groq"})
+
+
+@pytest.mark.asyncio
+async def test_run02_durable_transport_failure_is_not_retried_inside_proxy():
+    from amora.cognition.durable_realization import DURABLE_REALIZATION
+    context = _context()
+    provider = SequencedProvider([ProviderError("busy", status_code=429, retry_after="0.4")])
+    proxy = ResilientProviderProxy(provider, max_retries=3, base_delay_seconds=0)
+    marker = DURABLE_REALIZATION.set(str(context.turn_id))
+    try:
+        with pytest.raises(ProviderError):
+            await proxy.realize(context)
+        assert provider.calls == 1
+    finally:
+        DURABLE_REALIZATION.reset(marker)
+
+
+def test_run02_retry_after_and_input_specific_failure():
+    import httpx
+    assert retry_after_seconds("inf") is None
+    assert retry_after_seconds("nan") is None
+    failure = classify_provider_failure(ProviderError("too large", status_code=413))
+    assert failure.code == "PROVIDER_INPUT_TOO_LARGE" and not failure.retryable
+    assert classify_provider_failure(httpx.RemoteProtocolError("closed")).retryable
+
+
+def test_run02_compaction_keeps_original_and_does_not_repeat_payload():
+    from amora.cognition.context_budget import compact_rejected_payload
+    context = _context()
+    context.specialist_support = {"note": "x" * 4000}
+    def build(projected):
+        return {"text": projected.user_text, "identity": projected.self_model,
+                "plan": projected.dialogue_plan, "support": projected.specialist_support}
+    rejected = build(context)
+    reduced = compact_rejected_payload(context, build, rejected)
+    assert reduced is not None and reduced["support"] is None
+    assert reduced["text"] == rejected["text"]
+    assert reduced["identity"] == rejected["identity"]
+    assert reduced["plan"] == rejected["plan"]
+    assert context.specialist_support is not None
+    assert compact_rejected_payload(context, build, reduced) is None
