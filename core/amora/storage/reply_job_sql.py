@@ -203,6 +203,10 @@ SQLITE_STATEMENTS = {
                     AND b.identifier_type IN ('user_id','discord_user_id')
                     AND b.enabled=1 AND b.entity_id<>'PERSON_BK')
               AND """ + _VALID_SOURCE + " LIMIT 1"),
+    "JOURNAL_INSERT": ("""INSERT INTO cognitive_journal(
+            id,turn_id,stage,timestamp,source,summary,reason_codes_json,payload_json,
+            privacy_scope,provider,model,duration_ms,correlation_id,error_code,metadata_json,dedupe_key
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dedupe_key) DO NOTHING"""),
     "STATE": ("SELECT status,attempts,available_at,lease_until,last_reason,outbound_id "
                 "FROM messaging_reply_jobs WHERE turn_id=?"),
 }
