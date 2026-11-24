@@ -24,11 +24,13 @@ from .realization import RealizationError, RealizationValidator, ValidatedRealiz
 from .speech import SpeechSegmenter
 from .service import SegmentSink
 from .durable_realization import durable_realization, DeferredRealization, DURABLE_AUTHORIZATION
+from .provider_resilience import classify_provider_failure
 
 
 async def _await_numes_adaptive(
     awaitable, *, timeout: float, available_seconds: float,
     grace_cap_seconds: float = 12.0, reserve_seconds: float = 5.0,
+    progress_extension_seconds: float = 0.0, progress_idle_seconds: float = 23.0,
 ):
     """One bounded extra window only for a verifiably live Numes stream.
 
@@ -39,6 +41,7 @@ async def _await_numes_adaptive(
     All cancellation joins the same task before any failover can start.
     """
     liveness = NumesConnectionLiveness()
+    started = perf_counter()
     marker = ACTIVE_NUMES_LIVENESS.set(liveness)
     try:
         task = asyncio.create_task(awaitable)
@@ -51,6 +54,26 @@ async def _await_numes_adaptive(
             if task.done():
                 # A completion racing the timer must never be discarded.
                 return task.result()
+            if progress_extension_seconds > 0:
+                # Durable jobs are independent of HTTP. Only actual recent
+                # generation progress earns an extension; keepalive alone
+                # cannot renew the deadline. Reserve the original fallback window.
+                deadline = started + min(timeout + progress_extension_seconds,
+                    available_seconds + progress_extension_seconds - reserve_seconds)
+                while liveness.progressing(max_silence_seconds=progress_idle_seconds):
+                    remaining = deadline - perf_counter()
+                    if remaining <= 0:
+                        break
+                    idle_remaining = progress_idle_seconds - (perf_counter() - liveness.last_progress)
+                    if idle_remaining <= 0:
+                        break
+                    try:
+                        return await asyncio.wait_for(asyncio.shield(task),
+                            timeout=min(remaining, idle_remaining))
+                    except asyncio.TimeoutError:
+                        if task.done():
+                            return task.result()
+                raise
             if not liveness.healthy():
                 raise
             reserve = 0.75 if liveness.progress_deltas else reserve_seconds
@@ -325,14 +348,18 @@ class CognitiveEngine(ProductionCognitiveEngine):
         # journal persistence; their cost must not impersonate a model timeout.
         provider_elapsed = 0.0
 
-        async def timed_realize(realize):
+        is_durable = durable_realization(request)
+        failures = []
+
+        async def timed_realize(realize, *, charge_cap=None):
             nonlocal provider_elapsed
             attempt_started = perf_counter()
             try:
                 with span("provider_attempt"):
                     return await realize(context)
             finally:
-                provider_elapsed += max(0.0, perf_counter() - attempt_started)
+                elapsed = max(0.0, perf_counter() - attempt_started)
+                provider_elapsed += min(elapsed, charge_cap) if charge_cap is not None else elapsed
 
         last_failure = "NO_STRUCTURED_REALIZATION_PROVIDER"
         for provider_index, descriptor in enumerate(candidates):
@@ -417,8 +444,9 @@ class CognitiveEngine(ProductionCognitiveEngine):
                             and request.metadata.get("surface") == "platform_messaging"
                             and remaining_budget is not None):
                         raw_result = await _await_numes_adaptive(
-                            timed_realize(realize), timeout=max(0.05, timeout),
-                            available_seconds=remaining_budget,
+                            timed_realize(realize, charge_cap=timeout if is_durable else None),
+                            timeout=max(0.05, timeout), available_seconds=remaining_budget,
+                            progress_extension_seconds=120.0 if is_durable else 0.0,
                         )
                     else:
                         raw_result = await asyncio.wait_for(timed_realize(realize), timeout=max(0.05, timeout))
@@ -432,12 +460,14 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     )
             except ContextBudgetExceeded:
                 last_failure = "CONTEXT_ENVELOPE_OVERFLOW"
+                failures.append(("context", None))
                 await self._journal_async(request, JournalStage.ERROR, summary="provider envelope exceeds budget",
                     reason_codes=[last_failure, "NO_SURFACE_REQUEST"], error_code=last_failure)
                 continue
             except NvidiaStreamTimeout as exc:
                 kind = exc.diagnostics.get("timeout_kind")
                 last_failure = "NVIDIA_IDLE_TIMEOUT" if kind == "idle" else "NVIDIA_TOTAL_TIMEOUT"
+                failures.append(("temporary", None))
                 stage = exc.diagnostics.get("stage")
                 safe_stage = stage if stage in {"waiting_headers", "waiting_first_event", "reasoning_only", "visible_partial", "completed"} else "unknown"
                 self._last_realization_rejection = {"provider": descriptor.name, "model": descriptor.model,
@@ -452,6 +482,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 continue
             except asyncio.TimeoutError:
                 last_failure = "PROVIDER_ATTEMPT_TIMEOUT"
+                failures.append(("temporary", None))
                 self._last_realization_rejection = {
                     "provider": descriptor.name,
                     "model": descriptor.model,
@@ -482,6 +513,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 continue
             except RealizationError as exc:
                 last_failure = exc.code
+                failures.append(("temporary", None))
                 self._last_realization_rejection = {
                     "provider": descriptor.name,
                     "model": descriptor.model,
@@ -509,7 +541,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 continue
             except Exception as exc:
                 status = exc.status_code if isinstance(exc, ProviderError) else None
-                last_failure = type(exc).__name__
+                failure = classify_provider_failure(exc, now=self.clock.now())
+                last_failure = failure.code if is_durable else type(exc).__name__
+                category = ("context" if status == 413 else
+                            "configuration" if status in {401, 403, 404} else "temporary")
+                failures.append((category, failure.retry_after_seconds))
                 self._last_realization_rejection = {
                     "provider": descriptor.name,
                     "model": descriptor.model,
@@ -523,7 +559,9 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     status_code=status,
                     started=provider_started,
                 )
-                self._backoff(descriptor, status_code=status, retry_after=getattr(exc, "retry_after", None))
+                # Envelope size is a turn-specific rejection, not global health.
+                if status != 413:
+                    self._backoff(descriptor, status_code=status, retry_after=getattr(exc, "retry_after", None))
                 continue
 
             input_tokens = _optional_int(usage.get("input_tokens"))
@@ -566,6 +604,22 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 },
                 context=context,
             )
+
+        if is_durable and failures:
+            kinds = {kind for kind, _ in failures}
+            # A candidate skipped for cooldown or exhausted total budget may
+            # recover later. Never block a turn merely because the last route
+            # failed permanently while another remains temporarily unavailable.
+            if not excluded and last_failure != "PROVIDER_TOTAL_BUDGET_EXHAUSTED" and len(failures) == len(candidates):
+                if kinds == {"context"}:
+                    raise DeferredRealization(["CONTEXT_ENVELOPE_OVERFLOW"])
+                if kinds == {"configuration"}:
+                    raise DeferredRealization(["PROVIDER_CONFIGURATION_BLOCKED"])
+                if kinds <= {"context", "configuration"}:
+                    raise DeferredRealization(["PROVIDER_CONFIGURATION_BLOCKED"])
+            delays = [delay for kind, delay in failures if kind == "temporary" and delay is not None]
+            raise DeferredRealization([last_failure, "ALL_STRUCTURED_PROVIDERS_FAILED"],
+                retry_after_seconds=max(delays, default=None))
 
         return await self._fallback_plan(
             request,
