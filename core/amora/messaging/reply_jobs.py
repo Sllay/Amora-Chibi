@@ -237,7 +237,7 @@ class ReplyJobRepository:
     def reconcile_outbound(self):
         return self._write(self._sql("RECONCILE_OUTBOUND"))
 
-    def finalize(self, claim, store, message, decision, outbound, reasons, records):
+    def finalize(self, claim, store, message, decision, outbound, reasons, records, journals):
         """Commit history, original outbox/audit and ready state together.
 
         The caller supplies validated, deterministic history values, never
@@ -256,6 +256,8 @@ class ReplyJobRepository:
                         raise ValueError("DURABLE_REPLY_SEGMENT_CONFLICT")
                     if db._conn.execute(self._sql("HISTORY_INSERT"), message_values).rowcount != 1:
                         raise ValueError("DURABLE_REPLY_HISTORY_CONFLICT")
+                for values in journals:
+                    db._conn.execute(self._sql("JOURNAL_INSERT"), values)
                 persisted = store.persist_prepared_reply(
                     message, decision, outbound, reasons,
                     lease=(claim.turn_id, claim.token),
