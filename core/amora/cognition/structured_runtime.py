@@ -361,7 +361,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             nonlocal provider_elapsed
             attempt_started = perf_counter()
             try:
-                async with self._provider_quota.admission(descriptor.name):
+                async with self._provider_quota.admission(descriptor.name, model=descriptor.model):
                     with span("provider_attempt"):
                         return await realize(context)
             finally:
@@ -606,7 +606,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             )
             if (remaining_requests is not None and remaining_requests <= 0
                     or remaining_tokens is not None and remaining_tokens <= 0):
-                self._provider_quota.block_for(descriptor.name, 60)
+                self._provider_quota.block_for(descriptor.name, 60, model=descriptor.model)
             self._provider_succeeded(descriptor, remaining_requests, remaining_tokens)
             reasons = [*validated.reason_codes, "REMOTE_PROVIDER_USED", "STRUCTURED_REALIZATION"]
             if provider_index:
