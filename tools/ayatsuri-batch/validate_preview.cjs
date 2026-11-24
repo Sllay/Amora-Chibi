@@ -128,6 +128,45 @@ async function run() {
       irisChecks.peaks[2]<1.005||irisChecks.travelRatio<.09){
    throw Error("Iris shrink, damped multi-pulse rebound or gaze travel invalid: "+JSON.stringify(irisChecks));
   }
+  const mouthCheck=await page.evaluate(()=>{
+    const samples=[0,0.12,0.22,0.52,0.8,1].map(open=>({open,
+      auto:mouthLayerWeights(open,0),
+      speaking:mouthLayerWeights(open,1)
+    }));
+    const sad=mouthLayerWeights(.7,3);
+    const enabled=window.AmoraVisualEngine.setParameters({
+      ParamMouthOpenY:0.22,ParamMouthPose:0,ParamBlush:.4
+    });
+    const after=window.AmoraVisualEngine.getParameters();
+    window.AmoraVisualEngine.setParameters({ParamMouthOpenY:0,ParamBlush:0});
+    return {samples,sad,enabled,after};
+  });
+  const quiet=mouthCheck.samples.find(x=>x.open===.22);
+  const loud=mouthCheck.samples.find(x=>x.open===1);
+  if(!(quiet.auto[1]>quiet.auto[0]&&quiet.auto[1]>.7))
+    throw Error("Partially opened mouth must display talking sprite: "+JSON.stringify(quiet));
+  if(!(loud.auto[2]>.99&&loud.speaking[2]>.99))
+    throw Error("Wide open mouth must display shout even from talking pose: "+JSON.stringify(loud));
+  if(!mouthCheck.enabled||Math.abs(mouthCheck.after.mouth-.22)>.01||
+     Math.abs(mouthCheck.after.blush-.4)>.01||mouthCheck.sad[3]<.99)
+    throw Error("Public parameter interface or sad expression incorrect: "+JSON.stringify(mouthCheck));
+  for(const sample of mouthCheck.samples){
+    for(const weights of [sample.auto,sample.speaking]){
+      if(Math.abs(weights.reduce((a,b)=>a+b,0)-1)>.0001)
+        throw Error("Mouth image opacity not normalized at "+sample.open);
+    }
+  }
+  // Screenshots prove the selected PNGs are actually visible at small/loud
+  // opening, not only that numeric opacity math appears correct.
+  await setSlider("mouthPose",0);
+  await setSlider("mouth",.22);
+  const mouthTalk=await digest();
+  await page.screenshot({path:path.join(path.dirname(html),"amora-browser-mouth-talk.png"),fullPage:true});
+  await setSlider("mouth",.98);
+  const mouthShout=await digest();
+  await page.screenshot({path:path.join(path.dirname(html),"amora-browser-mouth-wide.png"),fullPage:true});
+  await setSlider("mouth",0);
+  if(mouthTalk.hash===mouthShout.hash)throw Error("Talk and wide mouth screenshots identical");
   // Regression snapshots for the newly supplied PNG art and emotion weights.
   const emotional={};
   for(const name of ["Shy","Crying","Sobbing","Sad","Angry","Shouting"]){
@@ -186,7 +225,7 @@ async function run() {
   if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0||wink.corner!==0||half.corner!==0||near.corner!==0||closed.corner!==0)throw Error("Opaque background remains around Amora");
   if(!neutral.center||!sleepy.center||!surprised.center||!wink.center||!half.center||!near.center||!closed.center)throw Error("Center of Amora is not rendered");
   if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash||wink.hash===surprised.hash||half.hash===wink.hash||half.hash===neutral.hash||near.hash===half.hash||closed.hash===near.hash)throw Error("Expressions did not change canvas pixels");
-  console.log(JSON.stringify({ok:true,loaded_layers:20,sixExtras,lidChecks,irisChecks,poses,emotional,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
+  console.log(JSON.stringify({ok:true,loaded_layers:20,sixExtras,lidChecks,irisChecks,mouthCheck,mouthTalk,mouthShout,poses,emotional,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
  }finally{await browser.close();}
 }
 run().catch(err=>{console.error(err.stack||err);process.exitCode=1;});
