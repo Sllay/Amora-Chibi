@@ -1,10 +1,13 @@
 """Internal durable realization boundary; never a user-controlled metadata flag."""
 from contextvars import ContextVar
+from collections.abc import Awaitable, Callable
 
 
 # Only the authorized reply dispatcher may bind this exact turn ID.
 DURABLE_REALIZATION: ContextVar[str | None] = ContextVar(
     "amora_durable_realization", default=None)
+DURABLE_AUTHORIZATION: ContextVar[Callable[[], Awaitable[bool]] | None] = ContextVar(
+    "amora_durable_authorization", default=None)
 
 
 def durable_realization(request):
