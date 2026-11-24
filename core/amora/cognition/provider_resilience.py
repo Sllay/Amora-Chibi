@@ -82,8 +82,6 @@ def classify_provider_failure(
         retry_after = retry_after_seconds(exc.retry_after, now=now)
         if status == 413:
             return ProviderFailure("PROVIDER_INPUT_TOO_LARGE", False, status)
-        if status in {401, 403, 404}:
-            return ProviderFailure("PROVIDER_CONFIGURATION_BLOCKED", False, status)
         if status in _NON_RETRYABLE_STATUS:
             return ProviderFailure(f"PROVIDER_HTTP_{status}", False, status, retry_after)
         if status == 429:
