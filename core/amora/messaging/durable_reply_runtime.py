@@ -36,6 +36,7 @@ class DurableReplyRuntime:
         self.service = service
         self.repo = ReplyJobRepository(service.store.database, service.clock)
         self.active = False
+        self.accepting = True
         self.task = None
         self.wake = None
         self._next_reconcile = 0.0
@@ -111,6 +112,28 @@ class DurableReplyRuntime:
             "mentions_amora": message.mentions_amora,
             "reply_to_amora": message.reply_to_amora,
         }}
+
+    def stop_admissions(self):
+        # Do not stop recovery or invalidate already accepted turns.
+        self.accepting = False
+
+    async def admission_guard(self, message):
+        if not self.active or self.accepting:
+            return
+        speaker, actor_ref = self.service.attention.resolve_speaker(message)
+        decision = AttentionDecision(action=RoutingAction.RESPOND,
+            speaker_entity_id=speaker, speaker_actor_ref=actor_ref, score=1.0)
+        if self.eligible(message, decision):
+            # Maintenance requires paused ingress. Never bypass the queue and
+            # generate out of order while older jobs are still being drained.
+            raise InboundGenerationBusy("DURABLE_REPLY_DRAINING")
+
+    async def status(self):
+        counts = await self.call("counts")
+        return {"mode": "accept" if self.accepting else "drain",
+                "active": self.active, "counts": counts,
+                "unsettled": sum(counts.get(key, 0) for key in
+                    ("pending", "running", "retry_wait", "ready", "blocked"))}
 
     async def existing_ack(self, message):
         if not self.active or message.platform.value != "discord":
