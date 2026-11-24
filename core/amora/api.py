@@ -97,6 +97,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             await numes.start_transport()
         core.cognition.store.start_async_lane()
         core.messaging.start_storage_lane()
+        await core.messaging.start_durable_replies()
         core.autonomy.schedule_idle(core.scheduler)
         from amora.messaging.temporal_initiative import TemporalInitiative
         temporal_initiative = TemporalInitiative(core)
