@@ -192,6 +192,14 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - 90ef95a: estado expõe tarefas, suporte estruturado, janela de contexto, saída quando conhecida, privacidade, quota e indicadores de ranking sem credenciais.
 - Pendente: confirmar CI neste HEAD, corrigir regressões; verificar cobertura dos demais adapters (incluindo visão de expressões, rotas legadas e SSE não Numes), métricas observadas e testes de integração/failover restantes. Nenhuma quota upstream inventada, nenhum deploy ou merge. RUN 02 ainda IN_PROGRESS.
 
+### RUN 02 — incremento C: quota por modelo Groq (24/11/2026)
+
+- CI ef5a9b8: 9/10 workflows PASS, Core Python 3.13 2.143 passed, 151 skipped, 1 failed; outras versões canceladas. Workflow 45489653707. Avatar 401 e compactação 413 anteriores passaram. Regressão: test_gpt_oss_memory_queue_and_qwen_fallback[True], 429 do GPT-OSS bloqueava Qwen indiscriminadamente.
+- Referência pública consultada: https://console.groq.com/docs/rate-limits e https://console.groq.com/docs/projects. Groq publica quotas por modelo dentro da organização/projeto. Não assumir valores numéricos da conta real.
+- 68b5990: cooldown indexado por família + modelo para Groq com modelo identificado; sem identificação ou provedor de escopo desconhecido continua global. Bloqueio explícito de conta sempre prevalece. Lock FIFO por conta permanece, sem paralelismo novo nem troca de conta.
+- 7990922, decca94, 2a896e9, f3d6e63, fd28651, ace1361: propagação do modelo real na reflexão, diálogo, visão e planner web; diagnóstico fixo quota_scope=account preservado quando explicitamente disponível. Não interpretar cabeçalhos/documentos desconhecidos como sinal de escopo global.
+- 1d400db: regressões de 429 por modelo, mesma rota compartilhada em diálogo/visão/web, fallback entre modelos distintos, bloqueio global e expiração independente. O teste integrado original GPT-OSS → Qwen permanece inalterado. Aguardar CI do novo HEAD para considerar o gate de desenvolvimento aprovado. Sem deploy ou merge.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
