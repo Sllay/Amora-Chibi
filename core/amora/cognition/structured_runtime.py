@@ -23,6 +23,7 @@ from .providers_structured import GeminiCognitiveProvider
 from .realization import RealizationError, RealizationValidator, ValidatedRealization, response_semantic_filter_enabled
 from .speech import SpeechSegmenter
 from .service import SegmentSink
+from .durable_realization import durable_realization, DeferredRealization
 
 
 async def _await_numes_adaptive(
@@ -676,6 +677,31 @@ class CognitiveEngine(ProductionCognitiveEngine):
         )
         segmenter = SpeechSegmenter()
         raw_segments = [*segmenter.feed(validated.text), *segmenter.flush()]
+        if durable_realization(request):
+            # The authorized text dispatcher commits the complete validated
+            # reply with its existing outbox fence. Never create speech/history
+            # rows before that transaction; a crash must not append duplicates.
+            # Text-only pilot: no voice callback or first-person choice writes
+            # are allowed through this provisional commit path.
+            if on_segment is not None:
+                raise DeferredRealization(["DURABLE_CALLBACK_UNSUPPORTED"])
+            if validated.frame.self_choices:
+                # Fail closed, not silently discard an authorized proposal.
+                # A future commit contract must carry choices through the same
+                # durable boundary; until then explicitly block this turn.
+                raise DeferredRealization(["DURABLE_SELF_CHOICE_UNSUPPORTED"])
+            if not speech_plan.speech_text.strip():
+                raise DeferredRealization(["VALIDATED_REALIZATION_NOT_SPEAKABLE"])
+            return CognitiveResponsePlan(
+                turn_id=request.turn_id, display_text=validated.text,
+                speech_text=speech_plan.speech_text, speech_plan=speech_plan,
+                speech_segments=[speech_plan.speech_text], provider=provider, model=model,
+                reason_codes=reason_codes,
+                input_tokens=_optional_int(usage.get("input_tokens")),
+                output_tokens=_optional_int(usage.get("output_tokens")),
+                latency_ms=(perf_counter() - started) * 1000.0,
+                metadata={"realization_validated": True},
+            )
         emitted: list[str] = []
         text_path = self._text_finalize_enabled(request, on_segment)
         if text_path:
