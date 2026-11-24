@@ -204,6 +204,26 @@ def reply_job_statements() -> dict[str, ReviewedStatement]:
                 ORDER BY j.created_at,j.turn_id LIMIT 128
             )""", 0),
         "PG_REPLY_JOB_COUNTS": ReviewedStatement("SELECT status,COUNT(*) AS count FROM amora_pg_v18_lab.messaging_reply_jobs GROUP BY status", 0, 7),
+        "PG_REPLY_JOB_DELIVERY_ALLOWED": ReviewedStatement("""SELECT 1 FROM amora_pg_v18_lab.messaging_reply_jobs
+            JOIN amora_pg_v18_lab.conversation_messages m ON m.id=messaging_reply_jobs.input_id
+            JOIN amora_pg_v18_lab.messaging_audit a ON a.id=m.metadata_json::jsonb ->> 'reply_audit_id'
+            WHERE messaging_reply_jobs.outbound_id=%s AND messaging_reply_jobs.status='ready'
+              AND a.platform='discord' AND a.channel_type='dm' AND a.direction='inbound'
+              AND a.account_scope=%s AND a.conversation_id=%s
+              AND a.speaker_entity_id='PERSON_BK' AND m.speaker_id='PERSON_BK'
+              AND COALESCE(a.metadata_json::jsonb -> 'durable_reply_transport' ->> 'native_message_id',a.message_id)=%s
+              AND EXISTS (SELECT 1 FROM amora_pg_v18_lab.platform_identity_bindings b
+                  WHERE b.platform='discord' AND b.account_scope=a.account_scope
+                    AND b.external_actor_id=a.sender_external_id
+                    AND b.identifier_type IN ('user_id','discord_user_id')
+                    AND b.enabled=1 AND b.entity_id='PERSON_BK'
+                    AND b.trust IN ('operator_verified','platform_authenticated'))
+              AND NOT EXISTS (SELECT 1 FROM amora_pg_v18_lab.platform_identity_bindings b
+                  WHERE b.platform='discord' AND b.account_scope=a.account_scope
+                    AND b.external_actor_id=a.sender_external_id
+                    AND b.identifier_type IN ('user_id','discord_user_id')
+                    AND b.enabled=1 AND b.entity_id<>'PERSON_BK')
+              AND """ + _VALID_SOURCE + " LIMIT 1", 4, 1),
         "PG_REPLY_JOB_STATE": ReviewedStatement(
             "SELECT status,attempts,available_at,lease_until,last_reason,outbound_id "
             "FROM amora_pg_v18_lab.messaging_reply_jobs WHERE turn_id=%s", 1, 1),
