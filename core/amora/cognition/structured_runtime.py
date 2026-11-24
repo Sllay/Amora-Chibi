@@ -23,7 +23,7 @@ from .providers_structured import GeminiCognitiveProvider
 from .realization import RealizationError, RealizationValidator, ValidatedRealization, response_semantic_filter_enabled
 from .speech import SpeechSegmenter
 from .service import SegmentSink
-from .durable_realization import durable_realization, DeferredRealization
+from .durable_realization import durable_realization, DeferredRealization, DURABLE_AUTHORIZATION
 
 
 async def _await_numes_adaptive(
@@ -681,17 +681,24 @@ class CognitiveEngine(ProductionCognitiveEngine):
             # The authorized text dispatcher commits the complete validated
             # reply with its existing outbox fence. Never create speech/history
             # rows before that transaction; a crash must not append duplicates.
-            # Text-only pilot: no voice callback or first-person choice writes
-            # are allowed through this provisional commit path.
+            # Text-only pilot, no voice callbacks. Preserve the existing
+            # first-choice-once Core gate, with live owner/lease revalidation.
             if on_segment is not None:
                 raise DeferredRealization(["DURABLE_CALLBACK_UNSUPPORTED"])
-            if validated.frame.self_choices:
-                # Fail closed, not silently discard an authorized proposal.
-                # A future commit contract must carry choices through the same
-                # durable boundary; until then explicitly block this turn.
-                raise DeferredRealization(["DURABLE_SELF_CHOICE_UNSUPPORTED"])
             if not speech_plan.speech_text.strip():
                 raise DeferredRealization(["VALIDATED_REALIZATION_NOT_SPEAKABLE"])
+            guard = DURABLE_AUTHORIZATION.get()
+            if guard is None or not await guard():
+                raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
+            if validated.frame.self_choices and context is not None:
+                try:
+                    choice_decision = commit_self_choices(
+                        self_model=self.compiler.self_model, request=request,
+                        context=context, choices=validated.frame.self_choices,
+                    )
+                    reason_codes.extend(choice_decision.reason_codes)
+                except Exception:
+                    reason_codes.append("SELF_CHOICE_COMMIT_FAILED")
             return CognitiveResponsePlan(
                 turn_id=request.turn_id, display_text=validated.text,
                 speech_text=speech_plan.speech_text, speech_plan=speech_plan,
