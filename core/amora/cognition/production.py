@@ -121,14 +121,15 @@ class CognitiveEngine(ResilientCognitiveEngine):
                     **request.metadata, "reflection_provider_attempt_seconds": min(16.0, remaining),
                 }})
             try:
-                async with self._provider_quota.admission(descriptor.name):
+                async with self._provider_quota.admission(descriptor.name, model=descriptor.model):
                     with self.router.pin(descriptor.name):
                         bundle = await super().reflect(attempt)
                     details = bundle._reflection_failure
                     if "REFLECTION_PROVIDER_FAILURE" in bundle.reason_codes and details:
                         if details.get("status_code") == 429:
                             self._provider_quota.block_for(
-                                descriptor.name, details.get("retry_after_seconds") or 60)
+                                descriptor.name, details.get("retry_after_seconds") or 60,
+                                model=descriptor.model, account_wide=details.get("quota_scope") == "account")
             except ProviderQuotaDeferred as exc:
                 bundle = CognitiveProposalBundle(reason_codes=["REFLECTION_PROVIDER_FAILURE"])
                 bundle._reflection_failure = {
