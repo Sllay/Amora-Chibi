@@ -7,7 +7,8 @@ additive candidate for isolated migration/recovery tests only. Runtime schema
 
 REPLY_JOB_CANDIDATE_SQL = """
 CREATE TABLE IF NOT EXISTS messaging_reply_jobs (
-    turn_id TEXT PRIMARY KEY,
+    job_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    turn_id TEXT NOT NULL UNIQUE,
     input_id TEXT NOT NULL UNIQUE REFERENCES conversation_messages(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL,
     native_message_hash TEXT NOT NULL,
@@ -28,7 +29,7 @@ CREATE TABLE IF NOT EXISTS messaging_reply_jobs (
 CREATE INDEX IF NOT EXISTS idx_messaging_reply_due
     ON messaging_reply_jobs(status,available_at,lease_until);
 CREATE INDEX IF NOT EXISTS idx_messaging_reply_session
-    ON messaging_reply_jobs(session_id,created_at,turn_id,status);
+    ON messaging_reply_jobs(session_id,created_at,job_seq,status);
 CREATE INDEX IF NOT EXISTS idx_messaging_reply_source
     ON messaging_reply_jobs(session_id,native_message_hash,transport_revision);
 """
