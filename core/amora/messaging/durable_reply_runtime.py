@@ -22,7 +22,7 @@ from amora.cognition.speech import SpeechSegmenter
 from amora.events import PrivacyScope
 from amora.web_tools import parse_web_intent
 from .explicit_memory import is_verified_owner
-from .generation_lifecycle import InboundGenerationLost
+from .generation_lifecycle import InboundGenerationBusy, InboundGenerationLost
 from .models import AttentionDecision, ChannelType, InboundMessage, InboundResult, RoutingAction
 from .reply_jobs import ReplyJobRepository, ReplyReason
 
@@ -136,12 +136,32 @@ class DurableReplyRuntime:
         }), duplicate=duplicate)
 
     async def accept(self, message, decision, request, *, duplicate):
-        await self.call("enqueue_turn", request.turn_id)
-        state = await self.call("state", request.turn_id)
-        if state is None:
+        # Build the existing canonical records, but commit through the owned
+        # messaging connection together with their job. No provider call here.
+        engine = self.service.cognition
+        request.metadata.update({"available_response_modalities": ["text", "silence"],
+                                 "visual_expression_available": False,
+                                 "visual_expression_count": 0})
+        item = engine._input_message(request, engine._input_dedupe(request))
+        journal = engine._journal_entry(request, JournalStage.INPUT_OBSERVED,
+                                        **engine._input_journal_fields(request))
+        try:
+            state = await self.call("admit", request.turn_id,
+                engine.store._message_values(item), engine.store._journal_values(journal))
+        except Exception as exc:
             if self.service._source_invalidated(message):
                 return self.service._invalidated_result(message)
-            raise RuntimeError("DURABLE_REPLY_ACCEPTANCE_NOT_PERSISTED")
+            _LOG.warning("durable_reply_admission_failed turn_id=%s code=%s",
+                         request.turn_id, type(exc).__name__)
+            raise InboundGenerationBusy("DURABLE_REPLY_ADMISSION_RETRY") from None
+        if request.metadata.get("reflection_enqueue_requested"):
+            try:
+                self.service.reflections.enqueue(request)
+            except Exception as exc:
+                # The trusted marker is already committed. The existing
+                # reflection reconciler repairs this independent crash gap.
+                _LOG.warning("durable_reply_reflection_deferred turn_id=%s code=%s",
+                             request.turn_id, type(exc).__name__)
         self.notify()
         return self.ack(decision, state["status"], duplicate=duplicate)
 
