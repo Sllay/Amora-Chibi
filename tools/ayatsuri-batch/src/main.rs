@@ -202,11 +202,21 @@ fn mouth_pose_weight(pose:f32,target:f32)->f32 {
     (1.-(pose-target).abs()).clamp(0.,1.)
 }
 fn mouth_auto_weights(open:f32)->(f32,f32,f32) {
-    // On neutral, VTube Studio's default lip sync drives closed -> talk ->
-    // shout automatically; explicit emotional mouth poses take priority.
-    let base=1.-smoothstep(open/0.24);
-    let wide=smoothstep((open-0.55)/0.34);
+    // A little opening must show the TALK sprite; a loud opening must show
+    // the WIDE sprite, including when the Talk expression is active.
+    let base=1.-smoothstep((open-0.06)/0.20);
+    let wide=smoothstep((open-0.57)/0.25);
     (base,(1.-base)*(1.-wide),(1.-base)*wide)
+}
+fn mouth_layer_weights(open:f32,pose:f32)->[f32;4] {
+    // pose=0 auto, 1 talking, 2 shouting, 3 sad. A loud opening always
+    // takes priority over the talk pose; sadness is the explicit override.
+    let (base,_,wide_auto)=mouth_auto_weights(open);
+    let sad=mouth_pose_weight(pose,3.);
+    let remaining=1.-sad;
+    let wide=remaining*wide_auto.max(mouth_pose_weight(pose,2.));
+    let talk=(remaining-wide)*(1.-base).max(mouth_pose_weight(pose,1.));
+    [remaining-wide-talk,talk,wide,sad]
 }
 
 fn smoothstep(value:f32)->f32 {
@@ -534,7 +544,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         let mouth_region=regions["mouth"];
         let mouth=&mut imported.model.art_meshes[i];
         subdivide(mouth, 8, 5);
-        let open_keys = [0., 0.5, 1.];
+        let open_keys = [0.,0.06,0.16,0.32,0.57,0.72,0.82,1.];
         let form_keys = [-1., 0., 1.];
         key_mesh(mouth,&[(mouth_open,&open_keys),(mouth_form,&form_keys),(mouth_pose,&pose_keys)],
             |v,x,y| {
@@ -548,7 +558,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                 let arch=-mouth_region.h*v[1]*center*0.13;
                 (mouth_region.cx+(x-mouth_region.cx)*spread,
                  y+lip_shift+arch)
-            }, |v|mouth_pose_weight(v[2],0.)*mouth_auto_weights(v[0]).0);
+            }, |v|mouth_layer_weights(v[0],v[2])[0]);
     }
     for (name,position) in [
         ("extra_mouth_talk",1.),
@@ -558,16 +568,12 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         if let Some(i)=idx(name) {
             let region=regions[name];
             let mesh=&mut imported.model.art_meshes[i];
-            key_mesh(mesh,&[(mouth_pose,&pose_keys),(mouth_open,&[0.,0.5,1.])],
+            key_mesh(mesh,&[(mouth_pose,&pose_keys),(mouth_open,&[0.,0.06,0.16,0.32,0.57,0.72,0.82,1.])],
                 |v,x,y| {
                     let sx=1.+0.035*v[1];
                     let sy=1.+0.045*v[1];
                     (region.cx+(x-region.cx)*sx,region.cy+(y-region.cy)*sy)
-                },|v| {
-                    let (_base,talk,wide)=mouth_auto_weights(v[1]);
-                    let auto=if position==1. {talk} else if position==2. {wide} else {0.};
-                    mouth_pose_weight(v[0],position)+mouth_pose_weight(v[0],0.)*auto
-                });
+                },|v| mouth_layer_weights(v[1],v[0])[position as usize]);
         }
     }
     add_root_motion(&mut imported.model,angle,body_angle,breath);
@@ -900,6 +906,20 @@ mod tests {
         let (base,talk,wide)=mouth_auto_weights(1.);
         assert!((base+talk+wide-1.).abs()<1e-5 && wide>0.99);
         assert!((mouth_pose_weight(1.5,1.)+mouth_pose_weight(1.5,2.)-1.).abs()<1e-6);
+        let small=mouth_layer_weights(0.20,0.);
+        assert!(small[1]>small[0] && small[1]>small[2], "small opening must talk");
+        let large=mouth_layer_weights(0.95,1.);
+        assert!(large[2]>0.999, "large opening overrides Talk pose");
+        let sad=mouth_layer_weights(0.8,3.);
+        assert!((sad[3]-1.).abs()<1e-6, "sad is explicit emotion");
+        for open in [0.,0.2,0.5,0.95,1.] {
+            for pose in [0.,1.,1.5,2.,2.5,3.] {
+                let w=mouth_layer_weights(open,pose);
+                assert!((w.iter().sum::<f32>()-1.).abs()<1e-5,
+                        "mouth layers must always sum to one");
+                assert!(w.iter().all(|a|*a>=0. && *a<=1.));
+            }
+        }
     }
 
     #[test]
