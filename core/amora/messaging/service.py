@@ -555,12 +555,12 @@ class PlatformMessagingService:
                 "reply_audit_id": str(durable_audit.id),
                 "reply_outbound_id": str(self._outbound_id(message)),
             })
-        await self.cognition.observe_input_async(request)
-        if enqueue_reflection:
-            self.reflections.enqueue(request)
         if durable:
             return await self.durable_replies.accept(
                 message, decision, request, duplicate=duplicate_recovery)
+        await self.cognition.observe_input_async(request)
+        if enqueue_reflection:
+            self.reflections.enqueue(request)
 
         if decision.action == RoutingAction.CONTEXT_ONLY:
             await self.cognition.record_turn_decision_async(
