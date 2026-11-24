@@ -13,6 +13,7 @@ import httpx
 from pydantic import ValidationError
 
 from amora.cognition.visual_context import IncomingVisualObservation
+from amora.cognition.provider_quota import ProviderQuotaDeferred
 
 from .groq_vision import GroqVisionError
 from .incoming_vision import VisionResponse, valid_image_bytes
@@ -23,8 +24,9 @@ class NvidiaMistralIncomingImageVision:
     endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
     model = "mistralai/mistral-large-4-1t-a52b"
 
-    def __init__(self, secrets, *, timeout_seconds=18.0, transport=None):
+    def __init__(self, secrets, *, timeout_seconds=18.0, transport=None, quota=None):
         self.secrets = secrets
+        self.quota = quota
         self.timeout_seconds = timeout_seconds
         self.transport = transport
 
@@ -33,6 +35,17 @@ class NvidiaMistralIncomingImageVision:
         return bool(self.secrets.get("NVIDIA_API_KEY"))
 
     async def analyze(self, image: InboundImageContent, user_text: str = "") -> dict:
+        if self.quota is None:
+            return await self._analyze(image, user_text)
+        valid_image_bytes(image)
+        try:
+            async with self.quota.admission("nvidia_vision", max_wait=1.0):
+                return await self._analyze(image, user_text)
+        except ProviderQuotaDeferred as exc:
+            raise GroqVisionError("INCOMING_VISION_HTTP_429", "visual account in backoff",
+                                  status_code=429, retry_after=exc.retry_after) from None
+
+    async def _analyze(self, image: InboundImageContent, user_text: str = "") -> dict:
         # Revalidate even though the primary and the Core already checked this.
         valid_image_bytes(image)
         key = self.secrets.get("NVIDIA_API_KEY")
@@ -95,6 +108,7 @@ class NvidiaMistralIncomingImageVision:
                 "NVIDIA_VISION_HTTP_" + str(response.status_code),
                 "NVIDIA visual provider rejected the request",
                 status_code=response.status_code,
+                retry_after=response.headers.get("retry-after"),
             )
 
         try:
