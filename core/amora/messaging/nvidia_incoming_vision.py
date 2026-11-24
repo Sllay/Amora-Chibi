@@ -39,7 +39,7 @@ class NvidiaMistralIncomingImageVision:
             return await self._analyze(image, user_text)
         valid_image_bytes(image)
         try:
-            async with self.quota.admission("nvidia_vision", max_wait=1.0):
+            async with self.quota.admission("nvidia_vision", model=self.model, max_wait=1.0):
                 return await self._analyze(image, user_text)
         except ProviderQuotaDeferred as exc:
             raise GroqVisionError("INCOMING_VISION_HTTP_429", "visual account in backoff",
