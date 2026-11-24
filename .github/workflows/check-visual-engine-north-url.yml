@@ -1,0 +1,34 @@
+name: Northflank Visual Engine public HTTP smoke check
+on:
+  push:
+    branches:
+      - check/north-visual-engine-20261124
+permissions:
+  contents: read
+jobs:
+  http:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check deployed Northflank route
+        shell: bash
+        env:
+          BASE: https://server--loyal-coat--fvd4t5c8m8k7.code.run
+        run: |
+          set -euo pipefail
+          for route in /health /visual-engine /visual-engine/; do
+            status="$(curl --location --silent --show-error --max-time 15 --connect-timeout 7 -o /tmp/north.html -w '%{http_code}' "$BASE$route" || true)"
+            effective="$(curl --location --silent --max-time 15 --connect-timeout 7 -o /dev/null -w '%{url_effective}' "$BASE$route" || true)"
+            echo "route=$route http=$status effective=$effective bytes=$(wc -c </tmp/north.html)"
+            if [ "$route" = "/visual-engine/" ]; then
+              if [ "$status" != "200" ]; then
+                echo "::error::Northflank did not serve the new /visual-engine/ page (HTTP $status)"
+                exit 1
+              fi
+              if ! grep -q 'AmoraVisualEngine' /tmp/north.html || ! grep -q 'closed_smile_L' /tmp/north.html || ! grep -q 'extra_mouth_open_wide' /tmp/north.html; then
+                echo "::error::HTTP 200 but deployed HTML is not the updated 20-layer preview"
+                exit 1
+              fi
+              echo "VISUAL_ENGINE_PUBLIC_DEPLOY_CONFIRMED"
+            fi
+          done
