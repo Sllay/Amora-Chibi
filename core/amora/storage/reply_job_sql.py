@@ -183,6 +183,26 @@ SQLITE_STATEMENTS = {
                 ORDER BY j.created_at,j.turn_id LIMIT 128
             )"""),
     "COUNTS": ("SELECT status,COUNT(*) AS count FROM messaging_reply_jobs GROUP BY status"),
+    "DELIVERY_ALLOWED": ("""SELECT 1 FROM messaging_reply_jobs
+            JOIN conversation_messages m ON m.id=messaging_reply_jobs.input_id
+            JOIN messaging_audit a ON a.id=json_extract(m.metadata_json,'$.reply_audit_id')
+            WHERE messaging_reply_jobs.outbound_id=? AND messaging_reply_jobs.status='ready'
+              AND a.platform='discord' AND a.channel_type='dm' AND a.direction='inbound'
+              AND a.account_scope=? AND a.conversation_id=?
+              AND a.speaker_entity_id='PERSON_BK' AND m.speaker_id='PERSON_BK'
+              AND COALESCE(json_extract(a.metadata_json,'$.durable_reply_transport.native_message_id'),a.message_id)=?
+              AND EXISTS (SELECT 1 FROM platform_identity_bindings b
+                  WHERE b.platform='discord' AND b.account_scope=a.account_scope
+                    AND b.external_actor_id=a.sender_external_id
+                    AND b.identifier_type IN ('user_id','discord_user_id')
+                    AND b.enabled=1 AND b.entity_id='PERSON_BK'
+                    AND b.trust IN ('operator_verified','platform_authenticated'))
+              AND NOT EXISTS (SELECT 1 FROM platform_identity_bindings b
+                  WHERE b.platform='discord' AND b.account_scope=a.account_scope
+                    AND b.external_actor_id=a.sender_external_id
+                    AND b.identifier_type IN ('user_id','discord_user_id')
+                    AND b.enabled=1 AND b.entity_id<>'PERSON_BK')
+              AND """ + _VALID_SOURCE + " LIMIT 1"),
     "STATE": ("SELECT status,attempts,available_at,lease_until,last_reason,outbound_id "
                 "FROM messaging_reply_jobs WHERE turn_id=?"),
 }
