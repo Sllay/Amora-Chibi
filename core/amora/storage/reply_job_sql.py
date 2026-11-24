@@ -74,7 +74,7 @@ SQLITE_STATEMENTS = {
                 SELECT turn_id FROM messaging_reply_jobs
                 WHERE status IN ('pending','running','retry_wait','ready','blocked')
                   AND NOT (""" + _VALID_SOURCE + """)
-                ORDER BY created_at,turn_id LIMIT 128
+                ORDER BY created_at,job_seq LIMIT 128
             )"""),
     "RUNNING_COUNT": ("SELECT COUNT(*) FROM messaging_reply_jobs "
                 "WHERE status='running' AND lease_until>?"),
@@ -105,9 +105,9 @@ SQLITE_STATEMENTS = {
                       AND earlier.status IN ('pending','retry_wait','running','ready')
                       AND (earlier.created_at<messaging_reply_jobs.created_at OR
                           (earlier.created_at=messaging_reply_jobs.created_at
-                           AND earlier.turn_id<messaging_reply_jobs.turn_id))
+                           AND earlier.job_seq<messaging_reply_jobs.job_seq))
                   )
-                ORDER BY available_at,created_at,turn_id LIMIT 1
+                ORDER BY available_at,created_at,job_seq LIMIT 1
             """),
     "CLAIM": ("""
                 UPDATE messaging_reply_jobs SET status='running',attempts=attempts+1,
@@ -180,7 +180,7 @@ SQLITE_STATEMENTS = {
                 SELECT j.turn_id FROM messaging_reply_jobs j
                 JOIN messaging_outbound_queue o ON o.id=j.outbound_id
                 WHERE j.status='ready' AND o.status IN ('sent','failed','cancelled')
-                ORDER BY j.created_at,j.turn_id LIMIT 128
+                ORDER BY j.created_at,j.job_seq LIMIT 128
             )"""),
     "COUNTS": ("SELECT status,COUNT(*) AS count FROM messaging_reply_jobs GROUP BY status"),
     "DELIVERY_ALLOWED": ("""SELECT 1 FROM messaging_reply_jobs
