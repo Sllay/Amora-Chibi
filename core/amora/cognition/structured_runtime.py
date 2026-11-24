@@ -439,6 +439,12 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     if await self.store.async_lane.call("source_invalidated", session, native_hash, revision):
                         from amora.messaging.generation_lifecycle import InboundGenerationLost
                         raise InboundGenerationLost("INBOUND_SOURCE_INVALIDATED")
+            begin_attempt = getattr(self, "_begin_structured_attempt", None)
+            end_attempt = getattr(self, "_end_structured_attempt", None)
+            if begin_attempt is not None and not begin_attempt(descriptor):
+                failures.append(("temporary", None))
+                last_failure = "PROVIDERS_IN_BACKOFF"
+                continue
             provider_started = perf_counter()
             try:
                 timeout = attempt_budget
@@ -568,6 +574,9 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 if status != 413:
                     self._backoff(descriptor, status_code=status, retry_after=getattr(exc, "retry_after", None))
                 continue
+            finally:
+                if end_attempt is not None:
+                    end_attempt(descriptor)
 
             input_tokens = _optional_int(usage.get("input_tokens"))
             output_tokens = _optional_int(usage.get("output_tokens"))
