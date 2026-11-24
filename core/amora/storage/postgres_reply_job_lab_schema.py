@@ -1,42 +1,9 @@
-"""Install reply-job candidate in the disposable PostgreSQL 18 lab only."""
+"""Install reviewed reply component only in the disposable PG18 lab."""
 from .postgres_memory_lab import ensure_local_lab
+from .postgres_runtime_connection import PostgresTargetPolicy
+from .postgres_reply_job_migration import prepare_reply_schema, MIGRATION_APPROVAL
 
 
 def install_reply_job_lab(raw):
     ensure_local_lab(raw)
-    with raw.transaction():
-        raw.execute("""
-            CREATE TABLE amora_pg_v18_lab.messaging_reply_jobs (
-                job_seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                turn_id TEXT NOT NULL UNIQUE,
-                input_id TEXT NOT NULL UNIQUE REFERENCES
-                    amora_pg_v18_lab.conversation_messages(id) ON DELETE CASCADE,
-                session_id TEXT NOT NULL,
-                native_message_hash TEXT NOT NULL,
-                transport_revision BIGINT NOT NULL CHECK(transport_revision>=1),
-                status TEXT NOT NULL CHECK(status IN
-                    ('pending','running','retry_wait','ready','sent','blocked','cancelled')),
-                attempts BIGINT NOT NULL DEFAULT 0 CHECK(attempts>=0),
-                created_at TEXT NOT NULL,
-                available_at TEXT NOT NULL,
-                lease_token TEXT,
-                lease_until TEXT,
-                last_reason TEXT,
-                outbound_id TEXT,
-                CHECK ((status='running' AND lease_token IS NOT NULL AND lease_until IS NOT NULL)
-                    OR (status<>'running' AND lease_token IS NULL AND lease_until IS NULL)),
-                CHECK (status NOT IN ('ready','sent') OR outbound_id IS NOT NULL)
-            )
-        """)
-        raw.execute("""
-            CREATE INDEX idx_messaging_reply_due
-            ON amora_pg_v18_lab.messaging_reply_jobs(status,available_at,lease_until)
-        """)
-        raw.execute("""
-            CREATE INDEX idx_messaging_reply_session
-            ON amora_pg_v18_lab.messaging_reply_jobs(session_id,created_at,job_seq,status)
-        """)
-        raw.execute("""
-            CREATE INDEX idx_messaging_reply_source
-            ON amora_pg_v18_lab.messaging_reply_jobs(session_id,native_message_hash,transport_revision)
-        """)
+    return prepare_reply_schema(raw, PostgresTargetPolicy(), approval=MIGRATION_APPROVAL)
