@@ -655,3 +655,82 @@ def test_candidate_schema_verified_and_refuses_missing_index(lab):
             raw.execute("DROP INDEX amora_pg_v18_lab.idx_messaging_reply_due")
     with pytest.raises(ValueError, match="REPLY_.*SCHEMA.*"):
         queue.verify_schema()
+
+
+@pytest.mark.asyncio
+async def test_integrated_native_backup_restore_new_core_preserves_ready_and_pending(lab, tmp_path, monkeypatch):
+    """Synthetic snapshot + new Core instance, never a production destination."""
+    core, clock, _ = lab
+    pg = core.database.backend.capabilities.name == "postgres-candidate"
+    if pg and os.getenv("GITHUB_ACTIONS") != "true":
+        pytest.skip("Native PG18 dump/restore uses the disposable GitHub service")
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-before-restore")
+    core.cognition.register_provider(provider)
+    first = _dm(core, "ready-before-backup")
+    second = _dm(core, "pending-before-backup", text="E como as árvores crescem?")
+    first_turn, second_turn = core.messaging._turn_id(first), core.messaging._turn_id(second)
+    first_outbound = core.messaging._outbound_id(first)
+    backend = core.database.backend
+    native_dump = "/tmp/amora-run01-replies-synthetic.dump"
+    restored = None
+    service = None
+    try:
+        await core.messaging.receive(first)
+        assert await runtime.run_once()
+        await core.messaging.receive(second)
+        assert (await runtime.call("state", first_turn))["status"] == "ready"
+        assert (await runtime.call("state", second_turn))["status"] == "pending"
+        assert provider.calls == 1
+        await _stop_runtime(core)
+        if not pg:
+            snapshot = core.database.backup_to(tmp_path / "reply-snapshot.db")
+        core.close()
+        if pg:
+            from test_postgres_run2_native_backup_restore import _docker, _service_container
+            service = _service_container()
+            _docker("exec", service, "pg_dump", "-U", "amora_ci",
+                "-d", "amora_pg_synthetic", "-n", "amora_pg_v18_lab",
+                "--format=custom", "--no-owner", "--no-acl", "--file", native_dump)
+            assert int(_docker("exec", service, "stat", "-c", "%s", native_dump)) > 1000
+            with closing(_raw()) as raw:
+                raw.execute("DROP SCHEMA amora_pg_v18_lab CASCADE")
+            _docker("exec", service, "pg_restore", "-U", "amora_ci",
+                "-d", "amora_pg_synthetic", "--no-owner", "--no-acl",
+                "--exit-on-error", native_dump)
+        monkeypatch.setenv("AMORA_HOME", str(tmp_path / "restored-home"))
+        if not pg:
+            AmoraDatabase.restore_backup(snapshot, tmp_path / "restored-home" / "data" / "amora.db")
+        restored = AmoraCore.bootstrap(clock=clock, storage=backend)
+        recovered = restored.messaging.configure_durable_replies()
+        recovered.stop_admissions()
+        await recovered.start(background=False)
+        next_provider = CountingStructuredProvider(name="durable-after-restore")
+        restored.cognition.register_provider(next_provider)
+        assert (await recovered.status())["unsettled"] == 2
+        assert (await recovered.call("state", first_turn))["status"] == "ready"
+        assert (await recovered.call("state", second_turn))["status"] == "pending"
+        assert (await restored.messaging.receive(first)).duplicate
+        assert not await recovered.run_once()
+        assert next_provider.calls == 0
+        claims = restored.messaging_store.claim_outbound(
+            platform=MessagingPlatform.DISCORD, account_scope="primary")
+        assert len(claims) == 1 and claims[0].id == first_outbound
+        assert restored.messaging_store.ack_outbound(first_outbound, sent=True,
+            external_message_id="synthetic-restored-ack")
+        assert await recovered.run_once()
+        assert next_provider.calls == 1
+        assert (await recovered.call("state", first_turn))["status"] == "sent"
+        assert (await recovered.call("state", second_turn))["status"] == "ready"
+        assert restored.cognition.store.get_message_by_dedupe(
+            f"cognitive-input:{second_turn}").raw_text == second.text
+        assert len(restored.cognition.store.list_messages(
+            turn_id=first_turn, speaker_id="ENTITY_AMORA")) == 1
+    finally:
+        if restored is not None:
+            await _stop_runtime(restored)
+            restored.close()
+        if service is not None:
+            _docker("exec", service, "rm", "-f", native_dump)
+        await _stop_runtime(core)
+        core.close()
