@@ -33,7 +33,7 @@ gate próprio em PLAN.md. Status de produção deve ser verificado separadamente
 | RUN | Área | Estado inicial em RUN 00 |
 |---|---|---|
 | 00 | Preparação e continuidade | Gate documental aprovado; PR #377 (conclusão condicionada ao merge) |
-| 01 | Durable Cognitive Runtime | IN_PROGRESS — persistência SQLite/PG18 e lease compartilhada CI PASS; integração pendente |
+| 01 | Durable Cognitive Runtime | IN_PROGRESS — integração candidata Core/outbox; CI pós-correção pendente |
 | 02 | Intelligent Provider Orchestrator | PLANNED |
 | 03 | Adaptive Context & Comprehension Engine | PLANNED |
 | 04 | Advanced Multimodal Perception | PLANNED |
@@ -132,6 +132,18 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - [Core tests](https://github.com/Sllay/Amora-Chibi/actions/runs/45288939669): Python 3.11–3.14 PASS; Python 3.11 com 2.123 aprovados, 139 ignorados, zero falhas, 8 avisos, 144,34 s. Os demais workflows (segurança, containers, memória/percepção e modalidade) PASS.
 - Nenhuma falha nova a corrigir; nenhuma alteração de código necessária. Este registro documental não altera a revisão de código validada.
 - Evidência limitada à persistência candidata, concorrência, leases e checkpoints em laboratório. Gate geral da RUN 01 continua aberto: migração revisada, reidratação autorizada de input, dispatcher, finalização/invalidação e reconciliação atômicas, ACK Discord, matriz D01–D16 e certificação live. Northflank, Altare e bancos ativos intactos. Próximo passo: integração real com Core, sem ativação prematura.
+
+### RUN 01 — integração candidata Core/Discord (23/11/2026)
+
+- PR #378 permanece draft. A fila foi ligada ao serviço de mensagens via configuração interna explícita e ao ciclo de vida ASGI. Não existe ativação automática, migration de produção ou alteração do registry PG padrão.
+- Escopo inicial conservador: texto em DM Discord do proprietário verificado, PERSONAL e consentimento remoto; comandos locais, grupos, web, anexos, visão e expressões recebidas continuam na rota legada. O catálogo de expressões não é persistido no envelope; o caminho candidato produz texto. RUN 04/05/06 devem estender contratos de recuperação multimodal/web/modalidades sem regressões.
+- Implementação: durable_reply_runtime.py (admissão, hidratação via audit/input, ACK sem geração, dispatcher, lease renovável, retry_wait, checkpoint e reautorização); messaging/service.py e storage_lane.py (entrada, wake após release, operações no lane existente); cognition/durable_realization.py, service.py e structured_runtime.py (fallback operacional não vira fala; realização estruturada validada antes do commit; self-choice gate original com revalidação); reply_jobs.py e SQLs candidatos (commit único de histórico/segmentos/journal/outbox/audit/ready, dedupe e conflito explícito); messaging/store.py (revalidação do dono e fonte no claim de outbound). Worker existente já recebe ACK sem outbound imediato e faz polling/ACK do outbox; teste real do Gateway ainda não executado.
+- CI do recorte inicial `1e65c2a`: [PG18 lab 45303702601](https://github.com/Sllay/Amora-Chibi/actions/runs/45303702601), 226 PASS / 2 FAIL. Os testes integrados de checkpoint, invalidação e autorização passaram em ambos os bancos; as duas falhas ocorreram no teste de retry seguido de nova mensagem: timestamps iguais e UUID aleatório invertiam a ordem, permitindo geração posterior antes da pendente.
+- Correção estrutural: `4227504`, `dc364fb`, `93c6fdc`, `d649f07` introduzem sequência de admissão persistente na tabela candidata e usam essa sequência no desempate FIFO. O mesmo teste conserva timestamps iguais. Não declarar correção validada antes de novo CI.
+- Revisão posterior também adiciona injeção de falha dentro da transação após gravação de outbound/audit (75a707f), rejeição de histórico/outbox divergente (5e6ce36), journals na transação (7f97bb2), wake depois da liberação da lease (4308b48) e guarda de autorização da realização/self-choice (c2415dd).
+- HEAD de código a validar: `c2415dd28166f5a075b1e471e8e8db29a3cf2618`. Suíte candidata: 31 casos previstos (15 por backend + contrato SQL). CI da revisão ainda não confirmado.
+- Limites restantes: ordem causal completa na janela de crash de inputs ainda sem job/ACK, contexto de turnos posteriores já observados, recuperação de efeitos/journals/eventos fora da transação (incluindo appraisal/self-choice), autorização/invalidação concorrente no limite do envio físico, encerramento/reinício real do dispatcher, rollback/migration/versionamento e backup/restore do schema candidato. Completar matriz D01–D16 e medição de recursos antes de promover; web e anexos ficam explicitamente fora do piloto textual.
+- Próxima ação: verificar CI atualizado, corrigir regressões, fechar os gates de integração e preparar certificação de produção com schema/registry aprovados, backup/restore, rollout/rollback e único Gateway. Não habilitar em produção nem iniciar RUN 02 antes do gate. Northflank, Altare, dados e configuração ativos intactos.
 
 ## Modelo obrigatório de registro para cada RUN
 
