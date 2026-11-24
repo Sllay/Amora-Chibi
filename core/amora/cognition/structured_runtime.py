@@ -327,6 +327,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 reason = "REMOTE_PROCESSING_NOT_ALLOWED"
             elif excluded:
                 reason = "PROVIDERS_IN_BACKOFF"
+            if durable_realization(request) and reason == "PROVIDERS_IN_BACKOFF":
+                now = self.clock.now()
+                delays = [(until - now).total_seconds() for name, until in self._provider_cooldowns.items()
+                          if name in excluded and until > now]
+                raise DeferredRealization([reason], retry_after_seconds=min(delays, default=None))
             await self._journal_async(
                 request,
                 JournalStage.PRIVACY_FILTERED,
@@ -618,7 +623,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 if kinds <= {"context", "configuration"}:
                     raise DeferredRealization(["PROVIDER_CONFIGURATION_BLOCKED"])
             delays = [delay for kind, delay in failures if kind == "temporary" and delay is not None]
-            raise DeferredRealization([last_failure, "ALL_STRUCTURED_PROVIDERS_FAILED"],
+            raise DeferredRealization(["ALL_STRUCTURED_PROVIDERS_FAILED"],
                 retry_after_seconds=max(delays, default=None))
 
         return await self._fallback_plan(
