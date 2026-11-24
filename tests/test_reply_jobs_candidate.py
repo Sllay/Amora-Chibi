@@ -1,5 +1,6 @@
 """RUN 01 candidate parity: SQLite and opt-in disposable PG18; no providers."""
 from contextlib import closing
+import asyncio
 from datetime import timedelta
 import os
 from uuid import uuid4
@@ -10,7 +11,8 @@ import pytest
 from amora.app import AmoraCore
 from amora.cognition import CognitiveRequest
 from amora.events import PrivacyScope
-from amora.messaging.models import AttentionDecision, MessagingPlatform, OutboundMessage, RoutingAction
+from amora.messaging.models import (AttentionDecision, MessagingPlatform, OutboundMessage,
+    RoutingAction, InboundMessage, ChannelType, ExternalActorRef, TransportInvalidation)
 from amora.messaging.generation_lifecycle import InboundGenerationLost
 from amora.messaging.reply_jobs import ReplyJobRepository, ReplyReason
 from amora.storage.database import AmoraDatabase
@@ -23,6 +25,8 @@ from amora.storage.postgres_runtime_connection import PostgresBackendCandidate, 
 from amora.storage.postgres_runtime_synthetic_setup import prepare_disposable_core_v18
 from amora.storage.postgres_reply_job_lab_schema import install_reply_job_lab
 from amora.time import SimulatedClock
+from test_messaging_lifecycle_stability import CountingStructuredProvider
+from test_platform_messaging_step2 import _bind_bk
 
 
 def _request(*, session="synthetic-reply-session", native="a"*20, revision=1,
@@ -374,3 +378,173 @@ def test_candidate_respects_existing_generation_lease_and_retains_checkpoint_on_
     second = queue.claim()
     assert second and second.attempts == 2
     assert core.messaging.generations.prepared(second.turn_id, second.token)[0] == outbound
+
+
+def _dm(core, message_id="durable-msg-1", *, text="  Amora, me explica o que é uma árvore.  ",
+        revision=1, native=None, actor="111111111111111111"):
+    return InboundMessage(platform=MessagingPlatform.DISCORD,
+        account_scope="primary", conversation_id="durable-dm",
+        message_id=message_id, native_message_id=native or message_id,
+        transport_revision=revision, channel_type=ChannelType.DM,
+        sender_identifiers=[ExternalActorRef(identifier_type="discord_user_id",
+            external_actor_id=actor)], text=text, timestamp=core.clock.now(),
+        remote_processing_allowed=True)
+
+
+async def _start_runtime(core):
+    _bind_bk(core)
+    runtime = core.messaging.configure_durable_replies()
+    await runtime.start(background=False)
+    return runtime
+
+
+async def _stop_runtime(core):
+    await core.messaging.stop_inflight()
+    await core.messaging.stop_storage_lane()
+
+
+@pytest.mark.asyncio
+async def test_integrated_durable_ingress_retry_without_error_history_then_delivery(lab):
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-test", delay=0.2)
+    core.cognition.register_provider(provider)
+    service = core.messaging
+    service.provider_attempt_budget_seconds = 0.02
+    service.provider_total_budget_seconds = 0.08
+    msg = _dm(core)
+    turn = service._turn_id(msg)
+    try:
+        accepted = await asyncio.wait_for(service.receive(msg), timeout=5)
+        assert "DURABLE_REPLY_ACCEPTED" in accepted.decision.reason_codes
+        assert not accepted.outbound and provider.calls == 0
+        assert core.cognition.store.get_message_by_dedupe(
+            f"cognitive-input:{turn}").raw_text == msg.text
+        repeated = await service.receive(msg)
+        assert repeated.duplicate and not repeated.outbound
+        assert provider.calls == 0
+        assert await runtime.run_once()
+        assert (await runtime.call("state", turn))["status"] == "retry_wait"
+        assert core.messaging_store.get_outbound(service._outbound_id(msg)) is None
+        assert not core.cognition.store.list_messages(turn_id=turn, speaker_id="ENTITY_AMORA")
+        assert not core.cognition.store.list_segments(turn)
+        provider.delay = 0
+        # Keep another message while the earlier provider is unavailable.
+        second = _dm(core, "durable-msg-2", text="E quais são suas partes?")
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(second)).decision.reason_codes
+        assert not await runtime.run_once()
+        clock.advance(timedelta(seconds=6))
+        service.provider_total_budget_seconds = 10
+        service.provider_attempt_budget_seconds = 5
+        assert await runtime.run_once()
+        assert (await runtime.call("state", turn))["status"] == "ready"
+        assert len(core.cognition.store.list_messages(turn_id=turn, speaker_id="ENTITY_AMORA")) >= 1
+        assert len(core.cognition.store.list_segments(turn)) >= 1
+        claim = core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,
+            account_scope="primary")
+        assert len(claim) == 1 and claim[0].id == service._outbound_id(msg)
+        assert claim[0].text == "Resposta remota estável."
+        assert not claim[0].metadata["fallback_used"]
+        assert core.messaging_store.ack_outbound(claim[0].id, sent=True,
+            external_message_id="synthetic-discord-ack")
+        assert await runtime.run_once()
+        assert (await runtime.call("state", turn))["status"] == "sent"
+        assert (await runtime.call("state", service._turn_id(second)))["status"] == "ready"
+        assert (await service.receive(msg)).duplicate
+        assert core.messaging_store.get_outbound(service._outbound_id(msg)).status.value == "sent"
+    finally:
+        await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_integrated_checkpoint_survives_finalize_error_and_reuses_provider_result(lab, monkeypatch):
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-checkpoint")
+    core.cognition.register_provider(provider)
+    msg = _dm(core)
+    turn = core.messaging._turn_id(msg)
+    original = runtime.call
+    async def fail_finalize(operation, *args, **kwargs):
+        if operation == "finalize":
+            raise RuntimeError("SYNTHETIC_STORAGE_FAILURE")
+        return await original(operation, *args, **kwargs)
+    try:
+        assert "DURABLE_REPLY_ACCEPTED" in (await core.messaging.receive(msg)).decision.reason_codes
+        monkeypatch.setattr(runtime, "call", fail_finalize)
+        assert await runtime.run_once()
+        assert (await original("state", turn))["status"] == "retry_wait"
+        assert not core.cognition.store.list_messages(turn_id=turn, speaker_id="ENTITY_AMORA")
+        assert core.messaging_store.get_outbound(core.messaging._outbound_id(msg)) is None
+        assert provider.calls == 1
+        monkeypatch.setattr(runtime, "call", original)
+        # Replace dispatcher instance, retain only database state.
+        await runtime.stop()
+        core.messaging.durable_replies = None
+        resumed = core.messaging.configure_durable_replies()
+        await resumed.start(background=False)
+        clock.advance(timedelta(seconds=6))
+        assert await resumed.run_once()
+        assert provider.calls == 1
+        assert (await resumed.call("state", turn))["status"] == "ready"
+        assert len(core.cognition.store.list_messages(turn_id=turn, speaker_id="ENTITY_AMORA")) == 1
+        assert len(core.cognition.store.list_segments(turn)) == 1
+    finally:
+        await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_integrated_invalidation_before_generation_and_before_delivery(lab):
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-invalidation")
+    core.cognition.register_provider(provider)
+    original = _dm(core)
+    turn = core.messaging._turn_id(original)
+    try:
+        await core.messaging.receive(original)
+        core.messaging.invalidate_transport(TransportInvalidation(
+            platform=original.platform, account_scope=original.account_scope,
+            conversation_id=original.conversation_id,
+            native_message_id=original.native_source_message_id,
+            reason="MESSAGE_EDITED", transport_revision=2))
+        assert not await runtime.run_once()
+        assert provider.calls == 0
+        assert (await runtime.call("state", turn))["status"] == "cancelled"
+        newer = _dm(core, "durable-msg-edit", revision=2,
+            native=original.native_source_message_id, text="Agora fala sobre folhas.")
+        assert "DURABLE_REPLY_ACCEPTED" in (await core.messaging.receive(newer)).decision.reason_codes
+        assert await runtime.run_once()
+        assert provider.calls == 1
+        core.messaging.invalidate_transport(TransportInvalidation(
+            platform=newer.platform, account_scope=newer.account_scope,
+            conversation_id=newer.conversation_id,
+            native_message_id=newer.native_source_message_id,
+            reason="MESSAGE_DELETED"))
+        assert core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,
+            account_scope="primary") == ()
+        assert not await runtime.run_once()
+        assert (await runtime.call("state", core.messaging._turn_id(newer)))["status"] == "cancelled"
+    finally:
+        await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_integrated_unknown_sender_and_local_only_never_join_queue(lab):
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-auth")
+    core.cognition.register_provider(provider)
+    try:
+        denied = _dm(core, actor="999999999999999999")
+        result = await core.messaging.receive(denied)
+        assert result.decision.action == RoutingAction.QUARANTINE
+        assert await runtime.call("state", core.messaging._turn_id(denied)) is None
+        local = _dm(core, "local-msg").model_copy(update={"remote_processing_allowed": False})
+        result = await core.messaging.receive(local)
+        assert result.outbound
+        assert await runtime.call("state", core.messaging._turn_id(local)) is None
+        assert not await runtime.run_once()
+        assert provider.calls == 0
+    finally:
+        await _stop_runtime(core)
