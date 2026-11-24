@@ -1,10 +1,10 @@
-"""RUN 01 isolated durable reply queue. Not wired into serving Core.
+"""RUN 01 durable reply queue repository (opt-in integration candidate).
 
 References canonical inputs; no message bodies, provider output or media are
 copied into the queue. The trusted Core must persist reply_enqueue_requested
 and reply_outbound_id after authorizing ingress. This repository is not itself
-an authorization grant. The queue shares the existing generation lease; the finalization/invalidation
-transaction and serving dispatcher still require integration.
+an authorization grant. The queue shares the existing generation lease and the atomic text commit.
+Activation requires a separately installed and verified schema.
 """
 from __future__ import annotations
 
@@ -218,6 +218,55 @@ class ReplyJobRepository:
         # Never equate generated/queued text with successful transport ACK.
         return self._write(self._sql("OBSERVE_SENT"), (str(turn_id),),
         ) == 1
+
+    def enqueue_turn(self, turn_id: str) -> bool:
+        return self._write(self._sql("ENQUEUE_TURN"),
+            (self._now().isoformat(), str(turn_id))) == 1
+
+    def load(self, claim: ReplyClaim):
+        with trace_lock(self.database._lock):
+            row = self.database._conn.execute(self._sql("LOAD"),
+                (claim.turn_id, claim.token, self._now().isoformat())).fetchone()
+        return dict(row) if row else None
+
+    def counts(self):
+        with trace_lock(self.database._lock):
+            rows = self.database._conn.execute(self._sql("COUNTS")).fetchall()
+        return {row["status"]: int(row["count"]) for row in rows}
+
+    def reconcile_outbound(self):
+        return self._write(self._sql("RECONCILE_OUTBOUND"))
+
+    def finalize(self, claim, store, message, decision, outbound, reasons, records):
+        """Commit history, original outbox/audit and ready state together.
+
+        The caller supplies validated, deterministic history values, never
+        SQL. No network await, nested SQLite transaction or provider call.
+        Existing prepared checkpoint survives any failed transaction.
+        """
+        db = self.database
+        oid = str(outbound.id)
+        try:
+            with trace_lock(db._lock), db._conn:
+                if db._conn.execute(self._sql("FINALIZE_LOCK"),
+                        (claim.turn_id, claim.token, self._now().isoformat())).fetchone() is None:
+                    return False
+                for segment_values, message_values in records:
+                    db._conn.execute(self._sql("SEGMENT_INSERT"), segment_values)
+                    db._conn.execute(self._sql("HISTORY_INSERT"), message_values)
+                store.persist_prepared_reply(
+                    message, decision, outbound, reasons,
+                    lease=(claim.turn_id, claim.token),
+                    native_hash=outbound.metadata["durable_native_hash"],
+                )
+                if db._conn.execute(self._sql("MARK_READY"),
+                        (oid, claim.turn_id, claim.token, self._now().isoformat(), oid)).rowcount != 1:
+                    raise _LeaseConflict()
+                if not self.generations.release(claim.turn_id, claim.token, completed=True):
+                    raise _LeaseConflict()
+                return True
+        except _LeaseConflict:
+            return False
 
     def state(self, turn_id: str):
         with trace_lock(self.database._lock):
