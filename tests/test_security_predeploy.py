@@ -103,9 +103,29 @@ def test_avatar_pairing_cannot_access_console(cloud):
     assert client.get("/v1/operations/state", headers=headers).status_code == 403
 
 
+
+
+def test_visual_engine_is_public_read_only_but_neighbors_and_api_stay_protected(cloud):
+    _, client, _ = cloud
+    # The static visual renderer uses no user credentials. It must behave
+    # like /web/ and /avatar/ without making other Core routes public.
+    html = client.get("/visual-engine/")
+    assert html.status_code == 200
+    assert "AmoraVisualEngine" in html.text
+    assert "extra_mouth_open_wide" in html.text
+    assert "closed_smile_L" in html.text
+    assert html.headers["content-type"].startswith("text/html")
+    assert client.head("/visual-engine/").status_code == 200
+    assert client.get("/visual-engine", follow_redirects=True).status_code == 200
+    assert client.get("/web/").status_code == 200
+    assert client.post("/visual-engine/").status_code == 401
+    assert client.get("/visual-engine-admin").status_code == 401
+    assert client.get("/v1/state").status_code == 401
+    assert client.get("/v1/avatar/project").status_code == 401
+
 def test_security_headers_cors_and_minimal_probes(cloud):
     _, client, headers = cloud
-    for path in ["/web/", "/avatar/", "/health", "/ready", "/v1/state"]:
+    for path in ["/web/", "/avatar/", "/visual-engine/", "/health", "/ready", "/v1/state"]:
         response = client.get(path)
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["referrer-policy"] == "no-referrer"
