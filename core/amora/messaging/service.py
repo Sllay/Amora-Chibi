@@ -228,6 +228,8 @@ class PlatformMessagingService:
             self._active_dm_progress.discard(turn_id)
             _GENERATION_LEASE.reset(context_token)
             await self._generation_call(message, "release", turn_id, token, completed=completed)
+            if self.durable_replies is not None:
+                self.durable_replies.notify()
 
     def _invalidated_result(self, message):
         audit = self.store.get_audit(platform=message.platform, account_scope=message.account_scope,
