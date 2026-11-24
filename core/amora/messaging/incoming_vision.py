@@ -16,6 +16,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from amora.cognition.visual_context import IncomingVisualObservation
+from amora.cognition.provider_quota import ProviderQuotaDeferred
 
 from .groq_vision import GroqVisionError
 from .models import InboundImageContent
@@ -79,8 +80,9 @@ class GroqIncomingImageVision:
     endpoint = "https://api.groq.com/openai/v1/chat/completions"
     model = "qwen/qwen3.8-27b"
 
-    def __init__(self, secrets, *, timeout_seconds=25.0, transport=None):
+    def __init__(self, secrets, *, timeout_seconds=25.0, transport=None, quota=None):
         self.secrets = secrets
+        self.quota = quota
         self.timeout_seconds = timeout_seconds
         self.transport = transport
 
@@ -89,6 +91,17 @@ class GroqIncomingImageVision:
         return bool(self.secrets.get("GROQ_API_KEY"))
 
     async def analyze(self, image: InboundImageContent, user_text: str = "") -> dict:
+        if self.quota is None:
+            return await self._analyze(image, user_text)
+        valid_image_bytes(image)
+        try:
+            async with self.quota.admission("groq_vision", max_wait=1.0):
+                return await self._analyze(image, user_text)
+        except ProviderQuotaDeferred as exc:
+            raise GroqVisionError("INCOMING_VISION_HTTP_429", "visual account in backoff",
+                                  status_code=429, retry_after=exc.retry_after) from None
+
+    async def _analyze(self, image: InboundImageContent, user_text: str = "") -> dict:
         # This switch is independent of existing sticker/CPF enrichment.
         if os.getenv("AMORA_DISCORD_IMAGE_VISION", "1").strip().lower() in {"0", "false", "off", "no"}:
             raise GroqVisionError("INCOMING_VISION_DISABLED", "incoming vision disabled")
@@ -183,6 +196,7 @@ class GroqIncomingImageVision:
                 "INCOMING_VISION_HTTP_" + str(response.status_code),
                 "image analysis rejected by model provider",
                 status_code=response.status_code,
+                retry_after=response.headers.get("retry-after"),
             )
         # Keep the envelope, JSON syntax and schema validation separate:
         # all operator logs are safe codes only, never model text/OCR/pixels.
