@@ -244,3 +244,35 @@ async def test_groq_reasoning_assist_rejection_does_not_echo_private_body(monkey
     assert error.status_code == 429
     assert error.diagnostics["stage"] == "reasoning_assist_rejected"
     assert marker not in str(error)
+
+
+@pytest.mark.asyncio
+async def test_run02_groq_413_sends_only_one_smaller_authorized_request(monkeypatch):
+    import json
+    from amora.cognition.durable_realization import DURABLE_REALIZATION
+    from amora.cognition.providers_identity import GroqCognitiveProvider as LiveGroq
+    from amora.cognition.providers import ProviderError
+    ctx = _context()
+    ctx.recent_messages = [
+        {"turn_id": str(uuid4()), "speaker_id": "PERSON_BK",
+         "addressee_id": "ENTITY_AMORA", "source": "platform_messaging",
+         "text": "historico opcional " + "a" * 2000}
+        for _ in range(12)
+    ]
+    history = ctx.model_copy(deep=True).recent_messages
+    sent = []
+    async def post(payload, **kwargs):
+        sent.append(payload)
+        raise ProviderError("synthetic rejection", status_code=413)
+    provider = LiveGroq(_Secrets())
+    monkeypatch.setattr(provider, "_post_responses", post)
+    marker = DURABLE_REALIZATION.set(str(ctx.turn_id))
+    try:
+        with pytest.raises(ProviderError):
+            await provider._responses_realize(ctx, api_key="TEST_KEY_DO_NOT_LEAK")
+    finally:
+        DURABLE_REALIZATION.reset(marker)
+    assert len(sent) == 2
+    assert len(json.dumps(sent[1]).encode()) < len(json.dumps(sent[0]).encode())
+    assert all(ctx.user_text in str(item["input"]) for item in sent)
+    assert ctx.recent_messages == history
