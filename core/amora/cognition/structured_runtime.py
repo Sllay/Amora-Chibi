@@ -25,6 +25,7 @@ from .speech import SpeechSegmenter
 from .service import SegmentSink
 from .durable_realization import durable_realization, DeferredRealization, DURABLE_AUTHORIZATION
 from .provider_resilience import classify_provider_failure
+from .provider_quota import ProviderQuotaDeferred
 
 
 async def _await_numes_adaptive(
@@ -259,7 +260,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 groq = self._providers.get("groq")
                 secrets = getattr(groq, "secrets", None)
                 api_key = secrets.get("GROQ_API_KEY") if secrets is not None else None
-                navigator.planner = GroqQueryPlanner(api_key)
+                navigator.planner = GroqQueryPlanner(api_key, quota=self._provider_quota)
             try:
                 evidence = await asyncio.wait_for(
                     navigator.research(request.text, request.session_id),
@@ -360,8 +361,9 @@ class CognitiveEngine(ProductionCognitiveEngine):
             nonlocal provider_elapsed
             attempt_started = perf_counter()
             try:
-                with span("provider_attempt"):
-                    return await realize(context)
+                async with self._provider_quota.admission(descriptor.name):
+                    with span("provider_attempt"):
+                        return await realize(context)
             finally:
                 elapsed = max(0.0, perf_counter() - attempt_started)
                 provider_elapsed += min(elapsed, charge_cap) if charge_cap is not None else elapsed
@@ -469,6 +471,10 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     validated = RealizationValidator.parse_and_validate(
                         context, raw, enforce_dialogue_plan=response_semantic_filter_enabled(),
                     )
+            except ProviderQuotaDeferred as exc:
+                last_failure = "PROVIDER_ACCOUNT_BACKOFF"
+                failures.append(("temporary", float(exc.retry_after)))
+                continue
             except ContextBudgetExceeded:
                 last_failure = "CONTEXT_ENVELOPE_OVERFLOW"
                 failures.append(("context", None))
@@ -598,6 +604,9 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 remaining_tokens=remaining_tokens,
                 metadata={"candidate_index": provider_index, "phase": "structured_realization"},
             )
+            if (remaining_requests is not None and remaining_requests <= 0
+                    or remaining_tokens is not None and remaining_tokens <= 0):
+                self._provider_quota.block_for(descriptor.name, 60)
             self._provider_succeeded(descriptor, remaining_requests, remaining_tokens)
             reasons = [*validated.reason_codes, "REMOTE_PROVIDER_USED", "STRUCTURED_REALIZATION"]
             if provider_index:
