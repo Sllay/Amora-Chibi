@@ -33,3 +33,22 @@ CREATE INDEX IF NOT EXISTS idx_messaging_reply_session
 CREATE INDEX IF NOT EXISTS idx_messaging_reply_source
     ON messaging_reply_jobs(session_id,native_message_hash,transport_revision);
 """
+
+
+def verify_sqlite_reply_schema(connection):
+    """Compare actual table/index SQL with an independently built reference."""
+    import sqlite3
+    from contextlib import closing
+
+    def definitions(db):
+        return [tuple(row) for row in db.execute(
+            "SELECT type,name,sql FROM sqlite_schema "
+            "WHERE tbl_name='messaging_reply_jobs' AND sql IS NOT NULL ORDER BY type,name"
+        ).fetchall()]
+
+    with closing(sqlite3.connect(":memory:")) as reference:
+        reference.execute("CREATE TABLE conversation_messages(id TEXT PRIMARY KEY)")
+        reference.executescript(REPLY_JOB_CANDIDATE_SQL)
+        if definitions(connection) != definitions(reference):
+            raise ValueError("REPLY_SQLITE_SCHEMA_NOT_PREPARED")
+    return {"state": "prepared", "version": 1}
