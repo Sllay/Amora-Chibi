@@ -44,7 +44,7 @@ def _visual_engine_csp(html_path: str) -> str:
         return CSP
     inline_scripts = [
         script for script in re.findall(
-            r"<script(?:\\s+[^>]*)?>(.*?)</script\\s*>", markup,
+            r"<script(?:\s+[^>]*)?>(.*?)</script\s*>", markup,
             flags=re.IGNORECASE | re.DOTALL,
         )
         if script.strip()
