@@ -89,7 +89,7 @@ def reply_job_statements() -> dict[str, ReviewedStatement]:
                 SELECT turn_id FROM amora_pg_v18_lab.messaging_reply_jobs
                 WHERE status IN ('pending','running','retry_wait','ready','blocked')
                   AND NOT (""" + _VALID_SOURCE + """)
-                ORDER BY created_at,turn_id LIMIT 128
+                ORDER BY created_at,job_seq LIMIT 128
               )""", 0),
         "PG_REPLY_JOB_RUNNING_COUNT": ReviewedStatement(
             "SELECT COUNT(*) FROM amora_pg_v18_lab.messaging_reply_jobs "
@@ -121,9 +121,9 @@ def reply_job_statements() -> dict[str, ReviewedStatement]:
                   AND earlier.status IN ('pending','retry_wait','running','ready')
                   AND (earlier.created_at<messaging_reply_jobs.created_at OR
                        (earlier.created_at=messaging_reply_jobs.created_at
-                        AND earlier.turn_id<messaging_reply_jobs.turn_id))
+                        AND earlier.job_seq<messaging_reply_jobs.job_seq))
               )
-            ORDER BY available_at,created_at,turn_id LIMIT 1
+            ORDER BY available_at,created_at,job_seq LIMIT 1
             """, 4, 1),
         "PG_REPLY_JOB_CLAIM": ReviewedStatement("""
             UPDATE amora_pg_v18_lab.messaging_reply_jobs
@@ -201,7 +201,7 @@ def reply_job_statements() -> dict[str, ReviewedStatement]:
                 SELECT j.turn_id FROM amora_pg_v18_lab.messaging_reply_jobs j
                 JOIN amora_pg_v18_lab.messaging_outbound_queue o ON o.id=j.outbound_id
                 WHERE j.status='ready' AND o.status IN ('sent','failed','cancelled')
-                ORDER BY j.created_at,j.turn_id LIMIT 128
+                ORDER BY j.created_at,j.job_seq LIMIT 128
             )""", 0),
         "PG_REPLY_JOB_COUNTS": ReviewedStatement("SELECT status,COUNT(*) AS count FROM amora_pg_v18_lab.messaging_reply_jobs GROUP BY status", 0, 7),
         "PG_REPLY_JOB_DELIVERY_ALLOWED": ReviewedStatement("""SELECT 1 FROM amora_pg_v18_lab.messaging_reply_jobs
