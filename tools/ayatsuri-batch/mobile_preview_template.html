@@ -95,7 +95,7 @@ const spec=[
  ["bodyX","Corpo 3/4 X",-10,10,.25],["bodyY","Corpo 3/4 Y",-10,10,.25],
  ["blush","Corada dinâmica",0,1,.01],
  ["tearL","Lágrimas E",0,1,.01],["tearR","Lágrimas D",0,1,.01],
- ["mouthPose","Boca (0 fechado; 1 fala; 2 grito; 3 triste)",0,3,.01]
+ ["mouthPose","Boca (0 auto; 1 fala; 2 grito; 3 triste)",0,3,.01]
 ];
 const controls=document.getElementById("controls");
 for(const [id,title,min,max,step] of spec){
@@ -130,6 +130,43 @@ for(const btn of document.querySelectorAll("[data-expr]")){
   document.querySelectorAll("[data-expr]").forEach(b=>b.classList.toggle("active",b===btn));
  });
 }
+// Stable browser-only parameter bridge. Does not contact Core or persist
+// secrets; future Amora emotion/voice adapters can call these controls.
+const externalParameters={
+ ParamEyeLOpen:"eyeL",ParamEyeROpen:"eyeR",
+ ParamEyeBallX:"lookX",ParamEyeBallY:"lookY",
+ ParamMouthOpenY:"mouth",ParamMouthForm:"form",ParamMouthPose:"mouthPose",
+ ParamBlush:"blush",ParamTearL:"tearL",ParamTearR:"tearR",
+ ParamAngleX:"headX",ParamAngleY:"headY",ParamAngleZ:"angle",
+ ParamBodyAngleX:"bodyX",ParamBodyAngleY:"bodyY"
+};
+window.AmoraVisualEngine=Object.freeze({
+ setParameters(values){
+  if(!values||typeof values!=="object")return false;
+  for(const [key,raw] of Object.entries(values)){
+   const id=externalParameters[key]||key;
+   const row=spec.find(a=>a[0]===id);
+   if(!row||!Number.isFinite(Number(raw)))continue;
+   const [, ,min,max]=row;
+   wanted[id]=Math.max(min,Math.min(max,Number(raw)));
+   const slider=document.getElementById(id);
+   if(slider)slider.value=String(wanted[id]);
+   const output=document.getElementById(id+"-value");
+   if(output)output.textContent=wanted[id].toFixed(2);
+  }
+  return true;
+ },
+ setEmotion(name){
+  const values=presets[name];
+  if(!values)return false;
+  this.setParameters({...{eyeL:1,eyeR:1,mouth:0,mouthPose:0,
+    blush:0,tearL:0,tearR:0},...values});
+  return true;
+ },
+ getParameters(){return {...wanted};},
+ getMouthWeights(){return mouthLayerWeights(smoothed.mouth,smoothed.mouthPose);},
+ version:"4.2"
+});
 function box(id) {
  const b=boxes[id];return {x:b[0],y:b[1],w:b[2]-b[0],h:b[3]-b[1],cx:(b[0]+b[2])/2,cy:(b[1]+b[3])/2};
 }
@@ -261,24 +298,24 @@ function happyClosedPose(side,opening){
  ctx.restore();
 }
 function smoother(v){v=Math.max(0,Math.min(1,v));return v*v*(3-2*v);}
-function drawMouthPose(opening,form,pose){
- // Four source-art mouths: base closed, talk, wide shout, sad.
- // Blend only adjacent states; preserve centered alignment and oral cavity.
- const mouthIds=["mouth","extra_mouth_talk","extra_mouth_open_wide","extra_mouth_sad"];
- // Match the Cubism rig: VTube Studio lip sync in neutral automatically
- // traverses closed -> talk -> shouting; an explicit emotion overrides it.
+function mouthLayerWeights(opening,pose){
+ // Exact semantic contract shared with the Rust/Cubism exporter.
+ // 0 automatic; 1 talking; 2 shouting; 3 sad. Large mouth opening
+ // overrides talking to show the wide-open drawing.
  const value=Math.max(0,Math.min(3,pose));
  const poseWeight=id=>Math.max(0,1-Math.abs(value-id));
- const autoBase=1-smoother(opening/.24);
- const autoWide=smoother((opening-.55)/.34);
- const autoTalk=(1-autoBase)*(1-autoWide);
- const autoShout=(1-autoBase)*autoWide;
- const weights=[
-  poseWeight(0)*autoBase,
-  poseWeight(1)+poseWeight(0)*autoTalk,
-  poseWeight(2)+poseWeight(0)*autoShout,
-  poseWeight(3)
- ];
+ const base=1-smoother((opening-.06)/.20);
+ const wideAuto=smoother((opening-.57)/.25);
+ const sad=poseWeight(3);
+ const remaining=1-sad;
+ const wide=remaining*Math.max(wideAuto,poseWeight(2));
+ const talk=(remaining-wide)*Math.max(1-base,poseWeight(1));
+ return [remaining-wide-talk,talk,wide,sad];
+}
+function drawMouthPose(opening,form,pose){
+ // Four original-aligned mouth PNGs with normalized weights.
+ const mouthIds=["mouth","extra_mouth_talk","extra_mouth_open_wide","extra_mouth_sad"];
+ const weights=mouthLayerWeights(opening,pose);
  for(const [idx,weight] of weights.entries()){
   if(weight<.001)continue;
   ctx.save();ctx.globalAlpha*=weight;
