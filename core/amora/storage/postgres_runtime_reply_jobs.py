@@ -164,6 +164,46 @@ def reply_job_statements() -> dict[str, ReviewedStatement]:
                 SELECT 1 FROM amora_pg_v18_lab.messaging_outbound_queue o
                 WHERE o.id=messaging_reply_jobs.outbound_id AND o.status='sent'
             )""", 1),
+        "PG_REPLY_JOB_ENQUEUE_TURN": ReviewedStatement(_INSERT + " AND m.turn_id=%s ON CONFLICT(turn_id) DO NOTHING", 2),
+        "PG_REPLY_JOB_LOAD": ReviewedStatement("""SELECT a.*,m.raw_text AS cognitive_text,m.metadata_json AS cognitive_metadata,
+            m.speaker_id AS input_speaker,m.session_id AS input_session
+            FROM amora_pg_v18_lab.messaging_reply_jobs
+            JOIN amora_pg_v18_lab.conversation_messages m ON m.id=messaging_reply_jobs.input_id
+            JOIN amora_pg_v18_lab.messaging_audit a ON a.id=m.metadata_json::jsonb ->> 'reply_audit_id'
+            WHERE messaging_reply_jobs.turn_id=%s AND messaging_reply_jobs.status='running'
+              AND messaging_reply_jobs.lease_token=%s AND messaging_reply_jobs.lease_until>%s
+              AND a.direction='inbound' AND a.platform='discord' AND a.channel_type='dm'
+              AND """ + _VALID_SOURCE, 3, 1),
+        "PG_REPLY_JOB_FINALIZE_LOCK": ReviewedStatement("""SELECT messaging_reply_jobs.turn_id FROM amora_pg_v18_lab.messaging_reply_jobs
+            JOIN amora_pg_v18_lab.messaging_inbound_generation g ON g.turn_id=messaging_reply_jobs.turn_id
+            WHERE messaging_reply_jobs.turn_id=%s AND messaging_reply_jobs.status='running'
+              AND messaging_reply_jobs.lease_token=%s AND messaging_reply_jobs.lease_until>%s
+              AND g.lease_token=messaging_reply_jobs.lease_token
+              AND g.lease_until=messaging_reply_jobs.lease_until
+              AND """ + _VALID_SOURCE + " FOR UPDATE OF messaging_reply_jobs,g", 3, 1),
+        "PG_REPLY_JOB_HISTORY_INSERT": ReviewedStatement("""INSERT INTO amora_pg_v18_lab.conversation_messages(
+            id,turn_id,speaker_id,addressee_id,source,raw_text,normalized_text,spoken_text,
+            privacy_scope,remote_processing_allowed,stt_confidence,provider,model,status,interrupted,
+            source_event_id,session_id,started_at,finished_at,metadata_json,dedupe_key
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(dedupe_key) DO NOTHING""", 21),
+        "PG_REPLY_JOB_SEGMENT_INSERT": ReviewedStatement("""INSERT INTO amora_pg_v18_lab.speech_segments(
+            id,turn_id,ordinal,display_text,speech_text,status,tts_provider,voice_id,
+            queued_at,started_at,finished_at,interrupted,metadata_json
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(turn_id,ordinal) DO NOTHING""", 13),
+        "PG_REPLY_JOB_RECONCILE_OUTBOUND": ReviewedStatement("""UPDATE amora_pg_v18_lab.messaging_reply_jobs SET
+            status=CASE WHEN EXISTS (SELECT 1 FROM amora_pg_v18_lab.messaging_outbound_queue o
+                WHERE o.id=messaging_reply_jobs.outbound_id AND o.status='sent')
+                THEN 'sent' ELSE 'blocked' END,
+            last_reason=CASE WHEN EXISTS (SELECT 1 FROM amora_pg_v18_lab.messaging_outbound_queue o
+                WHERE o.id=messaging_reply_jobs.outbound_id AND o.status='sent')
+                THEN NULL ELSE 'DELIVERY_BLOCKED' END
+            WHERE status='ready' AND turn_id IN (
+                SELECT j.turn_id FROM amora_pg_v18_lab.messaging_reply_jobs j
+                JOIN amora_pg_v18_lab.messaging_outbound_queue o ON o.id=j.outbound_id
+                WHERE j.status='ready' AND o.status IN ('sent','failed','cancelled')
+                ORDER BY j.created_at,j.turn_id LIMIT 128
+            )""", 0),
+        "PG_REPLY_JOB_COUNTS": ReviewedStatement("SELECT status,COUNT(*) AS count FROM amora_pg_v18_lab.messaging_reply_jobs GROUP BY status", 0, 7),
         "PG_REPLY_JOB_STATE": ReviewedStatement(
             "SELECT status,attempts,available_at,lease_until,last_reason,outbound_id "
             "FROM amora_pg_v18_lab.messaging_reply_jobs WHERE turn_id=%s", 1, 1),
