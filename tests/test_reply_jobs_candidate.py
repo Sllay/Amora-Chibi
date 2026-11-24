@@ -589,3 +589,69 @@ async def test_integrated_atomic_admission_rolls_back_and_worker_can_retry(lab, 
         assert (await runtime.call("state", turn))["status"] == "ready"
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_integrated_restart_in_drain_mode_preserves_accepted_work(lab):
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-drain")
+    core.cognition.register_provider(provider)
+    msg = _dm(core)
+    turn = core.messaging._turn_id(msg)
+    try:
+        await core.messaging.receive(msg)
+        assert (await runtime.status())["unsettled"] == 1
+        await runtime.stop()
+        core.messaging.durable_replies = None
+        recovered = core.messaging.configure_durable_replies()
+        recovered.stop_admissions()
+        await recovered.start(background=False)
+        assert (await recovered.status())["mode"] == "drain"
+        assert (await core.messaging.receive(msg)).duplicate
+        new = _dm(core, "new-during-drain")
+        with pytest.raises(InboundGenerationBusy):
+            await core.messaging.receive(new)
+        assert await recovered.call("state", core.messaging._turn_id(new)) is None
+        assert await recovered.run_once()
+        assert (await recovered.call("state", turn))["status"] == "ready"
+        claim = core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,
+            account_scope="primary")
+        assert len(claim) == 1
+        assert core.messaging_store.ack_outbound(claim[0].id, sent=True,
+            external_message_id="synthetic-ack-drain")
+        assert not await recovered.run_once()
+        assert (await recovered.status())["unsettled"] == 0
+        assert provider.calls == 1
+    finally:
+        await _stop_runtime(core)
+
+
+def test_rollout_requires_explicit_approval(monkeypatch):
+    from amora.storage.reply_job_rollout import durable_reply_mode, APPROVAL
+    monkeypatch.delenv("AMORA_DURABLE_REPLY_MODE", raising=False)
+    monkeypatch.delenv("AMORA_DURABLE_REPLY_APPROVAL", raising=False)
+    assert durable_reply_mode() == "off"
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE", "accept")
+    with pytest.raises(ValueError, match="DURABLE_REPLY_EXPLICIT_OPT_IN_REQUIRED"):
+        durable_reply_mode()
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_APPROVAL", APPROVAL)
+    assert durable_reply_mode() == "accept"
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE", "drain")
+    assert durable_reply_mode() == "drain"
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE", "off")
+    with pytest.raises(ValueError, match="DURABLE_REPLY_EXPLICIT_OPT_IN_REQUIRED"):
+        durable_reply_mode()
+
+
+def test_candidate_schema_verified_and_refuses_missing_index(lab):
+    core, clock, queue = lab
+    assert queue.verify_schema()["version"] == 1
+    if core.database.backend.capabilities.name == "sqlite":
+        with core.database._lock, core.database._conn:
+            core.database._conn.execute("DROP INDEX idx_messaging_reply_due")
+    else:
+        with closing(_raw()) as raw:
+            raw.execute("DROP INDEX amora_pg_v18_lab.idx_messaging_reply_due")
+    with pytest.raises(ValueError, match="REPLY_.*SCHEMA.*"):
+        queue.verify_schema()
