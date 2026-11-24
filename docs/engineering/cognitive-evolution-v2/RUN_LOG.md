@@ -173,6 +173,16 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Decisão: evoluir esses contratos existentes, preservar adapters/rotas e gates de privacidade. Prioridade: autoridade única de retry durável, classificação de HTTP, Retry-After, compactação corretiva, SSE com progresso e limite finito. Quotas reais e integração dos especialistas precisam de revisão; não inventar limites de conta.
 - Gate: testes do novo comportamento + CI integral verde; bateria profunda e live só após RUN 07.
 
+### RUN 02 — incremento A: resiliência de diálogo durável (24/11/2026)
+
+- PR #380 cumulativo sobre 6163c34, inicialmente empilhado e retargeted para main exclusivamente para disparar a matriz completa (Core tests filtra a base); manter draft, sem merge/deploy. HEAD de código 66f88c8.
+- Proxy não repete transporte quando o dispatcher é dono do turno (6ea065b, f22eebf); reparo estruturado limitado preservado. 413 recebe causa de input, RemoteProtocolError é transitório, Retry-After não finito é recusado. Compatibilidade do código HTTP_401 preservada por teste existente.
+- SSE Numes: heartbeat e último progresso separados (28867e6); janela adicional somente com progresso recente, cap provisório de 120s além da tentativa normal, idle 23s e cancel/join; reserve do orçamento de failover preservada (62e0229). A janela externa do dispatcher permite o cap (be8d624), sem mudar rota síncrona. Valores são candidatos a calibrar, não medições live.
+- Classificar conjunto de falhas e não apenas a última: 401/403/404 de todas as rotas candidatas -> blocked; 413 irredutível de todas -> context blocked; falhas mistas/transitórias -> retry_wait. Não abrir circuito por 413. Retry-After propagado e persistido com jitter, teto operacional de sete dias; cabeçalho superior bloqueia para revisão (4a29a22, be8d624, 401bb98, 9bd5501). Cooldown de diálogo respeita cabeçalho longo (66f88c8).
+- Projeção estrita de correção: pelo menos 20% menor em estimativa, bytes efetivamente menores, original/identidade/plan intactos; Groq Responses não-stream do piloto durável repete uma única vez se reduzível, sem repetir especialista (a87fac7, 53a06c5). Sem alegar que 413 revela limite exato.
+- Testes adicionados: classificação, retry único, compactação, Groq mock, SSE progress/heartbeat, 429 e 401 integrados nos dois bancos (1754593, 6dee2fd, b2a5489, ec98e73). Ainda sem PASS do HEAD. Nenhum provider real chamado.
+- Pendente dentro da RUN 02: registro completo de capacidades/limites observados, quotas compartilhadas com visão/web/reflexão e seus gates, half-open adquirido no momento da tentativa, métricas de saúde e liveness dos demais adapters, reparo 413 nos outros caminhos compatíveis, testes integrados de failover e CI completo. Não marcar RUN 02 concluída nem iniciar RUN 03 até fechar esse escopo e obter CI verde. Bateria profunda e produção permanecem após RUN 07.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
