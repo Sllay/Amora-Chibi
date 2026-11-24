@@ -81,6 +81,13 @@ def register_messaging_routes(app, core, require_auth) -> None:
         except InboundGenerationBusy:
             raise HTTPException(status_code=503, detail="INBOUND_GENERATION_BUSY") from None
 
+    @app.get("/v1/messaging/worker/reply-jobs/status", dependencies=[Depends(require_auth)])
+    async def durable_reply_status():
+        runtime = core.messaging.durable_replies
+        if runtime is None:
+            return {"mode": "off", "active": False}
+        return await runtime.status()
+
     @app.get("/v1/messaging/worker/progress/{turn_id}", dependencies=[Depends(require_auth)])
     async def messaging_progress(turn_id: UUID):
         # No database, private text, model output or native identifiers.
