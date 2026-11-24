@@ -17,6 +17,7 @@ def durable_realization(request):
 class DeferredRealization(RuntimeError):
     """No social response was committed; dispatcher owns the retry decision."""
 
-    def __init__(self, reasons):
+    def __init__(self, reasons, *, retry_after_seconds=None):
         self.reasons = tuple(reasons)
+        self.retry_after_seconds = retry_after_seconds
         super().__init__("DURABLE_REALIZATION_DEFERRED")
