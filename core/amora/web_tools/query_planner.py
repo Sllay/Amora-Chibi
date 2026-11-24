@@ -83,7 +83,7 @@ class GroqQueryPlanner:
         if self.quota is None:
             yield
         else:
-            async with self.quota.admission("groq_web", max_wait=0.25):
+            async with self.quota.admission("groq_web", model=self.model, max_wait=0.25):
                 yield
 
     async def plan(self, user_text: str, fallback_query: str) -> list[str]:
@@ -143,7 +143,7 @@ class GroqQueryPlanner:
                         json=payload,
                     ), timeout=MAX_PLANNER_SECONDS)
                 if self.quota is not None:
-                    self.quota.observe("groq_web", response.status_code, response.headers.get("retry-after"))
+                    self.quota.observe("groq_web", response.status_code, response.headers.get("retry-after"), model=self.model)
             if response.status_code != 200 or len(response.content) > 18000:
                 return [fallback_query]
             raw = response.json()
