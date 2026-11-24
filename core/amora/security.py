@@ -284,7 +284,11 @@ class SecurityMiddleware:
         public = public or (
             not websocket
             and scope["method"] in {"GET", "HEAD"}
-            and path.startswith(("/web", "/avatar"))
+            and (
+                path.startswith(("/web", "/avatar"))
+                or path == "/visual-engine"
+                or path.startswith("/visual-engine/")
+            )
             and not self.worker
         )
         if (
