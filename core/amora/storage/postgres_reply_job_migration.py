@@ -66,6 +66,21 @@ _COLUMNS = (
 )
 
 
+# PostgreSQL 18 deparses CHECK expressions into this canonical form.
+# Keep grouping, operators, and casts intact; only whitespace is normalized.
+_EXPECTED_CHECKS = {
+    "CHECK ((transport_revision >= 1))",
+    "CHECK ((attempts >= 0))",
+    "CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, "
+    "'retry_wait'::text, 'ready'::text, 'sent'::text, 'blocked'::text, 'cancelled'::text])))",
+    "CHECK ((((status = 'running'::text) AND (lease_token IS NOT NULL) "
+    "AND (lease_until IS NOT NULL)) OR ((status <> 'running'::text) "
+    "AND (lease_token IS NULL) AND (lease_until IS NULL))))",
+    "CHECK (((status <> ALL (ARRAY['ready'::text, 'sent'::text])) "
+    "OR (outbound_id IS NOT NULL)))",
+}
+
+
 def verify_target(raw, target):
     if not isinstance(target, PostgresTargetPolicy) or target.schema != "amora_pg_v18_lab":
         raise ValueError("REPLY_SCHEMA_TARGET_INVALID")
@@ -91,23 +106,28 @@ def review_reply_schema(raw, target):
             ORDER BY ordinal_position""").fetchall())
         indexes = dict(raw.execute("""SELECT indexname,indexdef FROM pg_indexes
             WHERE schemaname='amora_pg_v18_lab' AND tablename='messaging_reply_jobs'""").fetchall())
-        constraints = raw.execute("""SELECT contype,pg_get_constraintdef(oid)
+        constraints = raw.execute("""SELECT contype,pg_get_constraintdef(oid),convalidated,conenforced,
+            CASE WHEN contype='f' THEN confrelid =
+                'amora_pg_v18_lab.conversation_messages'::regclass ELSE TRUE END
             FROM pg_constraint WHERE conrelid='amora_pg_v18_lab.messaging_reply_jobs'::regclass""").fetchall()
         expected_indexes = {
             "idx_messaging_reply_due": "(status, available_at, lease_until)",
             "idx_messaging_reply_session": "(session_id, created_at, job_seq, status)",
             "idx_messaging_reply_source": "(session_id, native_message_hash, transport_revision)",
         }
-        keys = {definition for kind, definition in constraints if kind in {"p", "u"}}
-        fk = [definition for kind, definition in constraints if kind == "f"]
-        checks = [definition for kind, definition in constraints if kind == "c"]
+        keys = {definition for kind, definition, *_ in constraints if kind in {"p", "u"}}
+        fk = [definition for kind, definition, *_ in constraints if kind == "f"]
+        checks = [" ".join(definition.split()) for kind, definition, *_ in constraints if kind == "c"]
         if (comment != REPLY_SCHEMA_COMMENT or columns != _COLUMNS
                 or any(not indexes.get(name, "").endswith(suffix)
                        for name, suffix in expected_indexes.items())
                 or keys != {"PRIMARY KEY (job_seq)", "UNIQUE (turn_id)", "UNIQUE (input_id)"}
                 or len(fk) != 1 or "FOREIGN KEY (input_id)" not in fk[0]
                 or "conversation_messages(id) ON DELETE CASCADE" not in fk[0]
-                or len(checks) != 5):
+                or any(not validated or not enforced or not target_matches
+                       for _, _, validated, enforced, target_matches in constraints)
+                or len(checks) != len(_EXPECTED_CHECKS)
+                or set(checks) != _EXPECTED_CHECKS):
             raise ValueError("REPLY_SCHEMA_STRUCTURAL_MISMATCH")
         return {"state": "prepared", "version": REPLY_SCHEMA_VERSION, "base_version": 18}
 
