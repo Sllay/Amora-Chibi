@@ -7,7 +7,8 @@ def install_reply_job_lab(raw):
     with raw.transaction():
         raw.execute("""
             CREATE TABLE amora_pg_v18_lab.messaging_reply_jobs (
-                turn_id TEXT PRIMARY KEY,
+                job_seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                turn_id TEXT NOT NULL UNIQUE,
                 input_id TEXT NOT NULL UNIQUE REFERENCES
                     amora_pg_v18_lab.conversation_messages(id) ON DELETE CASCADE,
                 session_id TEXT NOT NULL,
@@ -33,7 +34,7 @@ def install_reply_job_lab(raw):
         """)
         raw.execute("""
             CREATE INDEX idx_messaging_reply_session
-            ON amora_pg_v18_lab.messaging_reply_jobs(session_id,created_at,turn_id,status)
+            ON amora_pg_v18_lab.messaging_reply_jobs(session_id,created_at,job_seq,status)
         """)
         raw.execute("""
             CREATE INDEX idx_messaging_reply_source
