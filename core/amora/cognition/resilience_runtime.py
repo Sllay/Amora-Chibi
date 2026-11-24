@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from amora.models import TaskClass
 
 from .identity_runtime import CognitiveEngine as IdentityAwareCognitiveEngine
@@ -81,6 +82,11 @@ class CognitiveEngine(IdentityAwareCognitiveEngine):
         super()._backoff(descriptor, status_code=status_code, retry_after=normalized)
 
         until = self._provider_cooldowns.get(descriptor.name)
+        # The legacy 300s ceiling must not permit another dialogue to hit a
+        # provider before a valid server-specified cooldown expires.
+        if parsed is not None and parsed > 300:
+            until = self.clock.now() + timedelta(seconds=min(604800, parsed))
+            self._provider_cooldowns[descriptor.name] = until
         if until is None:
             return
         failure_count = self._provider_failures.get(descriptor.name, 1)
