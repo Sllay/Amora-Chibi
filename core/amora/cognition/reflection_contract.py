@@ -193,6 +193,7 @@ def safe_reflection_failure(exc: Exception) -> dict:
         "failure_code": "REFLECTION_SCHEMA_INVALID" if schema_invalid else failure.code,
         "status_code": failure.status_code,
         "retry_after_seconds": failure.retry_after_seconds,
+        "quota_scope": "account" if getattr(exc, "diagnostics", {}).get("quota_scope") == "account" else None,
         "provider_error_category": category if category in _SAFE_CATEGORIES else None,
         "validation_issues": issues,
     }
