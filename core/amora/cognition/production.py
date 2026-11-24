@@ -14,6 +14,7 @@ from .proposals import CognitiveProposalBundle
 from .replay import CognitiveReplayResult
 from .realization import RealizationError
 from .context_budget import ContextBudgetExceeded
+from .provider_quota import ProviderQuotaCoordinator, ProviderQuotaDeferred
 from .resilient import CognitiveEngine as ResilientCognitiveEngine
 
 
@@ -22,6 +23,7 @@ class CognitiveEngine(ResilientCognitiveEngine):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self._provider_quota = ProviderQuotaCoordinator(self.clock)
         self._reflection_cooldowns: dict[str, Any] = {}
         self._reflection_failures: dict[str, int] = {}
         if not isinstance(self.router, ScopedModelRouter):
@@ -30,6 +32,7 @@ class CognitiveEngine(ResilientCognitiveEngine):
     def state(self) -> dict[str, object]:
         state = super().state()
         state["cognitive_usage_ledger"] = self.store.usage_ledger()
+        state["cognitive_provider_account_admission"] = self._provider_quota.snapshot()
         state["cognitive_replay_enabled"] = True
         state["cognitive_reflection_provider_failures"] = dict(self._reflection_failures)
         state["cognitive_reflection_provider_cooldowns"] = {
@@ -117,8 +120,24 @@ class CognitiveEngine(ResilientCognitiveEngine):
                 attempt = request.model_copy(update={"metadata": {
                     **request.metadata, "reflection_provider_attempt_seconds": min(16.0, remaining),
                 }})
-            with self.router.pin(descriptor.name):
-                bundle = await super().reflect(attempt)
+            try:
+                async with self._provider_quota.admission(descriptor.name):
+                    with self.router.pin(descriptor.name):
+                        bundle = await super().reflect(attempt)
+                    details = bundle._reflection_failure
+                    if "REFLECTION_PROVIDER_FAILURE" in bundle.reason_codes and details:
+                        if details.get("status_code") == 429:
+                            self._provider_quota.block_for(
+                                descriptor.name, details.get("retry_after_seconds") or 60)
+            except ProviderQuotaDeferred as exc:
+                bundle = CognitiveProposalBundle(reason_codes=["REFLECTION_PROVIDER_FAILURE"])
+                bundle._reflection_failure = {
+                    "failure_code": "PROVIDER_ACCOUNT_BACKOFF",
+                    "status_code": 429,
+                    "retry_after_seconds": float(exc.retry_after),
+                }
+                last = bundle
+                continue
             last = bundle
             failed = "REFLECTION_PROVIDER_FAILURE" in bundle.reason_codes
             unavailable = "NO_STRUCTURED_REFLECTION_PROVIDER" in bundle.reason_codes
