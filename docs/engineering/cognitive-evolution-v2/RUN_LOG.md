@@ -33,7 +33,7 @@ gate próprio em PLAN.md. Status de produção deve ser verificado separadamente
 | RUN | Área | Estado inicial em RUN 00 |
 |---|---|---|
 | 00 | Preparação e continuidade | Gate documental aprovado; PR #377 (conclusão condicionada ao merge) |
-| 01 | Durable Cognitive Runtime | IN_PROGRESS — SQLite inicial CI PASS; candidato PG18 e lease compartilhada em validação |
+| 01 | Durable Cognitive Runtime | IN_PROGRESS — persistência SQLite/PG18 e lease compartilhada CI PASS; integração pendente |
 | 02 | Intelligent Provider Orchestrator | PLANNED |
 | 03 | Adaptive Context & Comprehension Engine | PLANNED |
 | 04 | Advanced Multimodal Perception | PLANNED |
@@ -124,6 +124,14 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
   invalidação e cancelamento concorrentes, ACK do worker, matriz D01–D16
   e live. Nenhum deploy, alteração de schema ativo ou troca de banco.
   RUN 01 permanece IN_PROGRESS.
+
+### RUN 01 — validação do incremento PG18 e ownership (23/11/2026)
+
+- Revisão de código certificada em laboratório: `c65955c4616a16b6c88ba66b1b0bf37d3f786dcc`, PR #378 ainda draft.
+- Seis workflows concluídos com sucesso. [Laboratório PG18](https://github.com/Sllay/Amora-Chibi/actions/runs/45288939524): 220 testes aprovados, zero falhas, 3 avisos, 87,19 s. Logs confirmam os 23 casos de test_reply_jobs_candidate.py: 11 SQLite, 11 PostgreSQL 18 e 1 contrato SQL, todos PASS.
+- [Core tests](https://github.com/Sllay/Amora-Chibi/actions/runs/45288939669): Python 3.11–3.14 PASS; Python 3.11 com 2.123 aprovados, 139 ignorados, zero falhas, 8 avisos, 144,34 s. Os demais workflows (segurança, containers, memória/percepção e modalidade) PASS.
+- Nenhuma falha nova a corrigir; nenhuma alteração de código necessária. Este registro documental não altera a revisão de código validada.
+- Evidência limitada à persistência candidata, concorrência, leases e checkpoints em laboratório. Gate geral da RUN 01 continua aberto: migração revisada, reidratação autorizada de input, dispatcher, finalização/invalidação e reconciliação atômicas, ACK Discord, matriz D01–D16 e certificação live. Northflank, Altare e bancos ativos intactos. Próximo passo: integração real com Core, sem ativação prematura.
 
 ## Modelo obrigatório de registro para cada RUN
 
