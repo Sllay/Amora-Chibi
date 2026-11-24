@@ -42,7 +42,7 @@ GROQ_BASELINE_HARD_CEILING_TOKENS = 7_200
 GROQ_V3_SOFT_CEILING_TOKENS = 12_288
 
 
-def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEILING_TOKENS):
+def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEILING_TOKENS, strict=False):
     """Return a copy with optional context projected to a provider-specific cap.
 
     The original Core context and DialoguePlan remain authoritative and intact.
@@ -52,7 +52,7 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
     full_v3 = context.expression_profile == 'amora-v3'
     # Preserve the default conservative baseline; the expanded V3 profile
     # requires more room for its immutable text and the authoritative plan.
-    if full_v3 and ceiling == GROQ_PAYLOAD_SOFT_CEILING_TOKENS:
+    if not strict and full_v3 and ceiling == GROQ_PAYLOAD_SOFT_CEILING_TOKENS:
         ceiling = GROQ_V3_SOFT_CEILING_TOKENS
     target = min(int(context.token_budget), int(ceiling))
     if target <= 0:
@@ -113,7 +113,28 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
             # or refusing every V3 turn before the provider is even called.
             hard_ceiling = (GROQ_PAYLOAD_HARD_CEILING_TOKENS if full_v3
                             else GROQ_BASELINE_HARD_CEILING_TOKENS)
-            hard = min(int(context.token_budget), hard_ceiling)
+            hard = target if strict else min(int(context.token_budget), hard_ceiling)
             if estimate <= hard:
                 return projected, payload
             raise ContextBudgetExceeded(estimate, hard)
+
+
+def compact_rejected_payload(context, make_payload, rejected_payload):
+    """One corrective projection for a rejected request, never the same bytes.
+
+    Keep the original immutable turn, identity, plan and safety instructions.
+    The 20% reduction target is a provisional policy, not a claimed provider
+    limit. If essential context cannot fit, let the orchestrator try a different
+    compatible route. No truncation of the literal user input.
+    """
+    previous = estimate_payload(rejected_payload)
+    ceiling = max(1, int(previous * 0.8))
+    try:
+        _, payload = fit_provider_payload(context, make_payload, ceiling=ceiling, strict=True)
+    except ContextBudgetExceeded:
+        return None
+    def size(item):
+        return len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    if estimate_payload(payload) >= previous or size(payload) >= size(rejected_payload):
+        return None
+    return payload
