@@ -145,6 +145,16 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Limites restantes: ordem causal completa na janela de crash de inputs ainda sem job/ACK, contexto de turnos posteriores já observados, recuperação de efeitos/journals/eventos fora da transação (incluindo appraisal/self-choice), autorização/invalidação concorrente no limite do envio físico, encerramento/reinício real do dispatcher, rollback/migration/versionamento e backup/restore do schema candidato. Completar matriz D01–D16 e medição de recursos antes de promover; web e anexos ficam explicitamente fora do piloto textual.
 - Próxima ação: verificar CI atualizado, corrigir regressões, fechar os gates de integração e preparar certificação de produção com schema/registry aprovados, backup/restore, rollout/rollback e único Gateway. Não habilitar em produção nem iniciar RUN 02 antes do gate. Northflank, Altare, dados e configuração ativos intactos.
 
+### RUN 01 — validação da integração e preparação de rollback (23/11/2026)
+
+- Revisão de integração 59dcbec aprovada: 8/8 workflows PASS. [PG18 lab](https://github.com/Sllay/Amora-Chibi/actions/runs/45304308552) 228 PASS; os oito casos integrados passaram nos dois bancos, inclusive FIFO após correção. [Core](https://github.com/Sllay/Amora-Chibi/actions/runs/45304308571) 2.127 PASS / 143 skipped em 3.11, matriz 3.11–3.14 PASS.
+- Nova implementação: admissão atômica de input + journal + job antes de ACK (3938f88, 8daca9a, f87b84c, a07c54d), mantendo reflexão reconciliável. Teste de rollback no INSERT/ENQUEUE (c0ae12d).
+- Migração PG18 aditiva do componente v1, mantendo base v18 e instalação explícita: a15b56, 96cac38. Revisão estrutural fail-closed no startup PG/SQLite (3103b3d, e73797f, 3bb2c96, 54d0d60, 8ea3881). O instalador sintético usa o mesmo contrato de migração. Não aplicada a produção; revisão integral de constraints/privilégios/backup real ainda necessária.
+- Modos off/accept/drain com opt-in explícito e registry PG condicionado; status autenticado sem conteúdo de usuário. Commits b6ea2e8, 33d0e05, 1365f77, d638b12, 9f919e4. Drain mantém trabalho aceito e rejeita novo ingresso elegível; exige janela de manutenção, pois o worker não garante reenvio indefinido de ingresso não aceito.
+- Novos testes de drain, schema divergente e aprovação (5ce3d26) e backup/restore nativo em SQLite/PG18 com novo Core, ready + pending preservados, ACK e ordem (58c7e72). CI desse novo conjunto ainda não confirmado. Não confundir 8/8 da revisão 59dcbec com validação da nova revisão.
+- [Runbook de rollout e rollback](RUN01_ROLLOUT_AND_ROLLBACK.md), commit bb6c575: backup/restore isolado, preflight, drenagem sem apagar fila, gates de produção. Sem mudança de flags, schema ou implantação ativa.
+- Gate atual: CI atualizado, revisar efeitos/contexto causal, recuperação do ACK físico desconhecido, concorrência de invalidação/claim, status e recursos; confirmar backend e SHA efetivos de produção, backup/restore privado e autorização canário Northflank. RUN 01 permanece aberta. Não iniciar RUN 02.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
