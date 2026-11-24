@@ -139,9 +139,11 @@ jobs:
           cp artifacts/amora-browser-sad.png preview/sad.png
           cp artifacts/amora-browser-angry.png preview/angry.png
           cp artifacts/amora-browser-shouting.png preview/shouting.png
+          cp artifacts/amora-browser-mouth-talk.png preview/mouth-talk.png
+          cp artifacts/amora-browser-mouth-wide.png preview/mouth-wide.png
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png preview/wink-left.png preview/half-blink.png preview/nearly-closed.png preview/closed-smile.png preview/head-left.png preview/head-right.png preview/head-up.png preview/head-down.png preview/gaze-left.png preview/gaze-right.png preview/shy.png preview/crying.png preview/sobbing.png preview/sad.png preview/angry.png preview/shouting.png
+          git add preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png preview/wink-left.png preview/half-blink.png preview/nearly-closed.png preview/closed-smile.png preview/head-left.png preview/head-right.png preview/head-up.png preview/head-down.png preview/gaze-left.png preview/gaze-right.png preview/shy.png preview/crying.png preview/sobbing.png preview/sad.png preview/angry.png preview/shouting.png preview/mouth-talk.png preview/mouth-wide.png
           if ! git diff --cached --quiet; then
             git commit -m "ci(live2d): publish browser animation test [skip ci]"
             git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" || echo "Branch advanced while building; keeping artifact only."
@@ -177,6 +179,8 @@ jobs:
             artifacts/amora-browser-sad.png
             artifacts/amora-browser-angry.png
             artifacts/amora-browser-shouting.png
+            artifacts/amora-browser-mouth-talk.png
+            artifacts/amora-browser-mouth-wide.png
             artifacts/amora-prepared/source_order.json
             artifacts/AmoraBolinha/
           if-no-files-found: error
