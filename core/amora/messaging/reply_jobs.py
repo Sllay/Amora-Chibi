@@ -219,6 +219,27 @@ class ReplyJobRepository:
         return self._write(self._sql("OBSERVE_SENT"), (str(turn_id),),
         ) == 1
 
+    def admit(self, turn_id, message_values, journal_values):
+        """Atomically persist the canonical input, its journal and the job.
+
+        The caller already persisted an authorized audit envelope. A failed
+        insert/claim must not leave an acknowledged input without its job.
+        Existing marked inputs may be recovered, never rewritten.
+        """
+        db = self.database
+        turn_id = str(turn_id)
+        with trace_lock(db._lock), db._conn:
+            if self._postgres:
+                db._conn.execute("PG_REPLY_JOB_CLAIM_LOCK")
+            db._conn.execute(self._sql("HISTORY_INSERT"), message_values)
+            db._conn.execute(self._sql("JOURNAL_INSERT"), journal_values)
+            db._conn.execute(self._sql("ENQUEUE_TURN"),
+                (self._now().isoformat(), turn_id))
+            state = db._conn.execute(self._sql("STATE"), (turn_id,)).fetchone()
+            if state is None:
+                raise _LeaseConflict("DURABLE_ADMISSION_NOT_PERSISTED")
+            return dict(state)
+
     def enqueue_turn(self, turn_id: str) -> bool:
         return self._write(self._sql("ENQUEUE_TURN"),
             (self._now().isoformat(), str(turn_id))) == 1
