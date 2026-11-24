@@ -285,3 +285,35 @@ def test_run02_compaction_keeps_original_and_does_not_repeat_payload():
     assert reduced["plan"] == rejected["plan"]
     assert context.specialist_support is not None
     assert compact_rejected_payload(context, build, reduced) is None
+
+
+def test_run02_probe_is_acquired_at_dispatch_and_cannot_expire_in_flight():
+    registry = ProviderCircuitRegistry(half_open_probe_lease_seconds=2)
+    now = datetime(2026, 11, 24, tzinfo=timezone.utc)
+    task = TaskClass.SOCIAL_DIALOGUE.value
+    registry.open("groq", task, until=now, failure_count=1)
+    assert registry.excluded_names(task, now=now) == set()
+    assert registry.excluded_names(task, now=now) == set()
+    assert registry.begin_attempt("groq", task, now=now)
+    later = now + timedelta(seconds=200)
+    assert registry.excluded_names(task, now=later) == {"groq"}
+    assert not registry.begin_attempt("groq", task, now=later)
+    registry.end_attempt("groq", task, now=later)
+    assert registry.begin_attempt("groq", task, now=later)
+    registry.close("groq", task)
+    registry.end_attempt("groq", task, now=later)
+    assert registry.record("groq", task).state is CircuitState.CLOSED
+
+
+def test_run02_small_safe_reduction_is_accepted_without_cutting_literal_input():
+    from amora.cognition.context_budget import compact_rejected_payload
+    context = _context()
+    context.user_text = "z" * 4000
+    context.specialist_support = {"note": "x" * 100}
+    def build(item):
+        return {"text": item.user_text, "support": item.specialist_support}
+    original = build(context)
+    smaller = compact_rejected_payload(context, build, original)
+    assert smaller is not None and smaller["support"] is None
+    assert smaller["text"] == context.user_text
+    assert compact_rejected_payload(context, build, smaller) is None
