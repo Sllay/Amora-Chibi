@@ -250,6 +250,13 @@ class ReplyJobRepository:
                 (claim.turn_id, claim.token, self._now().isoformat())).fetchone()
         return dict(row) if row else None
 
+    def verify_schema(self):
+        with trace_lock(self.database._lock):
+            if self._postgres:
+                return self.database._conn.verify_reply_component()
+            from amora.storage.reply_job_schema import verify_sqlite_reply_schema
+            return verify_sqlite_reply_schema(self.database._conn)
+
     def counts(self):
         with trace_lock(self.database._lock):
             rows = self.database._conn.execute(self._sql("COUNTS")).fetchall()
