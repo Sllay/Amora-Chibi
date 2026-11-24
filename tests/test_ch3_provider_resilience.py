@@ -317,3 +317,54 @@ def test_run02_small_safe_reduction_is_accepted_without_cutting_literal_input():
     assert smaller is not None and smaller["support"] is None
     assert smaller["text"] == context.user_text
     assert compact_rejected_payload(context, build, smaller) is None
+
+
+@pytest.mark.asyncio
+async def test_run02_shared_account_cooldown_across_dialogue_memory_vision_web():
+    from amora.cognition.provider_quota import ProviderQuotaCoordinator, ProviderQuotaDeferred
+    from amora.time import SimulatedClock
+    clock = SimulatedClock(datetime(2026, 11, 24, tzinfo=timezone.utc))
+    quota = ProviderQuotaCoordinator(clock)
+    with pytest.raises(ProviderError):
+        async with quota.admission("groq"):
+            raise ProviderError("synthetic", status_code=429, retry_after="120")
+    for provider in ("groq_memory", "groq_vision", "groq_web"):
+        with pytest.raises(ProviderQuotaDeferred) as caught:
+            async with quota.admission(provider):
+                pytest.fail("rate-limited shared account was contacted")
+        assert float(caught.value.retry_after) == 120
+    async with quota.admission("numes"):
+        pass
+    clock.advance(timedelta(seconds=121))
+    async with quota.admission("groq_memory"):
+        assert quota.snapshot()["groq"]["in_flight"]
+    assert not quota.snapshot()["groq"]["in_flight"]
+
+
+@pytest.mark.asyncio
+async def test_run02_account_admission_releases_on_cancellation_and_is_fifo():
+    import asyncio
+    from amora.cognition.provider_quota import ProviderQuotaCoordinator
+    from amora.time import SimulatedClock
+    quota = ProviderQuotaCoordinator(SimulatedClock())
+    entered = asyncio.Event()
+    order = []
+    async def owner():
+        async with quota.admission("groq"):
+            entered.set()
+            await asyncio.Event().wait()
+    async def contender(name):
+        async with quota.admission(name):
+            order.append(name)
+    task = asyncio.create_task(owner())
+    await entered.wait()
+    first = asyncio.create_task(contender("groq_memory"))
+    await asyncio.sleep(0)
+    second = asyncio.create_task(contender("groq_vision"))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.gather(first, second)
+    assert order == ["groq_memory", "groq_vision"]
+    assert not quota.snapshot()["groq"]["in_flight"]
