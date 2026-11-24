@@ -14,6 +14,7 @@ from amora.events import PrivacyScope
 from amora.messaging.models import (AttentionDecision, MessagingPlatform, OutboundMessage,
     RoutingAction, InboundMessage, ChannelType, ExternalActorRef, TransportInvalidation)
 from amora.messaging.generation_lifecycle import InboundGenerationLost
+from amora.messaging.store import MessagingStore
 from amora.messaging.reply_jobs import ReplyJobRepository, ReplyReason
 from amora.storage.database import AmoraDatabase
 from amora.storage.reply_job_schema import REPLY_JOB_CANDIDATE_SQL
@@ -464,20 +465,26 @@ async def test_integrated_checkpoint_survives_finalize_error_and_reuses_provider
     core.cognition.register_provider(provider)
     msg = _dm(core)
     turn = core.messaging._turn_id(msg)
-    original = runtime.call
-    async def fail_finalize(operation, *args, **kwargs):
-        if operation == "finalize":
-            raise RuntimeError("SYNTHETIC_STORAGE_FAILURE")
-        return await original(operation, *args, **kwargs)
+    original = MessagingStore.persist_prepared_reply
+    def fail_finalize(store, *args, **kwargs):
+        original(store, *args, **kwargs)
+        # Fail *after* history, outbound, and audit have been written, before
+        # the job is ready. The single transaction must roll back all of them.
+        raise RuntimeError("SYNTHETIC_STORAGE_FAILURE")
     try:
         assert "DURABLE_REPLY_ACCEPTED" in (await core.messaging.receive(msg)).decision.reason_codes
-        monkeypatch.setattr(runtime, "call", fail_finalize)
+        monkeypatch.setattr(MessagingStore, "persist_prepared_reply", fail_finalize)
         assert await runtime.run_once()
-        assert (await original("state", turn))["status"] == "retry_wait"
+        assert (await runtime.call("state", turn))["status"] == "retry_wait"
         assert not core.cognition.store.list_messages(turn_id=turn, speaker_id="ENTITY_AMORA")
+        assert not core.cognition.store.list_segments(turn)
         assert core.messaging_store.get_outbound(core.messaging._outbound_id(msg)) is None
+        audit = core.messaging_store.get_audit(platform=msg.platform,
+            account_scope=msg.account_scope, conversation_id=msg.conversation_id,
+            message_id=msg.message_id)
+        assert not audit.responded
         assert provider.calls == 1
-        monkeypatch.setattr(runtime, "call", original)
+        monkeypatch.setattr(MessagingStore, "persist_prepared_reply", original)
         # Replace dispatcher instance, retain only database state.
         await runtime.stop()
         core.messaging.durable_replies = None
