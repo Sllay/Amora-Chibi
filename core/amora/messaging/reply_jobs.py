@@ -252,13 +252,19 @@ class ReplyJobRepository:
                         (claim.turn_id, claim.token, self._now().isoformat())).fetchone() is None:
                     return False
                 for segment_values, message_values in records:
-                    db._conn.execute(self._sql("SEGMENT_INSERT"), segment_values)
-                    db._conn.execute(self._sql("HISTORY_INSERT"), message_values)
-                store.persist_prepared_reply(
+                    if db._conn.execute(self._sql("SEGMENT_INSERT"), segment_values).rowcount != 1:
+                        raise ValueError("DURABLE_REPLY_SEGMENT_CONFLICT")
+                    if db._conn.execute(self._sql("HISTORY_INSERT"), message_values).rowcount != 1:
+                        raise ValueError("DURABLE_REPLY_HISTORY_CONFLICT")
+                persisted = store.persist_prepared_reply(
                     message, decision, outbound, reasons,
                     lease=(claim.turn_id, claim.token),
                     native_hash=outbound.metadata["durable_native_hash"],
                 )
+                if (persisted.id != outbound.id or persisted.text != outbound.text
+                        or persisted.source_message_id != outbound.source_message_id
+                        or persisted.conversation_id != outbound.conversation_id):
+                    raise ValueError("DURABLE_REPLY_OUTBOUND_CONFLICT")
                 if db._conn.execute(self._sql("MARK_READY"),
                         (oid, claim.turn_id, claim.token, self._now().isoformat(), oid)).rowcount != 1:
                     raise _LeaseConflict()
