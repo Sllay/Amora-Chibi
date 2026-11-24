@@ -54,6 +54,17 @@ def test_avatar_api_project_asset_and_static_studio(tmp_path: Path, monkeypatch)
         fetched = client.get("/v1/avatar/assets/test_face", headers=headers); assert fetched.status_code == 200 and fetched.content.startswith(b"\x89PNG")
         state = client.get("/v1/avatar/state", headers=headers); assert state.status_code == 200 and state.json()["expression"] in {"neutral", "happy", "sad", "angry"}
         studio = client.get("/avatar/"); assert studio.status_code == 200 and "Amora Avatar" in studio.text
+        visual = client.get("/visual-engine/")
+        assert visual.status_code == 200
+        assert "Amora Bolinha" in visual.text
+        assert "AmoraVisualEngine" in visual.text
+        assert "extra_mouth_open_wide" in visual.text
+        assert "extra_tear_L" in visual.text
+        assert "closed_smile_L" in visual.text
+        assert visual.headers["content-type"].startswith("text/html")
+        assert client.get("/visual-engine").status_code in {200,307,308}
+        # Existing interactive studio continues to function independently.
+        assert client.get("/avatar/").status_code == 200
     finally: core.close()
 
 
