@@ -83,6 +83,15 @@ class CognitiveEngine:
                     "available": item.available,
                     "streaming": item.supports_streaming,
                     "provider_class": item.provider_class.value,
+                    "tasks": sorted(task.value for task in item.capabilities),
+                    "structured_output": item.supports_structured_output,
+                    "context_window_tokens": item.context_window_tokens,
+                    "output_limit_tokens": item.metadata.get("output_limit_tokens"),
+                    "allowed_privacy_scopes": sorted(scope.value for scope in item.allowed_privacy_scopes),
+                    "quota_remaining": item.quota_remaining,
+                    "cost_score": item.cost_score,
+                    "latency_score": item.latency_score,
+                    "zero_cost_path_confirmed": item.metadata.get("zero_cost_path") is True,
                 }
                 for item in self.router.descriptors()
             ],
