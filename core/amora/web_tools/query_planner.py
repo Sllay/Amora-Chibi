@@ -10,9 +10,12 @@ import asyncio
 import json
 import os
 import re
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
+
+from amora.cognition.provider_quota import ProviderQuotaDeferred
 
 from .navigator import _clean, _fold_search, _topic_terms, _public_url
 
@@ -66,13 +69,22 @@ def validated_queries(raw: Any, original: str) -> list[str]:
 class GroqQueryPlanner:
     """Ephemeral Groq call: no transcripts, private memories, or cookies."""
 
-    def __init__(self, api_key: str | None, *, model: str | None = None):
+    def __init__(self, api_key: str | None, *, model: str | None = None, quota=None):
+        self.quota = quota
         self.api_key = str(api_key or "").strip()
         self.model = model or os.getenv("AMORA_WEB_QUERY_PLANNER_MODEL", DEFAULT_MODEL)
 
     @property
     def available(self) -> bool:
         return bool(self.api_key and _enabled())
+
+    @asynccontextmanager
+    async def _admission(self):
+        if self.quota is None:
+            yield
+        else:
+            async with self.quota.admission("groq_web", max_wait=0.25):
+                yield
 
     async def plan(self, user_text: str, fallback_query: str) -> list[str]:
         if not self.available:
@@ -115,26 +127,29 @@ class GroqQueryPlanner:
         }
         try:
             timeout = httpx.Timeout(MAX_PLANNER_SECONDS, connect=1.6)
-            async with httpx.AsyncClient(
-                timeout=timeout, follow_redirects=False,
-                trust_env=False, limits=httpx.Limits(
-                    max_connections=1, max_keepalive_connections=0
-                ),
-            ) as client:
-                response = await asyncio.wait_for(client.post(
-                    GROQ_URL,
-                    headers={
-                        "Authorization": "Bearer " + self.api_key,
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                ), timeout=MAX_PLANNER_SECONDS)
+            async with self._admission():
+                async with httpx.AsyncClient(
+                    timeout=timeout, follow_redirects=False,
+                    trust_env=False, limits=httpx.Limits(
+                        max_connections=1, max_keepalive_connections=0
+                    ),
+                ) as client:
+                    response = await asyncio.wait_for(client.post(
+                        GROQ_URL,
+                        headers={
+                            "Authorization": "Bearer " + self.api_key,
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    ), timeout=MAX_PLANNER_SECONDS)
+                if self.quota is not None:
+                    self.quota.observe("groq_web", response.status_code, response.headers.get("retry-after"))
             if response.status_code != 200 or len(response.content) > 18000:
                 return [fallback_query]
             raw = response.json()
             content = raw["choices"][0]["message"]["content"]
             queries = validated_queries(json.loads(content), fallback_query)
             return queries or [fallback_query]
-        except (httpx.HTTPError, asyncio.TimeoutError, ValueError,
+        except (ProviderQuotaDeferred, httpx.HTTPError, asyncio.TimeoutError, ValueError,
                 TypeError, KeyError, IndexError, json.JSONDecodeError):
             return [fallback_query]
