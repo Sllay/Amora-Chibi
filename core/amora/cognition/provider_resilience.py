@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import math
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,6 +12,7 @@ from typing import Any
 import httpx
 
 from .providers import ProviderError
+from .durable_realization import DURABLE_REALIZATION
 from .realization import RealizationError, RealizationValidator, response_semantic_filter_enabled
 
 
@@ -46,7 +48,8 @@ def retry_after_seconds(value: str | None, *, now: datetime | None = None) -> fl
     if not raw:
         return None
     try:
-        return max(0.0, float(raw))
+        delay = float(raw)
+        return max(0.0, delay) if math.isfinite(delay) else None
     except (TypeError, ValueError):
         pass
     try:
@@ -70,13 +73,17 @@ def classify_provider_failure(
 
     if isinstance(exc, (asyncio.TimeoutError, httpx.TimeoutException)):
         return ProviderFailure("PROVIDER_TIMEOUT", True)
-    if isinstance(exc, httpx.NetworkError):
+    if isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError)):
         return ProviderFailure("PROVIDER_NETWORK", True)
     if isinstance(exc, StructuredRealizationProviderError):
         return ProviderFailure("PROVIDER_STRUCTURED_OUTPUT_INVALID", False)
     if isinstance(exc, ProviderError):
         status = exc.status_code
         retry_after = retry_after_seconds(exc.retry_after, now=now)
+        if status == 413:
+            return ProviderFailure("PROVIDER_INPUT_TOO_LARGE", False, status)
+        if status in {401, 403, 404}:
+            return ProviderFailure("PROVIDER_CONFIGURATION_BLOCKED", False, status)
         if status in _NON_RETRYABLE_STATUS:
             return ProviderFailure(f"PROVIDER_HTTP_{status}", False, status, retry_after)
         if status == 429:
@@ -163,7 +170,8 @@ class ResilientProviderProxy:
                 raise
             except Exception as exc:
                 failure = classify_provider_failure(exc)
-                if not failure.retryable or transport_attempt >= self.max_retries:
+                if (DURABLE_REALIZATION.get() is not None or not failure.retryable
+                        or transport_attempt >= self.max_retries):
                     raise
                 transport_attempt += 1
                 delay = self._retry_delay(failure, attempt=transport_attempt)
