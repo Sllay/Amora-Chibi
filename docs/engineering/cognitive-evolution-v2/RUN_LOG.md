@@ -183,6 +183,15 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Testes adicionados: classificação, retry único, compactação, Groq mock, SSE progress/heartbeat, 429 e 401 integrados nos dois bancos (1754593, 6dee2fd, b2a5489, ec98e73). Ainda sem PASS do HEAD. Nenhum provider real chamado.
 - Pendente dentro da RUN 02: registro completo de capacidades/limites observados, quotas compartilhadas com visão/web/reflexão e seus gates, half-open adquirido no momento da tentativa, métricas de saúde e liveness dos demais adapters, reparo 413 nos outros caminhos compatíveis, testes integrados de failover e CI completo. Não marcar RUN 02 concluída nem iniciar RUN 03 até fechar esse escopo e obter CI verde. Bateria profunda e produção permanecem após RUN 07.
 
+### RUN 02 — incremento B: regressões e coordenação de conta (24/11/2026)
+
+- CI 211b40b: 8/9 PASS; Core Python 3.14 2.138 passed, 151 skipped, 2 failed; demais versões canceladas pela matriz. Workflow 45429536281; PG18 45429536745 PASS. Falhas: novo teste 413 exigia redução sobre envelope já praticamente mínimo; teste do Visual Engine introduzido na base esperava página pública e middleware respondia 401.
+- 1a43c04: permite GET/HEAD exclusivamente nos três caminhos HTML estáticos de /visual-engine, sem liberar APIs privadas, métodos de escrita ou worker. fb0b47c: tenta redução preferencial de 20%, ou redução estrita menor quando o contexto causal mínimo impede o alvo; nunca repetir envelope igual. 40e570e e 268a5ff: fixture genuinamente redutível, teste de redução pequena e proteção do literal.
+- cc88c0b, d84af27, f65b104: half-open adquirido no despacho real, não na seleção; mantém exclusão durante toda tentativa, libera também em cancelamento. Teste com relógio simulado cobre tentativa superior à lease anterior.
+- 6d69b9b, c02bec0, 60b4046, e5239f5, 204e901, 367d101, 835adb4: coordenador de conta por Core, lock FIFO com espera limitada, cooldown de 429 compartilhado por diálogo, reflexão, visão de entrada Groq/NVIDIA e planejador web Groq. Não assume RPM/TPM reais. Alias conhecido compartilha conta; backoff sem acesso remoto; web retorna consulta determinística. Uma operação concorrente por conta é política conservadora inicial, a calibrar. 5d9c985: testes de cooldown cruzado, independência de contas e cancelamento/FIFO.
+- 90ef95a: estado expõe tarefas, suporte estruturado, janela de contexto, saída quando conhecida, privacidade, quota e indicadores de ranking sem credenciais.
+- Pendente: confirmar CI neste HEAD, corrigir regressões; verificar cobertura dos demais adapters (incluindo visão de expressões, rotas legadas e SSE não Numes), métricas observadas e testes de integração/failover restantes. Nenhuma quota upstream inventada, nenhum deploy ou merge. RUN 02 ainda IN_PROGRESS.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
