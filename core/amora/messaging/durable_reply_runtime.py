@@ -233,12 +233,13 @@ class DurableReplyRuntime:
             **request.metadata, "response_display_text": outbound.text}})
         segmenter = SpeechSegmenter()
         records = []
+        journals = []
         for raw in [*segmenter.feed(outbound.text), *segmenter.flush()]:
             built = engine._build_segment_record(request, raw, len(records),
                 outbound.metadata.get("provider"), outbound.metadata.get("model"))
             if built is None:
                 continue
-            segment, message, _ = built
+            segment, message, fields = built
             segment.id = uuid5(NAMESPACE_URL, f"amora:durable-segment:{request.turn_id}:{segment.ordinal}")
             message.id = uuid5(NAMESPACE_URL, f"amora:durable-history:{request.turn_id}:{segment.ordinal}")
             segment.queued_at = outbound.created_at
@@ -247,9 +248,22 @@ class DurableReplyRuntime:
             message.metadata["segment_id"] = str(segment.id)
             message.metadata.update(engine._segment_execution_metadata(request, None, segment.speech_text))
             records.append((engine.store._segment_values(segment), engine.store._message_values(message)))
+            fields["payload"].update({"segment_id": str(segment.id), "message_id": str(message.id)})
+            entry = engine._journal_entry(request, JournalStage.SPEECH_SEGMENT_READY,
+                **fields, dedupe_key=f"journal:durable-segment:{request.turn_id}:{segment.ordinal}")
+            journals.append(engine.store._journal_values(entry))
         if not records:
             raise ValueError("DURABLE_REPLY_EMPTY_HISTORY")
-        return records
+        for stage, summary, dedupe in (
+            (JournalStage.RESPONSE_PLANNED, "durable validated response ready", "response-planned"),
+            (JournalStage.TURN_FINISHED, "durable cognitive turn ready for delivery", "turn-finished"),
+        ):
+            entry = engine._journal_entry(request, stage, summary=summary,
+                provider=outbound.metadata.get("provider"), model=outbound.metadata.get("model"),
+                reason_codes=["DURABLE_REPLY_READY"], payload={"segments": len(records)},
+                dedupe_key=f"journal:{dedupe}:{request.turn_id}")
+            journals.append(engine.store._journal_values(entry))
+        return records, journals
 
     async def execute(self, claim):
         try:
@@ -306,8 +320,8 @@ class DurableReplyRuntime:
             if decision is None:
                 await self.call("block", claim, ReplyReason.AUTHORIZATION_REVOKED)
                 return
-            records = self._history_records(request, outbound)
-            if not await self.call("finalize", claim, message, decision, outbound, reasons, records):
+            records, journals = self._history_records(request, outbound)
+            if not await self.call("finalize", claim, message, decision, outbound, reasons, records, journals):
                 raise InboundGenerationLost("DURABLE_REPLY_FINALIZE_LOST")
             _LOG.info("durable_reply_ready turn_id=%s attempts=%d", claim.turn_id, claim.attempts)
         except DeferredRealization as exc:
