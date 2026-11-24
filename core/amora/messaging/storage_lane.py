@@ -48,7 +48,7 @@ class MessagingStorageWorker:
             return self.generations.stage(*args)
         if operation == "prepared":
             return self.generations.prepared(*args)
-        if operation not in {"state", "counts", "enqueue_turn", "load", "claim",
+        if operation not in {"state", "counts", "admit", "enqueue_turn", "load", "claim",
                              "renew", "defer", "block", "cancel_invalidated",
                              "reconcile_missing", "reconcile_outbound"}:
             raise ValueError("REPLY_JOB_OPERATION_NOT_ALLOWED")
