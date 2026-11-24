@@ -155,6 +155,13 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - [Runbook de rollout e rollback](RUN01_ROLLOUT_AND_ROLLBACK.md), commit bb6c575: backup/restore isolado, preflight, drenagem sem apagar fila, gates de produção. Sem mudança de flags, schema ou implantação ativa.
 - Gate atual: CI atualizado, revisar efeitos/contexto causal, recuperação do ACK físico desconhecido, concorrência de invalidação/claim, status e recursos; confirmar backend e SHA efetivos de produção, backup/restore privado e autorização canário Northflank. RUN 01 permanece aberta. Não iniciar RUN 02.
 
+### RUN 01 — revisão de integridade do schema (23/11/2026)
+
+- Revisão 36266a3: CI anterior ainda incompleto no momento da revisão; não reutilizar o PASS de 59dcbec como certificação da nova versão.
+- Lacuna encontrada: a revisão PG18 aceitava cinco CHECKs mesmo quando uma expressão era substituída por uma versão mais permissiva. Correção 678ec00: comparar as definições canônicas do catálogo, exigir constraints validadas/enforced e conferir a identidade real da tabela referenciada pela FK.
+- Regressão 7edeac7: alterar o CHECK da revisão de transporte de >=1 para >=0 sem mudar o número de constraints; a revisão deve rejeitar o schema. Teste no laboratório PG18 ainda pendente, incluindo confirmação da representação canônica real do catálogo.
+- Gate: aguardar evidência de PASS do Core e PG18 no HEAD, corrigir eventuais divergências e registrar contagens efetivas; sem merge, deploy, flags ou migração de produção. Os gates de ACK físico, causalidade, invalidação concorrente, recursos e certificação real permanecem abertos.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
