@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
+import random
 from contextlib import suppress
 from time import monotonic
 from uuid import NAMESPACE_URL, uuid5
@@ -247,8 +249,14 @@ class DurableReplyRuntime:
         # Minimal RUN 01 recovery; provider-aware Retry-After/circuits are RUN 02.
         return min(300, 5 * (2 ** min(6, max(0, attempts - 1))))
 
-    async def defer(self, claim, reason):
-        return await self.call("defer", claim, reason, delay_seconds=self.delay(claim.attempts))
+    async def defer(self, claim, reason, *, retry_after_seconds=None):
+        # Jitter avoids synchronized retries; never undercut a server delay.
+        delay = max(1, math.ceil(self.delay(claim.attempts) * random.uniform(0.8, 1.0)))
+        if retry_after_seconds is not None:
+            if not math.isfinite(retry_after_seconds) or retry_after_seconds > 604800:
+                return await self.call("block", claim, ReplyReason.CONFIGURATION_BLOCKED)
+            delay = max(delay, math.ceil(retry_after_seconds))
+        return await self.call("defer", claim, reason, delay_seconds=delay)
 
     async def _heartbeat(self, claim, work):
         while not work.done():
@@ -268,7 +276,7 @@ class DurableReplyRuntime:
             return await asyncio.wait_for(
                 self.service.cognition.respond_observed(request, on_segment=None,
                     fallback_text=self.service.conversation.composer.operational_provider_fallback()),
-                timeout=self.service.cognition_timeout_seconds)
+                timeout=self.service.cognition_timeout_seconds + 120.0)
         finally:
             self.service._active_dm_progress.discard(claim.turn_id)
             DURABLE_AUTHORIZATION.reset(guard_token)
@@ -380,10 +388,11 @@ class DurableReplyRuntime:
                 await self.call("cancel_invalidated")
                 await self.call("block", claim, ReplyReason.AUTHORIZATION_REVOKED)
             elif any(reason in {"DURABLE_CALLBACK_UNSUPPORTED",
-                                "CONFIDENTIAL_OUTPUT_SUPPRESSED"} for reason in exc.reasons):
+                                "CONFIDENTIAL_OUTPUT_SUPPRESSED", "PROVIDER_CONFIGURATION_BLOCKED"} for reason in exc.reasons):
                 await self.call("block", claim, ReplyReason.CONFIGURATION_BLOCKED)
             else:
-                await self.defer(claim, ReplyReason.PROVIDER_TEMPORARY)
+                await self.defer(claim, ReplyReason.PROVIDER_BACKOFF if exc.retry_after_seconds is not None
+                    else ReplyReason.PROVIDER_TEMPORARY, retry_after_seconds=exc.retry_after_seconds)
         except TimeoutError:
             await self.defer(claim, ReplyReason.GENERATION_TIMEOUT)
         except InboundGenerationLost:
