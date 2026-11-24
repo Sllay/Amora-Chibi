@@ -16,7 +16,7 @@ from uuid import NAMESPACE_URL, uuid5
 from pydantic import ValidationError
 
 from amora.cognition import CognitiveRequest
-from amora.cognition.durable_realization import DURABLE_REALIZATION, DeferredRealization
+from amora.cognition.durable_realization import DURABLE_REALIZATION, DeferredRealization, DURABLE_AUTHORIZATION
 from amora.cognition.models import JournalStage
 from amora.cognition.speech import SpeechSegmenter
 from amora.events import PrivacyScope
@@ -214,7 +214,11 @@ class DurableReplyRuntime:
                 return
 
     async def _generate(self, claim, message, request):
+        async def live_guard():
+            return (self.authorize(message, request) is not None
+                    and await self.call("renew", claim))
         token = DURABLE_REALIZATION.set(claim.turn_id)
+        guard_token = DURABLE_AUTHORIZATION.set(live_guard)
         self.service._active_dm_progress.add(claim.turn_id)
         try:
             return await asyncio.wait_for(
@@ -223,6 +227,7 @@ class DurableReplyRuntime:
                 timeout=self.service.cognition_timeout_seconds)
         finally:
             self.service._active_dm_progress.discard(claim.turn_id)
+            DURABLE_AUTHORIZATION.reset(guard_token)
             DURABLE_REALIZATION.reset(token)
 
     def _history_records(self, request, outbound):
@@ -327,7 +332,10 @@ class DurableReplyRuntime:
         except DeferredRealization as exc:
             if "CONTEXT_ENVELOPE_OVERFLOW" in exc.reasons:
                 await self.call("block", claim, ReplyReason.CONTEXT_BLOCKED)
-            elif any(reason in {"DURABLE_SELF_CHOICE_UNSUPPORTED", "DURABLE_CALLBACK_UNSUPPORTED",
+            elif "DURABLE_AUTHORIZATION_LOST" in exc.reasons:
+                await self.call("cancel_invalidated")
+                await self.call("block", claim, ReplyReason.AUTHORIZATION_REVOKED)
+            elif any(reason in {"DURABLE_CALLBACK_UNSUPPORTED",
                                 "CONFIDENTIAL_OUTPUT_SUPPRESSED"} for reason in exc.reasons):
                 await self.call("block", claim, ReplyReason.CONFIGURATION_BLOCKED)
             else:
