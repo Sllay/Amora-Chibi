@@ -12,7 +12,8 @@ from .mesh_providers import (
     CloudflareCognitiveProvider as BaseCloudflareCognitiveProvider,
     OpenRouterCognitiveProvider as BaseOpenRouterCognitiveProvider,
 )
-from .context_budget import ensure_payload, fit_provider_payload, estimate_payload
+from .context_budget import ensure_payload, fit_provider_payload, estimate_payload, compact_rejected_payload
+from .durable_realization import DURABLE_REALIZATION
 from .payload_metrics import log_payload_metrics
 from .models import CognitiveContext
 from .preview import preview_enabled, publish_preview
@@ -179,26 +180,36 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
         raise AssertionError("unreachable memory extraction retry")
 
     async def _responses_realize(self, context: CognitiveContext, *, api_key: str) -> dict[str, object]:
-        _, payload = fit_provider_payload(context, lambda projected: {
-            "model": self.model,
-            "instructions": self._realization_instructions(projected),
-            "input": _responses_input(projected),
-            "stream": False,
-            "temperature": 0.70,
-            "top_p": 0.80,
-            "max_output_tokens": _dialogue_token_budget(projected),
-            "store": False,
-            "reasoning": {"effort": "none"},
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "amora_realization",
-                    "schema": _realization_schema(projected),
-                }
-            },
-        })
+        def build(projected):
+            return {
+                "model": self.model,
+                "instructions": self._realization_instructions(projected),
+                "input": _responses_input(projected),
+                "stream": False,
+                "temperature": 0.70,
+                "top_p": 0.80,
+                "max_output_tokens": _dialogue_token_budget(projected),
+                "store": False,
+                "reasoning": {"effort": "none"},
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "amora_realization",
+                        "schema": _realization_schema(projected),
+                    }
+                },
+            }
+        _, payload = fit_provider_payload(context, build)
         started = perf_counter()
-        root, response = await self._post_responses(payload, api_key=api_key, error_label="structured realization")
+        try:
+            root, response = await self._post_responses(payload, api_key=api_key, error_label="structured realization")
+        except ProviderError as exc:
+            if exc.status_code != 413 or DURABLE_REALIZATION.get() != str(context.turn_id):
+                raise
+            reduced = compact_rejected_payload(context, build, payload)
+            if reduced is None:
+                raise
+            root, response = await self._post_responses(reduced, api_key=api_key, error_label="structured realization compacted")
         set_ms("provider_surface_ms", (perf_counter() - started) * 1000.0)
         parse_started = perf_counter()
         parsed = _parse_responses_json(root, error_message="Groq returned invalid realization JSON")
