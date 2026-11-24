@@ -60,6 +60,7 @@ class DurableReplyRuntime:
             return
         self.service.start_storage_lane()
         # Missing candidate table/registry fails closed before accepting a turn.
+        await self.call("verify_schema")
         await self.call("counts")
         self.active = True
         self.wake = asyncio.Event()
