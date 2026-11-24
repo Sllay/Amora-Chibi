@@ -753,3 +753,64 @@ async def test_integrated_native_backup_restore_new_core_preserves_ready_and_pen
             _docker("exec", service, "rm", "-f", native_dump)
         await _stop_runtime(core)
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_run02_rate_limit_persists_retry_after_and_recovers(lab):
+    from amora.cognition.providers import ProviderError
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-rate-limit")
+    original = provider.realize
+    attempts = []
+    async def realize(context):
+        attempts.append(context.turn_id)
+        if len(attempts) == 1:
+            raise ProviderError("synthetic limit", status_code=429, retry_after="120")
+        return await original(context)
+    provider.realize = realize
+    core.cognition.register_provider(provider)
+    msg = _dm(core)
+    turn = core.messaging._turn_id(msg)
+    try:
+        await core.messaging.receive(msg)
+        assert await runtime.run_once()
+        state = await runtime.call("state", turn)
+        assert state["status"] == "retry_wait"
+        assert len(attempts) == 1
+        assert not core.cognition.store.list_messages(turn_id=turn, speaker_id="ENTITY_AMORA")
+        clock.advance(timedelta(seconds=119))
+        assert not await runtime.run_once()
+        assert len(attempts) == 1
+        clock.advance(timedelta(seconds=2))
+        assert await runtime.run_once()
+        assert len(attempts) == 2
+        assert (await runtime.call("state", turn))["status"] == "ready"
+    finally:
+        await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_run02_permanent_provider_auth_failure_blocks_without_social_fallback(lab):
+    from amora.cognition.providers import ProviderError
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-invalid-key")
+    attempts = []
+    async def realize(context):
+        attempts.append(context.turn_id)
+        raise ProviderError("synthetic auth failure", status_code=401)
+    provider.realize = realize
+    core.cognition.register_provider(provider)
+    msg = _dm(core)
+    turn = core.messaging._turn_id(msg)
+    try:
+        await core.messaging.receive(msg)
+        assert await runtime.run_once()
+        assert (await runtime.call("state", turn))["status"] == "blocked"
+        clock.advance(timedelta(seconds=600))
+        assert not await runtime.run_once()
+        assert len(attempts) == 1
+        assert not core.cognition.store.list_messages(turn_id=turn, speaker_id="ENTITY_AMORA")
+    finally:
+        await _stop_runtime(core)
