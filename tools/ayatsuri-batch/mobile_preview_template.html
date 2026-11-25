@@ -257,23 +257,20 @@ function eye(side,opening,lookX,lookY,irisScale){
  const id="eye_white_"+side,irid="iris_"+side;
  const b=box(id),ib=box(irid);
  const top=box("upper_lid_"+side),bottom=box("lower_lid_"+side);
- const strips=Math.ceil(b.w);
- // Cut the visible aperture out of the untouched face. Its two edges
- // exactly follow the upper/lower lash transforms. The iris remains ROUND.
+ // Both lashes and the aperture use the same integer source columns.
+ // A step-shaped clip follows the actual raster column, avoiding the
+ // interpolated polygon's overshoot at abrupt lash tips. A 1px inset
+ // sits inside the lash pigment rather than exposing its outer AA fringe.
  ctx.save();
  ctx.globalAlpha*=eyeVisibility(opening);
  ctx.beginPath();
- for(let i=0;i<=strips;i++){
-  const x=b.x+b.w*i/strips;
-  const y=Math.min(lowerApertureY(side,x,b,bottom,opening),lidY(x,upperEdgeAt(side,x,b,top),b,top,opening,true));
-  if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+ for(let x=b.x;x<b.x+b.w;x++){
+  const mid=x+.5;
+  const high=lidY(mid,upperEdgeAt(side,mid,b,top),b,top,opening,true)+1;
+  const low=lowerApertureY(side,mid,b,bottom,opening)-1;
+  if(low>high)ctx.rect(x,high,1,low-high);
  }
- for(let i=strips;i>=0;i--){
-  const x=b.x+b.w*i/strips;
-  const y=lowerApertureY(side,x,b,bottom,opening);
-  ctx.lineTo(x,y);
- }
- ctx.closePath();ctx.clip();
+ ctx.clip();
  // Cache one small per-eye canvas, not a full avatar framebuffer.
  // Source-atop preserves the exact derived sclera alpha. Unlike an ellipse,
  // neither gaze overshoot nor a large pupil can escape the nasal corner.
@@ -318,24 +315,20 @@ function apertureY(x,y,eye,top,bottom,opening){
 }
 function lid(side,type,opening){
  const lidName=type+"_lid_"+side,rect=box(lidName),eye=box("eye_white_"+side);
- const img=images[lidName],strips=96,stripW=rect.w/strips;
+ const img=images[lidName],strips=rect.w,stripW=1;
  const upper=type==="upper";
  // One timing curve shared with the exported Cubism mesh. Never allow the
  // upper layer to lead while the lower one trails behind.
  const progress=lidProgress(opening);
  const squeeze=.048;
- const seamOffset=upper?-.005:.005;
  ctx.save();
  ctx.globalAlpha*=1-closedPoseAlpha(opening);
  for(let i=0;i<strips;i++){
   const x=rect.x+i*stripW;
   const mid=x+stripW*.5;
-  const u=Math.max(-1,Math.min(1,(mid-eye.cx)/(eye.w*.55)));
-  const arch=Math.max(0,1-u*u);
-  const target=eye.cy+eye.h*(.035-.205*arch+seamOffset);
   const sy=1-progress+progress*squeeze;
-  const destY=rect.y*(1-progress) + (target+(rect.y-rect.cy)*squeeze)*progress;
-  ctx.drawImage(img,x,rect.y,stripW,rect.h,x,destY,stripW+.5,rect.h*sy);
+  const destY=lidY(mid,rect.y,eye,rect,opening,upper);
+  ctx.drawImage(img,x,rect.y,stripW,rect.h,x,destY,stripW,rect.h*sy);
  }
  ctx.restore();
 }
