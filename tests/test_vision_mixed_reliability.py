@@ -228,3 +228,31 @@ async def test_visual_batch_retry_reuses_only_successful_images(tmp_path,monkeyp
             assert msg.text not in serialized
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_non_image_inputs_never_touch_visual_identity_or_checkpoint_storage(tmp_path, monkeypatch):
+    from amora.messaging.models import AttentionDecision, RoutingAction
+    import amora.messaging.modality_service as modality
+    monkeypatch.setenv("AMORA_HOME",str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        service = core.messaging
+        decision = AttentionDecision(action=RoutingAction.RESPOND,score=1,
+            speaker_entity_id="PERSON_BK",speaker_actor_ref="synthetic",
+            addressee_id="ENTITY_AMORA")
+        def unexpected(*args, **kwargs):
+            pytest.fail("Non-image turn entered the visual authorization/storage path")
+        monkeypatch.setattr(modality,"is_verified_owner",unexpected)
+        monkeypatch.setattr(service,"_visual_checkpoint_call",unexpected)
+        msg = _message(core,message_id="text-only-visual-fast-path",
+            actor_id="111111111111111111",channel_type=ChannelType.DM,
+            text="Me explique o funcionamento de uma imagem digital.").model_copy(
+                update={"remote_processing_allowed":True})
+        for attachments in ([],[AttachmentRef(attachment_id="audio",media_type="audio/ogg")],
+                            [AttachmentRef(attachment_id="doc",media_type="application/pdf")]):
+            candidate = msg.model_copy(update={"attachments":attachments})
+            assert await service._incoming_visual_observation(candidate,decision) is None
+    finally:
+        core.close()

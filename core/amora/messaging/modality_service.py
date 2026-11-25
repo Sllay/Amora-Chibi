@@ -166,7 +166,22 @@ class PlatformMessagingService(BasePlatformMessagingService):
             return "[Usuário enviou uma figurinha cujo significado visual já foi aprendido.]"
         return BasePlatformMessagingService._cognitive_text(message)
 
+    @staticmethod
+    def _has_visual_input(message):
+        return bool(message.incoming_image or message.incoming_images) or any(
+            a.media_type and a.media_type.lower().split(";", 1)[0].startswith("image/")
+            for a in message.attachments
+        ) or (
+            message.incoming_image_status == "IMAGE_UNSUPPORTED_FORMAT"
+            and bool(message.attachments)
+        )
+
     async def _incoming_visual_observation(self, message, decision):
+        # Text/sticker/audio-only turns never enter the visual storage or
+        # authorization path. Inspect only local transport metadata here;
+        # all visual inputs still pass the full live authorization fence.
+        if not self._has_visual_input(message):
+            return None
         if not (message.platform == MessagingPlatform.DISCORD
                 and message.channel_type == ChannelType.DM
                 and message.privacy_scope == PrivacyScope.PERSONAL
@@ -286,14 +301,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
                 'partial' if analyzed else 'unavailable'}
 
     async def _visual_single(self, message):
-        has_image = bool(message.incoming_image) or any(
-            a.media_type and a.media_type.lower().split(";", 1)[0].startswith("image/")
-            for a in message.attachments
-        ) or (
-            message.incoming_image_status == "IMAGE_UNSUPPORTED_FORMAT"
-            and bool(message.attachments)
-        )
-        if not has_image:
+        if not self._has_visual_input(message):
             return None
 
         # The transport status is a machine code, never a source of image

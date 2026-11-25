@@ -331,6 +331,11 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Testes: mesma entrada em conexão reaberta SQLite/PG18, foco diferente, sessão/consentimento/revisão/TTL, partial batch reusa apenas sucesso e repete falha, ausência de mídia crua no evento, revogação antes da retentativa/fallback. CI pendente.
 - Limitações: não é memória visual permanente nem reutilização entre mensagens diferentes; requer redelivery com conteúdo correspondente, não recupera anexo ausente, expiração é lógica (política de limpeza física ainda necessária). Proveniência detalhada v2 preservada; quick legacy sem novo identificador de modelo. Não é certificado live. Demais pendências de web, diálogo e recursos continuam abertas. Sem alteração de produção/main ou monitoramento.
 
+### Integração final — regressão de desempenho D1
+
+- 3930ca1: 12/13 workflows PASS, inclusive PG18 45534388738; Core 45534388801 falhou em Python 3.12 (job 138937286126), 2194 passed, 157 skipped, 1 failed. Benchmark C02 detectou 72 consultas SQL contra limite 68; demais versões canceladas pelo fail-fast. A guarda de checkpoint visual consultava identidade e invalidação duas vezes mesmo em turnos textuais sem anexos de imagem.
+- Correção: classificação local dos anexos precede qualquer consulta visual e compartilha predicado com caminho singular. Texto, áudio e documentos sem mídia visual não iniciam guarda/checkpoint. Imagens reais, lote e metadados de formato não suportado preservam autorização completa. Teste de regressão proíbe acesso ao guard/armazenamento visual para turnos sem imagem. Benchmark C02 permanece inalterado. Nova validação pendente. Sem deploy ou monitoramento.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
