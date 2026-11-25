@@ -147,7 +147,18 @@ def test_security_headers_cors_and_minimal_probes(cloud):
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["referrer-policy"] == "no-referrer"
         assert "microphone=(self)" in response.headers["permissions-policy"]
-        assert "script-src 'self';" in response.headers["content-security-policy"]
+        csp = response.headers["content-security-policy"]
+        script_policy = next(d.strip().split() for d in csp.split(";")
+                             if d.strip().startswith("script-src "))
+        if path == "/visual-engine/":
+            # The dedicated visual-engine test verifies every inline script
+            # hash against the actual HTML. No additional source is allowed.
+            assert script_policy[:2] == ["script-src", "'self'"]
+            assert len(script_policy) > 2
+            assert all(re.fullmatch(r"'sha256-[A-Za-z0-9+/]{43}='", token)
+                       for token in script_policy[2:])
+        else:
+            assert script_policy == ["script-src", "'self'"]
         assert "unsafe-eval" not in response.headers["content-security-policy"]
         assert "access-control-allow-origin" not in response.headers
         assert "set-cookie" not in response.headers
