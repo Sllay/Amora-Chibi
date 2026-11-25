@@ -804,7 +804,7 @@ export class DiscordWorker {
     try {
       for (let drained = 0; drained < 8; drained += 1) {
         const claimStarted = performance.now();
-        const claimed = await this.core.claimOutbound(1, OUTBOUND_CLAIM_LEASE_SECONDS);
+        const claimed = await this.core.claimOutbound(1, OUTBOUND_CLAIM_LEASE_SECONDS, true);
         const messages = claimed?.messages || [];
         if (!messages.length) break;
         safeLog('OUTBOUND_CLAIMED', messages.length);
@@ -816,6 +816,15 @@ export class DiscordWorker {
           continue;
         }
 
+        if (item?.metadata?.discord_delivery_claim) {
+          try {
+            await this.sendCheckpointedOutbound(item);
+          } catch (error) {
+            safeLog('OUTBOUND_SEGMENT_PENDING', errorLabel(error));
+            break;
+          }
+          continue;
+        }
         let externalMessageId = null;
         const sendStarted = performance.now();
         try {
@@ -854,6 +863,42 @@ export class DiscordWorker {
     } finally {
       this.processingOutbound = false;
     }
+  }
+
+  async sendCheckpointedOutbound(item) {
+    const claim = item.metadata.discord_delivery_claim;
+    const {lease, chunks, receipts} = claim;
+    if (item.platform !== 'discord' || typeof lease !== 'string'
+        || !Array.isArray(chunks) || chunks.length < 2 || chunks.length > 32
+        || chunks.some(chunk => typeof chunk !== 'string' || !chunk.trim() || chunk.length > 2000)
+        || !Array.isArray(receipts) || receipts.length >= chunks.length
+        || receipts.some(id => !/^[0-9]{17,20}$/.test(id))) {
+      throw new Error('DISCORD_DELIVERY_CHECKPOINT_INVALID');
+    }
+    const path = `/channels/${encodeURIComponent(item.conversation_id)}/messages`;
+    for (let index = receipts.length; index < chunks.length; index++) {
+      const segment = {lease, index, phase:'prepare'};
+      await this.core.ackOutbound(item.id,{sent:false,segment});
+      let created;
+      try {
+        created = await this.rest.request(path,{method:'POST',body:discordReplyPayload(chunks[index],{
+          firstChunk:index===0,replyToMessageId:item.reply_to_message_id,nonce:discordNonce(item.id,index),
+        })});
+      } catch (error) {
+        if (!isDefinitiveDiscordSendFailure(error)) throw error;
+        await this.core.ackOutbound(item.id,{sent:false,
+          errorCode:`DISCORD_${errorLabel(error)}`.slice(0,120),segment:{...segment,phase:'confirm'}});
+        return;
+      }
+      if (!/^[0-9]{17,20}$/.test(String(created?.id || ''))
+          || String(created?.channel_id) !== String(item.conversation_id)) {
+        throw new Error('DISCORD_SEGMENT_RECEIPT_INVALID');
+      }
+      this.runtime.rememberBotMessage(created);
+      await this.core.ackOutbound(item.id,{sent:true,externalMessageId:String(created.id),
+        segment:{...segment,phase:'confirm'}});
+    }
+    safeLog('OUTBOUND_SEGMENTS_SENT');
   }
 
   async sendOutbound(item) {
