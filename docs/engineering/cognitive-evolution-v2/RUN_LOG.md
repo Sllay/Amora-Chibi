@@ -290,6 +290,13 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Base 1638748. Primeira etapa: inventário de escopo residual, diagnóstico correlacionado sanitizado e métricas limitadas do dispatcher; preparar matriz de certificação e teste transversal. Não remover caminho legado nem ativar fila, trocar banco/host, ou alterar voz/Avatar sem equivalência.
 - Gate final exige fechar pendências de implementação, CI integrado, bateria profunda e certificação Northflank. 11/11 de cada checkpoint não comprova produção. Alvo 512 MB/0,2 vCPU, sem promover automaticamente. Sem monitoramento ChatGPT.
 
+### RUN 07 — incremento A: diagnóstico, métricas e matriz (24/11/2026)
+
+- PR #388 draft; 5e4faed introduz diagnóstico sanitizado do dispatcher, turn_id/job_id iguais ao UUID interno, tentativa, outcome, razão fixa, próximo passo, duração; sem conteúdo ou segredo. Contadores locais limitados por enum e amostra de 256 durações, p50/p95 nearest-rank. Status expõe dados agregados junto às contagens persistentes já existentes; ready != sent. Consulta adicional de estado pós-tentativa, falha de telemetria não muda resultado. Não cobre ainda todos os módulos/provedores ou TTFS/CPU/RAM.
+- Corrigido risco de corrida no cancelamento de asyncio.wait_for(lock.acquire()) usando asyncio.timeout no mesmo task; tolera diagnostics=None. Teste de cancelamento e reutilização da quota, sanitização e limite de amostra.
+- Adicionado cenário transversal de 12 entradas únicas + redelivery, restart com ready, ordem e ACK sintético, contagem de saída e histórico; SQLite/PG18. Sem alegar teste aprovado antes do CI.
+- CERTIFICATION.md registra matriz de contratos residuais por RUN, metodologia de carga/falhas, backup, rollback e critérios live. PROJECT_STATE aponta para candidato. Não mexer em canon de identidade ou voz, schema ativo, Northflank, main ou Avatar. CI pendente, LIVE_PENDING; RUN07 aberta. Próximo trabalho: fechar contratos residuais e executar bateria profunda. Nenhum monitoramento.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.

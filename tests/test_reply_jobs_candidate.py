@@ -893,3 +893,54 @@ async def test_run06_causal_snapshot_preserves_followup_jobs_and_original_text(l
             assert core.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn}").raw_text == message.text
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_run07_burst_restart_duplicate_ack_and_queue_accounting(lab):
+    """Twelve unique accepted inputs, repeated ingress, restart, exact ACKs."""
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-run07-synthetic")
+    core.cognition.register_provider(provider)
+    service = core.messaging
+    inputs = [_dm(core, f"run07-{i}", text=f"Explique o conceito número {i}.")
+              for i in range(12)]
+    try:
+        for message in inputs:
+            message.timestamp = clock.now()
+            accepted = await service.receive(message)
+            assert "DURABLE_REPLY_ACCEPTED" in accepted.decision.reason_codes
+            assert (await service.receive(message)).duplicate
+            clock.advance(timedelta(seconds=1))
+        status = await runtime.status()
+        assert status["counts"].get("pending") == 12
+        assert status["diagnostics"]["receipt_counts"] == {"new_ack":12,"duplicate_ack":12}
+        assert await runtime.run_once()
+        first = service._turn_id(inputs[0])
+        assert (await runtime.call("state",first))["status"] == "ready"
+        assert not await runtime.run_once()  # physical delivery fence
+        await runtime.stop()
+        service.durable_replies = None
+        runtime = service.configure_durable_replies()
+        await runtime.start(background=False)
+        for index, message in enumerate(inputs):
+            if index:
+                assert await runtime.run_once()
+            claim = core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,
+                account_scope="primary")
+            assert len(claim) == 1 and claim[0].id == service._outbound_id(message)
+            assert core.messaging_store.ack_outbound(claim[0].id, sent=True,
+                external_message_id=f"run07-synthetic-ack-{index}")
+            assert (await service.receive(message)).duplicate
+        assert not await runtime.run_once()
+        final = await runtime.status()
+        assert final["counts"].get("sent") == 12
+        assert final["unsettled"] == 0
+        assert provider.calls == 12
+        for message in inputs:
+            turn = service._turn_id(message)
+            assert core.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn}").raw_text == message.text
+            assert len(core.cognition.store.list_messages(turn_id=turn,speaker_id="ENTITY_AMORA")) == 1
+        assert final["diagnostics"]["attempt_outcomes"] == {"ready":11}
+    finally:
+        await _stop_runtime(core)
