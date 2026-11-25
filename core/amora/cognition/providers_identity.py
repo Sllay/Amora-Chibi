@@ -463,7 +463,7 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
 
     def _realization_instructions(self, context: CognitiveContext) -> str:
         return (
-            render_trusted_protocol(context)
+            render_trusted_protocol(context, compact_acir=True)
             + "\n\nAMORA REALIZATION CONTRACT\n"
             + realization_instruction(context)
             + ("\nThe current turn may contain an ordered source-evidence map instead of the full literal. "

@@ -124,11 +124,15 @@ def test_visual_engine_is_public_read_only_but_neighbors_and_api_stay_protected(
     inline = [script for script in inline if script.strip()]
     assert inline, "Visual Engine should have inline visualizer JavaScript"
     csp = html.headers["content-security-policy"]
+    allowed_hashes = set()
     for script in inline:
         expected_hash = "'sha256-" + base64.b64encode(
             hashlib.sha256(script.encode("utf-8")).digest()
         ).decode("ascii") + "'"
         assert expected_hash in csp, "inline app must be trusted by hash"
+        allowed_hashes.add(expected_hash)
+    directive = next(part.strip() for part in csp.split(";") if part.strip().startswith("script-src "))
+    assert set(directive.split()[1:]) == {"'self'"} | allowed_hashes
     assert "script-src 'self'" in csp
     assert "'unsafe-inline'" not in csp.split("script-src", 1)[1].split(";", 1)[0]
     assert client.get("/web/").headers["content-security-policy"] != csp
@@ -137,6 +141,7 @@ def test_visual_engine_is_public_read_only_but_neighbors_and_api_stay_protected(
     assert client.get("/web/").status_code == 200
     assert client.post("/visual-engine/").status_code == 401
     assert client.get("/visual-engine-admin").status_code == 401
+    assert client.get("/visual-engine/unpublished.html").status_code == 401
     assert client.get("/v1/state").status_code == 401
     assert client.get("/v1/avatar/project").status_code == 401
 
@@ -147,7 +152,15 @@ def test_security_headers_cors_and_minimal_probes(cloud):
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["referrer-policy"] == "no-referrer"
         assert "microphone=(self)" in response.headers["permissions-policy"]
-        assert "script-src 'self';" in response.headers["content-security-policy"]
+        script_policy = next(part.strip() for part in response.headers["content-security-policy"].split(";")
+                             if part.strip().startswith("script-src "))
+        if path == "/visual-engine/":
+            # The exact checked-in hashes are asserted in the dedicated test.
+            tokens = script_policy.split()[1:]
+            assert tokens[0] == "'self'" and len(tokens) > 1
+            assert all(token.startswith("'sha256-") and token.endswith("'") for token in tokens[1:])
+        else:
+            assert script_policy == "script-src 'self'"
         assert "unsafe-eval" not in response.headers["content-security-policy"]
         assert "access-control-allow-origin" not in response.headers
         assert "set-cookie" not in response.headers

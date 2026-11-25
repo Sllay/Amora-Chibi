@@ -88,7 +88,8 @@ def test_wire_dedup_preserves_canonical_acir_and_resolves_reference():
                        "intent": "communicate", "proposition": {"roles": {"content": "LITERAL"}}})
     ctx.dialogue_plan["input_acir"] = ctx.acir
     baseline = turn_frame(ctx)
-    wire = render_turn_frame(ctx)
+    assert json.loads(render_turn_frame(ctx).split("\n", 1)[1]) == baseline
+    wire = render_turn_frame(ctx, compact_acir=True)
     compact = json.loads(wire.split("\n", 1)[1])
     assert compact["dialogue_plan"]["input_acir"] == {"same_as": "current_turn.acir"}
     assert compact["current_turn"]["acir"] == baseline["current_turn"]["acir"]
