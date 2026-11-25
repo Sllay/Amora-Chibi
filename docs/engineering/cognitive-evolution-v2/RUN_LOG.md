@@ -37,8 +37,8 @@ gate próprio em PLAN.md. Status de produção deve ser verificado separadamente
 | 02 | Intelligent Provider Orchestrator | CI_PASS (10/10, bd0d827); cobertura residual registrada |
 | 03 | Adaptive Context & Comprehension Engine | CI_PASS (11/11, 978d9f8); escopo residual registrado |
 | 04 | Advanced Multimodal Perception | CI_PASS (11/11, cbe211b); escopo residual registrado |
-| 05 | Autonomous Web Intelligence | IN_PROGRESS |
-| 06 | Living Conversation Engine | PLANNED |
+| 05 | Autonomous Web Intelligence | CI_PASS (11/11, a431fb0); escopo residual registrado |
+| 06 | Living Conversation Engine | IN_PROGRESS |
 | 07 | Cognitive Integration & Certification | PLANNED |
 
 ## RUN 00 — 2026-11-23 — preparação
@@ -263,6 +263,16 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Fallback Reader/browser por página no modo aprofundado, sem reencaminhar falha explícita de rede privada/URL inválida ao renderer; URLs compartilhadas passam filtro de parâmetros sensíveis. Transporte existente de DNS/IP pinning e redirects permanece. Correção em _call: mantém slot do thread de HTTP/DNS até saída real, mesmo quando awaiter cancela; não promete interrupção imediata de socket. Core mantém orçamento externo de 16s para deep, sem novo serviço e sem browser permanente.
 - Notebook v18 existente registra até cinco fontes abertas no modo deep e provenance disponível, referências ordenadas, sem DDL. Instrução de realização exige distinguir resultados e páginas lidas, comparar evidências, explicitar divergências e incompletude. Nenhuma confirmação automática de fatos/contradições. Testes sintéticos: consulta contextual/rápida, diversidade, fallback 403 por página, isolamento notebook, resultado parcial sob deadline, rede privada negada, slot durante cancelamento. Ainda não há resultado CI do novo HEAD confirmado.
 - Pendências: checkpoint por turno recuperável durante execução/restart, continuidade sem repetir consultas e leituras já concluídas, TTL/validade e revogação, avaliação semântica de contradições, pesquisa dinâmica com planejador e evidência visual, tratamento de quotas por motor, auditoria de todos os caminhos de SSRF (inclusive vendor e redirects), revisão da entrega de links/prints além dos limites existentes do Discord, testes de precisão e medidas p50/p95. Nenhum teste real de endpoints externos, deploy, alteração de produção ou monitoramento. RUN05 permanece IN_PROGRESS; bateria final após RUN07.
+
+### RUN 05 — checkpoint de avanço autorizado (24/11/2026)
+
+- a431fb0cde7bab5453cf9ccdf960b7636d78a591: 11/11 workflows PASS, Core 45528543201 e PG18 45528543164 PASS; PR #385 draft, mergeable=true. Proprietário autorizou RUN06. Retomada persistente, screenshots, verificação semântica e demais pendências anteriores continuam abertas para integração.
+
+### RUN 06 — Living Conversation Engine — início (24/11/2026)
+
+- Base a431fb0, branch feat/cognitive-evolution-run06-living-conversation. Seção 9 PLAN. Inventário: durable_reply_runtime.py, reply_jobs.py/SQL e geração já preservam IDs, ordem da fila e ACK; ContextCompiler lê últimas 96 mensagens sem separar mensagens aceitas posteriormente da fala atual; SpeechSegmenter e gate de realização existentes. Não alterar rig/voz ou promover execução parcial não validada.
+- Primeiro incremento: delimitar contexto causal do piloto de texto, identificar continuidades e correções de forma conservadora, preservar mensagens independentes e as identidades originais, introduzir janela curta apenas em sinais explícitos de continuação. Testes sintéticos e compatibilidade SQLite/PG. Não suprimir respostas aceitas, nem marcar agrupamento semântico/retomada de segmentos como entregue sem transação e contrato de ACK.
+- Próximas etapas: agrupamento transacional/replanejamento antes de commit, supersessão, retomada e ACK de segmentos, barge-in/voz/avatar, métricas de TTFS. Não realizar deploy nem monitoramento.
 
 ## Modelo obrigatório de registro para cada RUN
 
