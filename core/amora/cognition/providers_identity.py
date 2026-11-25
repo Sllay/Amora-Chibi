@@ -160,7 +160,7 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
                 payload["reasoning"] = {"effort": "none"}
             elif self.model.startswith("openai/gpt-oss-"):
                 payload["reasoning"] = {"effort": "low"}
-            ensure_payload(context, payload)
+            ensure_payload(context, payload, descriptor=self.descriptor)
             try:
                 root, response = await self._post_responses(
                     payload, api_key=api_key, error_label="memory extraction")
@@ -199,14 +199,14 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
                     }
                 },
             }
-        _, payload = fit_provider_payload(context, build)
+        _, payload = fit_provider_payload(context, build, descriptor=self.descriptor)
         started = perf_counter()
         try:
             root, response = await self._post_responses(payload, api_key=api_key, error_label="structured realization")
         except ProviderError as exc:
             if exc.status_code != 413 or DURABLE_REALIZATION.get() != str(context.turn_id):
                 raise
-            reduced = compact_rejected_payload(context, build, payload)
+            reduced = compact_rejected_payload(context, build, payload, descriptor=self.descriptor)
             if reduced is None:
                 raise
             root, response = await self._post_responses(reduced, api_key=api_key, error_label="structured realization compacted")
