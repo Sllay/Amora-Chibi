@@ -94,6 +94,8 @@ class NvidiaMistralIncomingImageVision:
                 ),
                 follow_redirects=False,
             ) as client:
+                from .visual_authorization import require_visual_authorization
+                await require_visual_authorization()
                 response = await client.post(
                     self.endpoint,
                     json=body,

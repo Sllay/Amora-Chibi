@@ -21,6 +21,7 @@ from amora.cognition.provider_quota import ProviderQuotaDeferred
 from .groq_vision import GroqVisionError
 from .models import InboundImageContent
 from .visual_focus import visual_focus, focus_instruction
+from .visual_authorization import require_visual_authorization
 from .visual_enrichment import VisualEnrichmentError, VisualExpressionEnrichmentService
 
 
@@ -191,6 +192,7 @@ class GroqIncomingImageVision:
                     response = None
                     reason = ""
                     try:
+                        await require_visual_authorization()
                         response = await client.post(
                             self.endpoint, json=payload, headers=headers,
                             timeout=httpx.Timeout(first_timeout),
@@ -215,6 +217,7 @@ class GroqIncomingImageVision:
                             timeout=httpx.Timeout(remaining),
                         )
                 else:
+                    await require_visual_authorization()
                     response = await client.post(self.endpoint, json=payload, headers=headers)
         except httpx.TimeoutException as exc:
             raise GroqVisionError("INCOMING_VISION_TIMEOUT", "image analysis timed out") from exc
@@ -366,6 +369,7 @@ class IncomingVisionCascade:
         # Never skip local image identity/signature checks when the primary is
         # temporarily unavailable or NVIDIA is chosen directly.
         valid_image_bytes(image)
+        await require_visual_authorization()
         enabled = self._fallback_available
         if not enabled:
             # Transient Groq failures can make the SAME valid photo succeed
@@ -399,6 +403,7 @@ class IncomingVisionCascade:
                     image.model_copy(update={"source_url": None})
                     if image.source_url else image
                 )
+                await require_visual_authorization()
                 return await asyncio.wait_for(
                     self.primary.analyze(retry_image, user_text),
                     timeout=max(0.05, remaining - 0.2),
@@ -433,6 +438,7 @@ class IncomingVisionCascade:
             "incoming_visual_fallback_attempt provider=nvidia_mistral primary_code=%s",
             primary_error,
         )
+        await require_visual_authorization()
         try:
             result = await asyncio.wait_for(
                 self.fallback.analyze(image, user_text), timeout=remaining

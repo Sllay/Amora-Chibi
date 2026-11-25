@@ -18,6 +18,8 @@ from .models import ChannelType, RoutingAction
 from amora.events import PrivacyScope
 from .incoming_vision import unavailable_visual_observation, visual_failure_reason
 from .visual_enrichment import VisualExpressionEnrichmentService
+from .visual_checkpoint import VisualCheckpointStore, checkpoint_key, contains_transport_input
+from .visual_authorization import VISUAL_AUTHORIZATION, require_visual_authorization
 
 
 _CURRENT_MESSAGE: ContextVar[InboundMessage | None] = ContextVar(
@@ -140,6 +142,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
         self.expression_memory = PerceptualExpressionMemory(self.store, self.clock)
         self.visual_enrichment = VisualExpressionEnrichmentService(self.expression_memory)
         self.incoming_vision = incoming_vision
+        self.visual_checkpoints = VisualCheckpointStore(self.store.database, self.clock)
         self.response_modality = response_modality or PerceptualResponseModalitySelector()
         self.cognition = _CapabilityAwareCognitionProxy(self.cognition)
         self._recent_expressions: dict[str, deque[str]] = {}
@@ -171,9 +174,71 @@ class PlatformMessagingService(BasePlatformMessagingService):
                 and decision.action == RoutingAction.RESPOND
                 and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)):
             return None
-        if message.incoming_images:
-            return await self._visual_batch(message, decision)
-        return await self._visual_single(message)
+        async def guard():
+            if not (message.remote_processing_allowed and message.privacy_scope == PrivacyScope.PERSONAL
+                    and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)):
+                return False
+            try:
+                return await self._visual_checkpoint_call(message, "source_current",
+                    self._session_ref(message), self._hash(message.native_source_message_id),
+                    message.transport_revision)
+            except Exception:
+                # An unverifiable revision is not permission to send pixels.
+                return False
+        token = VISUAL_AUTHORIZATION.set(guard)
+        try:
+            if not await guard():
+                return None
+            if message.incoming_images:
+                result = await self._visual_batch(message, decision)
+            else:
+                result = await self._visual_single(message)
+            return result if await guard() else None
+        finally:
+            VISUAL_AUTHORIZATION.reset(token)
+
+    async def _visual_checkpoint_call(self, message, operation, *args):
+        if self._use_storage_lane(message):
+            return await self.storage_lane.call("visual_checkpoint", operation, *args)
+        return getattr(self.visual_checkpoints, operation)(*args)
+
+    async def _checkpointed_visual_analysis(self, message):
+        import os
+        from amora.cognition.visual_context import visual_context_for_request
+        from .incoming_vision import valid_image_bytes
+        image = message.incoming_image
+        await require_visual_authorization()
+        if os.getenv("AMORA_DISCORD_IMAGE_VISION", "1").strip().lower() in {"0", "false", "off", "no"}:
+            return unavailable_visual_observation("unconfigured")
+        valid_image_bytes(image)
+        session = self._session_ref(message)
+        native_hash = self._hash(message.native_source_message_id)
+        revision = message.transport_revision
+        key = checkpoint_key(session, self._turn_id(message), native_hash, revision, image, message.text)
+        args = (session, native_hash, revision, key)
+        try:
+            cached = await self._visual_checkpoint_call(message, "load", *args)
+        except Exception:
+            cached = None
+        await require_visual_authorization()
+        if cached is not None and not contains_transport_input(cached, image):
+            logging.getLogger("amora.incoming_vision").info("visual_checkpoint_hit")
+            return cached
+        if self.incoming_vision is None or not self.incoming_vision.available:
+            return unavailable_visual_observation("unconfigured")
+        result = await self.incoming_vision.analyze(image, message.text)
+        await require_visual_authorization()
+        validated = visual_context_for_request(result, remote=True, private=True, mode="reply")
+        if validated is None or contains_transport_input(validated, image):
+            return unavailable_visual_observation("invalid_observation")
+        if validated["status"] == "analyzed":
+            try:
+                await self._visual_checkpoint_call(message, "save", *args, validated)
+            except Exception:
+                logging.getLogger("amora.incoming_vision").warning("visual_checkpoint_write_failed")
+        await require_visual_authorization()
+        return validated
+
 
     async def _visual_batch(self, message, decision):
         from amora.cognition.visual_context import visual_context_for_request
@@ -255,7 +320,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
             failure_reason = "unsupported_format"
         else:
             failure_reason = "processing_failed"
-        if self.incoming_vision is None or not self.incoming_vision.available:
+        if message.incoming_image is None and (self.incoming_vision is None or not self.incoming_vision.available):
             logging.getLogger("amora.incoming_vision").info(
                 "incoming_image_unavailable reason=unconfigured"
             )
@@ -270,7 +335,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
             # Inbound timeout includes this analysis; avoid blocking social reply
             # for a model outage. Never fall back to imagined pixels.
             result = await asyncio.wait_for(
-                self.incoming_vision.analyze(message.incoming_image, message.text),
+                self._checkpointed_visual_analysis(message),
                 timeout=27,
             )
             logging.getLogger("amora.incoming_vision").info(

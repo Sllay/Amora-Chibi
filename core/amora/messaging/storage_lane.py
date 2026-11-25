@@ -6,6 +6,7 @@ from amora.storage.owned_lane import OwnedStorageLane
 from .generation_lifecycle import InboundGeneration, InboundGenerationLost
 from .store import MessagingStore
 from .reply_jobs import ReplyJobRepository
+from .visual_checkpoint import VisualCheckpointStore
 
 
 class MessagingStorageWorker:
@@ -13,6 +14,7 @@ class MessagingStorageWorker:
         self.database = AmoraDatabase(database.path, backend=database.backend)
         self.generations = InboundGeneration(self.database, clock)
         self.reply_jobs = None
+        self.visual_checkpoints = VisualCheckpointStore(self.database, clock)
         self.clock = clock
         if database.backend.capabilities.name == "postgres-candidate":
             from .postgres_store import PostgresMessagingStore
@@ -37,6 +39,11 @@ class MessagingStorageWorker:
 
     def append_audit(self, audit):
         return self.store.append_audit(audit)
+
+    def visual_checkpoint(self, operation, *args):
+        if operation not in {"load", "save", "source_current"}:
+            raise ValueError("VISUAL_CHECKPOINT_OPERATION_NOT_ALLOWED")
+        return getattr(self.visual_checkpoints, operation)(*args)
 
     def reply_job(self, operation, *args, **kwargs):
         if self.reply_jobs is None:
@@ -65,7 +72,7 @@ class MessagingStorageWorker:
 
 class MessagingStorageLane(OwnedStorageLane):
     trace_name = "messaging_db_lane"
-    allowed = frozenset({"claim", "release", "prepared", "get_audit", "append_audit", "persist_reply", "reply_job"})
+    allowed = frozenset({"claim", "release", "prepared", "get_audit", "append_audit", "persist_reply", "reply_job", "visual_checkpoint"})
 
     def __init__(self, database, clock):
         super().__init__(thread_name="amora-messaging-db")
