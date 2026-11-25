@@ -36,3 +36,12 @@
 - 7013806: 7/9 workflows PASS; Core 45671108355 job 139406305250 falhou em test_stabilization_live_dm_section_generation_and_usage (chamadas [0] vs [1,2]) e recuperação SQLite; PG18 45671108285 job 139406312462 falhou na recuperação SQLite/PG18 por KeyError section-primary. Probe de recursos não executado/certificado.
 - Causa identificada em inspeção: ContextCompiler sempre projeta relógio normal em temporal_context, que o detector detalhado excluía indiscriminadamente. Diferenciado temporal_opportunity e modos reflexão/autonomia/reminder; relógio ordinário preservado. DialogueOrchestrator reconhece documentação explícita privada antes do fallback social, depois das rotas de identidade, boundary e sinais relacionais, sem ampliar autorização, sem pergunta compulsória. Proteção de contexto reportado/self choices mantida. Novo teste de relógio e plano técnico; teste real original não relaxado.
 - Fixture de checkpoint registra ambos providers no roteador antes de contabilizar quota/uso; mantém assert de recuperação, expiração e revogação. Sem alterar thresholds, sem merge/deploy/monitoramento. Novo CI pendente.
+
+
+## RUN01 — CI PASS, encerramento da implementação candidata
+- 44d25f5: 9/9 workflows verdes; Core 45681815899 job 139444033419 (Python 3.12, teste e probe PASS), PG18 45681815863 job 139444031946: 268 passed, 1 skipped. Recuperação de seção SQLite e PG18 PASS.
+- Fixture envelope 17206 -> 15168 bytes (11,8%); não extrapolar para tráfego real.
+- Docker offline cgroup 0,2 vCPU / 536870912 bytes, 14 turnos, 2 técnicos, 16 chamadas sintéticas, p50 78,578ms, p95 187,873ms, CPU 1,658s, wall 7,498s, memory.peak 65003520 bytes, ru_maxrss 66424 KiB. SQLite, sem provider/Discord físico. Sem equivalência Aiven/Northflank nem certificação semântica real.
+- Autorizado avançar para RUN02 na sequência cumulativa do PR #390. RUN01 CI_PASS / LIVE_PENDING; main e fila durável intactas.
+
+## RUN02 A — percepção espacial e revisão visual

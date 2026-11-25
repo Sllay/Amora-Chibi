@@ -309,6 +309,9 @@ def realization_instruction(context: CognitiveContext, *, compact_support: bool 
                 "Se faltar historical, diga que a referência não foi recuperada e peça reenvio quando necessário. "
                 "Se a pergunta exige detalhes ausentes, não invente nem alegue reanálise. "
                 "Compare apenas o que está nas observações e reconheça limitações ou falhas individuais. "
+                "historical_disputed significa que a leitura anterior foi contestada e suprimida; "
+                "não repita o erro como fato. A correção do usuário é relato, não nova visão. "
+                "review_requested sem current analisado não é reinspeção: peça o reenvio da imagem para examinar os pixels. "
             )
         elif context.visual_observation.get("observation_version") == 3:
             visual_cue = (
@@ -339,6 +342,12 @@ def realization_instruction(context: CognitiveContext, *, compact_support: bool 
                 "não responda como se a tivesse visto; indique a parte indisponível. "
                 "Use o código de falha como limitação, não como característica dos pixels. "
             )
+    if isinstance(context.visual_observation,dict):
+        visual_cue += (
+            " Se houver spatial, use regiões, posição, estado, cor, forma e confiança como estimativas do sensor. "
+            "Não invente painéis quando layout for incerto; não confunda partes de um rosto com imagens distintas. "
+            "Diferencie explicitamente evidência observada, incerteza e informação fornecida pela legenda. "
+        )
     web_cue = ""
     if context.web_research is not None:
         web_cue = (

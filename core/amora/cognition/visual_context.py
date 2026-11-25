@@ -7,6 +7,7 @@ from typing import Literal
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from .visual_spatial import SpatialObservation
 
 
 class IncomingVisualObservation(BaseModel):
@@ -22,6 +23,7 @@ class IncomingVisualObservation(BaseModel):
     observation_version: Literal[2] | None = None
     provider: Literal["groq", "nvidia"] | None = None
     model: str | None = Field(default=None, max_length=128)
+    spatial: SpatialObservation | None = None
     failure_reason: Literal[
         "", "too_large", "download_failed", "unsupported_format",
         "processing_failed", "provider_failed", "unconfigured",
@@ -46,7 +48,7 @@ class IncomingVisualObservation(BaseModel):
         elif (len(self.description) > 650 or len(self.visible_text) > 8
               or len(self.uncertainties) > 6
               or any(len(item) > 120 for item in self.visible_text + self.uncertainties)
-              or any(value is not None for value in (self.observation_version, self.provider, self.model))):
+              or any(value is not None for value in (self.observation_version, self.provider, self.model, self.spatial))):
             raise ValueError("legacy visual observation bounds exceeded")
         return self
 
@@ -124,6 +126,8 @@ class HistoricalVisualContext(BaseModel):
     reference_kind: Literal["reply","latest","unsupported"]
     observed_at: datetime | None = None
     historical: dict | None = None
+    historical_disputed: Literal[True] | None = None
+    review_requested: Literal[True] | None = None
     current: dict | None = None
 
     @model_validator(mode="after")
@@ -134,6 +138,8 @@ class HistoricalVisualContext(BaseModel):
                 raise ValueError("invalid historical visual evidence")
         elif self.observed_at is not None:
             raise ValueError("timestamp without visual evidence")
+        if self.historical_disputed and (self.historical is None or self.historical.get("status")!="unavailable"):
+            raise ValueError("disputed visual evidence must not contain a prior assertion")
         if self.current is not None:
             self.current = _current_context(self.current)
             if self.current is None:

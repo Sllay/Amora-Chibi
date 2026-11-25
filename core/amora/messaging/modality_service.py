@@ -20,7 +20,7 @@ from .incoming_vision import unavailable_visual_observation, visual_failure_reas
 from .visual_enrichment import VisualExpressionEnrichmentService
 from .visual_checkpoint import VisualCheckpointStore, checkpoint_key, contains_transport_input
 from .visual_authorization import VISUAL_AUTHORIZATION, require_visual_authorization
-from .visual_reference import visual_reference_intent
+from .visual_reference import visual_reference_intent, visual_review_intent
 
 
 _CURRENT_MESSAGE: ContextVar[InboundMessage | None] = ContextVar(
@@ -182,6 +182,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
         # Explicit historical references are the sole text-only exception.
         has_visual = self._has_visual_input(message)
         reference = visual_reference_intent(message)
+        review = visual_review_intent(message) if reference else None
         if not has_visual and reference is None:
             return None
         if not (message.platform == MessagingPlatform.DISCORD
@@ -243,6 +244,21 @@ class PlatformMessagingService(BasePlatformMessagingService):
                     historical = None
             if not await guard():
                 return None
+            if review=="dispute" and historical is not None:
+                # Suppress now even if persistence fails; do not elevate the user's
+                # proposed correction into a new sensor observation.
+                if await guard():
+                    try:
+                        from datetime import datetime
+                        await self._visual_checkpoint_call(message,"mark_reference_disputed",
+                            session,historical["native_hash"],historical["revision"],
+                            datetime.fromisoformat(historical["sent_at"]))
+                    except Exception:
+                        logging.getLogger("amora.incoming_vision").warning("visual_dispute_write_failed")
+                historical={**historical,"disputed":True,
+                            "observation":unavailable_visual_observation("invalid_observation")}
+            if not await guard():
+                return None
             prior = historical["observation"] if historical else None
             states = [o["status"] for o in (current,prior) if o is not None]
             status = ("analyzed" if prior is not None and states and all(x=="analyzed" for x in states)
@@ -250,6 +266,8 @@ class PlatformMessagingService(BasePlatformMessagingService):
                       else "unavailable")
             return {"observation_version":4,"source":"visual_reference",
                     "status":status,"reference_kind":reference,
+                    **({"review_requested":True} if review else {}),
+                    **({"historical_disputed":True} if historical and historical.get("disputed") else {}),
                     **({"historical":prior,"observed_at":historical["observed_at"]} if historical else {}),
                     **({"current":current} if current is not None else {})}
         finally:
@@ -268,7 +286,11 @@ class PlatformMessagingService(BasePlatformMessagingService):
         await require_visual_authorization()
         if os.getenv("AMORA_DISCORD_IMAGE_VISION", "1").strip().lower() in {"0", "false", "off", "no"}:
             return unavailable_visual_observation("unconfigured")
-        valid_image_bytes(image)
+        content=valid_image_bytes(image)
+        logging.getLogger("amora.incoming_vision").info(
+            "visual_ingest_validated mime=%s byte_count=%d original_url_available=%s",
+            image.content_mime.lower(),len(content),bool(image.source_url))
+        del content
         session = self._session_ref(message)
         native_hash = self._hash(message.native_source_message_id)
         revision = message.transport_revision
@@ -371,11 +393,6 @@ class PlatformMessagingService(BasePlatformMessagingService):
             failure_reason = "unsupported_format"
         else:
             failure_reason = "processing_failed"
-        if message.incoming_image is None and (self.incoming_vision is None or not self.incoming_vision.available):
-            logging.getLogger("amora.incoming_vision").info(
-                "incoming_image_unavailable reason=unconfigured"
-            )
-            return unavailable_visual_observation("unconfigured")
         if message.incoming_image is None:
             logging.getLogger("amora.incoming_vision").info(
                 "incoming_image_unavailable reason=%s", failure_reason,

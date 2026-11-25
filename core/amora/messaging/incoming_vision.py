@@ -16,6 +16,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from amora.cognition.visual_context import IncomingVisualObservation
+from amora.cognition.visual_spatial import SpatialObservation, SPATIAL_SCHEMA
 from amora.cognition.provider_quota import ProviderQuotaDeferred
 
 from .groq_vision import GroqVisionError
@@ -58,6 +59,8 @@ class VisionResponse(BaseModel):
 
 
 class DetailedVisionResponse(VisionResponse):
+    # Legacy observations remain readable; new detailed requests ask for spatial evidence.
+    spatial: SpatialObservation | None = None
     description: str = Field(min_length=1, max_length=1200)
     visible_text: list[str] = Field(max_length=16)
     uncertainties: list[str] = Field(max_length=8)
@@ -76,7 +79,7 @@ def observation_from_response(decoded, focus, *, provider: str, model: str) -> d
     details = ({"perception_mode": "detailed", "observation_version": 2,
                 "provider": provider, "model": model} if focus.mode == "detailed" else {})
     return IncomingVisualObservation(
-        status="analyzed", source="vision_model", **result.model_dump(), **details
+        status="analyzed", source="vision_model", **result.model_dump(exclude_none=True), **details
     ).as_context()
 
 
@@ -141,7 +144,7 @@ class GroqIncomingImageVision:
             raise GroqVisionError("INCOMING_VISION_FOCUS_LIMIT", "visual focus exceeds accepted caption limit") from exc
         prompt = (
             "Você é um sensor visual pontual, não a personagem Amora. "
-            "Analise SOMENTE a imagem recebida. Descreva o que é realmente visível, "
+            "Analise SOMENTE a única imagem recebida, não presuma uma montagem ou outros anexos. Descreva o que é realmente visível, "
             "em português brasileiro, de forma concreta e breve. "
             "Se houver texto legível, transcreva apenas trechos curtos em visible_text. "
             "Não infira identidade, local, emoções internas ou detalhes ilegíveis. "
@@ -171,7 +174,10 @@ class GroqIncomingImageVision:
                 "json_schema": {
                     "name": "amora_incoming_visual_observation",
                     "strict": True,
-                    "schema": VISUAL_OBSERVATION_SCHEMA,
+                    "schema": ({**VISUAL_OBSERVATION_SCHEMA,
+                        "properties": {**VISUAL_OBSERVATION_SCHEMA["properties"],"spatial":SPATIAL_SCHEMA},
+                        "required": [*VISUAL_OBSERVATION_SCHEMA["required"],"spatial"]}
+                        if focus.mode=="detailed" else VISUAL_OBSERVATION_SCHEMA),
                 },
             },
         }

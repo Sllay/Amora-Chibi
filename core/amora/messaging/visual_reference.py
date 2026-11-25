@@ -25,3 +25,19 @@ def visual_reference_intent(message):
     if _REFERENCE.search(text):
         return "latest"
     return None
+
+
+_REVIEW = re.compile(r"\b(?:reanalise|reavali[ae]|revise|olh[ae] (?:de novo|novamente)|analise (?:de novo|novamente)|verifi[qc]ue novamente)\b")
+_DISPUTE = re.compile(r"\b(?:voce (?:errou|se enganou|descreveu errado)|a (?:descricao|analise) (?:esta|ta|ficou) (?:errada|incorreta)|corrija (?:a|sua) (?:descricao|analise))\b")
+
+def visual_review_intent(message):
+    """Explicit review/dispute of a registered image, not an implicit guess."""
+    if visual_reference_intent(message) not in {"latest","reply"}:
+        return None
+    text = "".join(c for c in unicodedata.normalize("NFKD",message.text.casefold())
+                   if not unicodedata.combining(c))
+    if _DISPUTE.search(text):
+        return "dispute"
+    if _REVIEW.search(text):
+        return "review"
+    return None
