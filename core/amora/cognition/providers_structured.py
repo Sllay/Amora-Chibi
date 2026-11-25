@@ -333,7 +333,7 @@ class GeminiCognitiveProvider(BaseGeminiCognitiveProvider):
         system_instruction = payload.get("systemInstruction") or {"parts": [{"text": ""}]}
         parts = system_instruction.get("parts") or [{"text": ""}]
         current = render_trusted_protocol(context, compact_acir=True)
-        parts[0] = {"text": current + "\n\n" + realization_instruction(context)}
+        parts[0] = {"text": current + "\n\n" + realization_instruction(context, compact_support=True)}
         system_instruction["parts"] = parts
         payload["systemInstruction"] = system_instruction
         from .context_budget import ensure_payload

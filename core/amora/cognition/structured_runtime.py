@@ -28,7 +28,7 @@ from .durable_realization import (durable_realization, DeferredRealization, DURA
     DURABLE_CAUSAL_CHECK, CausalReplanRequired, adaptive_context_allowed)
 from .provider_resilience import classify_provider_failure, context_rejection
 from .provider_quota import ProviderQuotaDeferred
-from .surface_performance import attempt_window
+from .surface_performance import attempt_window, ProviderPerformance, detailed_output_requested
 
 
 async def _await_numes_adaptive(
@@ -151,8 +151,13 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     safe[key] = payload[key]
         logging.getLogger("amora.cognition.generation").info("generation_stage", extra=safe)
 
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self._surface_performance = ProviderPerformance(self.clock)
+
     def state(self) -> dict[str, object]:
         state = super().state()
+        state["surface_performance"] = self._surface_performance.snapshot()
         from .expressive_profile import configured_profile, profile_state
         state["social_expression_profile"] = profile_state(configured_profile())
         state["last_realization"] = getattr(self, "_last_realization", None)
@@ -383,6 +388,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 started=started,
             )
 
+        workload = ("visual" if context.visual_observation else "web" if context.web_research
+                    else "detail" if detailed_output_requested(context) else "dialogue")
+        empirical = request.metadata.get("surface") == "platform_messaging" and not adaptive_only
+        if empirical:
+            candidates = self._surface_performance.rank(candidates,workload,quota=self._provider_quota)
         total_budget = _positive_float(request.metadata.get("provider_total_budget_seconds"))
         attempt_budget = _positive_float(request.metadata.get("provider_attempt_budget_seconds"))
         # The caller separately bounds the entire cognitive turn. This budget
@@ -562,6 +572,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 self._backoff(descriptor, status_code=None)
                 continue
             except asyncio.TimeoutError:
+                if empirical and not adaptive:
+                    self._surface_performance.observe(descriptor,workload,perf_counter()-provider_started,False)
                 last_failure = "PROVIDER_ATTEMPT_TIMEOUT"
                 failures.append(("temporary", None))
                 self._last_realization_rejection = {
@@ -623,6 +635,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
             except Exception as exc:
                 status = exc.status_code if isinstance(exc, ProviderError) else None
                 failure = classify_provider_failure(exc, now=self.clock.now())
+                if empirical and not adaptive and (status is None or status >= 500) and not context_rejection(exc):
+                    self._surface_performance.observe(descriptor,workload,perf_counter()-provider_started,False)
                 last_failure = failure.code if is_durable else type(exc).__name__
                 category = ("context" if context_rejection(exc) else
                             "configuration" if status in {401, 403, 404} else "temporary")
@@ -654,6 +668,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
             remaining_requests = _optional_int(usage.get("remaining_requests"))
             remaining_tokens = _optional_int(usage.get("remaining_tokens"))
             effective_latency = _optional_float(usage.get("latency_ms")) or (perf_counter() - provider_started) * 1000.0
+            if empirical and not adaptive:
+                self._surface_performance.observe(descriptor,workload,perf_counter()-provider_started,True)
             usage_persistence = self._record_usage(
                 provider=descriptor.name,
                 model=descriptor.model or "unknown",

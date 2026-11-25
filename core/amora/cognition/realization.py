@@ -189,7 +189,8 @@ class RealizationValidator:
             raise RealizationError("CLOSING_MODE_VIOLATION", "dialogue plan requires a question closing")
 
         depth = str(plan.get("depth") or "medium")
-        max_chars = {"short": 360, "medium": 900, "deep": 1800}.get(depth, 900)
+        from .surface_performance import detailed_output_requested
+        max_chars = 6000 if detailed_output_requested(context) else {"short": 360, "medium": 900, "deep": 1800}.get(depth, 900)
         if len(combined) > max_chars:
             raise RealizationError(
                 "REALIZATION_TOO_LONG",
@@ -263,7 +264,7 @@ class RealizationValidator:
         )
 
 
-def realization_instruction(context: CognitiveContext) -> str:
+def realization_instruction(context: CognitiveContext, *, compact_support: bool = False) -> str:
     plan = context.dialogue_plan
     allowed = [str(value) for value in plan.get("response_moves") or []]
     self_choice_keys = [
@@ -388,7 +389,8 @@ def realization_instruction(context: CognitiveContext) -> str:
     if context.specialist_support:
         specialist = (
             "\nNOTA DE ESPECIALISTA INTERNO — APOIO EFÊMERO, NÃO CANÔNICO:\n"
-            + json.dumps(context.specialist_support, ensure_ascii=False, separators=(",", ":"))
+            + ("Consulte ephemeral_support.payload do TurnFrame, que contém esta mesma nota." if compact_support else
+               json.dumps(context.specialist_support, ensure_ascii=False, separators=(",", ":")))
             + "\nUse essa nota somente como apoio factual/racional. Não mencione o especialista, provider, modelo ou a nota. "
             "Se a nota declarar incerteza, preserve essa incerteza na fala."
         )

@@ -28,6 +28,9 @@ class MessagingStorageWorker:
     def claim(self, *args):
         return self.generations.claim(*args)
 
+    def renew(self, *args, **kwargs):
+        return self.generations.renew(*args, **kwargs)
+
     def release(self, *args, **kwargs):
         return self.generations.release(*args, **kwargs)
 
@@ -72,7 +75,7 @@ class MessagingStorageWorker:
 
 class MessagingStorageLane(OwnedStorageLane):
     trace_name = "messaging_db_lane"
-    allowed = frozenset({"claim", "release", "prepared", "get_audit", "append_audit", "persist_reply", "reply_job", "visual_checkpoint"})
+    allowed = frozenset({"claim", "renew", "release", "prepared", "get_audit", "append_audit", "persist_reply", "reply_job", "visual_checkpoint"})
 
     def __init__(self, database, clock):
         super().__init__(thread_name="amora-messaging-db")

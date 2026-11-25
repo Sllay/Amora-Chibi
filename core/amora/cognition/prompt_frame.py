@@ -314,6 +314,19 @@ def render_turn_frame(context: CognitiveContext, *, compact_acir: bool = False) 
     # an explicit pointer to the same authoritative per-turn interpretation.
     plan = frame["dialogue_plan"]
     acir = frame["current_turn"]["acir"]
+    if compact_acir:
+        # Deduplicate identical projection records, never distinct provenance,
+        # literal conversation turns, correction evidence or canonical storage.
+        state = frame["canonical_state"]
+        for field in ("memories","world_claims","reason_codes"):
+            seen = set()
+            unique = []
+            for item in state[field]:
+                key = json.dumps(item,ensure_ascii=False,sort_keys=True,separators=(",",":"))
+                if key not in seen:
+                    unique.append(item)
+                    seen.add(key)
+            state[field] = unique
     if compact_acir and acir is not None and plan.get("input_acir") == acir:
         reference = {"same_as": "current_turn.acir"}
         if len(json.dumps(acir, ensure_ascii=False)) > len(json.dumps(reference)):
