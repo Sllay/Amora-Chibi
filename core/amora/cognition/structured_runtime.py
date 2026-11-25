@@ -380,9 +380,26 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 provider_elapsed += min(elapsed, charge_cap) if charge_cap is not None else elapsed
 
         last_failure = "NO_STRUCTURED_REALIZATION_PROVIDER"
-        for provider_index, descriptor in enumerate(candidates):
+        attempts = [(descriptor, False) for descriptor in candidates]
+        # Do not spend extra calls on ordinary turns or substitute excerpts
+        # when any compatible full-source route has not actually been tried.
+        if (is_durable and DURABLE_AUTHORIZATION.get() is not None
+                and context.scene_visibility == "private"
+                and not context.visual_observation and not context.web_research
+                and len(request.text.encode("utf-8")) > 4096):
+            for descriptor in candidates:
+                provider = self._providers.get(descriptor.name)
+                if callable(getattr(provider, "realize_adaptive", None)):
+                    attempts.append((descriptor, True))
+                    break
+        attempted_count = len(candidates)
+        for provider_index, (descriptor, adaptive) in enumerate(attempts):
+            if adaptive:
+                if excluded or len(failures) != len(candidates) or {kind for kind, _ in failures} != {"context"}:
+                    break
+                attempted_count += 1
             provider = self._providers.get(descriptor.name)
-            realize = getattr(provider, "realize", None) if provider is not None else None
+            realize = getattr(provider, "realize_adaptive" if adaptive else "realize", None) if provider is not None else None
             if not callable(realize):
                 last_failure = "PROVIDER_NO_REALIZATION_INTERFACE"
                 self._last_realization_rejection = {
@@ -482,6 +499,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     validated = RealizationValidator.parse_and_validate(
                         context, raw, enforce_dialogue_plan=response_semantic_filter_enabled(),
                     )
+            except DeferredRealization:
+                raise
             except ProviderQuotaDeferred as exc:
                 last_failure = "PROVIDER_ACCOUNT_BACKOFF"
                 failures.append(("temporary", float(exc.retry_after)))
@@ -490,7 +509,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 last_failure = "CONTEXT_ENVELOPE_OVERFLOW"
                 failures.append(("context", None))
                 await self._journal_async(request, JournalStage.ERROR, summary="provider envelope exceeds budget",
-                    reason_codes=[last_failure, "NO_SURFACE_REQUEST"], error_code=last_failure)
+                    reason_codes=[last_failure, "AMD_CONTEXT_INSUFFICIENT" if adaptive else "NO_SURFACE_REQUEST"], error_code=last_failure)
                 continue
             except NvidiaStreamTimeout as exc:
                 kind = exc.diagnostics.get("timeout_kind")
@@ -613,14 +632,17 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 status_code=status_code,
                 remaining_requests=remaining_requests,
                 remaining_tokens=remaining_tokens,
-                metadata={"candidate_index": provider_index, "phase": "structured_realization"},
+                metadata={"candidate_index": provider_index, "phase": "structured_realization",
+                          **({"amd_blocks": usage.get("amd_blocks"), "amd_calls": usage.get("amd_calls")} if adaptive else {})},
             )
             if (remaining_requests is not None and remaining_requests <= 0
                     or remaining_tokens is not None and remaining_tokens <= 0):
                 self._provider_quota.block_for(descriptor.name, 60, model=descriptor.model)
             self._provider_succeeded(descriptor, remaining_requests, remaining_tokens)
             reasons = [*validated.reason_codes, "REMOTE_PROVIDER_USED", "STRUCTURED_REALIZATION"]
-            if provider_index:
+            if adaptive:
+                reasons.append("AMD_GLOBAL_CONSOLIDATION_USED")
+            elif provider_index:
                 reasons.append("PROVIDER_FAILOVER_USED")
             return await self._plan_from_validated(
                 request,
@@ -644,7 +666,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             # A candidate skipped for cooldown or exhausted total budget may
             # recover later. Never block a turn merely because the last route
             # failed permanently while another remains temporarily unavailable.
-            if not excluded and last_failure != "PROVIDER_TOTAL_BUDGET_EXHAUSTED" and len(failures) == len(candidates):
+            if not excluded and last_failure != "PROVIDER_TOTAL_BUDGET_EXHAUSTED" and len(failures) == attempted_count:
                 if kinds == {"context"}:
                     raise DeferredRealization(["CONTEXT_ENVELOPE_OVERFLOW"])
                 if kinds == {"configuration"}:

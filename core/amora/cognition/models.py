@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from amora.events import PrivacyScope
 from .speech import SpeechPlan
@@ -144,6 +144,8 @@ class ContextCapability(BaseModel):
 
 
 class CognitiveContext(BaseModel):
+    # Provider-only transient AMD projection; never serialized into replay or memory.
+    _adaptive_projection: dict[str, Any] | None = PrivateAttr(default=None)
     turn_id: UUID
     created_at: datetime
     speaker_id: str

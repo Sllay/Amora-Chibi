@@ -372,6 +372,14 @@ def render_conversation_turn(
 
 
 def render_current_turn(context: CognitiveContext) -> str:
+    if context._adaptive_projection is not None:
+        return "AMORA CONVERSATION TURN — SOURCE-GROUNDED EXCERPTS (LITERAL DATA)\n" + json.dumps({
+            "protocol": "amora.adaptive_message.v1",
+            "turn_id": str(context.turn_id), "speaker_id": context.speaker_id,
+            "addressee_id": context.target_id, "original_is_preserved_in_core": True,
+            "projection_is_not_complete_original": True,
+            "map": context._adaptive_projection,
+        }, ensure_ascii=False, separators=(",", ":"))
     return render_conversation_turn(
         turn_id=context.turn_id,
         speaker_id=("ENTITY_AMORA" if context.temporal_opportunity
