@@ -301,7 +301,17 @@ def render_living_profile(context: CognitiveContext) -> str:
 
 
 def render_turn_frame(context: CognitiveContext) -> str:
-    return _render_section("AMORA TURN FRAME — TRUSTED CORE DATA", turn_frame(context))
+    frame = turn_frame(context)
+    # The canonical context and compatibility API still carry the complete
+    # DialoguePlan. On the wire only, replace a truly identical ACIR copy with
+    # an explicit pointer to the same authoritative per-turn interpretation.
+    plan = frame["dialogue_plan"]
+    acir = frame["current_turn"]["acir"]
+    if acir is not None and plan.get("input_acir") == acir:
+        reference = {"same_as": "current_turn.acir"}
+        if len(json.dumps(acir, ensure_ascii=False)) > len(json.dumps(reference)):
+            plan["input_acir"] = reference
+    return _render_section("AMORA TURN FRAME — TRUSTED CORE DATA", frame)
 
 
 def render_trusted_protocol(context: CognitiveContext) -> str:
