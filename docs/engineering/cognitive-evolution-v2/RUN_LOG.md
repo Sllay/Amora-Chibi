@@ -357,6 +357,13 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Hardening: intenção de envio persistida antes de POST. Se lease expirar com parte preparada sem recibo, não é possível saber se Discord criou a mensagem. Bloqueia reenvio, marca failed DISCORD_SEGMENT_DELIVERY_UNCERTAIN para reconciliação do job; preserva recibos e texto, não inventa sucesso. Nonce não é idempotência permanente. Erro definitivo marca failed preservando prefixo. Sem promessa exactly-once para envio externo desconhecido. Mudança de protocolo apenas em queued, nunca legado já claimed.
 - Testes SQLite/PG18 e Node: ordem, ACK antecipado/duplicado, prefixo reaberto, lease antigo, worker legado, confirmação final e resultado ambíguo, parada após ACK falho. CI pendente. Entrega parcial incerta exige recuperação operacional; integração voz/avatar, histórico de fala por ACK e cancelamento transacional completo continuam pendentes. Sem alteração em main ou produção; sem monitoramento.
 
+### Integração final — incremento H: certificação sintética combinada
+
+- Baseline 52e3bef: 13/13 workflows PASS. Core 45545266779: quatro versões Python aprovadas; job 138973251674 (3.12) 2203 passed, 162 skipped. PG18 45545266729/job 138973251113: 264 passed, 1 skipped. Verificados logs explícitos dos testes checkpoint visual, referência entre turnos, replanejamento e segmentos em ambos backends. Nenhuma aprovação live.
+- Merge da main ce87a8b somente na branch candidata. Dois blobs HTML/README do Visual Engine preservados exatamente; sem alterações de política ou produção.
+- Bateria nova test_run07_combined_failure_recovery_accounting no mesmo fixture SQLite/PG18: 24 entradas únicas e redelivery; 3 cancelamentos por exclusão, 3 falhas temporárias 503, 3 rollbacks após materialização, reinício de dispatcher e retomada após ready; 21 ACKs sintéticos únicos, sem segundo ACK aceito, 0 unsettled, 24 chamadas provedor esperadas, 9 reinícios; verifica texto literal, histórico e contagens. RUN07_COMBINED_JSON registra denominadores e p50/p95 do processamento sintético; relógio simulado não mede espera de retry real. Nenhum teste físico Discord e nenhum resultado ainda para novo SHA.
+- Próxima etapa: revisar logs e completar certificação de recursos, web/security e lacunas de causalidade/voz/retention. Não declarar RUN07 finalizada enquanto houver bloqueios da matriz. Sem deploy, merge na main ou monitoramento.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.

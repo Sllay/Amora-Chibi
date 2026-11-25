@@ -1237,3 +1237,127 @@ async def test_durable_discord_segment_receipts_reclaim_and_uncertain_outcome(la
         assert (await runtime.call("state",turn))["status"]==("blocked" if uncertain else "sent")
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_run07_combined_failure_recovery_accounting(lab,monkeypatch,capsys):
+    """One continuous workload: admission, outage, checkpoint, restart, drain and delivery."""
+    from collections import Counter
+    from time import perf_counter
+    import json
+    from amora.cognition.providers import ProviderError
+
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    service = core.messaging
+    provider = CountingStructuredProvider(name="run07-combined-faults")
+    original_realize = provider.realize
+    attempts = Counter()
+    times = []
+    core.cognition.register_provider(provider)
+    inputs = [_dm(core,f"combined-{i}",text=f"Explique o conceito sintético número {i}.")
+              for i in range(24)]
+    by_turn = {str(service._turn_id(msg)):i for i,msg in enumerate(inputs)}
+    async def realize(context):
+        index = by_turn[str(context.turn_id)]
+        attempts[index] += 1
+        if index in {0,8,16} and attempts[index]==1:
+            raise ProviderError("synthetic temporary failure",status_code=503)
+        return await original_realize(context)
+    provider.realize=realize
+    original_finalize=MessagingStore.persist_prepared_reply
+    inject={"active":False}
+    def finalize(store,*args,**kwargs):
+        result=original_finalize(store,*args,**kwargs)
+        if inject["active"]:
+            inject["active"]=False
+            raise RuntimeError("SYNTHETIC_FINALIZE_ROLLBACK")
+        return result
+    monkeypatch.setattr(MessagingStore,"persist_prepared_reply",finalize)
+    cancelled={5,13,21}
+    receipts=set()
+    restarts=0
+    async def restart():
+        nonlocal runtime,restarts
+        await runtime.stop()
+        service.durable_replies=None
+        runtime=service.configure_durable_replies()
+        await runtime.start(background=False)
+        restarts+=1
+    started=perf_counter()
+    try:
+        for index,msg in enumerate(inputs):
+            msg.timestamp=clock.now()
+            assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(msg)).decision.reason_codes
+            assert (await service.receive(msg)).duplicate
+            clock.advance(timedelta(seconds=1))
+        for index in cancelled:
+            msg=inputs[index]
+            core.messaging.invalidate_transport(TransportInvalidation(
+                platform=msg.platform,account_scope=msg.account_scope,
+                conversation_id=msg.conversation_id,native_message_id=msg.native_source_message_id,
+                reason="MESSAGE_DELETED"))
+        for index,msg in enumerate(inputs):
+            turn=service._turn_id(msg)
+            if index in cancelled:
+                assert (await runtime.call("state",turn))["status"]=="cancelled"
+                assert not attempts[index]
+                continue
+            begin=perf_counter()
+            if index in {3,11,19}:
+                inject["active"]=True
+            assert await runtime.run_once()
+            state=await runtime.call("state",turn)
+            if index in {0,8,16,3,11,19}:
+                assert state["status"]=="retry_wait"
+                assert core.messaging_store.get_outbound(service._outbound_id(msg)) is None
+                assert not core.cognition.store.list_segments(turn)
+                await restart()
+                # Simulated provider cooldown and durable retry delay, not a wall-clock sleep.
+                clock.advance(timedelta(seconds=600))
+                assert await runtime.run_once()
+                state=await runtime.call("state",turn)
+            assert state["status"]=="ready"
+            if index in {4,12,20}:
+                await restart()
+                assert not await runtime.run_once()
+            claimed=core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,
+                account_scope="primary",limit=1)
+            assert len(claimed)==1 and claimed[0].id==service._outbound_id(msg)
+            receipt=f"combined-synthetic-ack-{index}"
+            assert receipt not in receipts
+            assert core.messaging_store.ack_outbound(claimed[0].id,sent=True,external_message_id=receipt)
+            assert not core.messaging_store.ack_outbound(claimed[0].id,sent=True,external_message_id=receipt)
+            receipts.add(receipt)
+            # Reconcile without claiming the next input until its injected fault is configured.
+            await runtime.call("reconcile_outbound")
+            assert (await runtime.call("state",turn))["status"]=="sent"
+            times.append((perf_counter()-begin)*1000)
+        assert not await runtime.run_once()
+        final=await runtime.status()
+        assert final["counts"].get("sent")==21
+        assert final["counts"].get("cancelled")==3
+        assert final["unsettled"]==0
+        assert len(receipts)==21 and restarts==9
+        assert sum(attempts.values())==24
+        for index,msg in enumerate(inputs):
+            turn=service._turn_id(msg)
+            assert core.cognition.store.get_message_by_dedupe("cognitive-input:"+str(turn)).raw_text==msg.text
+            history=core.cognition.store.list_messages(turn_id=turn,speaker_id="ENTITY_AMORA")
+            assert len(history)==(0 if index in cancelled else 1)
+            assert attempts[index]==(0 if index in cancelled else 2 if index in {0,8,16} else 1)
+        ordered=sorted(times)
+        import math
+        with capsys.disabled():
+            print("RUN07_COMBINED_JSON="+json.dumps({
+                "backend":core.database.backend.capabilities.name,
+                "accepted":24,"sent_synthetic":21,"cancelled":3,
+                "provider_attempts":sum(attempts.values()),"dispatcher_restarts":restarts,
+                "provider_faults":3,"finalize_faults":3,
+                "wall_seconds":round(perf_counter()-started,3),
+                "processing_ms_p50":round(ordered[math.ceil(len(ordered)*.5)-1],3),
+                "processing_ms_p95":round(ordered[math.ceil(len(ordered)*.95)-1],3),
+                "clock":"simulated_retry_waits","physical_delivery":False
+            },sort_keys=True),flush=True)
+    finally:
+        await _stop_runtime(core)

@@ -1,6 +1,10 @@
 # RUN 07 — matriz de integração e certificação
 
-Estado: IN_PROGRESS / LIVE_PENDING. PR #388. Base 1638748 (RUN06 11/11).
+Estado: SYNTHETIC_INTEGRATION_IN_PROGRESS / LIVE_PENDING. PR #388.
+Baseline certificado pelo CI: 52e3bef (13/13); Core Python 3.11–3.14,
+2203 passed/162 skipped no job 3.12; laboratório real PG18 264 passed/1 skipped.
+Core run 45545266779 / job 138973251674, PG18 run 45545266729 / job 138973251113.
+Aprovação sintética não equivale à aprovação live.
 Não é aprovação para ativação ou deploy. Cada linha exige evidência no SHA
 candidato e, quando aplicável, em ambiente isolado antes da produção.
 
@@ -8,11 +12,11 @@ candidato e, quando aplicável, em ambiente isolado antes da produção.
 |---|---|---|
 | R01 fila textual | testes SQLite/PG18, atomicidade, restart/restore, ACK | carga prolongada, ACK físico, rollback/drain live, limite de fila |
 | R02 providers | mocks de quota, backoff, 413, circuit e recuperação | cobertura completa de adapters, limites reais, latência/quotas, cancelamento |
-| R03 compreensão | offsets, mapa global experimental, fallback Groq, testes Unicode; candidato para overflow pré-seleção em 2deeef2 | CI da correção, leitura sob demanda, geração por partes e avaliação semântica |
-| R04 percepção | lote até 3 imagens e checkpoint exato/retry com guarda CI dc08bdf 13/13; candidato 589901f continuidade explícita entre turnos | CI da continuidade, retenção física, referência implícita, avaliação semântica e prova live |
-| R05 web | busca aprofundada limitada, fontes parciais, notebook; candidato 9eed31e para retomada explícita após gravação e TTL de reutilização | CI, checkpoint durante pesquisa/por turno, retenção/revogação, contradições, quotas, screenshots e SSRF completo |
-| R06 diálogo | replanejamento pré-realização 3a35b66 CI 13/13; candidato entrega Discord por segmentos/recibos com prefixo persistente | CI do protocolo, fence transacional de causalidade, reconciliação de resultado externo incerto, voz/avatar e prova live |
-| R07 integração | diagnósticos iniciais e teste de burst/restart | fechar todos os bloqueios acima, medir recursos, certificar Northflank |
+| R03 compreensão | offsets, mapa global experimental, fallback Groq, Unicode, overflow pré-seleção; CI 52e3bef | leitura sob demanda, geração por partes e avaliação semântica |
+| R04 percepção | lote, checkpoint, guarda e continuidade explícita CI 52e3bef SQLite/PG18 | retenção física, referência implícita, avaliação semântica e prova live |
+| R05 web | busca aprofundada limitada, fontes parciais, notebook, retomada explícita e TTL de reutilização; CI 52e3bef | checkpoint durante pesquisa/por turno, retenção/revogação, contradições, quotas, screenshots e SSRF completo |
+| R06 diálogo | replanejamento e entrega segmentada CI 52e3bef SQLite/PG18 e Node | fence transacional de causalidade, reconciliação de resultado externo incerto, voz/avatar e prova live |
+| R07 integração | diagnósticos, burst/restart 12 turnos CI 52e3bef; nova bateria de 24 turnos/falhas combinadas pendente | fechar bloqueios, carga prolongada e recursos equivalentes, certificar Northflank |
 
 ## Método da bateria
 
