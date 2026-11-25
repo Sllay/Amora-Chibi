@@ -221,3 +221,23 @@ async def test_groq_adaptive_pilot_all_blocks_then_global_then_final(monkeypatch
     finally:
         DURABLE_AUTHORIZATION.reset(auth)
         DURABLE_REALIZATION.reset(turn)
+
+
+def test_runtime_memory_query_projects_oversized_terms_without_rewriting_source():
+    from amora.memory.store import _retrieval_tokens
+    from amora.storage.postgres_fts_bm25_lab import normalized_fts5_terms, BM25LabError
+
+    opaque = "a" * 4400
+    original = opaque + " café coelho ação"
+    assert _retrieval_tokens(original) == ["ação", "café", "coelho"]
+    assert normalized_fts5_terms(original, runtime_projection=True) == ["acao", "cafe", "coelho"]
+    assert original.startswith(opaque)
+    assert normalized_fts5_terms(opaque, runtime_projection=True) == []
+    assert normalized_fts5_terms("!? 🚗", runtime_projection=True) == []
+    assert normalized_fts5_terms("café", runtime_projection=True) == normalized_fts5_terms("café")
+    # The strict synthetic-lab API has not been relaxed.
+    with pytest.raises(BM25LabError, match="BM25_QUERY_TOKEN_TOO_LONG"):
+        normalized_fts5_terms(opaque)
+    # Invalid terms must not occupy any of the 16 available query slots.
+    words = " ".join(f"termo{i:02d}" for i in range(20))
+    assert _retrieval_tokens(opaque + " " + words) == _retrieval_tokens(words)

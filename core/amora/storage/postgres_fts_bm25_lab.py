@@ -36,13 +36,20 @@ def _require_memory_fixture(source: sqlite3.Connection) -> None:
         raise BM25LabError("BM25_SOURCE_FTS5_MISSING")
 
 
-def normalized_fts5_terms(query: str) -> list[str]:
+def normalized_fts5_terms(query: str, *, runtime_projection: bool = False) -> list[str]:
     """Use the canonical unicode61 tokenizer, not Python NFKD guessing.
 
     The temporary index is memory-only, never persisted. Terms are deduped
     as in canonical MemoryStore._tokens() before OR ranking.
     """
-    terms = _search_terms(query)
+    if runtime_projection:
+        from amora.memory.store import _retrieval_tokens
+        terms = _retrieval_tokens(query)
+        if not terms:
+            return []
+    else:
+        # Keep the strict laboratory contract and its fail-closed behavior.
+        terms = _search_terms(query)
     if any(len(term) > 128 for term in terms):
         raise BM25LabError("BM25_QUERY_TOKEN_TOO_LONG")
     with closing(sqlite3.connect(":memory:")) as source:

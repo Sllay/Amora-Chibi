@@ -26,7 +26,7 @@ from amora.identity import EntityRegistry
 
 from .episode_fence import EpisodeWriteLease
 from .models import MemoryRecord, MemoryQuery, MemoryHit
-from .store import MemoryStore, _tokens
+from .store import MemoryStore, _tokens, _retrieval_tokens
 
 
 class PostgresMemoryStore(MemoryStore):
@@ -180,7 +180,7 @@ class PostgresMemoryStore(MemoryStore):
             baseline = self._conn.execute(q.BASELINE,args).fetchall()
             if not query.text.strip():
                 return baseline
-            terms = normalized_fts5_terms(query.text)[:16]
+            terms = normalized_fts5_terms(query.text, runtime_projection=True)
             if not terms:
                 return baseline
             found = self._conn.execute(q.FTS_RANK,(terms,*args,None,None)).fetchall()
@@ -192,7 +192,7 @@ class PostgresMemoryStore(MemoryStore):
         return list({row["id"]:row for row in [*baseline,*matches]}.values())
 
     def _text_rank(self, text: str, records: dict[str,MemoryRecord]) -> list[str]:
-        terms = normalized_fts5_terms(text)[:16]
+        terms = normalized_fts5_terms(text, runtime_projection=True)
         if not terms or not records:
             return []
         now = self.clock.now().isoformat()
@@ -212,7 +212,7 @@ class PostgresMemoryStore(MemoryStore):
         # Preserve canonical MemoryStore behavior when an indexed search has
         # no hits. A lack of BM25 postings must not silently suppress valid
         # direct lexical overlap among already authorized candidates.
-        query_set = set(_tokens(text))
+        query_set = set(_retrieval_tokens(text))
         scored: list[tuple[float, str]] = []
         for memory_id, record in records.items():
             haystack = _tokens(" ".join((
@@ -452,7 +452,7 @@ class PostgresMemoryStore(MemoryStore):
                 # FTS postings search all eligible owner records before the
                 # cap: a memory from years ago must not be hidden by 512 new
                 # unrelated memories. Exact topic semantics remain in Python.
-                indexed_terms = normalized_fts5_terms(" ".join(sorted(terms)))
+                indexed_terms = normalized_fts5_terms(" ".join(sorted(terms)), runtime_projection=True)
                 if indexed_terms:
                     # FTS indexes tags as well as content. A result can match
                     # only its tags while failing canonical topic_terms(text).

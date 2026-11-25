@@ -28,6 +28,16 @@ def _tokens(text: str) -> set[str]:
     return {token.casefold() for token in _TOKEN_RE.findall(text) if len(token) > 1}
 
 
+def _retrieval_tokens(text: str) -> list[str]:
+    """Bound the lexical query, not the original message or stored memory.
+
+    A long opaque token (URL fragment, identifier, pasted data) is not split
+    into invented searchable words. Keep valid terms before applying the
+    existing deterministic 16-term cap, equally on SQLite and PostgreSQL.
+    """
+    return sorted(token for token in _tokens(text) if len(token) <= 128)[:16]
+
+
 def _jaccard(a: str, b: str) -> float:
     left, right = _tokens(a), _tokens(b)
     if not left or not right:
@@ -593,7 +603,7 @@ class MemoryStore:
         if where:
             sql += " WHERE " + " AND ".join(where)
         baseline = sql + " ORDER BY (importance * retrievability) DESC, created_at DESC, id LIMIT 300"
-        tokens = sorted(_tokens(query.text))[:16]
+        tokens = _retrieval_tokens(query.text)
         with trace_lock(self._lock):
             rows = list(self._conn.execute(baseline, params).fetchall())
             if not tokens:
@@ -631,7 +641,7 @@ class MemoryStore:
 
     @trace_stage("memory_text_rank")
     def _text_rank(self, text: str, records: dict[str, MemoryRecord]) -> list[str]:
-        query_tokens = sorted(_tokens(text))[:16]
+        query_tokens = _retrieval_tokens(text)
         if not query_tokens:
             return []
         if self.fts_enabled:

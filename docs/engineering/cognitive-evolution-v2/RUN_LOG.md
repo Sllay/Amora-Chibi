@@ -222,6 +222,13 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Testes: corpus sintético A/B com negação tardia e pergunta visual, limites Unicode, rejeição de citação inventada e agrupamento incompleto, mock de todas as etapas, autorização revogada, integração SQLite/PG18 (entrada original e resposta única, AMD só no overflow). CI do HEAD novo ainda não confirmado; nenhum provedor real consultado.
 - Pendências de RUN 03: recuperação de overflow anterior à seleção de provider (compiler), decomposição opcional de subtarefas e geração por partes quando necessária; leitura sob demanda adicional de trechos, integração visual real pertence à RUN 04; ampliar corpus, comparação quantitativa de tokens/latência/qualidade (meta 30–50% somente quando houver redundância). A validação de cobertura lexical/quotes não prova compreensão semântica correta. Não marcar RUN 03 concluída; sem certificação live, deploy, merge em main ou monitoramento ChatGPT.
 
+### RUN 03 — incremento C: consultas de memória com tokens extensos (24/11/2026)
+
+- 171c942: CI 10/11 PASS; Core 45524181148 PASS e Pre-deploy security 45524181149 PASS, confirmando correções de compatibilidade ACIR/CSP. PG18 45524181128: 244 passed, 1 skipped, 2 failed, ambos em test_run03_durable_adaptive_only_after_full_context_rejection[pg18], com e sem overflow simulado. O dispatcher registrou BM25LabError antes da realização e conservou o turno em retry_wait.
+- Causa localizada: normalized_fts5_terms rejeita termo >128 caracteres; fixture original contém um token contínuo de 4400 caracteres. O limite de busca lexical não deve impedir processamento da mensagem completa. Também há caso sem termos lexicais. Não há evidência de corrupção, indisponibilidade de Aiven real ou falha de schema.
+- Correção: projeção lexical compartilhada em MemoryStore (até 16 termos válidos com <=128 caracteres, sem fatiar tokens longos); SQLite e PostgreSQL usam a mesma seleção antes de ranking. Normalização unicode61 mantém contrato estrito do laboratório por padrão, caminho runtime explícito retorna vazio se não houver termo elegível. Preservar fonte, filtros de privacidade, baseline de candidatos e recall exato do proprietário; sem alteração de schema, índice, conteúdo de memória ou permissões. O teste integrado longo permanece intacto; acrescentado teste de limite, acentos, termo opaco, ausência de termos e cap.
+- Novo CI necessário; RUN 03 ainda IN_PROGRESS, sem produção e sem monitoramento.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
