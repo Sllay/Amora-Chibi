@@ -632,6 +632,28 @@ class PlatformMessagingService:
         set_ms("messaging_pre_cognition_ms", elapsed_ms(ingress_started))
         set_value("_critical_phase", "cognition")
         cognition_started = perf_counter()
+        from amora.cognition.surface_performance import SYNC_REALIZATION_RETRY
+        lease = _GENERATION_LEASE.get()
+        # Allow one smaller request only in the verified private owner route.
+        # No additional identity or storage call unless a provider rejects size.
+        async def retry_guard():
+            if (lease is None or not message.remote_processing_allowed
+                    or message.privacy_scope != PrivacyScope.PERSONAL
+                    or not is_verified_owner(self.attention.profiles,message,decision.speaker_entity_id)):
+                return False
+            if self._source_invalidated(message):
+                return False
+            return bool(await self._generation_call(message,"renew",*lease))
+        retry_eligible = (
+            lease is not None and message.platform.value == "discord"
+            and message.channel_type == ChannelType.DM
+            and message.privacy_scope == PrivacyScope.PERSONAL
+            and message.remote_processing_allowed
+            and decision.speaker_entity_id == "PERSON_BK"
+            and visual_observation is None and not message.attachments
+        )
+        retry_token = SYNC_REALIZATION_RETRY.set(
+            (str(request.turn_id),retry_guard) if retry_eligible else None)
         try:
             plan = await asyncio.wait_for(
                 self.cognition.respond_observed(request, on_segment=None, fallback_text=fallback),
@@ -674,6 +696,8 @@ class PlatformMessagingService:
                 self.cognition_timeout_seconds,
                 message.remote_processing_allowed,
             )
+        finally:
+            SYNC_REALIZATION_RETRY.reset(retry_token)
 
         # Even a *hard* provider timeout can occur AFTER web results arrived.
         # Compose public links outside the generation try/except so a failed

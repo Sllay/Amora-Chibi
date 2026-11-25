@@ -28,6 +28,8 @@ from .durable_realization import (durable_realization, DeferredRealization, DURA
     DURABLE_CAUSAL_CHECK, CausalReplanRequired, adaptive_context_allowed)
 from .provider_resilience import classify_provider_failure, context_rejection
 from .provider_quota import ProviderQuotaDeferred
+from .surface_performance import attempt_window
+from amora.messaging.generation_lifecycle import InboundGenerationLost
 
 
 async def _await_numes_adaptive(
@@ -138,7 +140,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
         }
         for key in ("status_code", "candidate_index", "candidate_count",
                     "provider_total_budget_seconds", "provider_attempt_budget_seconds",
-                    "remaining_provider_budget_seconds", "memory_candidate_count", "accepted_memory_count"):
+                    "remaining_provider_budget_seconds", "effective_attempt_budget_seconds",
+                    "reserved_failover_seconds", "memory_candidate_count", "accepted_memory_count"):
             value = payload.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 safe[key] = value
@@ -390,7 +393,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
         is_durable = durable_realization(request)
         failures = []
 
-        async def timed_realize(realize, *, charge_cap=None):
+        async def timed_realize(realize):
             nonlocal provider_elapsed
             attempt_started = perf_counter()
             try:
@@ -399,7 +402,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                         return await realize(context)
             finally:
                 elapsed = max(0.0, perf_counter() - attempt_started)
-                provider_elapsed += min(elapsed, charge_cap) if charge_cap is not None else elapsed
+                provider_elapsed += elapsed
 
         last_failure = "NO_STRUCTURED_REALIZATION_PROVIDER"
         attempts = [(descriptor, adaptive_only) for descriptor in candidates]
@@ -453,6 +456,18 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     )
                     break
 
+            attempt_available = remaining_budget
+            reserved_failover = 0.0
+            if remaining_budget is not None and request.metadata.get("surface") == "platform_messaging":
+                later_available = sum(
+                    1 for later in candidates[provider_index+1:]
+                    if callable(getattr(self._providers.get(later.name), "realize", None))
+                    and self._provider_quota.remaining(later.name, model=later.model) <= 0
+                )
+                attempt_available, reserved_failover = attempt_window(remaining_budget,later_available)
+            timeout = attempt_budget
+            if attempt_available is not None:
+                timeout = min(timeout,attempt_available) if timeout is not None else attempt_available
             await self._journal_async(
                 request,
                 JournalStage.PROVIDER_SELECTED,
@@ -470,6 +485,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     "provider_total_budget_seconds": total_budget,
                     "provider_attempt_budget_seconds": attempt_budget,
                     "remaining_provider_budget_seconds": remaining_budget,
+                    "effective_attempt_budget_seconds": timeout,
+                    "reserved_failover_seconds": reserved_failover,
                 },
             )
             await self._journal_async(
@@ -496,20 +513,19 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 continue
             provider_started = perf_counter()
             try:
-                timeout = attempt_budget
-                if remaining_budget is not None:
-                    timeout = min(timeout, remaining_budget) if timeout is not None else remaining_budget
                 if timeout is not None:
                     if (descriptor.name == "numes"
                             and request.metadata.get("surface") == "platform_messaging"
                             and remaining_budget is not None):
                         raw_result = await _await_numes_adaptive(
-                            timed_realize(realize, charge_cap=timeout if is_durable else None),
-                            timeout=max(0.05, timeout), available_seconds=remaining_budget,
-                            progress_extension_seconds=120.0 if is_durable else 0.0,
+                            timed_realize(realize),
+                            timeout=max(0.001, timeout), available_seconds=attempt_available,
+                            # Progress grace may use only the assigned window,
+                            # never the fallback reserve or an uncharged extension.
+                            reserve_seconds=0.0,
                         )
                     else:
-                        raw_result = await asyncio.wait_for(timed_realize(realize), timeout=max(0.05, timeout))
+                        raw_result = await asyncio.wait_for(timed_realize(realize), timeout=max(0.001, timeout))
                 else:
                     raw_result = await timed_realize(realize)
                 raw = dict(raw_result)
@@ -518,7 +534,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     validated = RealizationValidator.parse_and_validate(
                         context, raw, enforce_dialogue_plan=response_semantic_filter_enabled(),
                     )
-            except DeferredRealization:
+            except (DeferredRealization, InboundGenerationLost):
                 raise
             except ProviderQuotaDeferred as exc:
                 last_failure = "PROVIDER_ACCOUNT_BACKOFF"

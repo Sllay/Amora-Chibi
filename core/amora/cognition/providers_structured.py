@@ -332,7 +332,7 @@ class GeminiCognitiveProvider(BaseGeminiCognitiveProvider):
         payload["generationConfig"] = generation
         system_instruction = payload.get("systemInstruction") or {"parts": [{"text": ""}]}
         parts = system_instruction.get("parts") or [{"text": ""}]
-        current = render_trusted_protocol(context)
+        current = render_trusted_protocol(context, compact_acir=True)
         parts[0] = {"text": current + "\n\n" + realization_instruction(context)}
         system_instruction["parts"] = parts
         payload["systemInstruction"] = system_instruction
@@ -380,6 +380,9 @@ class GeminiCognitiveProvider(BaseGeminiCognitiveProvider):
 
 
 def _dialogue_token_budget(context: CognitiveContext) -> int:
+    from .surface_performance import detailed_output_requested
+    if detailed_output_requested(context):
+        return 2200
     depth = str(context.dialogue_plan.get("depth") or "medium")
     return {"short": 180, "medium": 320, "deep": 600}.get(depth, 320)
 

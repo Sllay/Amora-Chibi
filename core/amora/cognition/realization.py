@@ -393,11 +393,23 @@ def realization_instruction(context: CognitiveContext) -> str:
             "Se a nota declarar incerteza, preserve essa incerteza na fala."
         )
 
+    from .surface_performance import detailed_output_requested
+    detailed_cue = (
+        " O pedido atual solicita documentação ou explicação extensa explicitamente. "
+        "Priorize o conteúdo técnico sobre introdução, brincadeiras e perguntas de encerramento. "
+        "Distribua os pontos solicitados em até cinco moves de até 1200 caracteres cada, "
+        "com explicações concretas, algoritmos, restrições e exemplos quando pedidos. "
+        "Não entregue apenas uma lista de nomes ou uma introdução. "
+        "Se não couber tudo, declare quais pontos ainda faltam; não chame a parte entregue de completa. "
+        "Neste caso a preferência por concisão oral não deve suprimir a explicação solicitada. "
+        if detailed_output_requested(context) else ""
+    )
     return (
         "Retorne SOMENTE um objeto JSON válido, sem markdown e sem texto fora do objeto. "
         "Formato: {\"moves\":[{\"kind\":\"...\",\"text\":\"...\"}],\"closing\":\"none|statement|question\"}; "
         "quando autorizado, acrescente \"self_choices\":[{\"key\":\"...\",\"value\":\"...\"}]. "
         + choice_instructions
+        + detailed_cue
         + visual_cue
         + causal_cue
         + web_cue
