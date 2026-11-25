@@ -41,7 +41,7 @@ class MessagingStorageWorker:
         return self.store.append_audit(audit)
 
     def visual_checkpoint(self, operation, *args):
-        if operation not in {"load", "save", "source_current"}:
+        if operation not in {"load", "save", "source_current", "save_reference", "load_reference"}:
             raise ValueError("VISUAL_CHECKPOINT_OPERATION_NOT_ALLOWED")
         return getattr(self.visual_checkpoints, operation)(*args)
 

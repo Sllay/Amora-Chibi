@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from amora.cognition.visual_context import visual_context_for_request
 from amora.events.models import AmoraEvent, EventPriority, PrivacyScope
@@ -17,6 +17,9 @@ from amora.latency_trace import trace_lock
 EVENT_TYPE = "messaging.visual.checkpoint.v1"
 SOURCE = "owner_dm_visual_checkpoint"
 TTL_SECONDS = 900
+HISTORY_EVENT = "messaging.visual.reference.v1"
+HISTORY_TTL_SECONDS = 86400
+HISTORY_MAX_RECORDS = 24
 
 
 def checkpoint_key(session, turn, native_hash, revision, image, text):
@@ -95,6 +98,82 @@ class VisualCheckpointStore:
             session_id=session, dedupe_key=self._dedupe(key, bucket),
             payload={"key":key, "revision":revision, "observation":obs},
         ))
+
+
+    def save_reference(self, session, native_hash, revision, sent_at, observation):
+        """Save one completed image-message snapshot, including negative results."""
+        if not self.source_current(session, native_hash, revision):
+            return False
+        obs = visual_context_for_request(observation, remote=True, private=True, mode="reply")
+        if not obs or obs.get("observation_version") == 4:
+            return False
+        now = self.clock.now()
+        if not timedelta(0) <= now - sent_at <= timedelta(seconds=HISTORY_TTL_SECONDS):
+            return False
+        payload = {"native_hash":native_hash,"revision":revision,
+                   "sent_at":sent_at.isoformat(),"observation":obs}
+        key = hashlib.sha256(json.dumps([session,payload],sort_keys=True,
+                    ensure_ascii=False,separators=(",",":")).encode()).hexdigest()
+        return self.database.append_event(AmoraEvent(
+            event_type=HISTORY_EVENT, timestamp=now, source=SOURCE,
+            actor="PERSON_BK", privacy_scope=PrivacyScope.PERSONAL,
+            priority=EventPriority.BACKGROUND, importance=0.0,
+            session_id=session, dedupe_key="visual-reference:v1:"+key,
+            payload=payload,
+        ))
+
+    def load_reference(self, session, before, target_hash=None, exclude_hash=None):
+        """Select the latest registered image message or exact native reply.
+
+        Never fall through from an invalidated/failed latest image to an older
+        unrelated image. A bounded history miss is explicitly unavailable.
+        """
+        now = self.clock.now()
+        with trace_lock(self.database._lock):
+            rows = self.database._conn.execute(
+                "SELECT * FROM events WHERE event_type=? AND session_id=? "
+                "AND privacy_scope='PERSONAL' AND actor='PERSON_BK' "
+                "ORDER BY timestamp DESC LIMIT ?",
+                (HISTORY_EVENT, session, HISTORY_MAX_RECORDS),
+            ).fetchall()
+        candidates = []
+        for row in rows:
+            try:
+                event = self.database._decode_stored_event(row)
+                if event.source != SOURCE:
+                    continue
+                data = event.payload
+                native_hash = data["native_hash"]
+                revision = data["revision"]
+                sent_at = datetime.fromisoformat(data["sent_at"])
+                if (not isinstance(native_hash,str) or len(native_hash)!=20
+                        or type(revision) is not int or revision < 1
+                        or native_hash == exclude_hash
+                        or (target_hash is not None and native_hash != target_hash)
+                        or not sent_at < before
+                        or not timedelta(0) <= now-sent_at <= timedelta(seconds=HISTORY_TTL_SECONDS)
+                        or not timedelta(0) <= now-event.timestamp <= timedelta(seconds=HISTORY_TTL_SECONDS)):
+                    continue
+                candidates.append((sent_at, revision, event.timestamp, native_hash, data))
+            except (ValueError, TypeError, KeyError, OverflowError):
+                continue
+        if not candidates:
+            return None
+        # Same-time independent messages are ambiguous; UUID ordering would
+        # fabricate chronology. Within one source use the highest revision.
+        latest = max(item[0] for item in candidates)
+        tied = [item for item in candidates if item[0] == latest]
+        if len({item[3] for item in tied}) != 1:
+            return None
+        chosen = max(tied,key=lambda item:(item[1],item[2]))
+        sent_at, revision, observed_at, native_hash, data = chosen
+        if not self.source_current(session,native_hash,revision):
+            return None
+        obs = visual_context_for_request(data.get("observation"),remote=True,private=True,mode="reply")
+        if not obs or obs.get("observation_version")==4:
+            return None
+        return {"native_hash":native_hash,"revision":revision,
+                "observed_at":observed_at.isoformat(),"observation":obs}
 
 
 def contains_transport_input(observation, image):

@@ -20,6 +20,7 @@ from .incoming_vision import unavailable_visual_observation, visual_failure_reas
 from .visual_enrichment import VisualExpressionEnrichmentService
 from .visual_checkpoint import VisualCheckpointStore, checkpoint_key, contains_transport_input
 from .visual_authorization import VISUAL_AUTHORIZATION, require_visual_authorization
+from .visual_reference import visual_reference_intent
 
 
 _CURRENT_MESSAGE: ContextVar[InboundMessage | None] = ContextVar(
@@ -180,7 +181,9 @@ class PlatformMessagingService(BasePlatformMessagingService):
         # Text/sticker/audio-only turns never enter the visual storage or
         # authorization path. Inspect only local transport metadata here;
         # all visual inputs still pass the full live authorization fence.
-        if not self._has_visual_input(message):
+        has_visual = self._has_visual_input(message)
+        reference = visual_reference_intent(message)
+        if not has_visual and reference is None:
             return None
         if not (message.platform == MessagingPlatform.DISCORD
                 and message.channel_type == ChannelType.DM
@@ -204,11 +207,52 @@ class PlatformMessagingService(BasePlatformMessagingService):
         try:
             if not await guard():
                 return None
-            if message.incoming_images:
-                result = await self._visual_batch(message, decision)
-            else:
-                result = await self._visual_single(message)
-            return result if await guard() else None
+            current = None
+            historical = None
+            session = self._session_ref(message)
+            native_hash = self._hash(message.native_source_message_id)
+            if reference and reference != "unsupported":
+                target = self._hash(message.reply_to_message_id) if reference == "reply" else None
+                try:
+                    historical = await self._visual_checkpoint_call(message,"load_reference",
+                        session,message.timestamp,target,native_hash)
+                except Exception:
+                    historical = None
+            if has_visual:
+                if message.incoming_images:
+                    current = await self._visual_batch(message, decision)
+                else:
+                    current = await self._visual_single(message)
+                if current is not None and await guard():
+                    try:
+                        await self._visual_checkpoint_call(message,"save_reference",session,
+                            native_hash,message.transport_revision,message.timestamp,current)
+                    except Exception:
+                        logging.getLogger("amora.incoming_vision").warning("visual_reference_write_failed")
+            if not await guard():
+                return None
+            if reference is None:
+                return current
+            # Recheck the previous source after possibly slow current inference.
+            if historical is not None:
+                try:
+                    valid = await self._visual_checkpoint_call(message,"source_current",session,
+                        historical["native_hash"],historical["revision"])
+                except Exception:
+                    valid = False
+                if not valid:
+                    historical = None
+            if not await guard():
+                return None
+            prior = historical["observation"] if historical else None
+            states = [o["status"] for o in (current,prior) if o is not None]
+            status = ("analyzed" if prior is not None and states and all(x=="analyzed" for x in states)
+                      else "partial" if any(x in {"analyzed","partial"} for x in states)
+                      else "unavailable")
+            return {"observation_version":4,"source":"visual_reference",
+                    "status":status,"reference_kind":reference,
+                    **({"historical":prior,"observed_at":historical["observed_at"]} if historical else {}),
+                    **({"current":current} if current is not None else {})}
         finally:
             VISUAL_AUTHORIZATION.reset(token)
 

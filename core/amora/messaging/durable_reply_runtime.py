@@ -28,6 +28,7 @@ from .generation_lifecycle import InboundGenerationBusy, InboundGenerationLost
 from .models import AttentionDecision, ChannelType, InboundMessage, InboundResult, RoutingAction
 from .reply_jobs import ReplyJobRepository, ReplyReason
 from .reply_diagnostics import ReplyDiagnostics
+from .visual_reference import visual_reference_intent
 
 _LOG = logging.getLogger("amora.messaging.durable_reply")
 
@@ -94,11 +95,12 @@ class DurableReplyRuntime:
             and message.channel_type == ChannelType.DM
             and message.privacy_scope == PrivacyScope.PERSONAL
             and message.remote_processing_allowed and message.text.strip()
-            and not message.attachments and not message.incoming_image
+            and not message.attachments and not message.incoming_image and not message.incoming_images
             and not message.expressions and not message.incoming_image_status
             and len(message.sender_identifiers) == 1
             and message.sender_identifiers[0].identifier_type == "discord_user_id"
             and parse_web_intent(message.text) is None
+            and visual_reference_intent(message) is None
             and is_verified_owner(self.service.attention.profiles, message,
                                   decision.speaker_entity_id))
 

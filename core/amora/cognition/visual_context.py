@@ -4,6 +4,7 @@ Image observations are not user utterances, verified world facts, privileged
 instructions or canonical memory. All provider text is length-limited.
 """
 from typing import Literal
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -105,12 +106,53 @@ class VisualBatch(BaseModel):
                            "observation":item.observation.as_context()} for item in self.images]}
 
 
-def visual_context_for_request(value, *, remote: bool, private: bool, mode: str) -> dict | None:
-    if not remote or not private or mode in {"reflection", "autonomous_initiation", "scheduled_reminder"}:
-        return None
+def _current_context(value):
     if isinstance(value, dict) and value.get("observation_version") == 3:
         try:
             return VisualBatch.model_validate(value).as_context()
         except (ValueError, TypeError):
             return None
     return _single_context(value)
+
+
+class HistoricalVisualContext(BaseModel):
+    """A prior observation, never a claim of newly inspected pixels."""
+    model_config = ConfigDict(extra="forbid")
+    observation_version: Literal[4]
+    source: Literal["visual_reference"]
+    status: Literal["analyzed","partial","unavailable"]
+    reference_kind: Literal["reply","latest","unsupported"]
+    observed_at: datetime | None = None
+    historical: dict | None = None
+    current: dict | None = None
+
+    @model_validator(mode="after")
+    def validate_reference(self):
+        if self.historical is not None:
+            self.historical = _current_context(self.historical)
+            if self.historical is None or self.observed_at is None or self.observed_at.tzinfo is None:
+                raise ValueError("invalid historical visual evidence")
+        elif self.observed_at is not None:
+            raise ValueError("timestamp without visual evidence")
+        if self.current is not None:
+            self.current = _current_context(self.current)
+            if self.current is None:
+                raise ValueError("invalid current visual evidence")
+        states = [v["status"] for v in (self.current,self.historical) if v is not None]
+        expected = ("analyzed" if self.historical is not None and states and all(x=="analyzed" for x in states)
+                    else "partial" if any(x in {"analyzed","partial"} for x in states)
+                    else "unavailable")
+        if self.status != expected or (self.reference_kind=="unsupported" and self.historical is not None):
+            raise ValueError("visual reference outcome mismatch")
+        return self
+
+
+def visual_context_for_request(value, *, remote: bool, private: bool, mode: str) -> dict | None:
+    if not remote or not private or mode in {"reflection", "autonomous_initiation", "scheduled_reminder"}:
+        return None
+    if isinstance(value,dict) and value.get("observation_version")==4:
+        try:
+            return HistoricalVisualContext.model_validate(value).model_dump(mode="json",exclude_none=True)
+        except (ValueError, TypeError):
+            return None
+    return _current_context(value)

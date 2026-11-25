@@ -299,7 +299,17 @@ def realization_instruction(context: CognitiveContext) -> str:
     # image as if it were a separate message.
     visual_cue = ""
     if isinstance(context.visual_observation, dict):
-        if context.visual_observation.get("observation_version") == 3:
+        if context.visual_observation.get("observation_version") == 4:
+            visual_cue = (
+                " Este turno faz referência explícita a evidência visual registrada anteriormente. "
+                "historical contém somente uma observação textual anterior (observed_at), não pixels atuais; "
+                "latest significa última mensagem de imagem registrada, reply indica a mensagem citada. "
+                "current, se presente, descreve novos anexos. Não confunda épocas ou números de imagem. "
+                "Se faltar historical, diga que a referência não foi recuperada e peça reenvio quando necessário. "
+                "Se a pergunta exige detalhes ausentes, não invente nem alegue reanálise. "
+                "Compare apenas o que está nas observações e reconheça limitações ou falhas individuais. "
+            )
+        elif context.visual_observation.get("observation_version") == 3:
             visual_cue = (
                 " A pessoa enviou várias imagens na mesma mensagem. Cada image_number "
                 "representa a ordem original entre os anexos de imagem; image_count é o total. "
