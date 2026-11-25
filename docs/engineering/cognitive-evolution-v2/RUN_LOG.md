@@ -38,8 +38,8 @@ gate próprio em PLAN.md. Status de produção deve ser verificado separadamente
 | 03 | Adaptive Context & Comprehension Engine | CI_PASS (11/11, 978d9f8); escopo residual registrado |
 | 04 | Advanced Multimodal Perception | CI_PASS (11/11, cbe211b); escopo residual registrado |
 | 05 | Autonomous Web Intelligence | CI_PASS (11/11, a431fb0); escopo residual registrado |
-| 06 | Living Conversation Engine | IN_PROGRESS |
-| 07 | Cognitive Integration & Certification | PLANNED |
+| 06 | Living Conversation Engine | CI_PASS (11/11, 1638748); escopo residual registrado |
+| 07 | Cognitive Integration & Certification | IN_PROGRESS |
 
 ## RUN 00 — 2026-11-23 — preparação
 
@@ -280,6 +280,15 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Janela experimental de até 650ms apenas para primeira tentativa com sinais de frase incompleta; não atrasar saudação ou pergunta normal. Revalida lease/autorização depois da espera. TurnFrame marca followups como dados não canônicos e realização orienta não contradizer correção explícita; mensagens posteriores preservam jobs independentes. Sem alteração de schema/voz/rig, sem afirmar entrega ou cancelar respostas por heurística.
 - Testes unitários de ordem, ambiguidades, privacidade, preservação literal, janela; integração SQLite/PG18 verifica três mensagens aceitas, correção projetada separadamente, novo assunto excluído, primeiro ready e posteriores pending. CI ainda não confirmado.
 - Pendências: snapshot acima cobre apenas mensagens já persistidas no momento da compilação, não replaneja geração em andamento; agrupamento e supersessão atômicos com ACK, detectar interrupção sem marcador lexical, empate com ordem real da fila, filtrar memórias posteriores e distinguir histórico de fala entregue, entrega e recuperação por segmento, TTS/barge-in/avatar, TTFS e testes reais. Não declarar RUN06 completa; manter escopo residual para integração antes da certificação. Sem deploy/monitoramento.
+
+### RUN 06 — checkpoint de avanço autorizado (24/11/2026)
+
+- 163874897a2b25b6219f029e2dc47a6856ff714a: 11/11 workflows PASS, Core 45529615301, PG18 45529615405; PR #386 draft mergeable. Proprietário autorizou RUN07. Pendências do snapshot causal, supersessão e ACK de segmentos permanecem abertas.
+
+### RUN 07 — integração e certificação — início (24/11/2026)
+
+- Base 1638748. Primeira etapa: inventário de escopo residual, diagnóstico correlacionado sanitizado e métricas limitadas do dispatcher; preparar matriz de certificação e teste transversal. Não remover caminho legado nem ativar fila, trocar banco/host, ou alterar voz/Avatar sem equivalência.
+- Gate final exige fechar pendências de implementação, CI integrado, bateria profunda e certificação Northflank. 11/11 de cada checkpoint não comprova produção. Alvo 512 MB/0,2 vCPU, sem promover automaticamente. Sem monitoramento ChatGPT.
 
 ## Modelo obrigatório de registro para cada RUN
 
