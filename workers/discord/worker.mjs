@@ -109,6 +109,9 @@ export class DiscordWorker {
       + ' enabled=' + this.webScreenshots.enabled
       + ' provider=' + (this.webScreenshots.apiKey ? 'keyed' : 'keyless'));
     this.typingProgress = new Map();
+    // Per-DM admission order for the synchronous Core path. No persistent
+    // queue activation, no shared global lock, and no coalescing of turns.
+    this.dmInboundTails = new Map();
     this.socket = null;
     this.ready = false;
     this.stopped = false;
@@ -738,11 +741,38 @@ export class DiscordWorker {
     return Boolean(author.bot) || Boolean(this.botUserId && String(author.id) === String(this.botUserId));
   }
 
+  async admitDiscordEntry(entry, options = {}, before = Promise.resolve()) {
+    const message = entry.message;
+    const channel = String(message?.channel_id || '');
+    if (!channel || message?.guild_id) {
+      await before;
+      return this.deliverNormalized(message, options);
+    }
+    const previous = this.dmInboundTails.get(channel) || Promise.resolve();
+    // Register synchronously before awaiting so later gateway events cannot
+    // overtake this revision. Rejection of one turn must not poison the tail.
+    const task = previous.catch(() => {}).then(async () => {
+      await before;
+      const state = this.runtime.state?.(channel, message.id);
+      if (state && (state.deleted || state.revision !== entry.revision)) {
+        safeLog('DM_INBOUND_REVISION_SUPERSEDED');
+        return null;
+      }
+      return this.deliverNormalized(message, options);
+    });
+    this.dmInboundTails.set(channel, task);
+    try {
+      return await task;
+    } finally {
+      if (this.dmInboundTails.get(channel) === task) this.dmInboundTails.delete(channel);
+    }
+  }
+
   async handleMessageCreate(message) {
     if (this.isBotAuthored(message)) return;
     const entry = this.runtime.recordCreate(message);
     if (!entry || entry.duplicate) return;
-    await this.deliverNormalized(entry.message, { revision: entry.revision });
+    await this.admitDiscordEntry(entry, { revision: entry.revision });
   }
 
   async handleMessageUpdate(partial) {
@@ -753,16 +783,18 @@ export class DiscordWorker {
     }
     const entry = this.runtime.recordUpdate(partial);
     if (!entry || entry.duplicate || !entry.semanticChanged) return;
-    await this.core.invalidateSource({
+    // Invalidation begins immediately, even if another turn is generating.
+    // Reserve the edited turn's admission position before waiting for the ACK.
+    const invalidation = this.core.invalidateSource({
       conversationId: partial.channel_id,
       nativeMessageId: partial.id,
       reason: 'DISCORD_MESSAGE_UPDATED',
       transportRevision: entry.revision,
     }).catch(() => {});
-    await this.deliverNormalized(entry.message, {
+    await this.admitDiscordEntry(entry, {
       revision: entry.revision,
       syntheticMessageId: discordEditMessageId(partial.id, entry.revision),
-    });
+    }, invalidation);
   }
 
   async handleMessageDelete(event) {

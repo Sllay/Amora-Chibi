@@ -148,3 +148,67 @@ test('Core inbound transport budget outlives the Core cognition hard timeout', a
     globalThis.clearTimeout = originalClearTimeout;
   }
 });
+
+
+test('RUN04 same DM admission is FIFO and independent DMs run concurrently', async () => {
+  const worker = makeWorker();
+  const started = [], finished = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  worker.deliverNormalized = async message => {
+    started.push(message.id);
+    if (message.id === '1') await gate;
+    finished.push(message.id);
+  };
+  const entry = (id, channel_id) => ({revision:1,message:{id,channel_id}});
+  const one = worker.admitDiscordEntry(entry('1','dm-a'));
+  const two = worker.admitDiscordEntry(entry('2','dm-a'));
+  const three = worker.admitDiscordEntry(entry('3','dm-a'));
+  const independent = worker.admitDiscordEntry(entry('4','dm-b'));
+  await independent;
+  assert.deepEqual(started,['1','4']);
+  assert.deepEqual(finished,['4']);
+  release();
+  await Promise.all([one,two,three]);
+  assert.deepEqual(finished,['4','1','2','3']);
+  assert.equal(worker.dmInboundTails.size,0);
+});
+
+test('RUN04 failed admission does not discard the next independent turn', async () => {
+  const worker = makeWorker();
+  const seen = [];
+  worker.deliverNormalized = async message => {
+    seen.push(message.id);
+    if (message.id === '1') throw new Error('synthetic failure');
+    return message.id;
+  };
+  const one = worker.admitDiscordEntry({revision:1,message:{id:'1',channel_id:'dm'}});
+  const two = worker.admitDiscordEntry({revision:1,message:{id:'2',channel_id:'dm'}});
+  await assert.rejects(one,/synthetic failure/);
+  assert.equal(await two,'2');
+  assert.deepEqual(seen,['1','2']);
+  assert.equal(worker.dmInboundTails.size,0);
+});
+
+test('RUN04 edit or deletion while waiting fences the obsolete revision', async () => {
+  const worker = makeWorker();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const seen = [];
+  const states = new Map();
+  worker.runtime.state = (_, id) => states.get(id);
+  worker.deliverNormalized = async message => {
+    seen.push(message.id + ':' + message.content);
+    if (message.id === '1') await gate;
+  };
+  const one = worker.admitDiscordEntry({revision:1,message:{id:'1',channel_id:'dm',content:'first'}});
+  const old = worker.admitDiscordEntry({revision:1,message:{id:'2',channel_id:'dm',content:'obsolete'}});
+  states.set('2',{revision:2,deleted:false});
+  const edited = worker.admitDiscordEntry({revision:2,message:{id:'2',channel_id:'dm',content:'corrected'}});
+  const removed = worker.admitDiscordEntry({revision:1,message:{id:'3',channel_id:'dm',content:'deleted'}});
+  states.set('3',{revision:2,deleted:true});
+  release();
+  await Promise.all([one,old,edited,removed]);
+  assert.deepEqual(seen,['1:first','2:corrected']);
+  assert.equal(worker.dmInboundTails.size,0);
+});
