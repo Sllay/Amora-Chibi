@@ -36,8 +36,8 @@ gate próprio em PLAN.md. Status de produção deve ser verificado separadamente
 | 01 | Durable Cognitive Runtime | CI_PASS — 9/9 no 6163c34; LIVE_PENDING até bateria final |
 | 02 | Intelligent Provider Orchestrator | CI_PASS (10/10, bd0d827); cobertura residual registrada |
 | 03 | Adaptive Context & Comprehension Engine | CI_PASS (11/11, 978d9f8); escopo residual registrado |
-| 04 | Advanced Multimodal Perception | IN_PROGRESS |
-| 05 | Autonomous Web Intelligence | PLANNED |
+| 04 | Advanced Multimodal Perception | CI_PASS (11/11, cbe211b); escopo residual registrado |
+| 05 | Autonomous Web Intelligence | IN_PROGRESS |
 | 06 | Living Conversation Engine | PLANNED |
 | 07 | Cognitive Integration & Certification | PLANNED |
 
@@ -246,6 +246,16 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - e8a7abe: removido corte [:500] de ambos os adapters de visão. Contrato visual_focus.py recebe legenda literal inteira até o limite existente do InboundMessage (12000 caracteres), rejeita excesso explicitamente; classificador determinístico rápido/direcionado/detalhado controla foco, não permissões ou significado. Nenhuma chamada extra para classificação. Qwen/NVIDIA preservam MIME/bytes, consentimento, fallback opt-in e teto temporal. Diagnósticos fixos diferenciam quota, timeout, recusa, observação inválida, transporte e formato; nunca registram conteúdo ou URL. Realização responde ao texto independente, explicita parte visual indisponível.
 - 4f8796b: modo detalhado reserva 2400 tokens de saída em vez de 1400 e admite descrição 1200 caracteres, 16 trechos OCR e 8 incertezas de até 240 caracteres; limites são configuração experimental local, não capacidade certificada do provedor. Modo rápido/direcionado mantém contrato anterior. Observação detalhada v2 inclui provider/model gerados pelo Core. Modelo do sensor continua não canônico; schema legado preservado e validado; nenhuma imagem é encaminhada ao modelo textual. Testes mock de ambos os adapters verificam pergunta tardia, Unicode, OCR ampliado, isolamento, limite de foco e códigos de erro; teste integrado de falha de transporte atualizado para causa específica, sem remover garantia de preservação de legenda.
 - Gate pendente: CI do HEAD ainda não certificado, sem chamadas reais. Múltiplas imagens, vínculo estável anexo/revisão, validade, cache/checkpoint persistente e retomada, política de leitura de regiões, dependências visão/web, telemetria quantitativa, cobertura de edição/exclusão e revogação ainda não implementadas. Próxima etapa deve auditar worker.mjs, core-client.mjs, serviço de ingress, storage e limites HTTP antes de ampliar payload. Não declarar conclusão da RUN 04. Sem deploy ou monitoramento.
+
+### RUN 04 — checkpoint de avanço autorizado (24/11/2026)
+
+- cbe211bc207e33845436af6ae41a402c0e563758: 11/11 workflows PASS, Core 45527660870, PG18 45527660874; PR #384 draft, mergeable=true. Proprietário autorizou iniciar RUN 05. Escopo residual de múltiplos anexos, vínculo e validade por revisão, checkpoint de visão e integração visual permanece aberto para integração; CI não equivale a conclusão do escopo.
+
+### RUN 05 — Autonomous Web Intelligence — início (24/11/2026)
+
+- Base cbe211b, branch feat/cognitive-evolution-run05-web-intelligence; seção 8 do PLAN. Inventário: navigator.py, query_planner.py, workspace_store.py, remote_reader.py, browser_client.py, structured_runtime.py e web_delivery. Caminho atual para no primeiro motor relevante, lê duas fontes e só usa fallback remoto se ambas falham. Limites externos podem cancelar sem resultado parcial.
+- Primeira etapa: perfil aprofundado explícito separado do rápido, consultas alternativas relevantes, fontes de domínios variados, fallback por página e deadline cooperativo que devolve evidência parcial. Nenhum motor novo ou serviço pago presumido. Preservar autorização owner-DM, SSRF, URLs sensíveis, provenance e separação de evidência/instrução.
+- Próximas etapas: checkpoint/replay persistente por turno e sessão, avaliação semântica de evidência e contradições, continuidade de pesquisas e entrega confiável de screenshots, testes de cancelamento/isolamento e medição de custos. Não declarar cobertura total. Sem produção, sem monitoramento.
 
 ## Modelo obrigatório de registro para cada RUN
 
