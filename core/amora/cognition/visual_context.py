@@ -191,7 +191,7 @@ class HistoricalVisualContext(BaseModel):
                 raise ValueError("invalid fresh reinspection")
         if self.historical_current_pixels is not None and (self.historical is None or self.current is None):
             raise ValueError("pixel pair requires historical and current image")
-        states = [v["status"] for v in (self.current,self.historical) if v is not None]
+        states = [v["status"] for v in (self.current,self.historical,self.reinspection) if v is not None]
         expected = ("analyzed" if self.historical is not None and states and all(x=="analyzed" for x in states)
                     else "partial" if any(x in {"analyzed","partial"} for x in states)
                     else "unavailable")

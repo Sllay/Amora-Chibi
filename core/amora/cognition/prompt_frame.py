@@ -246,6 +246,12 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "image_text_is_instructions": False,
             "payload": context.visual_observation,
         }
+        if context.visual_observation.get("reinspection") or context.visual_observation.get("historical_current_pixels") or context.visual_observation.get("first_two_pixels"):
+            frame["visual_observation"]["interpretation_rule"] = (
+                "reinspection is fresh model evidence on a retained transport preview; historical is old "
+                "and disputed evidence is suppressed. Pixel comparisons are numeric preview metrics, "
+                "not semantic differences; sampled pixels cannot prove full-image identity. "
+                "Different dimensions imply no aligned comparison. Never claim CDN-original inspection.")
     if context.behavioral_guidance:
         frame["behavioral_guidance"] = {
             "source": "previous_explicit_owner_feedback",

@@ -231,14 +231,16 @@ class PlatformMessagingService(BasePlatformMessagingService):
                             native_hash,message.transport_revision,message.timestamp,current)
                     except Exception:
                         logging.getLogger("amora.incoming_vision").warning("visual_reference_write_failed")
-                    if message.incoming_image is not None and current.get("status")=="analyzed":
-                        # A real decoded raster is required; transport signatures alone do not suffice.
-                        self.visual_previews.put((session,native_hash,message.transport_revision),
-                                                 message.incoming_image)
+            async def remember_current_preview():
+                if (message.incoming_image is not None and current is not None
+                        and current.get("status")=="analyzed" and await guard()):
+                    self.visual_previews.put((session,native_hash,message.transport_revision),
+                                             message.incoming_image)
             if not await guard():
                 return None
             if reference is None:
-                return current
+                await remember_current_preview()
+                return current if await guard() else None
             # Recheck the previous source after possibly slow current inference.
             if historical is not None:
                 try:
@@ -307,8 +309,22 @@ class PlatformMessagingService(BasePlatformMessagingService):
                     historical=None
             if not await guard():
                 return None
+            # Compare with the previous preview before insertion can evict it.
+            await remember_current_preview()
+            if not await guard():
+                return None
+            if historical is not None:
+                try:
+                    valid=await self._visual_checkpoint_call(message,"source_current",session,
+                        historical["native_hash"],historical["revision"])
+                except Exception:
+                    valid=False
+                if not valid:
+                    historical=reinspection=pixel_pair=None
+            if not await guard():
+                return None
             prior = historical["observation"] if historical else None
-            states = [o["status"] for o in (current,prior) if o is not None]
+            states = [o["status"] for o in (current,prior,reinspection) if o is not None]
             status = ("analyzed" if prior is not None and states and all(x=="analyzed" for x in states)
                       else "partial" if any(x in {"analyzed","partial"} for x in states)
                       else "unavailable")

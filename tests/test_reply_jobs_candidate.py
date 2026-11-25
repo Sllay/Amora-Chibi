@@ -1480,3 +1480,61 @@ async def test_stabilization_visual_dispute_is_scoped_and_does_not_fake_reinspec
         assert r["historical_disputed"] is True and r["current"]["description"]=="Leitura sintética 2"
         assert r["status"]=="partial" and len(calls)==2
     service.visual_checkpoints=VisualCheckpointStore(core.database,clock)
+
+
+@pytest.mark.asyncio
+async def test_run02_real_raster_review_compare_and_scope(lab):
+    from amora.messaging.models import AttachmentRef
+    from amora.messaging.visual_pixels import VisualPreviewCache
+    from amora.cognition.visual_context import visual_context_for_request
+    from test_run02_visual_pixels import photo
+    from test_discord_incoming_vision_ch2 import observation
+    core,clock,_=lab
+    _bind_bk(core)
+    service=core.messaging
+    calls=[]
+    class Vision:
+        available=True
+        async def analyze(self,image,user_text):
+            calls.append((image.content_base64,user_text))
+            return {**observation(),"description":"Fresh observation "+str(len(calls))}
+    service.incoming_vision=Vision()
+    decision=AttentionDecision(action=RoutingAction.RESPOND,score=1,
+        speaker_entity_id="PERSON_BK",speaker_actor_ref="synthetic",addressee_id="ENTITY_AMORA")
+    a=photo((0,0,0,255)).model_copy(update={"attachment_id":"987654321098765432"})
+    b=photo((255,0,0,255)).model_copy(update={"attachment_id":"987654321098765433"})
+    def inbound(mid,text,image):
+        msg=_dm(core,mid,text=text)
+        return InboundMessage.model_validate({**msg.model_dump(),
+            "attachments":[AttachmentRef(attachment_id=image.attachment_id,media_type="image/png").model_dump()],
+            "incoming_image":image.model_dump()})
+    await service._incoming_visual_observation(inbound("pixel-old","Descreva a imagem.",a),decision)
+    clock.advance(timedelta(seconds=1))
+    review=_dm(core,"pixel-review",text="Reanalise a imagem anterior.")
+    assert await service._incoming_visual_observation(review.model_copy(
+        update={"remote_processing_allowed":False}),decision) is None
+    assert len(calls)==1
+    result=await service._incoming_visual_observation(review,decision)
+    assert result["reinspection"]["description"]=="Fresh observation 2"
+    assert calls[0][0]==calls[1][0]
+    assert visual_context_for_request(result,remote=True,private=True,mode="reply")
+    clock.advance(timedelta(seconds=1))
+    dispute=_dm(core,"pixel-dispute",text="Você errou na análise da imagem anterior.")
+    result=await service._incoming_visual_observation(dispute,decision)
+    assert result["historical_disputed"] and result["historical"]["status"]=="unavailable"
+    assert result["reinspection"]["description"]=="Fresh observation 3"
+    assert result["status"]=="partial"
+    assert visual_context_for_request(result,remote=True,private=True,mode="reply")
+    clock.advance(timedelta(seconds=1))
+    result=await service._incoming_visual_observation(
+        inbound("pixel-current","Compare com a imagem anterior.",b),decision)
+    assert result["historical_current_pixels"]["changed_fraction"]==1
+    assert result["historical_disputed"]
+    assert visual_context_for_request(result,remote=True,private=True,mode="reply")
+    assert len(calls)==4
+    clock.advance(timedelta(seconds=1))
+    # Restart loses bytes, not historical textual evidence.
+    service.visual_previews=VisualPreviewCache(clock)
+    result=await service._incoming_visual_observation(
+        _dm(core,"pixel-restart",text="Reanalise a imagem anterior."),decision)
+    assert "reinspection" not in result and len(calls)==4
