@@ -124,6 +124,26 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
                 # Optional past web evidence yields before this turn's sources,
                 # identity, memory or current user text under a tight Groq TPM.
                 projected.web_research.pop("research_notebook", None)
+        elif (projected.web_research and projected.web_research.get("depth") == "deep"
+              and projected.web_research.get("sources")):
+            # Preserve competing evidence when possible: shorten each excerpt
+            # before dropping an entire source, and label the lossy projection.
+            research = projected.web_research
+            sources = research["sources"]
+            projection = research.setdefault("provider_evidence_projection", {
+                "original_read_count": len(sources), "shortened_count": 0,
+                "omitted_count": 0,
+            })
+            longest = max(sources, key=lambda item: len(item.get("text") or ""))
+            if len(longest.get("text") or "") > 600:
+                longest["text"] = longest["text"][:600]
+                projection["shortened_count"] += 1
+            else:
+                sources.pop()
+                projection["omitted_count"] += 1
+                if not sources:
+                    research["status"] = "results_only"
+            projection["available_read_count"] = len(sources)
         elif projected.web_research and len(projected.web_research.get("sources") or []) > 1:
             projected.web_research["sources"].pop()
         elif projected.web_research and (projected.web_research.get("sources") or []):

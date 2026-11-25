@@ -350,6 +350,9 @@ def realization_instruction(context: CognitiveContext) -> str:
                 "cached_excerpt indica trecho de uma leitura anterior; informe essa limitação "
                 "e não diga que uma página reutilizada foi aberta agora. "
                 "checkpoint_complete significa que o conjunto limitado foi retomado sem nova busca. "
+                "provider_evidence_projection indica redução de trechos por orçamento; "
+                "não confunda fontes omitidas do contexto com páginas nunca acessadas. "
+                "Se faltarem trechos para concluir, explicite a insuficiência. "
             )
 
     causal_cue = ""

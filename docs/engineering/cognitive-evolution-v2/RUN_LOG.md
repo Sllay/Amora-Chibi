@@ -297,6 +297,14 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Adicionado cenário transversal de 12 entradas únicas + redelivery, restart com ready, ordem e ACK sintético, contagem de saída e histórico; SQLite/PG18. Sem alegar teste aprovado antes do CI.
 - CERTIFICATION.md registra matriz de contratos residuais por RUN, metodologia de carga/falhas, backup, rollback e critérios live. PROJECT_STATE aponta para candidato. Não mexer em canon de identidade ou voz, schema ativo, Northflank, main ou Avatar. CI pendente, LIVE_PENDING; RUN07 aberta. Próximo trabalho: fechar contratos residuais e executar bateria profunda. Nenhum monitoramento.
 
+### Integração final — incremento B: overflow e retomada web (24/11/2026)
+
+- f244dce: 11/11 PASS, Core 45530646068 (3.11–3.14), PG18 45530646031; proprietário autorizou fechamento das pendências. PR #388 segue candidato.
+- 2deeef2: overflow no compilador não encerra mais o snapshot do piloto durável textual autorizado: flag interna não serializada, gate de escopo privado/pessoal/owner/consentimento/turn_id, V1 mantém seus gates, não autoriza envio de envelope integral ou realização local quando excedido. Router procura somente interfaces adaptativas elegíveis e o adapter mantém medição por chamada. Rejeição HTTP400 com categoria explícita context_length_exceeded equivale a 413 no tratamento de tamanho, sem abrir circuito global; 400 genérico/JSON/safety não equivale. Retentativa compactada revalida autorização. Testes integrados mock SQLite/PG18 e classificação. Sem certificação semântica de mapa real.
+- 9eed31e: retomada explícita de pesquisa deep concluída parcialmente usa último registro owner-DM com tópico exato, descoberta e trechos válidos por 900s, preserva números e data original, não repete descoberta nem leituras elegíveis. Limite de cinco páginas do pass mantido, 9s para continuação. Trechos cacheados marcados como históricos, não leitura nova. Não reaproveitar tópico truncado; novo pedido/"de novo" segue busca normal. Não cobre crash antes de gravar checkpoint, retry idempotente por turn_id, novos lotes além do conjunto selecionado, revogação/TTL de retenção física, redirects e avaliação semântica.
+- Projeção deep reduz trechos de todas as fontes antes de omitir fonte inteira, sinaliza redução/omissões ao modelo e não altera pesquisa canônica. Testes de diversidade, retomada após restart, TTL, tópico e isolamento adicionados.
+- Gates: CI do novo HEAD pendente; correções são candidatas, não certificadas. Ainda faltam multi-imagem e checkpoint visual, leitura AMD sob demanda/geração segmentada, quotas/SSRF/prints, replanejamento em voo e entrega por segmento, métricas completas/carga/live. Sem produção ou monitoramento.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.

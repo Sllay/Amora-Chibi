@@ -111,3 +111,52 @@ async def test_cancelled_thread_keeps_slot_until_actual_completion():
                 break
             await asyncio.sleep(.01)
     assert nav._semaphore._value == 2
+
+
+@pytest.mark.asyncio
+async def test_resume_fresh_deep_pass_after_restart_only_reads_unfinished(notebook):
+    from datetime import datetime, timezone
+    searches, reads = [], []
+    rows = [_result("first.example", "a"), _result("second.example", "b")]
+    def fetch(url):
+        reads.append(url)
+        if "second.example" in url:
+            raise WebFetchError("WEB_HTTP_503")
+        return {**_page(url), "fetched_at":datetime.now(timezone.utc).isoformat()}
+    nav = WebNavigator(fetch_page=fetch, search=lambda q: searches.append(q) or rows, workspace=notebook)
+    first = await nav.research("pesquise a fundo Godot Android", "owner-dm")
+    assert len(first["sources"]) == 1
+    assert first["research_progress"]["partial"]
+    assert len(searches) == 4
+    stamp = first["sources"][0]["fetched_at"]
+    reads.clear()
+    def read_remaining(url):
+        reads.append(url)
+        return {**_page(url), "fetched_at":datetime.now(timezone.utc).isoformat()}
+    restarted = WebNavigator(fetch_page=read_remaining,
+        search=lambda q: (_ for _ in ()).throw(AssertionError("do not rediscover")),
+        workspace=notebook)
+    result = await restarted.research("continue pesquisando", "owner-dm")
+    assert result["resumed_checkpoint"] is True
+    assert result["research_progress"]["search_calls_started"] == 0
+    assert result["research_progress"]["cached_excerpt_count"] == 1
+    assert reads == ["https://second.example/b"]
+    assert [r["url"] for r in result["references"]] == [r["url"] for r in first["references"]]
+    cached = next(s for s in result["sources"] if s.get("cached_excerpt"))
+    assert cached["fetched_at"] == stamp
+    assert len(result["sources"]) == 2
+    assert notebook.recent("other-dm") == []
+
+
+def test_research_checkpoint_rejects_stale_future_mismatched_and_truncated_topics():
+    from datetime import datetime, timedelta, timezone
+    from amora.web_tools.deep_research import resumable_checkpoint
+    now = datetime(2026,11,24,tzinfo=timezone.utc)
+    record = {"action":"search","depth":"deep","resume_eligible":True,
+              "topic":"Godot Android","references":[_result("first.example","a")],
+              "discovered_at":now.isoformat()}
+    assert resumable_checkpoint(record, "Godot Android", now=now)
+    assert not resumable_checkpoint(record, "Godot Linux", now=now)
+    assert not resumable_checkpoint({**record,"resume_eligible":False},"Godot Android",now=now)
+    assert not resumable_checkpoint(record,"Godot Android",now=now+timedelta(seconds=901))
+    assert not resumable_checkpoint(record,"Godot Android",now=now-timedelta(seconds=1))
