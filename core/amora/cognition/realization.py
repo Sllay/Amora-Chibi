@@ -347,6 +347,9 @@ def realization_instruction(context: CognitiveContext) -> str:
                 "e não trate a quantidade de domínios como confirmação independente. "
                 "Respeite research_progress; se parcial ou limitado, deixe explícito o que falta. "
                 "Resultados encontrados mas não lidos não sustentam conclusões. "
+                "cached_excerpt indica trecho de uma leitura anterior; informe essa limitação "
+                "e não diga que uma página reutilizada foi aberta agora. "
+                "checkpoint_complete significa que o conjunto limitado foi retomado sem nova busca. "
             )
 
     causal_cue = ""

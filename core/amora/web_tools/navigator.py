@@ -1194,6 +1194,13 @@ class WebNavigator:
                     "WEB_SEARCH_CONTEXT_REQUIRED" if contextual_search
                     else "WEB_SEARCH_QUERY_EMPTY"
                 )
+            if contextual_search and _WEB_CONTINUE_RE.search(text) is not None and self.workspace is not None:
+                from .deep_research import deep_search, resumable_checkpoint
+                latest = self.workspace.recent(session_id, 1)
+                checkpoint = latest[0] if latest else None
+                if resumable_checkpoint(checkpoint, search_topic):
+                    return self._record_delivery(session_id, await deep_search(
+                        self, search_topic, text, session_id, seconds=9.0, resume=checkpoint))
             if intent.depth == "deep":
                 from .deep_research import deep_search
                 return self._record_delivery(session_id, await deep_search(self, search_topic, text, session_id))

@@ -86,7 +86,11 @@ class WebWorkspaceStore:
             return False
         return self._write(session_id, VISIT_EVENT, {
             "action": action,
-            **({"depth": "deep"} if result.get("depth") == "deep" else {}),
+            **({"depth": "deep",
+                "discovered_at": _clean(str(result.get("discovered_at") or ""), 48),
+                "resume_eligible": result.get("resume_eligible") is True
+                    and result.get("query") == result.get("topic"),
+                } if result.get("depth") == "deep" else {}),
             "topic": _clean(str(result.get("topic") or ""), 90),
             "entries": entries[:15],
             # Keep the *actual* numbered reference order separately.

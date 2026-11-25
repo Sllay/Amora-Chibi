@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from .navigator import (
@@ -22,6 +23,26 @@ MAX_READS = 5
 MAX_EVIDENCE_CHARS = 1500
 DEEP_SECONDS = 14.0
 DISCOVERY_SECONDS = 5.5
+CHECKPOINT_TTL_SECONDS = 900
+
+
+def _fresh_timestamp(value, now):
+    try:
+        at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return at.tzinfo is not None and 0 <= (now - at).total_seconds() <= CHECKPOINT_TTL_SECONDS
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def resumable_checkpoint(record, topic, *, now=None):
+    """Only the latest owner-scoped, exact-topic, fresh deep pass qualifies."""
+    now = now or datetime.now(timezone.utc)
+    return (isinstance(record, dict) and record.get("action") == "search"
+            and record.get("depth") == "deep" and record.get("resume_eligible") is True
+            and record.get("topic") == topic and bool(topic)
+            and _fresh_timestamp(record.get("discovered_at"), now)
+            and isinstance(record.get("references"), list) and bool(record["references"]))
+
 
 
 def _queries(topic: str) -> list[str]:
@@ -71,10 +92,13 @@ async def _collect(coros, *, deadline):
 
 
 async def deep_search(nav, topic: str, text: str, session_id: str, *,
-                      seconds: float = DEEP_SECONDS) -> dict:
+                      seconds: float = DEEP_SECONDS, resume=None) -> dict:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + seconds
     discovery_deadline = min(deadline, loop.time() + min(DISCOVERY_SECONDS, seconds * .4))
+    now = datetime.now(timezone.utc)
+    resume = resume if resumable_checkpoint(resume, topic, now=now) else None
+    discovered_at = resume["discovered_at"] if resume else now.isoformat()
     queries = _queries(topic)
     endpoint = os.getenv("AMORA_WEB_SEARCH_ENDPOINT", "").strip()
     engines = [(nav.search_provider, "configured", False)] if nav.search_provider else (
@@ -86,11 +110,23 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
     jobs = [(queries[0], *engine) for engine in engines]
     for i, query in enumerate(queries[1:]):
         jobs.append((query, *engines[i % len(engines)]))
-    jobs = jobs[:MAX_SEARCH_CALLS]
+    jobs = [] if resume else jobs[:MAX_SEARCH_CALLS]
     errors = []
     rows = {}
     attempted = 0
     partial = False
+    if resume:
+        # Preserve the actual discovery order rather than reranking a saved list.
+        for ref in resume["references"][:MAX_REFERENCES]:
+            if not isinstance(ref, dict):
+                continue
+            try:
+                url = _shareable_public_url(str(ref.get("url") or ""))
+            except WebFetchError:
+                continue
+            rows.setdefault(url, {"url": url, "title": _clean(str(ref.get("title") or ""), 180),
+                                  "snippet": _clean(str(ref.get("snippet") or ""), 160),
+                                  "discovery_engine": "workspace_checkpoint"})
 
     async def search_one(job):
         query, fn, engine, needs_endpoint = job
@@ -130,7 +166,7 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
         if pending:
             break
 
-    ranked = _varied(list(rows.values()))
+    ranked = list(rows.values())[:MAX_REFERENCES] if resume else _varied(list(rows.values()))
     if not ranked:
         return {"action":"search", "status":"failed", "reason":
                 "WEB_SEARCH_TIMEOUT" if partial else "WEB_SEARCH_NO_RELEVANT_RESULTS"
@@ -141,7 +177,26 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
     nav._save_refs(session_id, references)
     sources = []
     failures = []
-    selected = ranked[:MAX_READS]
+    cached_count = 0
+    if resume:
+        entries = {item.get("url"): item for item in (resume.get("entries") or [])
+                   if isinstance(item, dict) and item.get("state") == "read"}
+        # A fresh saved excerpt is not a new page fetch. The timestamp is
+        # retained, and the provider is explicitly told about cached evidence.
+        for index, row in enumerate(ranked[:MAX_READS]):
+            entry = entries.get(row["url"])
+            if (not entry or not entry.get("excerpt")
+                    or not _fresh_timestamp(entry.get("fetched_at"), now)):
+                continue
+            sources.append({"url": row["url"], "title": entry.get("title", row["title"]),
+                            "text": _clean(str(entry["excerpt"]), 950), "status": "opened",
+                            "fetched_at": entry["fetched_at"], "cached_excerpt": True,
+                            "retrieval": entry.get("retrieval", "workspace_checkpoint"),
+                            "discovery_engine": "workspace_checkpoint"})
+            references[index]["state"] = "read"
+            cached_count += 1
+    selected = [(i, row) for i, row in enumerate(ranked[:MAX_READS])
+                if references[i]["state"] != "read"]
 
     async def read_one(row):
         try:
@@ -171,14 +226,15 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
             break
         batch = selected[start:start+2]
         reads_started += len(batch)
-        completed, pending = await _collect([read_one(row) for row in batch], deadline=deadline)
+        completed, pending = await _collect([read_one(row) for _, row in batch], deadline=deadline)
         partial |= pending
         for index, item in completed:
             page, error = item if item is not None else (None,"WEB_PAGE_FAILED")
+            reference_index = batch[index][0]
             if error:
-                failures.append({"number":start+index+1,"reason":error})
+                failures.append({"number":reference_index+1,"reason":error})
             elif page:
-                references[start+index]["state"] = "read"
+                references[reference_index]["state"] = "read"
                 if not any(s["url"] == page["url"] for s in sources):
                     sources.append(page)
         if pending:
@@ -187,12 +243,15 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
     return {
         "action":"search", "status":"opened" if sources else "results_only",
         "depth":"deep", "query":topic[:240], "topic":topic[:90],
+        "discovered_at":discovered_at, "resume_eligible":len(topic)<=90,
+        "resumed_checkpoint":bool(resume),
         "sources":sources, "references":references,
         "research_progress":{
             "search_calls_started":attempted, "reads_started":reads_started,
             "read_count":len(sources), "found_count":len(references),
+            "cached_excerpt_count":cached_count,
             "partial":partial or bool(errors) or bool(failures) or not sources,
-            "stop_reason":"deadline" if partial else "bounded_pass_complete",
+            "stop_reason":"deadline" if partial else "checkpoint_complete" if resume and not selected else "bounded_pass_complete",
             "search_failures":errors[:MAX_SEARCH_CALLS], "read_failures":failures[:MAX_READS],
             "cross_source_claims_verified":False,
         },

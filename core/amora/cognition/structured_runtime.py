@@ -333,7 +333,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             estimated_input_tokens=estimated_tokens,
             excluded_names=excluded,
         )
-        if (adaptive_only or not candidates) and adaptive_context_allowed(context):
+        if (adaptive_only or (not candidates and not excluded)) and adaptive_context_allowed(context):
             # Discover eligible specialist interfaces without pretending that
             # the entire original fits. The specialist measures EVERY request.
             adaptive_candidates = self.router.ranked_candidates(
