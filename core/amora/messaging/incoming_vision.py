@@ -212,6 +212,7 @@ class GroqIncomingImageVision:
                         # to remain below historical ~4 MB inline budgets.
                         payload["messages"][0]["content"][1]["image_url"]["url"] = data_url
                         remaining = max(1.0, self.timeout_seconds - first_timeout)
+                        await require_visual_authorization()
                         response = await client.post(
                             self.endpoint, json=payload, headers=headers,
                             timeout=httpx.Timeout(remaining),

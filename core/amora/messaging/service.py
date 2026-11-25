@@ -412,7 +412,8 @@ class PlatformMessagingService:
         # Specialist visual perception is explicitly authorized by attention,
         # identity, privacy and consent; never send an unverified/group image to Groq.
         visual_observation = await self._incoming_visual_observation(message, decision)
-        if self._source_invalidated(message):
+        if (visual_observation is not None or message.incoming_image is not None
+                or message.incoming_images) and self._source_invalidated(message):
             return self._invalidated_result(message)
         if visual_observation is not None and not message.text.strip():
             if visual_observation.get("observation_version") == 3:

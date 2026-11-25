@@ -9,7 +9,7 @@ candidato e, quando aplicável, em ambiente isolado antes da produção.
 | R01 fila textual | testes SQLite/PG18, atomicidade, restart/restore, ACK | carga prolongada, ACK físico, rollback/drain live, limite de fila |
 | R02 providers | mocks de quota, backoff, 413, circuit e recuperação | cobertura completa de adapters, limites reais, latência/quotas, cancelamento |
 | R03 compreensão | offsets, mapa global experimental, fallback Groq, testes Unicode; candidato para overflow pré-seleção em 2deeef2 | CI da correção, leitura sob demanda, geração por partes e avaliação semântica |
-| R04 percepção | legenda integral, OCR detalhado, erros específicos; candidato 0391b4c até 3 imagens, ordem e partial no Discord/Core | CI do lote, checkpoint, TTL/revisões, comparação semântica e consentimento a cada tentativa |
+| R04 percepção | legenda integral, OCR detalhado, erros específicos; lote até 3 imagens CI 017799d 13/13; candidato cb02b1b para checkpoint exato, TTL lógico, invalidação e guarda nas retentativas | CI do checkpoint/guard, retenção física, referência entre turnos, avaliação semântica, qualidade e prova live |
 | R05 web | busca aprofundada limitada, fontes parciais, notebook; candidato 9eed31e para retomada explícita após gravação e TTL de reutilização | CI, checkpoint durante pesquisa/por turno, retenção/revogação, contradições, quotas, screenshots e SSRF completo |
 | R06 diálogo | snapshot causal, janela curta, followups separados | atualização durante geração, supersessão atômica, ACK/retomada por segmento, voz/avatar |
 | R07 integração | diagnósticos iniciais e teste de burst/restart | fechar todos os bloqueios acima, medir recursos, certificar Northflank |

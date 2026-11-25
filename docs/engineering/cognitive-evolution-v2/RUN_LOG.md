@@ -323,6 +323,14 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Merge 835d024 incorpora main ac0dedf (3 commits), preservando exatamente os blobs do HTML e README do Visual Engine. Único arquivo compartilhado: tests/test_security_predeploy.py; reunidas as verificações das duas branches. Nenhuma alteração de implementação cognitiva, visual ou política de acesso nesta resolução.
 - Comparação pós-merge: main 0 commits à frente do candidato. Novo CI pendente; a consulta ao SHA anterior 6d5d292 não retornou workflows de PR. Produção e main intactas. Nenhum monitoramento.
 
+### Integração final — incremento D: checkpoint visual e autorização viva
+
+- 017799d: 13/13 CI PASS (Messaging workers 45533521646, Avatar 45533521666, Core 45533521593, PG18 45533521769), main ac0dedf incorporada e mergeable=true. Proprietário autorizou continuar.
+- cb02b1b: checkpoint por imagem concluída, no v18 events com chave hash length-delimited de sessão/turno/revisão/attachment/MIME/preview/URL/foco integral; consulta por dedupe indexado e duas janelas de 900s. Reaproveita somente observação validada bem-sucedida da mesma entrada, nunca cache de falha. Sem armazenar bytes/CDN/legenda bruta; persistência PERSONAL e não canônica. Registro opcional, falha de leitura/escrita não derruba resposta autorizada; revisão inválida ou impossível de verificar impede novo envio. Storage lane e SQL PG18 revisado, sem DDL. TTL é validade de reutilização, NÃO remoção física de eventos.
+- Autorização viva context-local verifica owner/consentimento do envelope/revisão, inclusive antes de chamadas Groq/NVIDIA, retry inline de URL, retry primário e fallback. Revalida antes de projetar observação; invalidation existente bloqueia fonte editada/excluída. Adaptadores diretos de laboratório conservam contrato de teste; serviço instala guarda. Não promete revogar bytes já enviados ou desfazer processamento externo em voo.
+- Testes: mesma entrada em conexão reaberta SQLite/PG18, foco diferente, sessão/consentimento/revisão/TTL, partial batch reusa apenas sucesso e repete falha, ausência de mídia crua no evento, revogação antes da retentativa/fallback. CI pendente.
+- Limitações: não é memória visual permanente nem reutilização entre mensagens diferentes; requer redelivery com conteúdo correspondente, não recupera anexo ausente, expiração é lógica (política de limpeza física ainda necessária). Proveniência detalhada v2 preservada; quick legacy sem novo identificador de modelo. Não é certificado live. Demais pendências de web, diálogo e recursos continuam abertas. Sem alteração de produção/main ou monitoramento.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.

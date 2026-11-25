@@ -979,3 +979,60 @@ async def test_run07_compiler_overflow_reaches_only_adaptive_route(lab, monkeypa
         assert core.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn}").raw_text == text
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_visual_checkpoint_exact_turn_ttl_source_and_backend_reopen(lab):
+    from amora.messaging.visual_checkpoint import VisualCheckpointStore, checkpoint_key
+    from amora.messaging.models import AttachmentRef
+    from test_discord_incoming_vision_ch2 import payload, observation
+
+    core, clock, _ = lab
+    _bind_bk(core)
+    service = core.messaging
+    image = payload()
+    message = _dm(core, "visual-checkpoint", text="Descreva a cor.")
+    message = InboundMessage.model_validate({
+        **message.model_dump(), "attachments":[AttachmentRef(
+            attachment_id=image.attachment_id, media_type="image/png").model_dump()],
+        "incoming_image":image.model_dump(),
+    })
+    decision = AttentionDecision(action=RoutingAction.RESPOND, score=1,
+        speaker_entity_id="PERSON_BK", speaker_actor_ref="synthetic",
+        addressee_id="ENTITY_AMORA")
+    calls = []
+    class Vision:
+        available = True
+        async def analyze(self, image, user_text):
+            calls.append(user_text)
+            return observation()
+    service.incoming_vision = Vision()
+    first = await service._incoming_visual_observation(message, decision)
+    assert first == observation()
+    assert calls == [message.text]
+    session = service._session_ref(message)
+    native_hash = service._hash(message.native_source_message_id)
+    args = (session, native_hash, 1,
+        checkpoint_key(session, service._turn_id(message), native_hash, 1,image,message.text))
+    # A separately opened backend connection proves that no RAM cache is needed.
+    with closing(AmoraDatabase(core.database.path,backend=core.database.backend)) as reopened:
+        service.visual_checkpoints = VisualCheckpointStore(reopened, clock)
+        assert service.visual_checkpoints.load(*args) == first
+        assert await service._incoming_visual_observation(message,decision) == first
+        assert len(calls) == 1
+        assert service.visual_checkpoints.load("another-session", *args[1:]) is None
+        changed = message.model_copy(update={"text":"Transcreva o texto."})
+        assert await service._incoming_visual_observation(changed,decision) == first
+        assert len(calls) == 2
+        no_consent = message.model_copy(update={"remote_processing_allowed":False})
+        assert await service._incoming_visual_observation(no_consent,decision) is None
+        assert len(calls) == 2
+        clock.advance(timedelta(seconds=901))
+        assert service.visual_checkpoints.load(*args) is None
+        assert await service._incoming_visual_observation(message,decision) == first
+        assert len(calls) == 3
+        core.messaging.reflections.invalidate_source(session,native_hash,through_revision=1)
+        assert service.visual_checkpoints.load(*args) is None
+        assert await service._incoming_visual_observation(message,decision) is None
+        assert len(calls) == 3
+    service.visual_checkpoints = VisualCheckpointStore(core.database,clock)

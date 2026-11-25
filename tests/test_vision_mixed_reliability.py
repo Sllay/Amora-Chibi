@@ -184,3 +184,47 @@ def test_batch_rejects_bad_identity_order_consent_and_aggregate(tmp_path, monkey
             InboundMessage.model_validate(oversized)
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_visual_batch_retry_reuses_only_successful_images(tmp_path,monkeypatch):
+    from amora.messaging.models import AttentionDecision, RoutingAction
+    from test_discord_incoming_vision_ch2 import observation
+    from amora.messaging.visual_checkpoint import VisualCheckpointStore
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        msg = _batch_message(core)
+        decision = AttentionDecision(action=RoutingAction.RESPOND, score=1,
+            speaker_entity_id="PERSON_BK", speaker_actor_ref="synthetic",
+            addressee_id="ENTITY_AMORA")
+        calls = []
+        third = msg.attachments[2].attachment_id
+        class Vision:
+            available = True
+            async def analyze(self,image,user_text):
+                calls.append(image.attachment_id)
+                if image.attachment_id == third and calls.count(third) == 1:
+                    raise GroqVisionError("INCOMING_VISION_HTTP_503","synthetic",status_code=503)
+                return observation()
+        core.messaging.incoming_vision = Vision()
+        before = await core.messaging._incoming_visual_observation(msg,decision)
+        assert before["images"][2]["observation"]["status"] == "unavailable"
+        core.messaging.visual_checkpoints = VisualCheckpointStore(core.database,core.clock)
+        after = await core.messaging._incoming_visual_observation(msg,decision)
+        assert calls == [msg.attachments[0].attachment_id,third,third]
+        assert after["images"][2]["observation"]["status"] == "analyzed"
+        assert after["status"] == "partial"  # missing second and omitted fourth
+        rows = core.database._conn.execute(
+            "SELECT payload_json FROM events WHERE event_type=?",
+            ("messaging.visual.checkpoint.v1",)).fetchall()
+        assert len(rows) == 2
+        for row in rows:
+            serialized = row["payload_json"]
+            assert "content_base64" not in serialized and "source_url" not in serialized
+            assert msg.incoming_images[0].image.content_base64 not in serialized
+            assert all(a.attachment_id not in serialized for a in msg.attachments)
+            assert msg.text not in serialized
+    finally:
+        core.close()

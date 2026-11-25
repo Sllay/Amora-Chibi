@@ -20,7 +20,7 @@ TTL_SECONDS = 900
 
 
 def checkpoint_key(session, turn, native_hash, revision, image, text):
-    # Length-delimited JSON avoids ambiguous concatenation. Include the exact
+    # Length-delimited fields avoid ambiguous concatenation. Include the exact
     # signed URL fingerprint when a provider might have read the original.
     digest = hashlib.sha256()
     for value in (EVENT_TYPE, session, str(turn), native_hash, str(revision),
