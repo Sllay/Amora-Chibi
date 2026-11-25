@@ -215,7 +215,7 @@ class NvidiaMistralLarge4Provider:
 
         payload = self._payload(context)
         from .context_budget import ensure_payload
-        ensure_payload(context, payload)
+        ensure_payload(context, payload, descriptor=self.descriptor)
         started = perf_counter()
         root, response_headers, status_code = await self._post_chat(payload, api_key=api_key)
         try:
