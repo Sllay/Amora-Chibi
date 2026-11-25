@@ -95,3 +95,128 @@ def test_wire_dedup_preserves_canonical_acir_and_resolves_reference():
     assert ctx.dialogue_plan["input_acir"] == ctx.acir
     assert "LITERAL" not in wire
     assert len(wire.split("\n", 1)[1]) < len(json.dumps(baseline, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+
+
+def test_global_map_preserves_late_negation_and_question_and_rejects_invented_quote():
+    from amora.cognition.adaptive_message import (
+        AdaptiveEvidenceError, bind_evidence, merge_evidence, bind_consolidation,
+    )
+    original = "Gosto do carro A. " + "x" * 120 + "\nMas não vou comprar A. Escolhi B. Qual a opinião da imagem?"
+    index = index_message(original, max_block_bytes=90)
+    rows = []
+    for i, block in enumerate(index.blocks):
+        lo = max(0, block.start - 160)
+        hi = min(len(original), block.end + 160)
+        literal = original[block.start:block.end]
+        # Exact excerpts from each core span; include any boundary-spanning signals.
+        for p in index.pointers:
+            if p.block == i and p.span.end > block.end:
+                literal = original[block.start:p.span.end]
+        window = original[lo:hi]
+        occurrence = 0
+        cursor = window.find(literal)
+        while cursor != block.start - lo:
+            assert cursor >= 0
+            occurrence += 1
+            cursor = window.find(literal, cursor + 1)
+        item = {"kind": "claim", "quote": literal, "occurrence": occurrence,
+                "interpretation": "source excerpt"}
+        raw = {"review_complete": True, "items": [item]}
+        rows.append(bind_evidence(original, index, i, raw))
+        with pytest.raises(AdaptiveEvidenceError):
+            bind_evidence(original, index, i, {"review_complete": True,
+                "items": [{**item, "quote": "invented quote"}]})
+    evidence = merge_evidence(index, rows)
+    assert [item["start"] for item in evidence] == sorted(item["start"] for item in evidence)
+    ids = [item["id"] for item in evidence]
+    groups = bind_consolidation(evidence, {"groups": [
+        {"ids": ids, "state": "uncertain", "interpretation": "A rejeitado; B escolhido; pergunta visual"}]})
+    assert groups[0]["ids"] == ids
+    with pytest.raises(AdaptiveEvidenceError):
+        bind_consolidation(evidence, {"groups": [
+            {"ids": ids[:-1], "state": "active", "interpretation": "missing evidence"}]})
+    with pytest.raises(AdaptiveEvidenceError):
+        merge_evidence(index, rows[:-1])
+
+
+@pytest.mark.asyncio
+async def test_groq_adaptive_pilot_all_blocks_then_global_then_final(monkeypatch):
+    import json
+    import httpx
+    from amora.cognition.providers_identity import GroqCognitiveProvider
+    from amora.cognition.durable_realization import (
+        DURABLE_REALIZATION, DURABLE_AUTHORIZATION, DeferredRealization,
+    )
+    from amora.cognition.prompt_frame import render_current_turn
+    from amora.events import PrivacyScope
+
+    ctx = context("Gosto do carro A. " + "x" * 5000 + " Mas não vou comprar A. Escolhi B. Qual a opinião da imagem?")
+    ctx.privacy_scope = PrivacyScope.PERSONAL
+    provider = GroqCognitiveProvider(SimpleNamespace(get=lambda name: "synthetic" if name == "GROQ_API_KEY" else None))
+    observed = []
+    guard_calls = []
+    def root(value):
+        return {"status": "completed", "output": [{"type": "message",
+            "content": [{"type": "output_text", "text": json.dumps(value)}]}],
+            "usage": {"input_tokens": 10, "output_tokens": 5}}
+
+    async def fake_post(payload, *, api_key, error_label):
+        data = json.loads(payload["input"][0]["content"])
+        assert payload["store"] is False
+        observed.append(data)
+        if "literal_data" in data:
+            literal = data["literal_data"]
+            if data["block"] == 0:
+                quote = "Gosto do carro A."
+            else:
+                quote = "Mas não vou comprar A. Escolhi B. Qual a opinião da imagem?"
+            assert quote in literal
+            value = {"review_complete": True, "items": [{"kind": "claim", "quote": quote,
+                "occurrence": 0, "interpretation": "unverified"}]}
+        else:
+            value = {"groups": [{"ids": [item["id"] for item in data["evidence"]],
+                "state": "uncertain", "interpretation": "B escolhido, A rejeitado; pergunta visual"}]}
+        return root(value), httpx.Response(200)
+
+    async def fake_final(projected, *, api_key):
+        assert projected.user_text == ctx.user_text
+        assert projected.dialogue_plan == ctx.dialogue_plan
+        assert "_adaptive_projection" not in projected.model_dump()
+        mapped = json.loads(render_current_turn(projected).split("\n", 1)[1])
+        observed.append(mapped)
+        assert "não vou comprar A" in str(mapped)
+        assert "Qual a opinião da imagem?" in str(mapped)
+        return {"moves": [{"kind": "answer_question", "text": "B, não A."}],
+                "closing": "statement", "_usage": {"input_tokens": 20, "output_tokens": 6}}
+
+    async def guard():
+        guard_calls.append(True)
+        return True
+    monkeypatch.setattr(provider, "_post_responses", fake_post)
+    monkeypatch.setattr(provider, "_responses_realize", fake_final)
+    turn = DURABLE_REALIZATION.set(str(ctx.turn_id))
+    auth = DURABLE_AUTHORIZATION.set(guard)
+    try:
+        result = await provider.realize_adaptive(ctx)
+        assert len(observed) == 4 and len(guard_calls) == 4
+        assert result["_usage"]["amd_blocks"] == 2
+        assert result["_usage"]["input_tokens"] == 50
+        assert ctx._adaptive_projection is None
+    finally:
+        DURABLE_AUTHORIZATION.reset(auth)
+        DURABLE_REALIZATION.reset(turn)
+    with pytest.raises(ContextBudgetExceeded):
+        await provider.realize_adaptive(ctx)
+    assert len(observed) == 4
+
+    async def revoked():
+        return False
+    turn = DURABLE_REALIZATION.set(str(ctx.turn_id))
+    auth = DURABLE_AUTHORIZATION.set(revoked)
+    try:
+        with pytest.raises(DeferredRealization, match="DURABLE_REALIZATION_DEFERRED"):
+            await provider.realize_adaptive(ctx)
+        assert len(observed) == 4
+    finally:
+        DURABLE_AUTHORIZATION.reset(auth)
+        DURABLE_REALIZATION.reset(turn)

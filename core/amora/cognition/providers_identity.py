@@ -156,6 +156,13 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
                 raise ContextBudgetExceeded(budget.estimated_input_tokens, budget.input_limit_tokens)
             root, response = await self._post_responses(payload, api_key=api_key, error_label="adaptive comprehension")
             usage_rows.append(_responses_usage(root, response))
+            # A successful extraction can still exhaust this model quota. Do
+            # not start another request against a reported exhausted bucket.
+            for key in ("remaining_requests", "remaining_tokens"):
+                remaining = _optional_int(usage_rows[-1].get(key))
+                if remaining is not None and remaining <= 0:
+                    raise ProviderError("adaptive stage reported exhausted quota", status_code=429,
+                                        retry_after="60", diagnostics={"stage": "adaptive_quota_exhausted"})
             if root.get("status") in {"incomplete", "failed", "cancelled"}:
                 raise AdaptiveEvidenceError()
             return _parse_responses_json(root, error_message="Invalid adaptive comprehension JSON")
@@ -316,6 +323,11 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
             reduced = compact_rejected_payload(context, build, payload, descriptor=self.descriptor)
             if reduced is None:
                 raise
+            if context._adaptive_projection is not None:
+                from .durable_realization import DURABLE_AUTHORIZATION, DeferredRealization
+                guard = DURABLE_AUTHORIZATION.get()
+                if guard is None or not await guard():
+                    raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
             root, response = await self._post_responses(reduced, api_key=api_key, error_label="structured realization compacted")
         set_ms("provider_surface_ms", (perf_counter() - started) * 1000.0)
         parse_started = perf_counter()
