@@ -35,8 +35,8 @@ gate próprio em PLAN.md. Status de produção deve ser verificado separadamente
 | 00 | Preparação e continuidade | Gate documental aprovado; PR #377 (conclusão condicionada ao merge) |
 | 01 | Durable Cognitive Runtime | CI_PASS — 9/9 no 6163c34; LIVE_PENDING até bateria final |
 | 02 | Intelligent Provider Orchestrator | CI_PASS (10/10, bd0d827); cobertura residual registrada |
-| 03 | Adaptive Context & Comprehension Engine | IN_PROGRESS |
-| 04 | Advanced Multimodal Perception | PLANNED |
+| 03 | Adaptive Context & Comprehension Engine | CI_PASS (11/11, 978d9f8); escopo residual registrado |
+| 04 | Advanced Multimodal Perception | IN_PROGRESS |
 | 05 | Autonomous Web Intelligence | PLANNED |
 | 06 | Living Conversation Engine | PLANNED |
 | 07 | Cognitive Integration & Certification | PLANNED |
@@ -228,6 +228,17 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Causa localizada: normalized_fts5_terms rejeita termo >128 caracteres; fixture original contém um token contínuo de 4400 caracteres. O limite de busca lexical não deve impedir processamento da mensagem completa. Também há caso sem termos lexicais. Não há evidência de corrupção, indisponibilidade de Aiven real ou falha de schema.
 - Correção: projeção lexical compartilhada em MemoryStore (até 16 termos válidos com <=128 caracteres, sem fatiar tokens longos); SQLite e PostgreSQL usam a mesma seleção antes de ranking. Normalização unicode61 mantém contrato estrito do laboratório por padrão, caminho runtime explícito retorna vazio se não houver termo elegível. Preservar fonte, filtros de privacidade, baseline de candidatos e recall exato do proprietário; sem alteração de schema, índice, conteúdo de memória ou permissões. O teste integrado longo permanece intacto; acrescentado teste de limite, acentos, termo opaco, ausência de termos e cap.
 - Novo CI necessário; RUN 03 ainda IN_PROGRESS, sem produção e sem monitoramento.
+
+### RUN 03 — checkpoint de avanço autorizado (24/11/2026)
+
+- 978d9f87fd1c63c1c82d5598bc6133edb4fb8fe0: 11/11 workflows PASS; Core 45526184528 Python 3.11–3.14 PASS; PG18 45526184127 PASS. PR #382 mergeable=true, draft, sem deploy. Proprietário autorizou avanço para RUN 04 após consulta.
+- CI aprovado não significa escopo completo: overflow no compilador, leitura adicional sob demanda, geração por partes (interface RUN 06), corpus e medições quantitativas permanecem residuais e devem ser fechados antes do gate final. Não ocultar limitações.
+
+### RUN 04 — Advanced Multimodal Perception — início (24/11/2026)
+
+- Base 978d9f8; branch feat/cognitive-evolution-run04-multimodal-perception. Escopo oficial seção 7 do PLAN. Inventário inicial: incoming_vision.py Groq e cascade; nvidia_incoming_vision.py opt-in; visual_context.py schema limitado; messaging/models.py anexo singular e validação CDN; worker, ingress, replay e store a revisar. Falhas atuais: corte [:500] do foco, único anexo, observação sem identificação de origem/versionamento e causa genérica.
+- Primeira etapa: foco adaptativo preservando mensagem inteira quando cabe, leitura da cauda e perguntas tardias, perfis de orçamento, códigos de falha e metadados de fonte com compatibilidade; mapear múltiplos anexos sem ampliar autorização nem tamanho total cego. Reusar quota RUN 02, não enviar imagem ao provider textual. Não persistir pixels ou URL assinada. Validar com mocks e CI; live Discord depois da RUN 07. Sem monitoramento.
+- Próximas etapas: contratos de múltiplos anexos ponta a ponta, cache/checkpoint vinculado a revisão/consentimento e fonte, retry sem repetição de visão concluída, isolamento, dependências visão/web, corpus e desempenho. Não declarar COMPLETED sem entregar escopo.
 
 ## Modelo obrigatório de registro para cada RUN
 
