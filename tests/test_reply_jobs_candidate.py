@@ -944,3 +944,38 @@ async def test_run07_burst_restart_duplicate_ack_and_queue_accounting(lab):
         assert final["diagnostics"]["attempt_outcomes"] == {"ready":11}
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_run07_compiler_overflow_reaches_only_adaptive_route(lab, monkeypatch):
+    from amora.cognition import context_budget
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-compiler-overflow")
+    original = provider.realize
+    text = "Explique estas ideias. " + "x" * 4400 + " Mas não escolhi A, escolhi B."
+    estimate = context_budget.estimate_context
+    monkeypatch.setattr(context_budget, "estimate_context",
+        lambda context: context.token_budget + 1 if context.user_text == text else estimate(context))
+    calls = []
+    async def full(context):
+        raise AssertionError("oversized canonical snapshot must not reach ordinary realization")
+    async def adaptive(context):
+        calls.append("adaptive")
+        assert context._compiler_overflow
+        assert "AMD_COMPILER_OVERFLOW" in context.reason_codes
+        assert context.user_text == text
+        return await original(context)
+    provider.realize = full
+    provider.realize_adaptive = adaptive
+    core.cognition.register_provider(provider)
+    msg = _dm(core, text=text)
+    turn = core.messaging._turn_id(msg)
+    try:
+        assert "DURABLE_REPLY_ACCEPTED" in (await core.messaging.receive(msg)).decision.reason_codes
+        assert await runtime.run_once()
+        assert calls == ["adaptive"]
+        assert (await runtime.call("state",turn))["status"] == "ready"
+        assert core.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn}").raw_text == text
+    finally:
+        await _stop_runtime(core)

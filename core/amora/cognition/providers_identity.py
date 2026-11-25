@@ -318,16 +318,16 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
         try:
             root, response = await self._post_responses(payload, api_key=api_key, error_label="structured realization")
         except ProviderError as exc:
-            if exc.status_code != 413 or DURABLE_REALIZATION.get() != str(context.turn_id):
+            from .provider_resilience import context_rejection
+            if not context_rejection(exc) or DURABLE_REALIZATION.get() != str(context.turn_id):
                 raise
             reduced = compact_rejected_payload(context, build, payload, descriptor=self.descriptor)
             if reduced is None:
                 raise
-            if context._adaptive_projection is not None:
-                from .durable_realization import DURABLE_AUTHORIZATION, DeferredRealization
-                guard = DURABLE_AUTHORIZATION.get()
-                if guard is None or not await guard():
-                    raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
+            from .durable_realization import DURABLE_AUTHORIZATION, DeferredRealization
+            guard = DURABLE_AUTHORIZATION.get()
+            if guard is None or not await guard():
+                raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
             root, response = await self._post_responses(reduced, api_key=api_key, error_label="structured realization compacted")
         set_ms("provider_surface_ms", (perf_counter() - started) * 1000.0)
         parse_started = perf_counter()

@@ -241,3 +241,16 @@ def test_runtime_memory_query_projects_oversized_terms_without_rewriting_source(
     # Invalid terms must not occupy any of the 16 available query slots.
     words = " ".join(f"termo{i:02d}" for i in range(20))
     assert _retrieval_tokens(opaque + " " + words) == _retrieval_tokens(words)
+
+
+def test_context_rejection_is_not_generic_http400_or_safety_rejection():
+    from amora.cognition.providers import ProviderError
+    from amora.cognition.provider_resilience import context_rejection, classify_provider_failure
+    for status, category, expected in [
+        (413, "other", True), (400, "context_length_exceeded", True),
+        (400, "json_generation_failed", False), (400, "explicit_content_policy_rejection", False),
+        (429, "context_length_exceeded", False),
+    ]:
+        exc = ProviderError("synthetic", status_code=status, diagnostics={"provider_error_category":category})
+        assert context_rejection(exc) is expected
+        assert (classify_provider_failure(exc).code == "PROVIDER_INPUT_TOO_LARGE") is expected

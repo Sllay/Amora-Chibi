@@ -146,6 +146,7 @@ class ContextCapability(BaseModel):
 class CognitiveContext(BaseModel):
     # Provider-only transient AMD projection; never serialized into replay or memory.
     _adaptive_projection: dict[str, Any] | None = PrivateAttr(default=None)
+    _compiler_overflow: bool = PrivateAttr(default=False)
     turn_id: UUID
     created_at: datetime
     speaker_id: str

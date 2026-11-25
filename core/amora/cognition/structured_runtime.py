@@ -24,8 +24,8 @@ from .providers_structured import GeminiCognitiveProvider
 from .realization import RealizationError, RealizationValidator, ValidatedRealization, response_semantic_filter_enabled
 from .speech import SpeechSegmenter
 from .service import SegmentSink
-from .durable_realization import durable_realization, DeferredRealization, DURABLE_AUTHORIZATION
-from .provider_resilience import classify_provider_failure
+from .durable_realization import durable_realization, DeferredRealization, DURABLE_AUTHORIZATION, adaptive_context_allowed
+from .provider_resilience import classify_provider_failure, context_rejection
 from .provider_quota import ProviderQuotaDeferred
 
 
@@ -309,7 +309,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             },
         )
 
-        local = RealizationValidator.local_realization(context)
+        local = None if context._compiler_overflow else RealizationValidator.local_realization(context)
         if local is not None:
             return await self._plan_from_validated(
                 request,
@@ -324,6 +324,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             )
 
         excluded = self._cooldown_names()
+        adaptive_only = context._compiler_overflow
         candidates = self.router.ranked_candidates(
             TaskClass.SOCIAL_DIALOGUE,
             privacy_scope=request.privacy_scope,
@@ -332,6 +333,25 @@ class CognitiveEngine(ProductionCognitiveEngine):
             estimated_input_tokens=estimated_tokens,
             excluded_names=excluded,
         )
+        if (adaptive_only or not candidates) and adaptive_context_allowed(context):
+            # Discover eligible specialist interfaces without pretending that
+            # the entire original fits. The specialist measures EVERY request.
+            adaptive_candidates = self.router.ranked_candidates(
+                TaskClass.SOCIAL_DIALOGUE, privacy_scope=request.privacy_scope,
+                remote_processing_allowed=context.remote_processing_allowed,
+                require_structured_output=True, estimated_input_tokens=1,
+                excluded_names=excluded,
+            )
+            adaptive_candidates = tuple(d for d in adaptive_candidates
+                if callable(getattr(self._providers.get(d.name), "realize_adaptive", None)))
+            if adaptive_candidates:
+                candidates = adaptive_candidates[:1]
+                adaptive_only = True
+        if adaptive_only and (not candidates or not adaptive_context_allowed(context)
+                or not callable(getattr(self._providers.get(candidates[0].name), "realize_adaptive", None))):
+            if excluded:
+                raise DeferredRealization(["PROVIDERS_IN_BACKOFF"])
+            raise DeferredRealization(["CONTEXT_ENVELOPE_OVERFLOW"])
         if not candidates:
             reason = "NO_ELIGIBLE_STRUCTURED_PROVIDER"
             if request.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
@@ -381,13 +401,10 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 provider_elapsed += min(elapsed, charge_cap) if charge_cap is not None else elapsed
 
         last_failure = "NO_STRUCTURED_REALIZATION_PROVIDER"
-        attempts = [(descriptor, False) for descriptor in candidates]
+        attempts = [(descriptor, adaptive_only) for descriptor in candidates]
         # Do not spend extra calls on ordinary turns or substitute excerpts
         # when any compatible full-source route has not actually been tried.
-        if (is_durable and DURABLE_AUTHORIZATION.get() is not None
-                and context.scene_visibility == "private"
-                and not context.visual_observation and not context.web_research
-                and len(request.text.encode("utf-8")) > 4096):
+        if not adaptive_only and adaptive_context_allowed(context):
             for descriptor in candidates:
                 provider = self._providers.get(descriptor.name)
                 if callable(getattr(provider, "realize_adaptive", None)):
@@ -395,7 +412,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     break
         attempted_count = len(candidates)
         for provider_index, (descriptor, adaptive) in enumerate(attempts):
-            if adaptive:
+            if adaptive and not adaptive_only:
                 if excluded or len(failures) != len(candidates) or {kind for kind, _ in failures} != {"context"}:
                     break
                 attempted_count += 1
@@ -591,7 +608,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 status = exc.status_code if isinstance(exc, ProviderError) else None
                 failure = classify_provider_failure(exc, now=self.clock.now())
                 last_failure = failure.code if is_durable else type(exc).__name__
-                category = ("context" if status == 413 else
+                category = ("context" if context_rejection(exc) else
                             "configuration" if status in {401, 403, 404} else "temporary")
                 failures.append((category, failure.retry_after_seconds))
                 self._last_realization_rejection = {
@@ -608,7 +625,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     started=provider_started,
                 )
                 # Envelope size is a turn-specific rejection, not global health.
-                if status != 413:
+                if not context_rejection(exc):
                     self._backoff(descriptor, status_code=status, retry_after=getattr(exc, "retry_after", None))
                 continue
             finally:

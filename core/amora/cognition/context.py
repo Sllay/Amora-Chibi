@@ -607,6 +607,10 @@ class ContextCompiler:
     @trace_stage("context_budget")
     def _fit_budget(context: CognitiveContext, dialogue=None) -> CognitiveContext:
         from .context_budget import estimate_context, ContextBudgetExceeded
+        from .durable_realization import adaptive_context_allowed
+        # Recheck at both base and V1 capability-projection stages.
+        context._compiler_overflow = False
+        context.reason_codes = [code for code in context.reason_codes if code != "AMD_COMPILER_OVERFLOW"]
         def replan():
             identity = context.dialogue_plan.get("speaker_identity")
             old = set(context.dialogue_plan.get("reason_codes") or ())
@@ -638,6 +642,12 @@ class ContextCompiler:
                     context.recent_messages.pop(0)
                 reason = "CONTEXT_TRIMMED_RECENT"
             else:
+                if adaptive_context_allowed(context):
+                    # Canonical snapshot survives. Only the explicit adaptive
+                    # realization route may process it; no normal/local speech.
+                    context._compiler_overflow = True
+                    context.reason_codes.append("AMD_COMPILER_OVERFLOW")
+                    return context
                 raise ContextBudgetExceeded(estimate_context(context), context.token_budget)
             if reason not in context.reason_codes:
                 context.reason_codes.append(reason)

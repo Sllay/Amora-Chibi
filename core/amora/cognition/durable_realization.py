@@ -21,3 +21,18 @@ class DeferredRealization(RuntimeError):
         self.reasons = tuple(reasons)
         self.retry_after_seconds = retry_after_seconds
         super().__init__("DURABLE_REALIZATION_DEFERRED")
+
+
+def adaptive_context_allowed(context):
+    """Only the authorized durable text pilot can carry an oversized snapshot."""
+    from amora.events import PrivacyScope
+    return (DURABLE_REALIZATION.get() == str(context.turn_id)
+            and DURABLE_AUTHORIZATION.get() is not None
+            and context.speaker_id == "PERSON_BK"
+            and context.target_id == "ENTITY_AMORA"
+            and context.scene_visibility == "private"
+            and context.privacy_scope == PrivacyScope.PERSONAL
+            and context.remote_processing_allowed
+            and not context.visual_observation and not context.web_research
+            and not context.temporal_opportunity and not context.perceptual_expressions
+            and len(context.user_text.encode("utf-8")) > 4096)

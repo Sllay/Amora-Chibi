@@ -64,6 +64,17 @@ def retry_after_seconds(value: str | None, *, now: datetime | None = None) -> fl
     return max(0.0, (target - current).total_seconds())
 
 
+def context_rejection(exc: BaseException) -> bool:
+    """Fixed adapter-derived category, never substring-match user text."""
+    return isinstance(exc, ProviderError) and (
+        exc.status_code == 413 or (
+            exc.status_code == 400 and
+            (getattr(exc, "diagnostics", None) or {}).get("provider_error_category")
+            == "context_length_exceeded"
+        )
+    )
+
+
 def classify_provider_failure(
     exc: BaseException,
     *,
@@ -80,7 +91,7 @@ def classify_provider_failure(
     if isinstance(exc, ProviderError):
         status = exc.status_code
         retry_after = retry_after_seconds(exc.retry_after, now=now)
-        if status == 413:
+        if context_rejection(exc):
             return ProviderFailure("PROVIDER_INPUT_TOO_LARGE", False, status)
         if status in _NON_RETRYABLE_STATUS:
             return ProviderFailure(f"PROVIDER_HTTP_{status}", False, status, retry_after)
