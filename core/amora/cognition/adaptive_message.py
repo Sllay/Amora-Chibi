@@ -60,7 +60,8 @@ class MessageMap:
             if not 0 <= pointer.block < len(self.blocks):
                 raise ValueError("AMD_POINTER_INVALID")
             block = self.blocks[pointer.block]
-            if not block.start <= pointer.span.start < pointer.span.end <= block.end:
+            if not (block.start <= pointer.span.start < block.end
+                    and pointer.span.start < pointer.span.end <= len(original)):
                 raise ValueError("AMD_POINTER_INVALID")
 
     def read(self, original: str, block: int, *, overlap_chars: int = 0) -> str:
@@ -125,13 +126,14 @@ def index_message(original: str, *, max_block_bytes: int, max_blocks: int = 32,
         start = end
     pointers = []
     # Search full source so word boundaries remain meaningful at block edges.
-    # A split marker can still be recovered by inspecting the original spans.
+    # A cross-boundary marker belongs to the block where it starts; its full
+    # source span is retained for overlap reads.
     for kind, pattern in _SIGNALS.items():
         block = 0
         for match in pattern.finditer(original):
             while block < len(blocks) and blocks[block].end <= match.start():
                 block += 1
-            if block < len(blocks) and match.end() <= blocks[block].end:
+            if block < len(blocks):
                 pointers.append(EvidencePointer(kind, Span(match.start(), match.end()), block))
     result = MessageMap(_digest(original), len(original), tuple(blocks),
                         tuple(sorted(pointers, key=lambda p: (p.span.start, p.kind))))
