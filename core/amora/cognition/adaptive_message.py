@@ -139,3 +139,112 @@ def index_message(original: str, *, max_block_bytes: int, max_blocks: int = 32,
                         tuple(sorted(pointers, key=lambda p: (p.span.start, p.kind))))
     result.verify(original)
     return result
+
+
+# Source-grounded provider analysis. It is intentionally independent of Core
+# memory and realization; neither extraction nor consolidation may emit speech.
+class AdaptiveEvidenceError(ValueError):
+    code = "AMD_EVIDENCE_INVALID"
+
+
+_EVIDENCE_KINDS = frozenset({
+    "subject", "relation", "claim", "decision", "correction", "negation",
+    "question", "visual_reference", "dependency", "reference", "other",
+})
+_GROUP_STATES = frozenset({"active", "superseded", "uncertain", "question"})
+
+
+def bind_evidence(original, indexed, block_index, raw, *, overlap_chars=160):
+    """Bind exact quoted substrings to offsets; reject hallucinated evidence.
+
+    An extractor must report complete review of its block. This is a protocol
+    assertion, not proof of semantic completeness. Deterministic marker
+    coverage is additionally enforced for consequential lexical signals.
+    """
+    indexed.verify(original)
+    if (not isinstance(raw, dict) or set(raw) != {"review_complete", "items"}
+            or raw["review_complete"] is not True or not isinstance(raw["items"], list)
+            or not 1 <= len(raw["items"]) <= 32):
+        raise AdaptiveEvidenceError()
+    block = indexed.blocks[block_index]
+    lo = max(0, block.start - overlap_chars)
+    hi = min(len(original), block.end + overlap_chars)
+    window = original[lo:hi]
+    evidence = []
+    for item in raw["items"]:
+        if not isinstance(item, dict) or set(item) != {"kind", "quote", "occurrence", "interpretation"}:
+            raise AdaptiveEvidenceError()
+        kind, quote, occurrence, interpretation = (item[k] for k in
+            ("kind", "quote", "occurrence", "interpretation"))
+        if (not isinstance(kind, str) or kind not in _EVIDENCE_KINDS
+                or not isinstance(quote, str) or not 1 <= len(quote) <= 1200
+                or type(occurrence) is not int or not 0 <= occurrence <= 64
+                or not isinstance(interpretation, str) or not 1 <= len(interpretation) <= 280):
+            raise AdaptiveEvidenceError()
+        start = window.find(quote)
+        for _ in range(occurrence):
+            start = window.find(quote, start + 1) if start >= 0 else -1
+        if start < 0:
+            raise AdaptiveEvidenceError()
+        start += lo
+        end = start + len(quote)
+        if not (start < block.end and end > block.start):
+            raise AdaptiveEvidenceError()
+        evidence.append({"block": block_index, "start": start, "end": end,
+                         "kind": kind, "quote": quote, "interpretation": interpretation})
+    # Do not let a summary silently remove a late question, correction,
+    # negation, decision or attachment reference. These are hints, not facts.
+    for pointer in indexed.pointers:
+        if pointer.block == block_index and pointer.kind != "reference":
+            if not any(item["start"] <= pointer.span.start and item["end"] >= pointer.span.end
+                       for item in evidence):
+                raise AdaptiveEvidenceError()
+    return evidence
+
+
+def merge_evidence(indexed, results):
+    """Require a reviewed result for every block, preserving source order."""
+    if len(results) != len(indexed.blocks):
+        raise AdaptiveEvidenceError()
+    items = []
+    seen = set()
+    for block, evidence in enumerate(results):
+        if not evidence or any(item["block"] != block for item in evidence):
+            raise AdaptiveEvidenceError()
+        for item in evidence:
+            key = (item["start"], item["end"], item["kind"], item["interpretation"])
+            if key not in seen:
+                seen.add(key)
+                items.append(dict(item))
+    items.sort(key=lambda item: (item["start"], item["end"], item["kind"]))
+    for i, item in enumerate(items):
+        item["id"] = i
+    return items
+
+
+def bind_consolidation(evidence, raw):
+    """Require an explicit global grouping of every item, including revisions.
+
+    Interpretations are transient hypotheses, never canonical facts. The
+    original quote and its source offsets remain attached to the map.
+    """
+    if (not isinstance(raw, dict) or set(raw) != {"groups"}
+            or not isinstance(raw["groups"], list) or not 1 <= len(raw["groups"]) <= len(evidence)):
+        raise AdaptiveEvidenceError()
+    ids = {item["id"] for item in evidence}
+    covered = set()
+    groups = []
+    for group in raw["groups"]:
+        if not isinstance(group, dict) or set(group) != {"ids", "state", "interpretation"}:
+            raise AdaptiveEvidenceError()
+        refs, state, interpretation = group["ids"], group["state"], group["interpretation"]
+        if (not isinstance(refs, list) or not refs or any(type(i) is not int or i not in ids for i in refs)
+                or len(set(refs)) != len(refs) or covered.intersection(refs)
+                or not isinstance(state, str) or state not in _GROUP_STATES
+                or not isinstance(interpretation, str) or not 1 <= len(interpretation) <= 400):
+            raise AdaptiveEvidenceError()
+        covered.update(refs)
+        groups.append({"ids": sorted(refs), "state": state, "interpretation": interpretation})
+    if covered != ids:
+        raise AdaptiveEvidenceError()
+    return groups
