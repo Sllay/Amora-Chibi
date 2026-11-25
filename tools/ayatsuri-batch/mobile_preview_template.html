@@ -38,7 +38,7 @@ footer{font-size:.74rem;color:#aaa7ba;line-height:1.5;margin-top:12px}
 <body>
 <header>
 <h1>Amora Bolinha · Rig Lab</h1>
-<div class="sub">Laboratório V3: piscada, slime, expressões e corpo 2,5D. Prévia HTML, não Cubism.</div>
+<div class="sub">Laboratório V4.4: máscara ocular, piscada, slime, expressões e corpo 2,5D. Prévia HTML, não Cubism.</div>
 </header>
 <div id="js-disabled" role="alert" style="padding:10px;margin-bottom:10px;border:1px solid #a58db6;border-radius:8px;color:#e7d7f7;background:#35283c">Se esta mensagem permanecer na tela, o visualizador do iPhone não executou JavaScript. Abra a versão online no Safari para testar as animações.</div>
 <main>
@@ -86,7 +86,7 @@ document.getElementById("js-disabled").remove();
 const source=__AMORA_PREVIEW_DATA__;
 const W=source.width,H=source.height, cv=document.getElementById("amora"),ctx=cv.getContext("2d",{alpha:true});
 cv.width=W;cv.height=H;
-const images={}, boxes={}, lowerProfiles={};
+const images={}, boxes={}, lowerProfiles={}, upperProfiles={}, eyeBuffers={};
 let displayedMouthWeights=[1,0,0,0,0,0];
 const wanted={eyeL:1,eyeR:1,lookX:0,lookY:0,mouth:0,form:0,angle:0,headX:0,headY:0,bodyX:0,bodyY:0,blush:0,tearL:0,tearR:0,mouthPose:0};
 const smoothed={...wanted};
@@ -172,7 +172,7 @@ window.AmoraVisualEngine=Object.freeze({
  },
  getParameters(){return {...wanted};},
  getMouthWeights(){return [...displayedMouthWeights];},
- version:"4.3"
+ version:"4.4"
 });
 function box(id) {
  const b=boxes[id];return {x:b[0],y:b[1],w:b[2]-b[0],h:b[3]-b[1],cx:(b[0]+b[2])/2,cy:(b[1]+b[3])/2};
@@ -222,24 +222,33 @@ function eyeVisibility(opening){
  return t*t*(3-2*t);
 }
 // Build the true outer lash contour once from the approved alpha channel.
-function buildLowerProfile(side){
- const id="lower_lid_"+side,b=box(id),c=document.createElement("canvas");
+function buildLashProfile(side,kind){
+ const id=kind+"_lid_"+side,b=box(id),c=document.createElement("canvas");
  c.width=b.w;c.height=b.h;
  const g=c.getContext("2d",{willReadFrequently:true});
  g.drawImage(images[id],b.x,b.y,b.w,b.h,0,0,b.w,b.h);
  const a=g.getImageData(0,0,b.w,b.h).data, profile=[];
  for(let x=0;x<b.w;x++){
   let edge=null;
-  for(let y=b.h-1;y>=0;y--)if(a[(y*b.w+x)*4+3]>=96){edge=b.y+y+1;break;}
+  if(kind==="lower"){
+   for(let y=b.h-1;y>=0;y--)if(a[(y*b.w+x)*4+3]>=96){edge=b.y+y+1;break;}
+  }else{
+   for(let y=0;y<b.h;y++)if(a[(y*b.w+x)*4+3]>=96){edge=b.y+y;break;}
+  }
   profile.push(edge);
  }
- lowerProfiles[side]=profile;
+ (kind==="lower"?lowerProfiles:upperProfiles)[side]=profile;
 }
 function lowerEdgeAt(side,x,eye,lid){
  const profile=lowerProfiles[side],i=Math.floor(x-lid.x);
  const edge=profile&&i>=0&&i<profile.length?profile[i]:null;
- return edge!==null&&edge!==undefined&&edge>eye.cy-eye.h*.1
-  ?Math.min(eye.y+eye.h,edge):eye.y+eye.h;
+ return edge!==null&&edge!==undefined
+  ?Math.max(eye.y,Math.min(eye.y+eye.h,edge)):eye.y+eye.h;
+}
+function upperEdgeAt(side,x,eye,lid){
+ const p=upperProfiles[side],i=Math.floor(x-lid.x);
+ const edge=p&&i>=0&&i<p.length?p[i]:null;
+ return edge!==null&&edge!==undefined?Math.max(eye.y,Math.min(eye.y+eye.h,edge)):eye.y;
 }
 function lowerApertureY(side,x,eye,lid,opening){
  return lidY(x,lowerEdgeAt(side,x,eye,lid),eye,lid,opening,false);
@@ -256,23 +265,34 @@ function eye(side,opening,lookX,lookY,irisScale){
  ctx.beginPath();
  for(let i=0;i<=strips;i++){
   const x=b.x+b.w*i/strips;
-  const y=apertureY(x,b.y,b,top,bottom,opening);
+  const y=Math.min(lowerApertureY(side,x,b,bottom,opening),lidY(x,upperEdgeAt(side,x,b,top),b,top,opening,true));
   if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
  }
  for(let i=strips;i>=0;i--){
   const x=b.x+b.w*i/strips;
-  const y=Math.max(apertureY(x,b.y,b,top,bottom,opening),lowerApertureY(side,x,b,bottom,opening));
+  const y=lowerApertureY(side,x,b,bottom,opening);
   ctx.lineTo(x,y);
  }
  ctx.closePath();ctx.clip();
- draw(id);
- ctx.beginPath();
- ctx.ellipse(b.cx,b.cy,Math.max(1,b.w*.49),Math.max(1,b.h*.49),0,0,Math.PI*2);
- ctx.clip();
+ // Cache one small per-eye canvas, not a full avatar framebuffer.
+ // Source-atop preserves the exact derived sclera alpha. Unlike an ellipse,
+ // neither gaze overshoot nor a large pupil can escape the nasal corner.
+ const c=eyeBuffers[side],g=c.getContext("2d");
+ g.setTransform(1,0,0,1,0,0);
+ g.globalCompositeOperation="source-over";
+ g.clearRect(0,0,c.width,c.height);
+ g.drawImage(images[id],b.x,b.y,b.w,b.h,0,0,b.w,b.h);
+ g.globalCompositeOperation="source-atop";
  const tx=Math.min(b.w*.22,Math.max(b.w*.12,b.w-ib.w)*.56)*lookX*opening;
  const ty=Math.min(b.h*.16,Math.max(b.h*.12,b.h-ib.h)*.48)*lookY*opening;
  const kinetic=Math.min(.085,Math.abs(bounce.vx)*.008+Math.abs(bounce.vy)*.006);
- draw(irid,{py:ib.cy,dx:tx,dy:ty,sy:irisScale*(1-kinetic*.20),sx:irisScale*(1+kinetic*.30)});
+ g.save();
+ g.translate(ib.cx-b.x+tx,ib.cy-b.y+ty);
+ g.scale(irisScale*(1+kinetic*.30),irisScale*(1-kinetic*.20));
+ g.drawImage(images[irid],ib.x,ib.y,ib.w,ib.h,-ib.w*.5,-ib.h*.5,ib.w,ib.h);
+ g.restore();
+ g.globalCompositeOperation="source-over";
+ ctx.drawImage(c,b.x,b.y);
  ctx.restore();
 }
 function closedPoseAlpha(opening){
@@ -460,7 +480,11 @@ Promise.all(Object.entries(source.layers).map(([name,info])=>new Promise((resolv
  img.onload=resolve;img.onerror=()=>reject(new Error("Falha na camada "+name));
  img.src=info.src;
 }))).then(()=>{
- for(const side of ["L","R"])buildLowerProfile(side);
+ for(const side of ["L","R"]){
+  buildLashProfile(side,"lower");buildLashProfile(side,"upper");
+  const b=box("eye_white_"+side),c=document.createElement("canvas");
+  c.width=b.w;c.height=b.h;eyeBuffers[side]=c;
+ }
  document.getElementById("status").textContent="10 camadas originais + 8 extras + 4 peças técnicas carregadas · prévia pronta";
  requestAnimationFrame(tick);
 }).catch(error=>{document.getElementById("status").textContent=error.message;});

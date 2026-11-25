@@ -163,6 +163,7 @@ jobs:
             artifacts/amora-prepared/layers/
             artifacts/amora-prepared/amora_montada.png
             artifacts/amora-mobile-preview.html
+            artifacts/amora-eye-coverage.json
             artifacts/amora-browser-neutral.png
             artifacts/amora-browser-sleepy.png
             artifacts/amora-browser-surprised.png

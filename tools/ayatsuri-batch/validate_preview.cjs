@@ -62,6 +62,99 @@ async function run() {
    }
   }
 
+  // Independently inspect rasterized RGBA, not a comparison of the same
+  // geometry function against itself. Nasal limits come from original lash
+  // PNG alpha and each sample renders the actual eye/iris code.
+  const eyeCoverage=await page.evaluate(()=>{
+    const openings=[1,.98,.95,.85,.7,.5,.35,.18,.115,.06,0];
+    const gazes=[[0,0],[-1.25,0],[1.25,0],[0,-1.25],[0,1.25],[-1.25,-1.25],[1.25,1.25]];
+    const report={samples:0,eyePixels:0,nasalLeakPixels:0,verticalLeakPixels:0,
+      unpaintedSkinPixels:0,closedEyePixels:0,worst:[],sides:[]};
+    function sourceAlphaBounds(id){
+      const b=box(id),c=document.createElement("canvas");c.width=b.w;c.height=b.h;
+      const g=c.getContext("2d",{willReadFrequently:true});
+      g.drawImage(images[id],b.x,b.y,b.w,b.h,0,0,b.w,b.h);
+      const data=g.getImageData(0,0,b.w,b.h).data;
+      let min=b.w,max=-1;
+      for(let y=0;y<b.h;y++)for(let x=0;x<b.w;x++)if(data[(y*b.w+x)*4+3]>=96){
+        min=Math.min(min,x);max=Math.max(max,x);
+      }
+      if(max<min)throw Error("No visible lash pixels: "+id);
+      return [b.x+min,b.x+max+1];
+    }
+    ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;
+    try{
+      for(const side of ["L","R"]){
+        const b=box("eye_white_"+side),orig=source.layers["eye_white_"+side].sourceBox;
+        if(!orig)throw Error("Original eye bounds absent");
+        const u=sourceAlphaBounds("upper_lid_"+side),l=sourceAlphaBounds("lower_lid_"+side);
+        const left=(orig[0]+orig[2])/2<W/2;
+        const cap=left?Math.min(u[1],l[1]):Math.max(u[0],l[0]);
+        const top=box("upper_lid_"+side),low=box("lower_lid_"+side);
+        const x0=Math.floor(Math.min(orig[0],top.x,low.x))-3;
+        const y0=Math.floor(Math.min(orig[1],top.y,low.y))-3;
+        const x1=Math.ceil(Math.max(orig[2],top.x+top.w,low.x+low.w))+3;
+        const y1=Math.ceil(Math.max(orig[3],top.y+top.h,low.y+low.h))+3;
+        const w=x1-x0,h=y1-y0;
+        const sample=()=>ctx.getImageData(x0,y0,w,h).data;
+        const clear=()=>ctx.clearRect(0,0,W,H);
+        const isNasal=x=>left?x>=cap:x<cap;
+        clear();draw("body_horns");
+        const body=sample();
+        let skinArea=0;
+        // Actual former eye rectangle at the nose must still be solid skin.
+        for(let y=orig[1];y<orig[3];y++)for(let x=orig[0];x<orig[2];x++){
+          if(!isNasal(x))continue;
+          skinArea++;
+          if(body[((y-y0)*w+x-x0)*4+3]<250)report.unpaintedSkinPixels++;
+        }
+        let openArea=0;
+        for(const opening of openings){
+          const upper=new Int32Array(w).fill(h),lower=new Int32Array(w).fill(-1);
+          if(opening>=.115){
+            clear();lid(side,"upper",opening);
+            const up=sample();
+            clear();lid(side,"lower",opening);
+            const lo=sample();
+            for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+              if(up[(y*w+x)*4+3]>=32)upper[x]=Math.min(upper[x],y);
+              if(lo[(y*w+x)*4+3]>=32)lower[x]=Math.max(lower[x],y);
+            }
+          }
+          for(const [gx,gy] of gazes){
+            clear();eye(side,opening,gx,gy,1.09);
+            const data=sample();let area=0,nasal=0,vertical=0;
+            for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+              const alpha=data[(y*w+x)*4+3];
+              if(alpha===0)continue;
+              area++;
+              if(isNasal(x+x0))nasal++;
+              // The upper/lower real lash raster is the independent bound.
+              // Two/three pixels of strip AA are tolerated, not a visible
+              // sliver. Check every column that has both physical lashes.
+              if(alpha>=32&&upper[x]<h&&lower[x]>=0&&upper[x]<=lower[x]&&
+                  (y<upper[x]-3||y>lower[x]+3))vertical++;
+            }
+            report.samples++;report.eyePixels+=area;
+            report.nasalLeakPixels+=nasal;report.verticalLeakPixels+=vertical;
+            if(opening===0)report.closedEyePixels+=area;
+            if(opening===1&&gx===0&&gy===0)openArea=area;
+            if((nasal||vertical)&&report.worst.length<12)
+              report.worst.push({side,opening,gx,gy,nasal,vertical});
+          }
+        }
+        if(openArea<.25*b.w*b.h)throw Error("Eye disappears instead of being correctly masked: "+side);
+        report.sides.push({side,cap,openArea,skinArea,derived:[b.x,b.y,b.x+b.w,b.y+b.h],original:orig});
+      }
+      return report;
+    } finally {ctx.clearRect(0,0,W,H);ctx.restore();}
+  });
+  fs.writeFileSync(path.join(path.dirname(html),"amora-eye-coverage.json"),JSON.stringify(eyeCoverage,null,2));
+  console.log("EYE_COVERAGE "+JSON.stringify(eyeCoverage));
+  if(eyeCoverage.nasalLeakPixels||eyeCoverage.verticalLeakPixels||
+     eyeCoverage.unpaintedSkinPixels||eyeCoverage.closedEyePixels)
+    throw Error("Eye coverage regression: "+JSON.stringify(eyeCoverage));
+  await page.waitForFunction(()=>!!document.querySelector("canvas").getContext("2d").getImageData(600,600,1,1).data[3]);
   await page.screenshot({path:path.join(path.dirname(html),"amora-browser-neutral.png"),fullPage:true});
   async function digest(){
    return page.evaluate(()=>{
@@ -235,7 +328,7 @@ async function run() {
   if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0||wink.corner!==0||half.corner!==0||near.corner!==0||closed.corner!==0)throw Error("Opaque background remains around Amora");
   if(!neutral.center||!sleepy.center||!surprised.center||!wink.center||!half.center||!near.center||!closed.center)throw Error("Center of Amora is not rendered");
   if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash||wink.hash===surprised.hash||half.hash===wink.hash||half.hash===neutral.hash||near.hash===half.hash||closed.hash===near.hash)throw Error("Expressions did not change canvas pixels");
-  console.log(JSON.stringify({ok:true,loaded_layers:22,eightExtras,lidChecks,irisChecks,mouthCheck,mouthTalk,mouthShout,poses,emotional,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
+  console.log(JSON.stringify({ok:true,loaded_layers:22,eightExtras,eyeCoverage,lidChecks,irisChecks,mouthCheck,mouthTalk,mouthShout,poses,emotional,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
  }finally{await browser.close();}
 }
 run().catch(err=>{console.error(err.stack||err);process.exitCode=1;});

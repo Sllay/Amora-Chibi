@@ -269,7 +269,7 @@ fn aperture_vertex(x:f32,y:f32,eye:Region,
 
 // Measure the original nontransparent lash columns in source-pixel space.
 // Values are relative to the alpha bounds, then mapped into the imported quad.
-fn lower_lash_profile(layer:&Layer)->Vec<Option<f32>> {
+fn lash_profile(layer:&Layer,upper:bool)->Vec<Option<f32>> {
     let (w,h)=(layer.width as usize,layer.height as usize);
     let alpha=|x:usize,y:usize|layer.rgba[(y*w+x)*4+3];
     let (mut x0,mut y0,mut x1,mut y1)=(w,h,0usize,0usize);
@@ -277,8 +277,11 @@ fn lower_lash_profile(layer:&Layer)->Vec<Option<f32>> {
         x0=x0.min(x); y0=y0.min(y); x1=x1.max(x+1); y1=y1.max(y+1);
     } } }
     if x0>=x1||y0>=y1{return vec![];}
-    (x0..x1).map(|x|(y0..y1).rev().find(|&y|alpha(x,y)>=96)
-        .map(|y|(y+1-y0) as f32/(y1-y0) as f32)).collect()
+    (x0..x1).map(|x| {
+        let edge=if upper {(y0..y1).find(|&y|alpha(x,y)>=96)}
+                 else {(y0..y1).rev().find(|&y|alpha(x,y)>=96).map(|y|y+1)};
+        edge.map(|y|(y-y0) as f32/(y1-y0) as f32)
+    }).collect()
 }
 fn lower_edge_at(x:f32,eye:Region,lid:Region,profile:&[Option<f32>])->f32{
     let bottom=eye.cy+eye.h*0.5;
@@ -286,13 +289,21 @@ fn lower_edge_at(x:f32,eye:Region,lid:Region,profile:&[Option<f32>])->f32{
     if !(0.0..1.0).contains(&u)||profile.is_empty(){return bottom;}
     let i=(u*profile.len() as f32) as usize;
     profile.get(i).copied().flatten().map(|v|lid.cy-lid.h*0.5+v*lid.h)
-        .filter(|v|*v>eye.cy-eye.h*0.1).map(|v|v.min(bottom)).unwrap_or(bottom)
+        .map(|v|v.clamp(eye.cy-eye.h*0.5,bottom)).unwrap_or(bottom)
+}
+fn upper_edge_at(x:f32,eye:Region,lid:Region,profile:&[Option<f32>])->f32{
+    let top=eye.cy-eye.h*0.5;
+    let u=(x-(lid.cx-lid.w*0.5))/lid.w.max(0.0001);
+    if !(0.0..1.0).contains(&u)||profile.is_empty(){return top;}
+    let i=(u*profile.len() as f32) as usize;
+    profile.get(i).copied().flatten().map(|v|lid.cy-lid.h*0.5+v*lid.h)
+        .map(|v|v.clamp(top,eye.cy+eye.h*0.5)).unwrap_or(top)
 }
 fn aperture_vertex_contour(x:f32,y:f32,eye:Region,upper:Region,lower:Region,
-                          profile:&[Option<f32>],opening:f32)->(f32,f32){
-    let top=eye.cy-eye.h*0.5;
-    let bottom=lower_edge_at(x,eye,lower,profile);
-    let clipped=y.min(bottom);
+                          upper_profile:&[Option<f32>],lower_profile:&[Option<f32>],opening:f32)->(f32,f32){
+    let bottom=lower_edge_at(x,eye,lower,lower_profile);
+    let top=upper_edge_at(x,eye,upper,upper_profile).min(bottom);
+    let clipped=y.clamp(top,bottom);
     let v=((clipped-top)/(bottom-top).max(0.0001)).clamp(0.,1.);
     let (_,a)=eyelid_vertex(x,clipped,eye,upper,opening,LidSide::Upper);
     let (_,b)=eyelid_vertex(x,clipped,eye,lower,opening,LidSide::Lower);
@@ -498,9 +509,11 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported, doc: &Document) -> 
         let top=regions[&format!("upper_lid_{side}")];
         let bottom=regions[&format!("lower_lid_{side}")];
         let lower_source=doc.layers.iter().find(|l|l.name==format!("lower_lid_{side}")).ok_or("missing lower lash source")?;
-        let profile=lower_lash_profile(lower_source);
+        let upper_source=doc.layers.iter().find(|l|l.name==format!("upper_lid_{side}")).ok_or("missing upper lash source")?;
+        let lower_profile=lash_profile(lower_source,false);
+        let upper_profile=lash_profile(upper_source,true);
         key_mesh(white, &[(eye_param,&open_keys)],
-            |v,x,y| aperture_vertex_contour(x,y,eye,top,bottom,&profile,v[0]),
+            |v,x,y| aperture_vertex_contour(x,y,eye,top,bottom,&upper_profile,&lower_profile,v[0]),
             |v| eye_visibility(v[0]));
         let iris_name=format!("iris_{side}");
         if let Some(i)=idx(&iris_name) {
@@ -948,8 +961,22 @@ mod tests {
         let profile=vec![Some(0.5);32];
         let y=lower_edge_at(0.,eye,lower,&profile);
         for opening in [1.,0.95,0.8,0.5,0.18,0.] {
-            let (_,actual)=aperture_vertex_contour(0.,y,eye,upper,lower,&profile,opening);
+            let (_,actual)=aperture_vertex_contour(0.,y,eye,upper,lower,&[],&profile,opening);
             let (_,lash)=eyelid_vertex(0.,y,eye,lower,opening,LidSide::Lower);
+            assert!((actual-lash).abs()<1e-5);
+        }
+    }
+
+    #[test]
+    fn contour_attachment_uses_actual_upper_lash_edge() {
+        let eye=Region{cx:0.,cy:0.,w:2.,h:2.};
+        let upper=Region{cx:0.,cy:-0.6,w:2.,h:0.6};
+        let lower=Region{cx:0.,cy:0.6,w:2.,h:0.6};
+        let profile=vec![Some(0.5);32];
+        let y=upper_edge_at(0.,eye,upper,&profile);
+        for opening in [1.,0.95,0.85,0.7,0.5,0.35,0.18,0.] {
+            let (_,actual)=aperture_vertex_contour(0.,y,eye,upper,lower,&profile,&[],opening);
+            let (_,lash)=eyelid_vertex(0.,y,eye,upper,opening,LidSide::Upper);
             assert!((actual-lash).abs()<1e-5);
         }
     }
