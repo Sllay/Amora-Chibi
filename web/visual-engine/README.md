@@ -52,8 +52,10 @@ service URL after merging; a GitHub merge alone is not proof of production rollo
 
 ## Current export
 
-- Source preview commit: `84b878d0c2344a14d626d81218e7eb18f807a8dc` (validated workflow 45528401704).
+- Source preview commit: `582405fe0263f8a97880d2916289c91d0a4e9d6a` (validated workflow 45531686875).
 - 22 layers; Sad V2, flat and lip-bite art; separate sobbing and laughing-tears presets; lower-lash contour changes.
 - Only the static HTML export is promoted; experimental MOC3 rig remains in PR #370.
 
 - V4.4: derived nasal sclera mask, synchronized lash raster, restored gaze travel. Chromium coverage: 154 samples, 3,952,207 eye pixels, zero nasal/vertical leaks, zero uncovered skin or closed-eye pixels. Rust 12/12; MOC3 export passed. Native Cubism on-device validation remains pending.
+
+- Visible interface identity: Visual Engine V4.4, Build 3b3a3a67ce76. The static HTML is byte-identical to the validated browser export.
