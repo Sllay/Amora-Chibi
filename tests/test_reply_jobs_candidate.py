@@ -855,3 +855,41 @@ async def test_run03_durable_adaptive_only_after_full_context_rejection(lab, nor
             turn_id=turn, speaker_id="ENTITY_AMORA")) == 1
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_run06_causal_snapshot_preserves_followup_jobs_and_original_text(lab):
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-causal-synthetic")
+    original_realize = provider.realize
+    snapshots = []
+    async def capture(context):
+        snapshots.append(context)
+        return await original_realize(context)
+    provider.realize = capture
+    core.cognition.register_provider(provider)
+    first = _dm(core, "causal-first", text="Quero saber sobre Godot para PC.")
+    try:
+        assert "DURABLE_REPLY_ACCEPTED" in (await core.messaging.receive(first)).decision.reason_codes
+        clock.advance(timedelta(seconds=1))
+        second = _dm(core, "causal-second", text="Na verdade, Godot para Android.")
+        assert "DURABLE_REPLY_ACCEPTED" in (await core.messaging.receive(second)).decision.reason_codes
+        clock.advance(timedelta(seconds=1))
+        third = _dm(core, "causal-third", text="Mudando de assunto, como funciona a chuva?")
+        assert "DURABLE_REPLY_ACCEPTED" in (await core.messaging.receive(third)).decision.reason_codes
+        assert await runtime.run_once()
+        assert len(snapshots) == 1
+        ctx = snapshots[0]
+        assert ctx.user_text == first.text
+        assert [x["turn_id"] for x in ctx.causal_followups] == [str(core.messaging._turn_id(second))]
+        assert ctx.causal_followups[0]["literal_text"] == second.text
+        assert all(x["turn_id"] not in {str(core.messaging._turn_id(second)),str(core.messaging._turn_id(third))}
+                   for x in ctx.recent_messages)
+        assert (await runtime.call("state",core.messaging._turn_id(first)))["status"] == "ready"
+        for message in (second,third):
+            turn = core.messaging._turn_id(message)
+            assert (await runtime.call("state",turn))["status"] == "pending"
+            assert core.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn}").raw_text == message.text
+    finally:
+        await _stop_runtime(core)
