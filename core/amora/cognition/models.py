@@ -38,6 +38,7 @@ class JournalStage(StrEnum):
     PROVIDER_SELECTED = "provider_selected"
     MODEL_STARTED = "model_started"
     MODEL_DELTA = "model_delta"
+    DETAIL_SECTION_CHECKPOINT = "detail_section_checkpoint"
     RESPONSE_PLANNED = "response_planned"
     REFLECTION_STARTED = "reflection_started"
     PROPOSALS_GENERATED = "proposals_generated"
@@ -147,6 +148,7 @@ class CognitiveContext(BaseModel):
     # Provider-only transient AMD projection; never serialized into replay or memory.
     _adaptive_projection: dict[str, Any] | None = PrivateAttr(default=None)
     _compiler_overflow: bool = PrivateAttr(default=False)
+    _detail_section: dict[str, Any] | None = PrivateAttr(default=None)
     turn_id: UUID
     created_at: datetime
     speaker_id: str

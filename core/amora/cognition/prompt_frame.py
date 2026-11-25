@@ -277,6 +277,9 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "may_be_persisted_as_fact": False,
             "payload": context.web_research,
         }
+    if context._detail_section is not None:
+        frame["detail_section"] = {"canonical":False,"scope_is_literal_user_data":True,
+                                   "payload":context._detail_section}
     if context.specialist_support:
         # Specialist material is useful evidence, never canonical state. Keeping
         # it outside canonical_state prevents a language model from silently

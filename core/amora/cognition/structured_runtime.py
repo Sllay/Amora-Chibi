@@ -401,6 +401,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
         provider_elapsed = 0.0
 
         is_durable = durable_realization(request)
+        from .detail_sections import create_detail_session
+        detail = create_detail_session(self,request,context,on_segment)
         failures = []
 
         async def timed_realize(realize):
@@ -409,6 +411,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
             try:
                 async with self._provider_quota.admission(descriptor.name, model=descriptor.model):
                     with span("provider_attempt"):
+                        if detail is not None and not adaptive:
+                            return await detail.run(realize,descriptor)
                         return await realize(context)
             finally:
                 elapsed = max(0.0, perf_counter() - attempt_started)
@@ -690,6 +694,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 self._provider_quota.block_for(descriptor.name, 60, model=descriptor.model)
             self._provider_succeeded(descriptor, remaining_requests, remaining_tokens)
             reasons = [*validated.reason_codes, "REMOTE_PROVIDER_USED", "STRUCTURED_REALIZATION"]
+            if detail is not None and not adaptive:
+                reasons.append("DETAIL_SECTIONS_ASSEMBLED")
             if adaptive:
                 reasons.append("AMD_GLOBAL_CONSOLIDATION_USED")
             elif provider_index:
@@ -711,6 +717,14 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 context=context,
             )
 
+        if detail is not None and not is_durable:
+            partial = detail.partial()
+            if partial is not None:
+                await detail.authorize()
+                provider,model = detail.providers[-1]
+                return await self._plan_from_validated(request,partial,
+                    provider=provider,model=model,on_segment=on_segment,started=started,
+                    reason_codes=list(partial.reason_codes),usage={},context=context)
         if is_durable and failures:
             kinds = {kind for kind, _ in failures}
             # A candidate skipped for cooldown or exhausted total budget may

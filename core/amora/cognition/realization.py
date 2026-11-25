@@ -406,12 +406,21 @@ def realization_instruction(context: CognitiveContext, *, compact_support: bool 
         "Neste caso a preferência por concisão oral não deve suprimir a explicação solicitada. "
         if detailed_output_requested(context) else ""
     )
+    section_cue = (
+        " Este é um trecho de uma resposta técnica dividida pelo Core. "
+        "Consulte detail_section.payload: desenvolva a scope atual, respeitando TODAS as restrições "
+        "da mensagem literal completa. previous_scopes identifica temas já cobertos, não repita a introdução. "
+        "Retorne no máximo dois moves autorizados, sem self_choices nem pergunta final. "
+        "Não declare a documentação completa, nem prometa uma entrega futura. "
+        if context._detail_section is not None else ""
+    )
     return (
         "Retorne SOMENTE um objeto JSON válido, sem markdown e sem texto fora do objeto. "
         "Formato: {\"moves\":[{\"kind\":\"...\",\"text\":\"...\"}],\"closing\":\"none|statement|question\"}; "
         "quando autorizado, acrescente \"self_choices\":[{\"key\":\"...\",\"value\":\"...\"}]. "
         + choice_instructions
         + detailed_cue
+        + section_cue
         + visual_cue
         + causal_cue
         + web_cue
