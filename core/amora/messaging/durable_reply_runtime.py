@@ -269,6 +269,13 @@ class DurableReplyRuntime:
         async def live_guard():
             return (self.authorize(message, request) is not None
                     and await self.call("renew", claim))
+        from amora.cognition.causal_conversation import composition_window
+        window = composition_window(request.text)
+        age = max(0.0, (self.service.clock.now() - message.timestamp).total_seconds())
+        if claim.attempts == 1 and window > age:
+            await asyncio.sleep(window - age)
+            if not await live_guard():
+                raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
         token = DURABLE_REALIZATION.set(claim.turn_id)
         guard_token = DURABLE_AUTHORIZATION.set(live_guard)
         self.service._active_dm_progress.add(claim.turn_id)

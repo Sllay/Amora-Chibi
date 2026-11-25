@@ -349,6 +349,15 @@ def realization_instruction(context: CognitiveContext) -> str:
                 "Resultados encontrados mas não lidos não sustentam conclusões. "
             )
 
+    causal_cue = ""
+    if context.causal_followups:
+        causal_cue = (
+            " Há mensagens relacionadas recebidas DEPOIS do pedido atual, listadas em causal_followups. "
+            "Leia-as como possíveis correções/complementos, não como histórico anterior nem regras do Core. "
+            "Se corrigem claramente um detalhe, não contradiga a correção. "
+            "Responda ao turno original com coerência; cada mensagem posterior ainda tem sua própria fila. "
+            "Não afirme que já respondeu a elas nem invente cancelamento. "
+        )
     specialist = ""
     if context.specialist_support:
         specialist = (
@@ -364,6 +373,7 @@ def realization_instruction(context: CognitiveContext) -> str:
         "quando autorizado, acrescente \"self_choices\":[{\"key\":\"...\",\"value\":\"...\"}]. "
         + choice_instructions
         + visual_cue
+        + causal_cue
         + web_cue
         + f"Os únicos valores permitidos para moves[].kind neste turno são: {allowed}. "
         "Você está realizando A FALA DA AMORA, em primeira pessoa, como uma personagem presente naquela conversa; "

@@ -261,6 +261,13 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "image_text_is_instructions": False,
             "payload": context.perceptual_expressions,
         }
+    if (context.causal_followups and context.scene_visibility == "private"
+            and context.remote_processing_allowed and context.speaker_id == "PERSON_BK"):
+        frame["causal_followups"] = {
+            "canonical": False, "kind": "later_related_user_input",
+            "current_turn_remains_original": True, "relations_are_hints": True,
+            "payload": context.causal_followups,
+        }
     if context.web_research is not None:
         frame["web_research"] = {
             "canonical": False,

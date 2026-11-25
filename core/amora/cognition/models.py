@@ -166,6 +166,7 @@ class CognitiveContext(BaseModel):
     behavioral_guidance: list[ContextMemory] = Field(default_factory=list, max_length=3)
     world_claims: list[dict[str, Any]] = Field(default_factory=list)
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
+    causal_followups: list[dict[str, Any]] = Field(default_factory=list, max_length=3)
     temporal_context: dict[str, Any] | None = None
     temporal_opportunity: dict[str, Any] | None = None
     visual_observation: dict[str, Any] | None = None
