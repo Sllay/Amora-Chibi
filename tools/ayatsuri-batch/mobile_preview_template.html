@@ -233,9 +233,9 @@ function buildLashProfile(side,kind){
  for(let x=0;x<b.w;x++){
   let edge=null;
   if(kind==="lower"){
-   for(let y=b.h-1;y>=0;y--)if(a[(y*b.w+x)*4+3]>=96){edge=b.y+y+1;break;}
+   for(let y=0;y<b.h;y++)if(a[(y*b.w+x)*4+3]>=32){edge=b.y+y;break;}
   }else{
-   for(let y=0;y<b.h;y++)if(a[(y*b.w+x)*4+3]>=96){edge=b.y+y;break;}
+   for(let y=b.h-1;y>=0;y--)if(a[(y*b.w+x)*4+3]>=32){edge=b.y+y+1;break;}
   }
   profile.push(edge);
  }
@@ -245,12 +245,12 @@ function lowerEdgeAt(side,x,eye,lid){
  const profile=lowerProfiles[side],i=Math.floor(x-lid.x);
  const edge=profile&&i>=0&&i<profile.length?profile[i]:null;
  return edge!==null&&edge!==undefined
-  ?Math.max(eye.y,Math.min(eye.y+eye.h,edge)):eye.y+eye.h;
+  ?edge:eye.y+eye.h;
 }
 function upperEdgeAt(side,x,eye,lid){
  const p=upperProfiles[side],i=Math.floor(x-lid.x);
  const edge=p&&i>=0&&i<p.length?p[i]:null;
- return edge!==null&&edge!==undefined?Math.max(eye.y,Math.min(eye.y+eye.h,edge)):eye.y;
+ return edge!==null&&edge!==undefined?edge:eye.y;
 }
 function lowerApertureY(side,x,eye,lid,opening){
  return lidY(x,lowerEdgeAt(side,x,eye,lid),eye,lid,opening,false);

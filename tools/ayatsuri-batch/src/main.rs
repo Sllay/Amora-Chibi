@@ -278,8 +278,8 @@ fn lash_profile(layer:&Layer,upper:bool)->Vec<Option<f32>> {
     } } }
     if x0>=x1||y0>=y1{return vec![];}
     (x0..x1).map(|x| {
-        let edge=if upper {(y0..y1).find(|&y|alpha(x,y)>=96)}
-                 else {(y0..y1).rev().find(|&y|alpha(x,y)>=96).map(|y|y+1)};
+        let edge=if upper {(y0..y1).rev().find(|&y|alpha(x,y)>=32).map(|y|y+1)}
+                 else {(y0..y1).find(|&y|alpha(x,y)>=32)};
         edge.map(|y|(y-y0) as f32/(y1-y0) as f32)
     }).collect()
 }
@@ -289,7 +289,7 @@ fn lower_edge_at(x:f32,eye:Region,lid:Region,profile:&[Option<f32>])->f32{
     if !(0.0..1.0).contains(&u)||profile.is_empty(){return bottom;}
     let i=(u*profile.len() as f32) as usize;
     profile.get(i).copied().flatten().map(|v|lid.cy-lid.h*0.5+v*lid.h)
-        .map(|v|v.clamp(eye.cy-eye.h*0.5,bottom)).unwrap_or(bottom)
+        .unwrap_or(bottom)
 }
 fn upper_edge_at(x:f32,eye:Region,lid:Region,profile:&[Option<f32>])->f32{
     let top=eye.cy-eye.h*0.5;
@@ -297,7 +297,7 @@ fn upper_edge_at(x:f32,eye:Region,lid:Region,profile:&[Option<f32>])->f32{
     if !(0.0..1.0).contains(&u)||profile.is_empty(){return top;}
     let i=(u*profile.len() as f32) as usize;
     profile.get(i).copied().flatten().map(|v|lid.cy-lid.h*0.5+v*lid.h)
-        .map(|v|v.clamp(top,eye.cy+eye.h*0.5)).unwrap_or(top)
+        .unwrap_or(top)
 }
 // Only compress the nasal part of the sclera as the lid closes.
 // Keep the texture and neutral mesh exactly as authored.
