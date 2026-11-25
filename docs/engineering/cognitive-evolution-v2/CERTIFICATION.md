@@ -11,7 +11,7 @@ candidato e, quando aplicável, em ambiente isolado antes da produção.
 | R03 compreensão | offsets, mapa global experimental, fallback Groq, testes Unicode; candidato para overflow pré-seleção em 2deeef2 | CI da correção, leitura sob demanda, geração por partes e avaliação semântica |
 | R04 percepção | lote até 3 imagens e checkpoint exato/retry com guarda CI dc08bdf 13/13; candidato 589901f continuidade explícita entre turnos | CI da continuidade, retenção física, referência implícita, avaliação semântica e prova live |
 | R05 web | busca aprofundada limitada, fontes parciais, notebook; candidato 9eed31e para retomada explícita após gravação e TTL de reutilização | CI, checkpoint durante pesquisa/por turno, retenção/revogação, contradições, quotas, screenshots e SSRF completo |
-| R06 diálogo | snapshot causal, janela curta, followups separados | atualização durante geração, supersessão atômica, ACK/retomada por segmento, voz/avatar |
+| R06 diálogo | replanejamento pré-realização 3a35b66 CI 13/13; candidato entrega Discord por segmentos/recibos com prefixo persistente | CI do protocolo, fence transacional de causalidade, reconciliação de resultado externo incerto, voz/avatar e prova live |
 | R07 integração | diagnósticos iniciais e teste de burst/restart | fechar todos os bloqueios acima, medir recursos, certificar Northflank |
 
 ## Método da bateria

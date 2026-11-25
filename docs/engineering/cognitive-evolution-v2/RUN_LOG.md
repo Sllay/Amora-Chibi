@@ -350,6 +350,13 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Teste concorrente com provider sintético bloqueado por evento, correção ou assunto independente admitido enquanto gera, valida snapshot, ausência de saída antiga e preservação da fila em SQLite e PG18.
 - Limites: revisão por leitura antes do commit, NÃO fence transacional de versão da sessão; ainda há janela entre última leitura e stage/finalize. Não cancela tokens em voo, não replaneja uma resposta já enviada ou preparada, não agrupa/desduplica respostas a mensagens distintas, não cobre voz, multimodal ou correções ambíguas. O gate anterior de 8s/3 followups/1800 caracteres permanece. CI e certificação live pendentes. Sem deploy ou monitoramento.
 
+### Integração final — incremento G: recibos de entrega por segmento Discord
+
+- 3a35b66: 13/13 CI PASS (Core 45542734430, PG18 45542734608), mergeable, autorizado continuar.
+- 2185b68: protocolo v1 opt-in no claim worker para respostas textuais longas da fila durável Discord; divisão Core em até 2000 unidades UTF-16 sem quebrar scalar Unicode. Prefixo confirmado persistido no metadata do outbox existente, sem nova DDL, texto canônico intacto. Claim por lease e CAS, SQL PG18 revisado, preparação revalida fonte/owner/job, confirmação ordinal exige ID Discord, última confirma pai atomicamente. Workers antigos não recebem checkpoints; ACK legado não marca parcialmente entregue como sent. Reclaim de prefixo confirmado não reenvia partes anteriores.
+- Hardening: intenção de envio persistida antes de POST. Se lease expirar com parte preparada sem recibo, não é possível saber se Discord criou a mensagem. Bloqueia reenvio, marca failed DISCORD_SEGMENT_DELIVERY_UNCERTAIN para reconciliação do job; preserva recibos e texto, não inventa sucesso. Nonce não é idempotência permanente. Erro definitivo marca failed preservando prefixo. Sem promessa exactly-once para envio externo desconhecido. Mudança de protocolo apenas em queued, nunca legado já claimed.
+- Testes SQLite/PG18 e Node: ordem, ACK antecipado/duplicado, prefixo reaberto, lease antigo, worker legado, confirmação final e resultado ambíguo, parada após ACK falho. CI pendente. Entrega parcial incerta exige recuperação operacional; integração voz/avatar, histórico de fala por ACK e cancelamento transacional completo continuam pendentes. Sem alteração em main ou produção; sem monitoramento.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.

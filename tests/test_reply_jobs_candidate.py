@@ -1165,3 +1165,75 @@ async def test_inflight_correction_replans_only_related_uncommitted_reply(lab, r
             work.cancel()
             await asyncio.gather(work,return_exceptions=True)
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uncertain",[False,True])
+async def test_durable_discord_segment_receipts_reclaim_and_uncertain_outcome(lab,uncertain,monkeypatch):
+    from amora.messaging.delivery_segments import DeliverySegmentRequest, split_delivery_text, CHECKPOINT
+    from amora.cognition import CognitiveResponsePlan
+    core, clock, _ = lab
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    long_text=("Texto sintético de recuperação. "*180).strip()
+    async def generate(claim,message,request):
+        return CognitiveResponsePlan(turn_id=request.turn_id,display_text=long_text,
+            speech_text=long_text,provider="synthetic",model="synthetic",
+            metadata={"realization_validated":True})
+    monkeypatch.setattr(runtime,"_generate",generate)
+    msg=_dm(core,"durable-long-delivery")
+    turn=service._turn_id(msg)
+    def claim(store,enabled=True):
+        return store.claim_outbound(platform=MessagingPlatform.DISCORD,
+            account_scope="primary",limit=1,lease_seconds=5,segmented_delivery=enabled)
+    def ack(store,item,index,phase,sent=False,external=None):
+        lease=item.metadata["discord_delivery_claim"]["lease"]
+        return store.ack_delivery_segment(item.id,DeliverySegmentRequest(
+            index=index,phase=phase,lease=lease),sent=sent,external_message_id=external)
+    try:
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(msg)).decision.reason_codes
+        assert await runtime.run_once()
+        store=core.messaging_store
+        first,=claim(store)
+        chunks=first.metadata["discord_delivery_claim"]["chunks"]
+        assert chunks==split_delivery_text(long_text) and len(chunks)>=3
+        receipt="123456789012345678"
+        assert not store.ack_outbound(first.id,sent=True,external_message_id=receipt)
+        assert not ack(store,first,1,"prepare")
+        assert not ack(store,first,0,"confirm",True,receipt)
+        assert ack(store,first,0,"prepare")
+        assert ack(store,first,0,"confirm",True,receipt)
+        assert ack(store,first,0,"confirm",True,receipt)
+        assert not ack(store,first,0,"confirm",True,"123456789012345679")
+        assert store.get_outbound(first.id).status.value=="claimed"
+        assert (await runtime.call("state",turn))["status"]=="ready"
+        if uncertain:
+            assert ack(store,first,1,"prepare")
+        clock.advance(timedelta(seconds=121))
+        assert not claim(store,False)
+        with closing(AmoraDatabase(core.database.path,backend=core.database.backend)) as db:
+            reopened=type(store)(db,clock)
+            recovered=claim(reopened)
+            if uncertain:
+                assert not recovered
+                failed=reopened.get_outbound(first.id)
+                assert failed.status.value=="failed"
+                assert failed.metadata[CHECKPOINT]["receipts"]==[receipt]
+                assert not claim(reopened)
+            else:
+                second,=recovered
+                assert second.metadata["discord_delivery_claim"]["receipts"]==[receipt]
+                assert not ack(reopened,first,1,"prepare")
+                for index in range(1,len(chunks)):
+                    assert ack(reopened,second,index,"prepare")
+                    assert ack(reopened,second,index,"confirm",True,str(123456789012345678+index))
+                completed=reopened.get_outbound(first.id)
+                assert completed.status.value=="sent"
+                assert len(completed.metadata[CHECKPOINT]["receipts"])==len(chunks)
+                assert "delivery_confirmed_at" in completed.metadata
+                assert "discord_delivery_claim" not in completed.metadata
+                assert not claim(reopened)
+        await runtime.run_once()
+        assert (await runtime.call("state",turn))["status"]==("blocked" if uncertain else "sent")
+    finally:
+        await _stop_runtime(core)

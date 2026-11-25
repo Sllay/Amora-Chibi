@@ -37,10 +37,12 @@ class DeliveryCheckpoint(BaseModel):
     version: Literal[1] = 1
     count: int = Field(ge=2, le=32)
     receipts: list[str] = Field(default_factory=list,max_length=32)
+    pending_lease: str | None = Field(default=None,max_length=64)
 
     @model_validator(mode="after")
     def check_receipts(self):
         if (len(self.receipts)>self.count or len(set(self.receipts))!=len(self.receipts)
+                or (self.pending_lease is not None and len(self.receipts)==self.count)
                 or any(not x.isascii() or not x.isdecimal() or not 17<=len(x)<=20 for x in self.receipts)):
             raise ValueError("invalid Discord segment receipts")
         return self

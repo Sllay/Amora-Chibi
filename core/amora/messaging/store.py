@@ -447,9 +447,22 @@ class MessagingStore:
                             raise ValueError("DISCORD_DELIVERY_CHECKPOINT_INVALID")
                         candidate.metadata[CHECKPOINT] = checkpoint.model_dump(mode="json")
                         stored = json.dumps(candidate.metadata,ensure_ascii=False,separators=(",",":"))
-                        self.database._conn.execute(
+                        if checkpoint.pending_lease is not None:
+                            # A crash between dispatch and confirmation leaves
+                            # an ambiguous external outcome. Discord nonces
+                            # are not permanent receipts; never guess/replay.
+                            self.database._conn.execute(
+                                "UPDATE messaging_outbound_queue SET metadata_json=?,status=?,external_message_id=?,error_code=?,claim_expires_at=? "
+                                "WHERE id=? AND status='claimed' AND claimed_at=? AND claim_expires_at>=? AND metadata_json=?",
+                                (stored,"failed",checkpoint.receipts[0] if checkpoint.receipts else None,
+                                 "DISCORD_SEGMENT_DELIVERY_UNCERTAIN",None,row["id"],now.isoformat(),
+                                 now.isoformat(),row["metadata_json"]))
+                            continue
+                        cursor = self.database._conn.execute(
                             "UPDATE messaging_outbound_queue SET metadata_json=? WHERE id=? AND status='claimed' AND claimed_at=?",
                             (stored,row["id"],now.isoformat()))
+                        if cursor.rowcount != 1:
+                            raise RuntimeError("DISCORD_DELIVERY_CLAIM_LOST")
                         candidate.status = OutboundStatus.CLAIMED
                         candidate.metadata["discord_delivery_claim"] = {
                             "lease":now.isoformat(),"chunks":chunks,
@@ -521,12 +534,18 @@ class MessagingStore:
             if segment.phase=="prepare":
                 if sent or external_message_id or error_code:
                     return False
+                if cp.pending_lease not in {None,segment.lease}:
+                    return False
+                cp.pending_lease=segment.lease
+            elif cp.pending_lease!=segment.lease:
+                return False
             elif sent:
                 if (not external_message_id or not external_message_id.isascii()
                         or not external_message_id.isdecimal() or not 17<=len(external_message_id)<=20
                         or external_message_id in cp.receipts or error_code):
                     return False
                 cp.receipts.append(external_message_id)
+                cp.pending_lease=None
                 if len(cp.receipts)==cp.count:
                     state="sent"
                     candidate.metadata["delivery_confirmed_at"]=now.isoformat()
@@ -534,6 +553,7 @@ class MessagingStore:
                 if external_message_id or not error_code:
                     return False
                 state="failed"
+                cp.pending_lease=None
             candidate.metadata[CHECKPOINT]=cp.model_dump(mode="json")
             expires=(now+timedelta(seconds=120)).isoformat() if state=="claimed" else None
             cursor=self.database._conn.execute(
