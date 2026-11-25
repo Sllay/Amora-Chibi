@@ -57,3 +57,10 @@
 - Cache process-local apenas para preview válido de imagem única analisada, sem URL, máximo 3 registros / 5 MB Base64 / TTL lógico 15 minutos; escopo sessão/nativo/revisão, guard owner DM e autorização da fonte anterior antes/depois da nova inferência. Não grava mídia no banco, não sobrevive restart, expiração lazy (não promete apagamento físico de RAM). Contestação antiga permanece suprimida; nova reinspeção é evidência separada, não substituição canônica. Sem mídia disponível, comportamento anterior de reenvio mantido. CI e certificação semântica live pendentes. Sem deploy, merge ou monitoramento.
 
 - RUN02 B hardening: cache insertion delayed until comparison to avoid evicting the historical preview; repeated source revision checks before projection, fresh reinspection included in aggregate status, bounded numeric evidence interpretation rule in TurnFrame. Pillow 13.0.0 pinned in deployment lock (CPython 3.12 musllinux x86_64/aarch64 wheels published). Added integrated actual PNG regression in the SQLite/PG18 lab: owner revocation, fresh inference, dispute separation, previous/current numeric comparison, process-local restart behavior. No CI conclusion for this SHA yet.
+
+
+## RUN02 — CI PASS / LIVE_PENDING
+- ed66fbe: 11/11 workflows verdes; PG18 45691444299, job 139477647152, 272 passed / 1 skipped. Reinspeção de PNG e comparação numérica passaram em SQLite e PG18; auditoria de segurança 45691444116 PASS. Sem certificação semântica live ou cobertura adicional do worker. Autorizado avançar RUN03.
+
+## RUN03 A — continuidade após falha e intenção de captura
+- Pesquisa sem fontes mantém tópico explícito e profundidade em snapshot privado de workspace (sem entradas falsas); retorno de erro não fornece links antigos. Falha recente recuperável após restart, TTL 15 min. Continuação conserva profundidade e até 240 caracteres. Detector de captura compartilhado, inclui flexões de envio e negação explícita. Retry genérico ainda exige lease owner DM; SSRF e transportes inalterados. CI pendente; refinamento, evidência comparativa, entrega física e certificação live pendentes. Sem merge/deploy/monitoramento.

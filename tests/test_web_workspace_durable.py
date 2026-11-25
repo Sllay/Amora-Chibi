@@ -246,3 +246,35 @@ async def test_numbered_saved_links_follow_the_freshly_listed_order(notebook):
     followed = await nav.research("abre o link 2", "owner-dm")
     assert followed["status"] == "opened"
     assert followed["sources"][0]["url"] == "https://godotengine.org/learn"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deep", [False, True])
+async def test_run03_empty_research_recovers_topic_without_inventing_sources(notebook, deep):
+    nav=WebNavigator(fetch_page=open_page,search=lambda _: [],workspace=notebook)
+    result=await nav.research("pesquise "+("a fundo " if deep else "")+"Godot Engine","owner-dm")
+    assert result["status"]=="failed" and not result["sources"] and not result["references"]
+    record=notebook.recent("owner-dm")[0]
+    assert record["topic"]=="Godot Engine" and record["entries"]==[]
+    assert record["status"]=="failed"
+    queries=[]
+    restarted=WebNavigator(fetch_page=open_page,workspace=notebook,search=lambda q:
+        queries.append(q) or [{"url":"https://godotengine.org/releases","title":"Godot Engine","snippet":"Godot Engine"}])
+    other=await restarted.research("continue pesquisando","other-dm")
+    assert other["status"]=="failed" and not queries
+    resumed=await restarted.research("continue pesquisando","owner-dm")
+    assert resumed["status"]=="opened" and queries[0]=="Godot Engine"
+    if deep:
+        assert resumed["depth"]=="deep"
+
+
+@pytest.mark.asyncio
+async def test_run03_failure_does_not_reuse_old_links(notebook):
+    nav=WebNavigator(fetch_page=open_page,search=lambda _: [],workspace=notebook)
+    await nav.research("abre https://godotengine.org","owner-dm")
+    await nav.research("pesquise Blender","owner-dm")
+    restarted=WebNavigator(fetch_page=open_page,search=lambda _: [],workspace=notebook)
+    capture=await restarted.research("mim envie o print real","owner-dm")
+    assert capture["status"]=="failed"
+    assert not restarted.current_delivery("owner-dm")["sources"]
+    assert not restarted.current_public_references("owner-dm")

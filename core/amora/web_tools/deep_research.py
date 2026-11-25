@@ -172,6 +172,7 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
                 "WEB_SEARCH_TIMEOUT" if partial else "WEB_SEARCH_NO_RELEVANT_RESULTS"
                 if "WEB_SEARCH_NO_RELEVANT_RESULTS" in errors else "WEB_SEARCH_UNAVAILABLE",
                 "sources":[], "references":[], "depth":"deep",
+                "topic":topic[:240], "query":topic[:240], "discovered_at":discovered_at,
                 "research_progress":{"search_calls_started":attempted, "stop_reason":"deadline" if partial else "no_results"}}
     references = [{"number": i, **row, "state":"found"} for i,row in enumerate(ranked,1)]
     nav._save_refs(session_id, references)
@@ -242,8 +243,8 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
     nav._save_refs(session_id, references)
     return {
         "action":"search", "status":"opened" if sources else "results_only",
-        "depth":"deep", "query":topic[:240], "topic":topic[:90],
-        "discovered_at":discovered_at, "resume_eligible":len(topic)<=90,
+        "depth":"deep", "query":topic[:240], "topic":topic[:240],
+        "discovered_at":discovered_at, "resume_eligible":len(topic)<=240,
         "resumed_checkpoint":bool(resume),
         "sources":sources, "references":references,
         "research_progress":{

@@ -10,20 +10,11 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-from amora.web_tools.navigator import WebFetchError, WebIntent, _public_url
-
-_SCREENSHOT_REQUEST = re.compile(
-    r"\b(?:(?:tira|tirar|manda|mande|envia|enviar|mostra|mostre|faz|quero)"
-    r".{0,42}?\b(?:print|screenshot|captura(?:\s+de\s+tela)?)\b"
-    r"|(?:print|screenshot|captura)\s+(?:do|da|desse|dessa|de)"
-    r"\s+(?:site|p[aá]gina|link|resultado|web))\b",
-    re.IGNORECASE | re.DOTALL,
-)
-
+from amora.web_tools.navigator import WebFetchError, WebIntent, _public_url, screenshot_command
 
 def screenshot_requested(text: str) -> bool:
-    """User explicitly requested a page image, not a generic image topic."""
-    return bool(_SCREENSHOT_REQUEST.search(str(text or "")[:1600]))
+    """Single explicit-capture detector shared with the navigation parser."""
+    return screenshot_command(text)
 
 
 _SCREENSHOT_DELIVERY_CLAIM = re.compile(

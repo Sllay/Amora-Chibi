@@ -49,13 +49,13 @@ _FOLLOW_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _CAPTURE_RETRY_RE = re.compile(
-    r"^\s*(?:amora[,\s]+)?(?:me\s+)?"
+    r"^\s*(?:amora[,\s]+)?(?:(?:me|mim)\s+)?"
     r"(?:envie|envia|mande|manda|reenvi[ae])\s+"
     r"(?:(?:a|o|essa|esse)\s+)?(?:imagem|foto|arquivo|anexo)\s*[.!?]*$",
     re.IGNORECASE,
 )
 _CAPTURE_CURRENT_RE = re.compile(
-    r"\b(?:tira|tirar|manda|mande|envia|enviar|mostra|mostre|faz|quero)\b"
+    r"\b(?:tira|tire|tirar|manda|mande|envia|envie|enviar|mostra|mostre|faz|faça|quero)\b"
     r".{0,48}?\b(?:print|screenshot|captura(?:\s+de\s+tela)?)\b",
     re.IGNORECASE | re.DOTALL,
 )
@@ -524,6 +524,17 @@ _CONTEXT_WEB_RE = re.compile(
 )
 
 
+_CAPTURE_NEGATED_RE = re.compile(
+    r"\b(?:n[aã]o|nem|sem)\s+(?:(?:me|mim)\s+)?(?:tira|tire|tirar|manda|mande|envia|envie|enviar|mostra|mostre|faz|faça|quero)\b",
+    re.I,
+)
+
+
+def screenshot_command(text: str) -> bool:
+    raw=str(text or "")[:12000]
+    return bool(_CAPTURE_CURRENT_RE.search(raw) and not _CAPTURE_NEGATED_RE.search(raw))
+
+
 def parse_web_intent(text: str) -> WebIntent | None:
     raw = str(text or "")[:12000]
     urls = _LINK_RE.findall(raw)
@@ -575,7 +586,7 @@ def parse_web_intent(text: str) -> WebIntent | None:
             subject = _clean(_DEEP_REQUEST_RE.sub(" ", subject), 240)
             subject = re.sub(r"(?i)^fundo\s+", "", subject)
         return WebIntent("search", subject, depth)
-    if _CAPTURE_CURRENT_RE.search(raw):
+    if screenshot_command(raw):
         return WebIntent("capture", "current")
     # A bare "envie a imagem" may refer to the preceding screenshot request;
     # the navigator still requires an owner-DM capture lease before acting.
@@ -837,7 +848,8 @@ class WebNavigator:
     def _record_delivery(self, session_id: str, result: dict[str, Any]) -> dict[str, Any]:
         # Only source/ref URL metadata survives briefly for the Discord worker
         # after provider fallback. Never retain fetched HTML or user text here.
-        if result.get("status") in {"opened", "results_only"}:
+        if (result.get("status") in {"opened", "results_only"}
+                or (result.get("action")=="search" and result.get("status")=="failed" and result.get("topic"))):
             sources = result.get("sources") or []
             topic = str(result.get("topic") or "").strip()
             if not topic and sources and isinstance(sources[0], dict):
@@ -850,7 +862,8 @@ class WebNavigator:
                     topic = str(prior[1].get("focus") or "")
             projection = {
                 "action": result.get("action", ""),
-                "focus": _clean(topic, 90),
+                "focus": _clean(topic, 240),
+                "depth": result.get("depth","quick"),
                 "sources": [
                     {"url": str(item.get("url") or ""), "title": str(item.get("title") or "")}
                     for item in (result.get("sources") or [])[:5 if result.get("depth") == "deep" else 2] if isinstance(item, dict)
@@ -881,6 +894,7 @@ class WebNavigator:
             return {
                 "action": data["action"],
                 "focus": data.get("focus", ""),
+                "depth": data.get("depth","quick"),
                 "sources": [dict(item) for item in data["sources"]],
                 "references": [dict(item) for item in data["references"]],
             }
@@ -922,6 +936,11 @@ class WebNavigator:
         if not rows:
             return
         record = rows[0]
+        if record.get("status")=="failed":
+            from .deep_research import _fresh_timestamp
+            if not _fresh_timestamp(record.get("recorded_at"), datetime.now(timezone.utc)):
+                self._save_refs(session_id, [])
+                return
         entries = record.get("entries") or []
         sources = [e for e in entries if isinstance(e, dict)
                    and e.get("state") == "read" and e.get("url")]
@@ -929,7 +948,8 @@ class WebNavigator:
                 if isinstance(e, dict) and e.get("url")]
         projection = {
             "action": str(record.get("action") or ""),
-            "focus": str(record.get("topic") or "")[:90]
+            "depth": record.get("depth","quick"),
+            "focus": str(record.get("topic") or "")[:240]
                 or (_page_topic(sources[0]) if sources else ""),
             "sources": [{"url": e["url"], "title": str(e.get("title") or "")}
                         for e in sources[:5 if record.get("depth") == "deep" else 2]],
@@ -1133,7 +1153,10 @@ class WebNavigator:
                  or _WEB_CONTINUE_RE.search(text) is not None)
         )
         if contextual_search:
-            search_topic = self.current_delivery(session_id).get("focus", "")
+            previous_search = self.current_delivery(session_id)
+            search_topic = previous_search.get("focus", "")
+            if previous_search.get("depth")=="deep":
+                intent=WebIntent("search", "", "deep")
             # Safe diagnostic event only: never log the subject, URL,
             # Discord conversation, user content or session identifier.
             _LOG.info(
@@ -1280,20 +1303,26 @@ class WebNavigator:
                     })
             return self._record_delivery(session_id, {
                 "action": "search", "status": "opened" if sources else "results_only",
-                "query": used_query[:240], "topic": search_topic[:90], "sources": sources,
+                "query": used_query[:240], "topic": search_topic[:240], "sources": sources,
                 "references": [{"number": index, "url": item["url"],
                                 "title": item["title"], "snippet": item.get("snippet", "")}
                                for index, item in enumerate(validated, 1)],
             })
         except (WebFetchError, TimeoutError) as exc:
             code = exc.code if isinstance(exc, WebFetchError) else "WEB_TIMEOUT"
-            return {"action": intent.action, "status": "failed", "reason": code,
-                    "sources": [], "references": []}
+            failure={"action": intent.action, "status": "failed", "reason": code,
+                     "sources": [], "references": []}
+            if intent.action=="search" and search_topic:
+                return self._record_delivery(session_id,{**failure,"topic":search_topic,"depth":intent.depth})
+            return failure
         except Exception:
             # DNS/HTML/parser failures are not evidence. Avoid dumping user
             # URLs, fetched text or provider exceptions into production logs.
-            return {"action": intent.action, "status": "failed", "reason": "WEB_RUNTIME_FAILED",
-                    "sources": [], "references": []}
+            failure={"action": intent.action, "status": "failed", "reason": "WEB_RUNTIME_FAILED",
+                     "sources": [], "references": []}
+            if intent.action=="search" and search_topic:
+                return self._record_delivery(session_id,{**failure,"topic":search_topic,"depth":intent.depth})
+            return failure
 
     async def _open(self, url: str, session_id: str, action: str,
                     *, force_browser: bool = False) -> dict[str, Any]:

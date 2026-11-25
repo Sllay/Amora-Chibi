@@ -69,9 +69,10 @@ class WebWorkspaceStore:
         ))
 
     def record_visit(self, session_id: str, result: dict[str, Any]) -> bool:
-        if result.get("status") not in {"opened", "results_only"}:
-            return False
         action = str(result.get("action") or "")
+        failed_search = action=="search" and result.get("status")=="failed" and bool(result.get("topic"))
+        if result.get("status") not in {"opened", "results_only"} and not failed_search:
+            return False
         if action not in {"open", "open_many", "search", "follow"}:
             return False
         sources = [_safe_entry(x, read=True) for x in (result.get("sources") or [])[:5 if result.get("depth") == "deep" else 3]]
@@ -82,7 +83,7 @@ class WebWorkspaceStore:
                 continue
             seen.add(entry["url"])
             entries.append(entry)
-        if not entries:
+        if not entries and not failed_search:
             return False
         return self._write(session_id, VISIT_EVENT, {
             "action": action,
@@ -91,7 +92,8 @@ class WebWorkspaceStore:
                 "resume_eligible": result.get("resume_eligible") is True
                     and result.get("query") == result.get("topic"),
                 } if result.get("depth") == "deep" else {}),
-            "topic": _clean(str(result.get("topic") or ""), 90),
+            "topic": _clean(str(result.get("topic") or ""), 240),
+            **({"failure_reason": _clean(str(result.get("reason") or ""), 96)} if failed_search else {}),
             "entries": entries[:15],
             # Keep the *actual* numbered reference order separately.
             # Reconstructing it from [opened, found] shifts link 2 after restart.
@@ -107,7 +109,7 @@ class WebWorkspaceStore:
             event_type=kind, session_id=session_id, limit=limit,
         )
         return [r.payload for r in records if r.privacy_scope == PrivacyScope.PERSONAL
-                and r.actor == "PERSON_BK" and isinstance(r.payload, dict)]
+                and r.actor == "PERSON_BK" and r.source == "owner_dm_web_workspace" and isinstance(r.payload, dict)]
 
     def recent(self, session_id: str, limit: int = 12) -> list[dict[str, Any]]:
         return self._read(session_id, VISIT_EVENT, min(max(1, limit), MAX_RECENT_VISITS))
