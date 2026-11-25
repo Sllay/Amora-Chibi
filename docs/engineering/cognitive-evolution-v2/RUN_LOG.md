@@ -34,8 +34,8 @@ gate próprio em PLAN.md. Status de produção deve ser verificado separadamente
 |---|---|---|
 | 00 | Preparação e continuidade | Gate documental aprovado; PR #377 (conclusão condicionada ao merge) |
 | 01 | Durable Cognitive Runtime | CI_PASS — 9/9 no 6163c34; LIVE_PENDING até bateria final |
-| 02 | Intelligent Provider Orchestrator | IN_PROGRESS — branch empilhada sobre RUN 01 |
-| 03 | Adaptive Context & Comprehension Engine | PLANNED |
+| 02 | Intelligent Provider Orchestrator | CI_PASS (10/10, bd0d827); cobertura residual registrada |
+| 03 | Adaptive Context & Comprehension Engine | IN_PROGRESS |
 | 04 | Advanced Multimodal Perception | PLANNED |
 | 05 | Autonomous Web Intelligence | PLANNED |
 | 06 | Living Conversation Engine | PLANNED |
@@ -199,6 +199,19 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - 68b5990: cooldown indexado por família + modelo para Groq com modelo identificado; sem identificação ou provedor de escopo desconhecido continua global. Bloqueio explícito de conta sempre prevalece. Lock FIFO por conta permanece, sem paralelismo novo nem troca de conta.
 - 7990922, decca94, 2a896e9, f3d6e63, fd28651, ace1361: propagação do modelo real na reflexão, diálogo, visão e planner web; diagnóstico fixo quota_scope=account preservado quando explicitamente disponível. Não interpretar cabeçalhos/documentos desconhecidos como sinal de escopo global.
 - 1d400db: regressões de 429 por modelo, mesma rota compartilhada em diálogo/visão/web, fallback entre modelos distintos, bloqueio global e expiração independente. O teste integrado original GPT-OSS → Qwen permanece inalterado. Aguardar CI do novo HEAD para considerar o gate de desenvolvimento aprovado. Sem deploy ou merge.
+
+### RUN 02 — checkpoint de desenvolvimento e avanço autorizado (24/11/2026)
+
+- bd0d82707655f4b156995b23d3ae59f739b1a0d5: 10/10 workflows PASS; Core 45494076737 aprovado em Python 3.11/3.12/3.13/3.14, PG18 45494076903, Provider certification 45494076778. PR #380 draft e mergeable=false na consulta; nenhum merge ou deploy.
+- Proprietário autorizou iniciar RUN 03 após CI verde. Não declarar cobertura integral de adapters: revisão de visão de expressões, rotas legadas, SSE não Numes, recuperação 413 adicional e métricas de saúde continuam como trabalho residual de integração (RUN 04/07 e respectivos módulos). Não confundir com certificação live; corrigir regressões conhecidas que afetem RUN 03 antes do gate.
+- Branch seguinte mantém ancestralidade do HEAD validado. Produção intocada.
+
+### RUN 03 — início: Adaptive Context & Comprehension Engine (24/11/2026)
+
+- Branch feat/cognitive-evolution-run03-adaptive-context, base bd0d827. Objetivo: contexto adaptativo, orçamento de envelope por rota, AMD por offsets, mapa de cobertura e consolidação sem alterar texto original; preservação de identidade/ACIR e memória.
+- Inventário inicial: context_v1.py compila contexto e capabilities; context_budget.py estima JSON por caracteres/4 e compacta projeções opcionais; prompt_frame.py separa protocolo confiável e fala literal, inclui ACIR no turno e no plano; structured_runtime.py controla failover e realização validada. Revisar context.py, adapters e testes antes da integração.
+- Decisão: caminho curto sem chamada adicional; AMD só para entrada que não cabe mesmo após compactação, limite finito de blocos e evidência explícita de cobertura. Não transformar heurísticas em fatos ou persistir resumos como memória. Fase inicial: contratos determinísticos, telemetria numérica e fixtures de negação tardia; integração semântica e gates completos ainda pendentes.
+- Gate CI integral após implementação; bateria profunda depois da RUN 07.
 
 ## Modelo obrigatório de registro para cada RUN
 
