@@ -11,6 +11,7 @@ from amora.time import Clock
 
 from .generation_lifecycle import InboundGenerationLost
 from .session_identity import messaging_session_ref
+from .delivery_segments import CHECKPOINT, DeliveryCheckpoint, split_delivery_text
 from .models import (
     AuditDirection,
     ChannelType,
@@ -346,6 +347,7 @@ class MessagingStore:
         account_scope: str,
         limit: int = 8,
         lease_seconds: int = 30,
+        segmented_delivery: bool = False,
     ) -> tuple[OutboundMessage, ...]:
         limit = max(1, min(32, int(limit)))
         now = self.clock.now()
@@ -379,6 +381,21 @@ class MessagingStore:
             ).fetchall()
             for row in rows:
                 candidate = self._outbound_from_row(row)
+                if CHECKPOINT in candidate.metadata and not segmented_delivery:
+                    continue
+                if candidate.metadata.get("durable_native_hash"):
+                    from amora.storage.reply_job_sql import SQLITE_STATEMENTS
+                    sql = ("PG_REPLY_JOB_DELIVERY_ALLOWED"
+                           if self.database.backend.capabilities.name == "postgres-candidate"
+                           else SQLITE_STATEMENTS["DELIVERY_ALLOWED"])
+                    allowed = (candidate.target_entity_id == "PERSON_BK"
+                               and self.database._conn.execute(sql, (
+                                   str(candidate.id), candidate.account_scope,
+                                   candidate.conversation_id, candidate.source_message_id,
+                               )).fetchone() is not None)
+                    if not allowed:
+                        self.cancel_outbound(candidate.id, reason="DURABLE_REPLY_STALE_OR_UNAUTHORIZED")
+                        continue
                 if candidate.metadata.get("agenda_id"):
                     from amora.agenda.service import agenda_claim_allowed
                     # A previously claimed send is ambiguous after a lost ACK:
@@ -417,6 +434,41 @@ class MessagingStore:
                 )
                 if getattr(cursor, "rowcount", 1) == 0:
                     continue
+                if (segmented_delivery and candidate.platform == MessagingPlatform.DISCORD
+                        and candidate.metadata.get("durable_native_hash")
+                        and not candidate.metadata.get("transport_expressions")
+                        and not candidate.metadata.get("web_capture_requested")
+                        and not candidate.metadata.get("web_capture_source")):
+                    chunks = split_delivery_text(candidate.text)
+                    if CHECKPOINT in candidate.metadata or (row["status"] == "queued" and len(chunks)>1):
+                        checkpoint = DeliveryCheckpoint.model_validate(candidate.metadata.get(CHECKPOINT)
+                            or {"count":len(chunks)})
+                        if checkpoint.count != len(chunks) or len(checkpoint.receipts)>=checkpoint.count:
+                            raise ValueError("DISCORD_DELIVERY_CHECKPOINT_INVALID")
+                        candidate.metadata[CHECKPOINT] = checkpoint.model_dump(mode="json")
+                        stored = json.dumps(candidate.metadata,ensure_ascii=False,separators=(",",":"))
+                        if checkpoint.pending_lease is not None:
+                            # A crash between dispatch and confirmation leaves
+                            # an ambiguous external outcome. Discord nonces
+                            # are not permanent receipts; never guess/replay.
+                            self.database._conn.execute(
+                                "UPDATE messaging_outbound_queue SET metadata_json=?,status=?,external_message_id=?,error_code=?,claim_expires_at=? "
+                                "WHERE id=? AND status='claimed' AND claimed_at=? AND claim_expires_at>=? AND metadata_json=?",
+                                (stored,"failed",checkpoint.receipts[0] if checkpoint.receipts else None,
+                                 "DISCORD_SEGMENT_DELIVERY_UNCERTAIN",None,row["id"],now.isoformat(),
+                                 now.isoformat(),row["metadata_json"]))
+                            continue
+                        cursor = self.database._conn.execute(
+                            "UPDATE messaging_outbound_queue SET metadata_json=? WHERE id=? AND status='claimed' AND claimed_at=?",
+                            (stored,row["id"],now.isoformat()))
+                        if cursor.rowcount != 1:
+                            raise RuntimeError("DISCORD_DELIVERY_CLAIM_LOST")
+                        candidate.status = OutboundStatus.CLAIMED
+                        candidate.metadata["discord_delivery_claim"] = {
+                            "lease":now.isoformat(),"chunks":chunks,
+                            "receipts":checkpoint.receipts}
+                        claimed.append(candidate)
+                        continue
                 claimed.append(
                     self._outbound_from_row(
                         dict(row) | {
@@ -445,10 +497,72 @@ class MessagingStore:
                 """UPDATE messaging_outbound_queue
                    SET status=?, external_message_id=?, error_code=?, claim_expires_at=NULL,
                        metadata_json=CASE WHEN ?='sent' THEN json_set(metadata_json,'$.delivery_confirmed_at',?) ELSE metadata_json END
-                   WHERE id=? AND status IN ('queued','claimed')""",
+                   WHERE id=? AND status IN ('queued','claimed')
+                     AND json_extract(metadata_json,'$.discord_delivery_v1') IS NULL""",
                 (status.value, external_message_id, error_code, status.value, self.clock.now().isoformat(), str(message_id)),
             )
         return getattr(cursor, "rowcount", 1) > 0
+
+    def ack_delivery_segment(self, message_id, segment, *, sent, external_message_id=None, error_code=None):
+        """CAS on the active claim and durable prefix, not on worker memory."""
+        now = self.clock.now()
+        with trace_lock(self.database._lock), self.database._conn:
+            row = self.database._conn.execute(
+                "SELECT * FROM messaging_outbound_queue WHERE id=?",(str(message_id),)).fetchone()
+            if row is None or row["status"]!="claimed" or row["claimed_at"]!=segment.lease:
+                return False
+            if not row["claim_expires_at"] or datetime.fromisoformat(row["claim_expires_at"]) < now:
+                return False
+            candidate = self._outbound_from_row(row)
+            if (candidate.platform != MessagingPlatform.DISCORD or candidate.target_entity_id!="PERSON_BK"
+                    or not candidate.metadata.get("durable_native_hash") or CHECKPOINT not in candidate.metadata):
+                return False
+            from amora.storage.reply_job_sql import SQLITE_STATEMENTS
+            sql = ("PG_REPLY_JOB_DELIVERY_ALLOWED" if self.database.backend.capabilities.name=="postgres-candidate"
+                   else SQLITE_STATEMENTS["DELIVERY_ALLOWED"])
+            if self.database._conn.execute(sql,(str(candidate.id),candidate.account_scope,
+                    candidate.conversation_id,candidate.source_message_id)).fetchone() is None:
+                return False
+            cp = DeliveryCheckpoint.model_validate(candidate.metadata[CHECKPOINT])
+            if cp.count!=len(split_delivery_text(candidate.text)) or segment.index>=cp.count:
+                return False
+            if segment.phase=="confirm" and segment.index<len(cp.receipts):
+                return bool(sent and cp.receipts[segment.index]==external_message_id)
+            if segment.index!=len(cp.receipts):
+                return False
+            state = "claimed"
+            if segment.phase=="prepare":
+                if sent or external_message_id or error_code:
+                    return False
+                if cp.pending_lease not in {None,segment.lease}:
+                    return False
+                cp.pending_lease=segment.lease
+            elif cp.pending_lease!=segment.lease:
+                return False
+            elif sent:
+                if (not external_message_id or not external_message_id.isascii()
+                        or not external_message_id.isdecimal() or not 17<=len(external_message_id)<=20
+                        or external_message_id in cp.receipts or error_code):
+                    return False
+                cp.receipts.append(external_message_id)
+                cp.pending_lease=None
+                if len(cp.receipts)==cp.count:
+                    state="sent"
+                    candidate.metadata["delivery_confirmed_at"]=now.isoformat()
+            else:
+                if external_message_id or not error_code:
+                    return False
+                state="failed"
+                cp.pending_lease=None
+            candidate.metadata[CHECKPOINT]=cp.model_dump(mode="json")
+            expires=(now+timedelta(seconds=120)).isoformat() if state=="claimed" else None
+            cursor=self.database._conn.execute(
+                "UPDATE messaging_outbound_queue SET metadata_json=?,status=?,external_message_id=?,error_code=?,claim_expires_at=? "
+                "WHERE id=? AND status='claimed' AND claimed_at=? AND claim_expires_at>=? AND metadata_json=?",
+                (json.dumps(candidate.metadata,ensure_ascii=False,separators=(",",":")),state,
+                 cp.receipts[0] if cp.receipts else None,error_code if state=="failed" else None,
+                 expires,str(message_id),segment.lease,now.isoformat(),row["metadata_json"]))
+            return cursor.rowcount>0
 
     def cancel_outbound(self, message_id: UUID | str, *, reason: str) -> bool:
         with trace_lock(self.database._lock):

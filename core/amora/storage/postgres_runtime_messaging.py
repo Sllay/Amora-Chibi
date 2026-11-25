@@ -149,16 +149,24 @@ def messaging_statements()->dict[str,ReviewedStatement]:
         SET status='claimed',claimed_at=%s,claim_expires_at=%s
         WHERE id=%s AND (status='queued' OR
             (status='claimed' AND claim_expires_at<%s))""",4)
+    add("UPDATE messaging_outbound_queue SET metadata_json=? WHERE id=? AND status='claimed' AND claimed_at=?",
+        "UPDATE amora_pg_v18_lab.messaging_outbound_queue SET metadata_json=%s WHERE id=%s AND status='claimed' AND claimed_at=%s",3)
+    add("UPDATE messaging_outbound_queue SET metadata_json=?,status=?,external_message_id=?,error_code=?,claim_expires_at=? "
+        "WHERE id=? AND status='claimed' AND claimed_at=? AND claim_expires_at>=? AND metadata_json=?",
+        "UPDATE amora_pg_v18_lab.messaging_outbound_queue SET metadata_json=%s,status=%s,external_message_id=%s,error_code=%s,claim_expires_at=%s "
+        "WHERE id=%s AND status='claimed' AND claimed_at=%s AND claim_expires_at>=%s AND metadata_json=%s",9)
     add("""UPDATE messaging_outbound_queue
         SET status=?, external_message_id=?, error_code=?, claim_expires_at=NULL,
             metadata_json=CASE WHEN ?='sent' THEN json_set(metadata_json,'$.delivery_confirmed_at',?) ELSE metadata_json END
-        WHERE id=? AND status IN ('queued','claimed')""",
+        WHERE id=? AND status IN ('queued','claimed')
+          AND json_extract(metadata_json,'$.discord_delivery_v1') IS NULL""",
         """UPDATE amora_pg_v18_lab.messaging_outbound_queue
         SET status=%s,external_message_id=%s,error_code=%s,claim_expires_at=NULL,
         metadata_json=CASE WHEN %s='sent' THEN
             jsonb_set(metadata_json::jsonb,'{delivery_confirmed_at}',
                 to_jsonb(%s::text),true)::text ELSE metadata_json END
-        WHERE id=%s AND status IN ('queued','claimed')""",6)
+        WHERE id=%s AND status IN ('queued','claimed')
+          AND metadata_json::jsonb->'discord_delivery_v1' IS NULL""",6)
     add("""UPDATE messaging_outbound_queue
         SET status='cancelled', error_code=?, claim_expires_at=NULL
         WHERE id=? AND status IN ('queued','claimed')""",

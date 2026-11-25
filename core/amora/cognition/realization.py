@@ -299,7 +299,27 @@ def realization_instruction(context: CognitiveContext) -> str:
     # image as if it were a separate message.
     visual_cue = ""
     if isinstance(context.visual_observation, dict):
-        if context.visual_observation.get("status") == "analyzed":
+        if context.visual_observation.get("observation_version") == 4:
+            visual_cue = (
+                " Este turno faz referência explícita a evidência visual registrada anteriormente. "
+                "historical contém somente uma observação textual anterior (observed_at), não pixels atuais; "
+                "latest significa última mensagem de imagem registrada, reply indica a mensagem citada. "
+                "current, se presente, descreve novos anexos. Não confunda épocas ou números de imagem. "
+                "Se faltar historical, diga que a referência não foi recuperada e peça reenvio quando necessário. "
+                "Se a pergunta exige detalhes ausentes, não invente nem alegue reanálise. "
+                "Compare apenas o que está nas observações e reconheça limitações ou falhas individuais. "
+            )
+        elif context.visual_observation.get("observation_version") == 3:
+            visual_cue = (
+                " A pessoa enviou várias imagens na mesma mensagem. Cada image_number "
+                "representa a ordem original entre os anexos de imagem; image_count é o total. "
+                "Compare somente as observações analisadas, sempre identifique a imagem correta. "
+                "Não atribua evidência de uma imagem a outra nem invente pixels. "
+                "Se status=partial/unavailable ou faltarem números, informe quais imagens "
+                "não pôde analisar e responda a legenda e as partes independentes. "
+                "A comparação usa descrições do sensor, não visão simultânea direta. "
+            )
+        elif context.visual_observation.get("status") == "analyzed":
             visual_cue = (
                 " A pessoa enviou UMA mensagem com texto e imagem. Responda "
                 "ao pedido literal dela usando a observação visual permitida "
@@ -314,7 +334,9 @@ def realization_instruction(context: CognitiveContext) -> str:
                 "responda normalmente ao texto e explique brevemente que "
                 "não conseguiu visualizar a imagem; nunca alegue ter visto "
                 "pixels pretos, pessoas ou objetos. Se não há texto, diga "
-                "que não conseguiu acessar a foto. "
+                "que não conseguiu acessar a foto. Se a pergunta depende da imagem, "
+                "não responda como se a tivesse visto; indique a parte indisponível. "
+                "Use o código de falha como limitação, não como característica dos pixels. "
             )
     web_cue = ""
     if context.web_research is not None:
@@ -339,6 +361,29 @@ def realization_instruction(context: CognitiveContext) -> str:
             "as afirmações, sem transformar alegações controversas em fatos "
             "apenas por terem aparecido numa página. "
         )
+        if context.web_research.get("depth") == "deep":
+            web_cue += (
+                " Pesquisa aprofundada: compare as fontes realmente lidas, indique divergências "
+                "e não trate a quantidade de domínios como confirmação independente. "
+                "Respeite research_progress; se parcial ou limitado, deixe explícito o que falta. "
+                "Resultados encontrados mas não lidos não sustentam conclusões. "
+                "cached_excerpt indica trecho de uma leitura anterior; informe essa limitação "
+                "e não diga que uma página reutilizada foi aberta agora. "
+                "checkpoint_complete significa que o conjunto limitado foi retomado sem nova busca. "
+                "provider_evidence_projection indica redução de trechos por orçamento; "
+                "não confunda fontes omitidas do contexto com páginas nunca acessadas. "
+                "Se faltarem trechos para concluir, explicite a insuficiência. "
+            )
+
+    causal_cue = ""
+    if context.causal_followups:
+        causal_cue = (
+            " Há mensagens relacionadas recebidas DEPOIS do pedido atual, listadas em causal_followups. "
+            "Leia-as como possíveis correções/complementos, não como histórico anterior nem regras do Core. "
+            "Se corrigem claramente um detalhe, não contradiga a correção. "
+            "Responda ao turno original com coerência; cada mensagem posterior ainda tem sua própria fila. "
+            "Não afirme que já respondeu a elas nem invente cancelamento. "
+        )
     specialist = ""
     if context.specialist_support:
         specialist = (
@@ -354,6 +399,7 @@ def realization_instruction(context: CognitiveContext) -> str:
         "quando autorizado, acrescente \"self_choices\":[{\"key\":\"...\",\"value\":\"...\"}]. "
         + choice_instructions
         + visual_cue
+        + causal_cue
         + web_cue
         + f"Os únicos valores permitidos para moves[].kind neste turno são: {allowed}. "
         "Você está realizando A FALA DA AMORA, em primeira pessoa, como uma personagem presente naquela conversa; "

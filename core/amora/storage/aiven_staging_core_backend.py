@@ -88,7 +88,15 @@ def _tls_pinned_aiven_backend(application_name: str) -> PostgresBackendCandidate
             raise
         return connection
 
+    from .reply_job_rollout import durable_reply_mode
+    registry = compiled_domain_registry()
+    if durable_reply_mode() != "off":
+        from .postgres_runtime_reply_jobs import reply_job_statements
+        extra = reply_job_statements()
+        if registry.keys() & extra.keys():
+            raise PostgresRuntimeError("PG_REPLY_REGISTRY_CONFLICT")
+        registry.update(extra)
     return PostgresBackendCandidate(
-        connect, compiled_domain_registry(), target=target,
+        connect, registry, target=target,
         max_connections=_MAX_CORE_CONNECTIONS,
     )

@@ -415,6 +415,20 @@ class ContextCompiler:
 
         persisted_messages = yield {"limit": 96, "session_id": request.session_id, "exclude_invalidated": True}
         reasons.append("RECENT_HISTORY_SESSION_SCOPED" if request.session_id is not None else "RECENT_HISTORY_UNSCOPED_LEGACY")
+        causal_followups = []
+        from .durable_realization import durable_realization
+        if (durable_realization(request) and remote and not shared
+                and request.session_id and request.speaker_id == "PERSON_BK"):
+            from .causal_conversation import causal_partition
+            persisted_messages, causal_followups, causal_state = causal_partition(
+                request, persisted_messages,
+                allowed=lambda message: self.privacy_gate.message_allowed(
+                    message, remote=True, recipient_id=request.speaker_id),
+            )
+            reasons.append("CAUSAL_HISTORY_PARTITIONED" if causal_state == "partitioned"
+                           else "CAUSAL_HISTORY_ANCHOR_MISSING")
+            if causal_followups:
+                reasons.append("CAUSAL_RELATED_FOLLOWUPS_PROJECTED")
         test_turn_ids = {str(message.turn_id) for message in persisted_messages if bool(message.metadata.get("test_mode", False))}
         include_session_tests = bool(request.metadata.get("test_mode", False)) and request.session_id is not None
         if test_turn_ids:
@@ -564,7 +578,7 @@ class ContextCompiler:
                                                "dominance": round(mood.dominance, 6)},
             directed_affect=affect, drives=drives, active_intention=intention, memories=memories,
             behavioral_guidance=guidance,
-            world_claims=claims, recent_messages=recent, temporal_context=temporal,
+            world_claims=claims, recent_messages=recent, causal_followups=causal_followups, temporal_context=temporal,
             temporal_opportunity=opportunity,
             visual_observation=visual,
             perceptual_expressions=stored_stickers,
@@ -593,6 +607,10 @@ class ContextCompiler:
     @trace_stage("context_budget")
     def _fit_budget(context: CognitiveContext, dialogue=None) -> CognitiveContext:
         from .context_budget import estimate_context, ContextBudgetExceeded
+        from .durable_realization import adaptive_context_allowed
+        # Recheck at both base and V1 capability-projection stages.
+        context._compiler_overflow = False
+        context.reason_codes = [code for code in context.reason_codes if code != "AMD_COMPILER_OVERFLOW"]
         def replan():
             identity = context.dialogue_plan.get("speaker_identity")
             old = set(context.dialogue_plan.get("reason_codes") or ())
@@ -624,6 +642,12 @@ class ContextCompiler:
                     context.recent_messages.pop(0)
                 reason = "CONTEXT_TRIMMED_RECENT"
             else:
+                if adaptive_context_allowed(context):
+                    # Canonical snapshot survives. Only the explicit adaptive
+                    # realization route may process it; no normal/local speech.
+                    context._compiler_overflow = True
+                    context.reason_codes.append("AMD_COMPILER_OVERFLOW")
+                    return context
                 raise ContextBudgetExceeded(estimate_context(context), context.token_budget)
             if reason not in context.reason_codes:
                 context.reason_codes.append(reason)

@@ -224,3 +224,46 @@ test('Discord ambiguous send failure stays claimable for nonce recovery instead 
 
   assert.deepEqual(acknowledgements, []);
 });
+
+
+test('checkpointed Discord delivery resumes after a persisted prefix without legacy ACK', async () => {
+  const sends=[], acks=[];
+  const first='123456789012345678';
+  const chunks=['primeira parte','segunda parte','terceira parte'];
+  const item={id:'01234567-89ab-cdef-0123-456789abcdef',platform:'discord',
+    conversation_id:'c1',text:chunks.join(' '),metadata:{discord_delivery_claim:{
+      lease:'2026-11-25T00:00:00+00:00',chunks,receipts:[first]}}};
+  const worker=new DiscordWorker({token:'test-token',
+    core:{ackOutbound:async(id,body)=>acks.push(body)},
+    rest:{request:async(path,options)=>{
+      sends.push(options.body);
+      return {id:String(123456789012345679n+BigInt(sends.length-1)),
+        channel_id:'c1',author:{id:'bot1',bot:true}};
+    }},runtime:new DiscordSocialRuntime()});
+  await worker.sendCheckpointedOutbound(item);
+  assert.deepEqual(sends.map(x=>x.content),chunks.slice(1));
+  assert.equal(sends[0].message_reference,undefined);
+  assert.deepEqual(acks.map(x=>[x.segment.index,x.segment.phase,x.sent]),
+    [[1,'prepare',false],[1,'confirm',true],[2,'prepare',false],[2,'confirm',true]]);
+  assert.ok(sends.every(x=>x.enforce_nonce===true));
+  assert.notEqual(sends[0].nonce,sends[1].nonce);
+});
+
+test('checkpointed Discord delivery stops immediately after uncertain receipt', async () => {
+  const sends=[],acks=[];
+  const item={id:'01234567-89ab-cdef-0123-456789abcdef',platform:'discord',
+    conversation_id:'c1',text:'long',metadata:{discord_delivery_claim:{
+      lease:'lease',chunks:['first','second','third'],receipts:[]}}};
+  const worker=new DiscordWorker({token:'test-token',
+    core:{ackOutbound:async(id,body)=>{
+      acks.push(body);
+      if(body.segment.phase==='confirm') throw new Error('ACK lost');
+    }},rest:{request:async(path,options)=>{
+      sends.push(options.body);
+      return {id:'123456789012345678',channel_id:'c1'};
+    }},runtime:new DiscordSocialRuntime()});
+  await assert.rejects(()=>worker.sendCheckpointedOutbound(item),/ACK lost/);
+  assert.equal(sends.length,1);
+  assert.equal(acks.length,2);
+  assert.equal(acks[1].sent,true);
+});

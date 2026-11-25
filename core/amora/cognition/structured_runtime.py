@@ -12,6 +12,7 @@ from amora.events import PrivacyScope
 from amora.models import TaskClass
 
 from .context_budget import ContextBudgetExceeded
+from .adaptive_message import index_message, MessageDecompositionLimit
 from .models import CognitiveContext, CognitiveRequest, CognitiveResponsePlan, JournalStage
 from .self_choice import commit_self_choices
 from .production import CognitiveEngine as ProductionCognitiveEngine
@@ -23,11 +24,16 @@ from .providers_structured import GeminiCognitiveProvider
 from .realization import RealizationError, RealizationValidator, ValidatedRealization, response_semantic_filter_enabled
 from .speech import SpeechSegmenter
 from .service import SegmentSink
+from .durable_realization import (durable_realization, DeferredRealization, DURABLE_AUTHORIZATION,
+    DURABLE_CAUSAL_CHECK, CausalReplanRequired, adaptive_context_allowed)
+from .provider_resilience import classify_provider_failure, context_rejection
+from .provider_quota import ProviderQuotaDeferred
 
 
 async def _await_numes_adaptive(
     awaitable, *, timeout: float, available_seconds: float,
     grace_cap_seconds: float = 12.0, reserve_seconds: float = 5.0,
+    progress_extension_seconds: float = 0.0, progress_idle_seconds: float = 23.0,
 ):
     """One bounded extra window only for a verifiably live Numes stream.
 
@@ -38,6 +44,7 @@ async def _await_numes_adaptive(
     All cancellation joins the same task before any failover can start.
     """
     liveness = NumesConnectionLiveness()
+    started = perf_counter()
     marker = ACTIVE_NUMES_LIVENESS.set(liveness)
     try:
         task = asyncio.create_task(awaitable)
@@ -50,6 +57,26 @@ async def _await_numes_adaptive(
             if task.done():
                 # A completion racing the timer must never be discarded.
                 return task.result()
+            if progress_extension_seconds > 0:
+                # Durable jobs are independent of HTTP. Only actual recent
+                # generation progress earns an extension; keepalive alone
+                # cannot renew the deadline. Reserve the original fallback window.
+                deadline = started + min(timeout + progress_extension_seconds,
+                    available_seconds + progress_extension_seconds - reserve_seconds)
+                while liveness.progressing(max_silence_seconds=progress_idle_seconds):
+                    remaining = deadline - perf_counter()
+                    if remaining <= 0:
+                        break
+                    idle_remaining = progress_idle_seconds - (perf_counter() - liveness.last_progress)
+                    if idle_remaining <= 0:
+                        break
+                    try:
+                        return await asyncio.wait_for(asyncio.shield(task),
+                            timeout=min(remaining, idle_remaining))
+                    except asyncio.TimeoutError:
+                        if task.done():
+                            return task.result()
+                raise
             if not liveness.healthy():
                 raise
             reserve = 0.75 if liveness.progress_deltas else reserve_seconds
@@ -211,6 +238,16 @@ class CognitiveEngine(ProductionCognitiveEngine):
         try:
             context = await self._prepare_context_async(request)
         except ContextBudgetExceeded:
+            # First AMD increment: preserve exact source and record coverage
+            # without invoking a model or emitting a partial interpretation.
+            try:
+                coverage = index_message(request.text, max_block_bytes=8192).metadata()
+            except MessageDecompositionLimit:
+                coverage = {"resource_limit": True}
+            await self._journal_async(request, JournalStage.ERROR,
+                summary="adaptive message analysis required; consolidation unavailable",
+                reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "AMD_CONSOLIDATION_REQUIRED"],
+                payload={"amd_coverage": coverage})
             return await self._fallback_plan(request, "Esse contexto ficou grande demais para processar com segurança.",
                 on_segment=on_segment, reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "LOCAL_FALLBACK"], started=started)
         # A verified owner-DM request can request read-only web retrieval.
@@ -235,11 +272,12 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 groq = self._providers.get("groq")
                 secrets = getattr(groq, "secrets", None)
                 api_key = secrets.get("GROQ_API_KEY") if secrets is not None else None
-                navigator.planner = GroqQueryPlanner(api_key)
+                navigator.planner = GroqQueryPlanner(api_key, quota=self._provider_quota)
             try:
                 evidence = await asyncio.wait_for(
                     navigator.research(request.text, request.session_id),
-                    timeout=16.0 if (navigator.reader is not None or navigator.browser is not None) else 11.0,
+                    timeout=16.0 if (navigator.reader is not None or navigator.browser is not None
+                                     or (web_intent is not None and web_intent.depth == "deep")) else 11.0,
                 )
             except Exception:
                 evidence = {"action": "unknown", "status": "failed",
@@ -272,7 +310,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             },
         )
 
-        local = RealizationValidator.local_realization(context)
+        local = None if context._compiler_overflow else RealizationValidator.local_realization(context)
         if local is not None:
             return await self._plan_from_validated(
                 request,
@@ -287,6 +325,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
             )
 
         excluded = self._cooldown_names()
+        adaptive_only = context._compiler_overflow
         candidates = self.router.ranked_candidates(
             TaskClass.SOCIAL_DIALOGUE,
             privacy_scope=request.privacy_scope,
@@ -295,6 +334,25 @@ class CognitiveEngine(ProductionCognitiveEngine):
             estimated_input_tokens=estimated_tokens,
             excluded_names=excluded,
         )
+        if (adaptive_only or (not candidates and not excluded)) and adaptive_context_allowed(context):
+            # Discover eligible specialist interfaces without pretending that
+            # the entire original fits. The specialist measures EVERY request.
+            adaptive_candidates = self.router.ranked_candidates(
+                TaskClass.SOCIAL_DIALOGUE, privacy_scope=request.privacy_scope,
+                remote_processing_allowed=context.remote_processing_allowed,
+                require_structured_output=True, estimated_input_tokens=1,
+                excluded_names=excluded,
+            )
+            adaptive_candidates = tuple(d for d in adaptive_candidates
+                if callable(getattr(self._providers.get(d.name), "realize_adaptive", None)))
+            if adaptive_candidates:
+                candidates = adaptive_candidates[:1]
+                adaptive_only = True
+        if adaptive_only and (not candidates or not adaptive_context_allowed(context)
+                or not callable(getattr(self._providers.get(candidates[0].name), "realize_adaptive", None))):
+            if excluded:
+                raise DeferredRealization(["PROVIDERS_IN_BACKOFF"])
+            raise DeferredRealization(["CONTEXT_ENVELOPE_OVERFLOW"])
         if not candidates:
             reason = "NO_ELIGIBLE_STRUCTURED_PROVIDER"
             if request.privacy_scope in {PrivacyScope.AUTH, PrivacyScope.SECRET}:
@@ -303,6 +361,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 reason = "REMOTE_PROCESSING_NOT_ALLOWED"
             elif excluded:
                 reason = "PROVIDERS_IN_BACKOFF"
+            if durable_realization(request) and reason == "PROVIDERS_IN_BACKOFF":
+                now = self.clock.now()
+                delays = [(until - now).total_seconds() for name, until in self._provider_cooldowns.items()
+                          if name in excluded and until > now]
+                raise DeferredRealization([reason], retry_after_seconds=min(delays, default=None))
             await self._journal_async(
                 request,
                 JournalStage.PRIVACY_FILTERED,
@@ -324,19 +387,38 @@ class CognitiveEngine(ProductionCognitiveEngine):
         # journal persistence; their cost must not impersonate a model timeout.
         provider_elapsed = 0.0
 
-        async def timed_realize(realize):
+        is_durable = durable_realization(request)
+        failures = []
+
+        async def timed_realize(realize, *, charge_cap=None):
             nonlocal provider_elapsed
             attempt_started = perf_counter()
             try:
-                with span("provider_attempt"):
-                    return await realize(context)
+                async with self._provider_quota.admission(descriptor.name, model=descriptor.model):
+                    with span("provider_attempt"):
+                        return await realize(context)
             finally:
-                provider_elapsed += max(0.0, perf_counter() - attempt_started)
+                elapsed = max(0.0, perf_counter() - attempt_started)
+                provider_elapsed += min(elapsed, charge_cap) if charge_cap is not None else elapsed
 
         last_failure = "NO_STRUCTURED_REALIZATION_PROVIDER"
-        for provider_index, descriptor in enumerate(candidates):
+        attempts = [(descriptor, adaptive_only) for descriptor in candidates]
+        # Do not spend extra calls on ordinary turns or substitute excerpts
+        # when any compatible full-source route has not actually been tried.
+        if not adaptive_only and adaptive_context_allowed(context):
+            for descriptor in candidates:
+                provider = self._providers.get(descriptor.name)
+                if callable(getattr(provider, "realize_adaptive", None)):
+                    attempts.append((descriptor, True))
+                    break
+        attempted_count = len(candidates)
+        for provider_index, (descriptor, adaptive) in enumerate(attempts):
+            if adaptive and not adaptive_only:
+                if excluded or len(failures) != len(candidates) or {kind for kind, _ in failures} != {"context"}:
+                    break
+                attempted_count += 1
             provider = self._providers.get(descriptor.name)
-            realize = getattr(provider, "realize", None) if provider is not None else None
+            realize = getattr(provider, "realize_adaptive" if adaptive else "realize", None) if provider is not None else None
             if not callable(realize):
                 last_failure = "PROVIDER_NO_REALIZATION_INTERFACE"
                 self._last_realization_rejection = {
@@ -406,6 +488,12 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     if await self.store.async_lane.call("source_invalidated", session, native_hash, revision):
                         from amora.messaging.generation_lifecycle import InboundGenerationLost
                         raise InboundGenerationLost("INBOUND_SOURCE_INVALIDATED")
+            begin_attempt = getattr(self, "_begin_structured_attempt", None)
+            end_attempt = getattr(self, "_end_structured_attempt", None)
+            if begin_attempt is not None and not begin_attempt(descriptor):
+                failures.append(("temporary", None))
+                last_failure = "PROVIDERS_IN_BACKOFF"
+                continue
             provider_started = perf_counter()
             try:
                 timeout = attempt_budget
@@ -416,8 +504,9 @@ class CognitiveEngine(ProductionCognitiveEngine):
                             and request.metadata.get("surface") == "platform_messaging"
                             and remaining_budget is not None):
                         raw_result = await _await_numes_adaptive(
-                            timed_realize(realize), timeout=max(0.05, timeout),
-                            available_seconds=remaining_budget,
+                            timed_realize(realize, charge_cap=timeout if is_durable else None),
+                            timeout=max(0.05, timeout), available_seconds=remaining_budget,
+                            progress_extension_seconds=120.0 if is_durable else 0.0,
                         )
                     else:
                         raw_result = await asyncio.wait_for(timed_realize(realize), timeout=max(0.05, timeout))
@@ -429,14 +518,22 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     validated = RealizationValidator.parse_and_validate(
                         context, raw, enforce_dialogue_plan=response_semantic_filter_enabled(),
                     )
+            except DeferredRealization:
+                raise
+            except ProviderQuotaDeferred as exc:
+                last_failure = "PROVIDER_ACCOUNT_BACKOFF"
+                failures.append(("temporary", float(exc.retry_after)))
+                continue
             except ContextBudgetExceeded:
                 last_failure = "CONTEXT_ENVELOPE_OVERFLOW"
+                failures.append(("context", None))
                 await self._journal_async(request, JournalStage.ERROR, summary="provider envelope exceeds budget",
-                    reason_codes=[last_failure, "NO_SURFACE_REQUEST"], error_code=last_failure)
+                    reason_codes=[last_failure, "AMD_CONTEXT_INSUFFICIENT" if adaptive else "NO_SURFACE_REQUEST"], error_code=last_failure)
                 continue
             except NvidiaStreamTimeout as exc:
                 kind = exc.diagnostics.get("timeout_kind")
                 last_failure = "NVIDIA_IDLE_TIMEOUT" if kind == "idle" else "NVIDIA_TOTAL_TIMEOUT"
+                failures.append(("temporary", None))
                 stage = exc.diagnostics.get("stage")
                 safe_stage = stage if stage in {"waiting_headers", "waiting_first_event", "reasoning_only", "visible_partial", "completed"} else "unknown"
                 self._last_realization_rejection = {"provider": descriptor.name, "model": descriptor.model,
@@ -451,6 +548,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 continue
             except asyncio.TimeoutError:
                 last_failure = "PROVIDER_ATTEMPT_TIMEOUT"
+                failures.append(("temporary", None))
                 self._last_realization_rejection = {
                     "provider": descriptor.name,
                     "model": descriptor.model,
@@ -481,6 +579,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 continue
             except RealizationError as exc:
                 last_failure = exc.code
+                failures.append(("temporary", None))
                 self._last_realization_rejection = {
                     "provider": descriptor.name,
                     "model": descriptor.model,
@@ -508,7 +607,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 continue
             except Exception as exc:
                 status = exc.status_code if isinstance(exc, ProviderError) else None
-                last_failure = type(exc).__name__
+                failure = classify_provider_failure(exc, now=self.clock.now())
+                last_failure = failure.code if is_durable else type(exc).__name__
+                category = ("context" if context_rejection(exc) else
+                            "configuration" if status in {401, 403, 404} else "temporary")
+                failures.append((category, failure.retry_after_seconds))
                 self._last_realization_rejection = {
                     "provider": descriptor.name,
                     "model": descriptor.model,
@@ -522,8 +625,13 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     status_code=status,
                     started=provider_started,
                 )
-                self._backoff(descriptor, status_code=status, retry_after=getattr(exc, "retry_after", None))
+                # Envelope size is a turn-specific rejection, not global health.
+                if not context_rejection(exc):
+                    self._backoff(descriptor, status_code=status, retry_after=getattr(exc, "retry_after", None))
                 continue
+            finally:
+                if end_attempt is not None:
+                    end_attempt(descriptor)
 
             input_tokens = _optional_int(usage.get("input_tokens"))
             output_tokens = _optional_int(usage.get("output_tokens"))
@@ -543,11 +651,17 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 status_code=status_code,
                 remaining_requests=remaining_requests,
                 remaining_tokens=remaining_tokens,
-                metadata={"candidate_index": provider_index, "phase": "structured_realization"},
+                metadata={"candidate_index": provider_index, "phase": "structured_realization",
+                          **({"amd_blocks": usage.get("amd_blocks"), "amd_calls": usage.get("amd_calls")} if adaptive else {})},
             )
+            if (remaining_requests is not None and remaining_requests <= 0
+                    or remaining_tokens is not None and remaining_tokens <= 0):
+                self._provider_quota.block_for(descriptor.name, 60, model=descriptor.model)
             self._provider_succeeded(descriptor, remaining_requests, remaining_tokens)
             reasons = [*validated.reason_codes, "REMOTE_PROVIDER_USED", "STRUCTURED_REALIZATION"]
-            if provider_index:
+            if adaptive:
+                reasons.append("AMD_GLOBAL_CONSOLIDATION_USED")
+            elif provider_index:
                 reasons.append("PROVIDER_FAILOVER_USED")
             return await self._plan_from_validated(
                 request,
@@ -565,6 +679,22 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 },
                 context=context,
             )
+
+        if is_durable and failures:
+            kinds = {kind for kind, _ in failures}
+            # A candidate skipped for cooldown or exhausted total budget may
+            # recover later. Never block a turn merely because the last route
+            # failed permanently while another remains temporarily unavailable.
+            if not excluded and last_failure != "PROVIDER_TOTAL_BUDGET_EXHAUSTED" and len(failures) == attempted_count:
+                if kinds == {"context"}:
+                    raise DeferredRealization(["CONTEXT_ENVELOPE_OVERFLOW"])
+                if kinds == {"configuration"}:
+                    raise DeferredRealization(["PROVIDER_CONFIGURATION_BLOCKED"])
+                if kinds <= {"context", "configuration"}:
+                    raise DeferredRealization(["PROVIDER_CONFIGURATION_BLOCKED"])
+            delays = [delay for kind, delay in failures if kind == "temporary" and delay is not None]
+            raise DeferredRealization(["ALL_STRUCTURED_PROVIDERS_FAILED"],
+                retry_after_seconds=max(delays, default=None))
 
         return await self._fallback_plan(
             request,
@@ -676,6 +806,45 @@ class CognitiveEngine(ProductionCognitiveEngine):
         )
         segmenter = SpeechSegmenter()
         raw_segments = [*segmenter.feed(validated.text), *segmenter.flush()]
+        if durable_realization(request):
+            # The authorized text dispatcher commits the complete validated
+            # reply with its existing outbox fence. Never create speech/history
+            # rows before that transaction; a crash must not append duplicates.
+            # Text-only pilot, no voice callbacks. Preserve the existing
+            # first-choice-once Core gate, with live owner/lease revalidation.
+            if on_segment is not None:
+                raise DeferredRealization(["DURABLE_CALLBACK_UNSUPPORTED"])
+            if not speech_plan.speech_text.strip():
+                raise DeferredRealization(["VALIDATED_REALIZATION_NOT_SPEAKABLE"])
+            guard = DURABLE_AUTHORIZATION.get()
+            if guard is None or not await guard():
+                raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
+            causal_check = DURABLE_CAUSAL_CHECK.get()
+            if causal_check is not None and context is not None:
+                if not await causal_check(context):
+                    raise CausalReplanRequired()
+                # The history read may have yielded to source invalidation.
+                if not await guard():
+                    raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
+            if validated.frame.self_choices and context is not None:
+                try:
+                    choice_decision = commit_self_choices(
+                        self_model=self.compiler.self_model, request=request,
+                        context=context, choices=validated.frame.self_choices,
+                    )
+                    reason_codes.extend(choice_decision.reason_codes)
+                except Exception:
+                    reason_codes.append("SELF_CHOICE_COMMIT_FAILED")
+            return CognitiveResponsePlan(
+                turn_id=request.turn_id, display_text=validated.text,
+                speech_text=speech_plan.speech_text, speech_plan=speech_plan,
+                speech_segments=[speech_plan.speech_text], provider=provider, model=model,
+                reason_codes=reason_codes,
+                input_tokens=_optional_int(usage.get("input_tokens")),
+                output_tokens=_optional_int(usage.get("output_tokens")),
+                latency_ms=(perf_counter() - started) * 1000.0,
+                metadata={"realization_validated": True},
+            )
         emitted: list[str] = []
         text_path = self._text_finalize_enabled(request, on_segment)
         if text_path:
@@ -763,7 +932,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 "realization_validated": True,
                 "web_sources": [
                     {"url": item.get("url", ""), "title": item.get("title", "")}
-                    for item in (context.web_research.get("sources") or [])[:2]
+                    for item in (context.web_research.get("sources") or [])[:5 if context.web_research.get("depth") == "deep" else 2]
                     if item.get("status") == "opened"
                 ] if context is not None and context.web_research else [],
                 "web_references": [

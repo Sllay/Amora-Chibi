@@ -525,3 +525,56 @@ def test_core_rejects_untrusted_discord_cdn_image_urls(tmp_path, monkeypatch, ba
             InboundMessage.model_validate(base)
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_visual_url_retry_is_denied_if_authorization_is_lost(tmp_path):
+    from amora.messaging.visual_authorization import VISUAL_AUTHORIZATION
+    from amora.messaging.incoming_vision import IncomingVisionCascade
+    requests = []
+    async def guard():
+        return not requests
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(404, json={"error":"synthetic unavailable"})
+    image = payload().model_copy(update={
+        "source_url": f"https://cdn.discordapp.com/attachments/123456789012345678/{ATTACHMENT}/foto.png?ex=abc"
+    })
+    provider = GroqIncomingImageVision(secrets(tmp_path),transport=httpx.MockTransport(handler))
+    token = VISUAL_AUTHORIZATION.set(guard)
+    try:
+        with pytest.raises(GroqVisionError) as caught:
+            await IncomingVisionCascade(provider).analyze(image,"Descreva a imagem.")
+        assert caught.value.code == "INCOMING_VISION_AUTHORIZATION_LOST"
+        assert len(requests) == 1
+    finally:
+        VISUAL_AUTHORIZATION.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_visual_cascade_denies_second_attempt_and_fallback_after_revocation(monkeypatch):
+    from amora.messaging.visual_authorization import VISUAL_AUTHORIZATION
+    from amora.messaging.incoming_vision import IncomingVisionCascade
+    for fallback_enabled in ("false","true"):
+        monkeypatch.setenv("AMORA_VISION_NVIDIA_FALLBACK",fallback_enabled)
+        calls = []
+        class Primary:
+            available = True
+            async def analyze(self,image,user_text):
+                calls.append("primary")
+                raise GroqVisionError("INCOMING_VISION_TRANSPORT_FAILED","synthetic")
+        class Fallback:
+            available = True
+            async def analyze(self,image,user_text):
+                calls.append("fallback")
+                return observation()
+        async def guard():
+            return not calls
+        token = VISUAL_AUTHORIZATION.set(guard)
+        try:
+            with pytest.raises(GroqVisionError) as caught:
+                await IncomingVisionCascade(Primary(),Fallback()).analyze(payload(),"Veja a foto.")
+            assert caught.value.code == "INCOMING_VISION_AUTHORIZATION_LOST"
+            assert calls == ["primary"]
+        finally:
+            VISUAL_AUTHORIZATION.reset(token)

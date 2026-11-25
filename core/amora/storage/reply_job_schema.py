@@ -1,0 +1,54 @@
+"""RUN 01 candidate DDL; never auto-applied to a serving Core.
+
+The queue references the existing canonical conversation input. This is an
+additive candidate for isolated migration/recovery tests only. Runtime schema
+18 and the existing schema 19 opt-in remain unchanged.
+"""
+
+REPLY_JOB_CANDIDATE_SQL = """
+CREATE TABLE IF NOT EXISTS messaging_reply_jobs (
+    job_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    turn_id TEXT NOT NULL UNIQUE,
+    input_id TEXT NOT NULL UNIQUE REFERENCES conversation_messages(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    native_message_hash TEXT NOT NULL,
+    transport_revision INTEGER NOT NULL CHECK(transport_revision >= 1),
+    status TEXT NOT NULL CHECK(status IN
+        ('pending','running','retry_wait','ready','sent','blocked','cancelled')),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+    created_at TEXT NOT NULL,
+    available_at TEXT NOT NULL,
+    lease_token TEXT,
+    lease_until TEXT,
+    last_reason TEXT,
+    outbound_id TEXT,
+    CHECK ((status='running' AND lease_token IS NOT NULL AND lease_until IS NOT NULL)
+        OR (status<>'running' AND lease_token IS NULL AND lease_until IS NULL)),
+    CHECK (status NOT IN ('ready','sent') OR outbound_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_messaging_reply_due
+    ON messaging_reply_jobs(status,available_at,lease_until);
+CREATE INDEX IF NOT EXISTS idx_messaging_reply_session
+    ON messaging_reply_jobs(session_id,created_at,job_seq,status);
+CREATE INDEX IF NOT EXISTS idx_messaging_reply_source
+    ON messaging_reply_jobs(session_id,native_message_hash,transport_revision);
+"""
+
+
+def verify_sqlite_reply_schema(connection):
+    """Compare actual table/index SQL with an independently built reference."""
+    import sqlite3
+    from contextlib import closing
+
+    def definitions(db):
+        return [tuple(row) for row in db.execute(
+            "SELECT type,name,sql FROM sqlite_schema "
+            "WHERE tbl_name='messaging_reply_jobs' AND sql IS NOT NULL ORDER BY type,name"
+        ).fetchall()]
+
+    with closing(sqlite3.connect(":memory:")) as reference:
+        reference.execute("CREATE TABLE conversation_messages(id TEXT PRIMARY KEY)")
+        reference.executescript(REPLY_JOB_CANDIDATE_SQL)
+        if definitions(connection) != definitions(reference):
+            raise ValueError("REPLY_SQLITE_SCHEMA_NOT_PREPARED")
+    return {"state": "prepared", "version": 1}

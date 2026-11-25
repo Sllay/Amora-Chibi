@@ -13,6 +13,7 @@ from amora.models import ModelRouter, TaskClass
 from amora.time import Clock
 
 from .context import ContextCompiler
+from .durable_realization import DeferredRealization, durable_realization
 from .models import (
     CognitiveJournalEntry,
     CognitiveRequest,
@@ -82,6 +83,15 @@ class CognitiveEngine:
                     "available": item.available,
                     "streaming": item.supports_streaming,
                     "provider_class": item.provider_class.value,
+                    "tasks": sorted(task.value for task in item.capabilities),
+                    "structured_output": item.supports_structured_output,
+                    "context_window_tokens": item.context_window_tokens,
+                    "output_limit_tokens": item.metadata.get("output_limit_tokens"),
+                    "allowed_privacy_scopes": sorted(scope.value for scope in item.allowed_privacy_scopes),
+                    "quota_remaining": item.quota_remaining,
+                    "cost_score": item.cost_score,
+                    "latency_score": item.latency_score,
+                    "zero_cost_path_confirmed": item.metadata.get("zero_cost_path") is True,
                 }
                 for item in self.router.descriptors()
             ],
@@ -296,6 +306,10 @@ class CognitiveEngine:
         reason_codes: list[str],
         started: float,
     ) -> CognitiveResponsePlan:
+        if durable_realization(request):
+            # Do not write a technical fallback into social history or emit
+            # speech. The durable dispatcher records the operational outcome.
+            raise DeferredRealization(reason_codes)
         # Presentation is the complete authorized text, before vocal segmentation.
         request = request.model_copy(update={"metadata": {**request.metadata, "response_display_text": text}})
         segmenter = SpeechSegmenter()

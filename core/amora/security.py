@@ -332,8 +332,7 @@ class SecurityMiddleware:
             and scope["method"] in {"GET", "HEAD"}
             and (
                 path.startswith(("/web", "/avatar"))
-                or path == "/visual-engine"
-                or path.startswith("/visual-engine/")
+                or path in {"/visual-engine", "/visual-engine/", "/visual-engine/index.html"}
             )
             and not self.worker
         )

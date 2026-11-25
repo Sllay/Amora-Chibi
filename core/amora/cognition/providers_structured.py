@@ -172,7 +172,7 @@ class GroqCognitiveProvider(BaseGroqCognitiveProvider):
                 "response_format": {"type": "json_object"},
             }
 
-        _, payload = fit_provider_payload(effective_context, build_payload)
+        _, payload = fit_provider_payload(effective_context, build_payload, descriptor=self.descriptor)
         messages = payload["messages"]
         started = perf_counter()
         timeout = httpx.Timeout(self.timeout_seconds, connect=10.0)
@@ -337,7 +337,7 @@ class GeminiCognitiveProvider(BaseGeminiCognitiveProvider):
         system_instruction["parts"] = parts
         payload["systemInstruction"] = system_instruction
         from .context_budget import ensure_payload
-        ensure_payload(context, payload)
+        ensure_payload(context, payload, descriptor=self.descriptor)
 
         url = f"{self.API_ROOT}/{self.model}:generateContent"
         started = perf_counter()

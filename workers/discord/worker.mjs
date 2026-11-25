@@ -15,7 +15,7 @@ import {
   splitDiscordText,
 } from './normalize.mjs';
 import { DiscordSocialRuntime } from './social-runtime.mjs';
-import { collectDiscordIncomingImage, IncomingImageError } from './incoming-image.mjs';
+import { collectDiscordIncomingImage, collectDiscordIncomingImages, discordImageCandidates, IncomingImageError } from './incoming-image.mjs';
 import { transcodeOversizedImage } from './incoming-image-transform.mjs';
 import { WebScreenshotService, screenshotMultipart } from './web-screenshot.mjs';
 import { messagingTurnId, startTypingProgress } from './typing-progress.mjs';
@@ -603,7 +603,19 @@ export class DiscordWorker {
           ? Math.ceil(announced / (1024 * 1024)) : -1;
         safeLog('IMAGE_INGEST_BEGIN', `pipeline=${IMAGE_PIPELINE_VERSION} native_mib_ceil=${mib}`);
       }
-      try {
+      if (discordImageCandidates(message).length > 1) {
+        const batch = await collectDiscordIncomingImages(message, {
+          onStage: (stage) => safeLog('IMAGE_INGEST_STAGE', stage),
+        });
+        for (const candidate of discordImageCandidates(message)) {
+          const item = batch.find(a => a.attachment_id === String(candidate.id));
+          const nativeRef = normalized.attachments?.find(a => a.attachment_id === String(candidate.id));
+          if (nativeRef && (!nativeRef.media_type || nativeRef.media_type === 'application/octet-stream')) {
+            nativeRef.media_type = item?.image?.content_mime || 'image/unknown';
+          }
+        }
+        normalized.incoming_images = batch;
+      } else try {
         normalized.incoming_image = await collectDiscordIncomingImage(message, {
           onStage: (stage) => safeLog('IMAGE_INGEST_STAGE', stage),
         });
@@ -656,6 +668,16 @@ export class DiscordWorker {
           // A gateway can reject a 4 MiB image after Base64 expands JSON
           // beyond its request-body cap. Never silently lose the entire turn.
           // Try one smaller visual derivative, then metadata-only delivery.
+          if (Number(error?.status) === 413 && normalized.incoming_images?.some(item => item.image)) {
+            // One metadata-only retry preserves ordering and caption without
+            // dropping the message or retrying an oversized aggregate body.
+            normalized.incoming_images = normalized.incoming_images.map(item => ({
+              attachment_id:item.attachment_id,
+              ingest_status:item.ingest_status || 'IMAGE_TRANSPORT_TOO_LARGE',
+            }));
+            safeLog('IMAGE_TRANSPORT_RECOVERY', 'reason=CORE_HTTP_413 action=batch_metadata_only');
+            continue;
+          }
           if (Number(error?.status) === 413 && normalized.incoming_image) {
             if (image413Recovery === 0) {
               image413Recovery = 1;
@@ -782,7 +804,7 @@ export class DiscordWorker {
     try {
       for (let drained = 0; drained < 8; drained += 1) {
         const claimStarted = performance.now();
-        const claimed = await this.core.claimOutbound(1, OUTBOUND_CLAIM_LEASE_SECONDS);
+        const claimed = await this.core.claimOutbound(1, OUTBOUND_CLAIM_LEASE_SECONDS, true);
         const messages = claimed?.messages || [];
         if (!messages.length) break;
         safeLog('OUTBOUND_CLAIMED', messages.length);
@@ -794,6 +816,15 @@ export class DiscordWorker {
           continue;
         }
 
+        if (item?.metadata?.discord_delivery_claim) {
+          try {
+            await this.sendCheckpointedOutbound(item);
+          } catch (error) {
+            safeLog('OUTBOUND_SEGMENT_PENDING', errorLabel(error));
+            break;
+          }
+          continue;
+        }
         let externalMessageId = null;
         const sendStarted = performance.now();
         try {
@@ -832,6 +863,42 @@ export class DiscordWorker {
     } finally {
       this.processingOutbound = false;
     }
+  }
+
+  async sendCheckpointedOutbound(item) {
+    const claim = item.metadata.discord_delivery_claim;
+    const {lease, chunks, receipts} = claim;
+    if (item.platform !== 'discord' || typeof lease !== 'string'
+        || !Array.isArray(chunks) || chunks.length < 2 || chunks.length > 32
+        || chunks.some(chunk => typeof chunk !== 'string' || !chunk.trim() || chunk.length > 2000)
+        || !Array.isArray(receipts) || receipts.length >= chunks.length
+        || receipts.some(id => !/^[0-9]{17,20}$/.test(id))) {
+      throw new Error('DISCORD_DELIVERY_CHECKPOINT_INVALID');
+    }
+    const path = `/channels/${encodeURIComponent(item.conversation_id)}/messages`;
+    for (let index = receipts.length; index < chunks.length; index++) {
+      const segment = {lease, index, phase:'prepare'};
+      await this.core.ackOutbound(item.id,{sent:false,segment});
+      let created;
+      try {
+        created = await this.rest.request(path,{method:'POST',body:discordReplyPayload(chunks[index],{
+          firstChunk:index===0,replyToMessageId:item.reply_to_message_id,nonce:discordNonce(item.id,index),
+        })});
+      } catch (error) {
+        if (!isDefinitiveDiscordSendFailure(error)) throw error;
+        await this.core.ackOutbound(item.id,{sent:false,
+          errorCode:`DISCORD_${errorLabel(error)}`.slice(0,120),segment:{...segment,phase:'confirm'}});
+        return;
+      }
+      if (!/^[0-9]{17,20}$/.test(String(created?.id || ''))
+          || String(created?.channel_id) !== String(item.conversation_id)) {
+        throw new Error('DISCORD_SEGMENT_RECEIPT_INVALID');
+      }
+      this.runtime.rememberBotMessage(created);
+      await this.core.ackOutbound(item.id,{sent:true,externalMessageId:String(created.id),
+        segment:{...segment,phase:'confirm'}});
+    }
+    safeLog('OUTBOUND_SEGMENTS_SENT');
   }
 
   async sendOutbound(item) {

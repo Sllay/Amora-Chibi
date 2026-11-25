@@ -22,12 +22,16 @@ from .presence_control import PresenceControlAction, PresenceControlIntent
 from .visual_routes import register_visual_enrichment_routes
 
 
+from .delivery_segments import DeliverySegmentRequest
+
+
 class OutboundAckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sent: bool
     external_message_id: str | None = Field(default=None, max_length=512)
     error_code: str | None = Field(default=None, max_length=120)
+    segment: DeliverySegmentRequest | None = None
 
 
 class OutboundCancelRequest(BaseModel):
@@ -81,6 +85,13 @@ def register_messaging_routes(app, core, require_auth) -> None:
         except InboundGenerationBusy:
             raise HTTPException(status_code=503, detail="INBOUND_GENERATION_BUSY") from None
 
+    @app.get("/v1/messaging/worker/reply-jobs/status", dependencies=[Depends(require_auth)])
+    async def durable_reply_status():
+        runtime = core.messaging.durable_replies
+        if runtime is None:
+            return {"mode": "off", "active": False}
+        return await runtime.status()
+
     @app.get("/v1/messaging/worker/progress/{turn_id}", dependencies=[Depends(require_auth)])
     async def messaging_progress(turn_id: UUID):
         # No database, private text, model output or native identifiers.
@@ -96,12 +107,13 @@ def register_messaging_routes(app, core, require_auth) -> None:
         account_scope: str = Query(default="primary", min_length=1, max_length=96),
         limit: int = Query(default=1, ge=1, le=32),
         lease_seconds: int = Query(default=120, ge=5, le=120),
+        segmented_delivery: bool = Query(default=False),
     ):
         with bind_latency_trace() as trace:
             started = perf_counter()
             items = core.messaging_store.claim_outbound(
                 platform=platform, account_scope=account_scope,
-                limit=limit, lease_seconds=lease_seconds,
+                limit=limit, lease_seconds=lease_seconds, segmented_delivery=segmented_delivery,
             )
             result = {"messages": [item.model_dump(mode="json") for item in items]}
             set_ms("outbound_claim_total_ms", elapsed_ms(started))
@@ -113,11 +125,15 @@ def register_messaging_routes(app, core, require_auth) -> None:
     def messaging_outbound_ack(message_id: UUID, payload: OutboundAckRequest):
         with bind_latency_trace() as trace:
             started = perf_counter()
-            accepted = core.messaging_store.ack_outbound(
-                message_id, sent=payload.sent,
-                external_message_id=payload.external_message_id,
-                error_code=payload.error_code,
-            )
+            if payload.segment is not None:
+                accepted = core.messaging_store.ack_delivery_segment(message_id,payload.segment,
+                    sent=payload.sent,external_message_id=payload.external_message_id,error_code=payload.error_code)
+            else:
+                accepted = core.messaging_store.ack_outbound(
+                    message_id, sent=payload.sent,
+                    external_message_id=payload.external_message_id,
+                    error_code=payload.error_code,
+                )
             set_ms("outbound_ack_total_ms", elapsed_ms(started))
             log_trace("outbound_ack", trace, outbound_id=message_id,
                       outcome="ok" if accepted else "not_claimable")

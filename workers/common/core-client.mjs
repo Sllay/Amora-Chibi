@@ -96,7 +96,7 @@ export class MessagingCoreClient {
     return this.request('/v1/messaging/worker/inbound', {
       method: 'POST',
       body: message,
-      timeoutMs: message?.incoming_image || message?.incoming_image_status
+      timeoutMs: message?.incoming_image || message?.incoming_image_status || message?.incoming_images?.length
         ? IMAGE_INBOUND_TIMEOUT_MS : INBOUND_TIMEOUT_MS,
     });
   }
@@ -136,23 +136,25 @@ export class MessagingCoreClient {
     });
   }
 
-  claimOutbound(limit = 1, leaseSeconds = DEFAULT_OUTBOUND_LEASE_SECONDS) {
+  claimOutbound(limit = 1, leaseSeconds = DEFAULT_OUTBOUND_LEASE_SECONDS, segmentedDelivery = false) {
     const query = new URLSearchParams({
       platform: this.platform,
       account_scope: this.accountScope,
       limit: String(limit),
       lease_seconds: String(leaseSeconds),
     });
+    if (segmentedDelivery) query.set('segmented_delivery', 'true');
     return this.request(`/v1/messaging/worker/outbound?${query}`);
   }
 
-  ackOutbound(id, { sent, externalMessageId = null, errorCode = null }) {
+  ackOutbound(id, { sent, externalMessageId = null, errorCode = null, segment = null }) {
     return this.request(`/v1/messaging/worker/outbound/${encodeURIComponent(id)}/ack`, {
       method: 'POST',
       body: {
         sent,
         external_message_id: externalMessageId,
         error_code: errorCode,
+        ...(segment ? { segment } : {}),
       },
     });
   }

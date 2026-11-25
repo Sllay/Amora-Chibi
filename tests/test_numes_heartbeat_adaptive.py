@@ -151,3 +151,41 @@ def test_missing_usage_is_unknown_not_zero():
     assert "prompt_tokens_reported" not in result
     assert "completion_tokens_reported" not in result
     assert "cost_reported" not in result
+
+
+@pytest.mark.asyncio
+async def test_run02_durable_progress_extends_past_legacy_grace():
+    async def provider():
+        watch = ACTIVE_NUMES_LIVENESS.get()
+        watch.headers(200)
+        for _ in range(8):
+            watch.progress()
+            await asyncio.sleep(0.02)
+        return {"answer": 4}
+
+    assert await _await_numes_adaptive(
+        provider(), timeout=0.04, available_seconds=0.07,
+        grace_cap_seconds=0.01, reserve_seconds=0.01,
+        progress_extension_seconds=0.35, progress_idle_seconds=0.15,
+    ) == {"answer": 4}
+
+
+@pytest.mark.asyncio
+async def test_run02_durable_heartbeat_only_cannot_extend_progress():
+    cancelled = []
+    async def provider():
+        watch = ACTIVE_NUMES_LIVENESS.get()
+        watch.headers(200)
+        try:
+            while True:
+                watch.keepalive()
+                await asyncio.sleep(0.005)
+        finally:
+            cancelled.append(True)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await _await_numes_adaptive(
+            provider(), timeout=0.03, available_seconds=0.05,
+            reserve_seconds=0.01, progress_extension_seconds=0.2,
+            progress_idle_seconds=0.1)
+    assert cancelled == [True]

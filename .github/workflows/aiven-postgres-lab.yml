@@ -49,6 +49,12 @@ on:
       - 'core/amora/storage/postgres_runtime_emotion.py'
       - 'core/amora/storage/postgres_runtime_messaging.py'
       - 'core/amora/storage/postgres_runtime_generation.py'
+      - 'core/amora/messaging/reply_jobs.py'
+      - 'core/amora/storage/reply_job_sql.py'
+      - 'core/amora/storage/reply_job_schema.py'
+      - 'core/amora/storage/postgres_runtime_reply_jobs.py'
+      - 'core/amora/storage/postgres_reply_job_lab_schema.py'
+      - 'tests/test_reply_jobs_candidate.py'
       - 'core/amora/storage/postgres_runtime_reflections.py'
       - 'core/amora/storage/postgres_runtime_agenda.py'
       - 'core/amora/storage/postgres_runtime_temporal.py'
@@ -219,6 +225,7 @@ jobs:
             tests/test_postgres_run2_core_bootstrap.py \
             tests/test_postgres_run2_usage_boundary.py \
             tests/test_postgres_run2_messaging_queue.py \
+            tests/test_reply_jobs_candidate.py \
             tests/test_postgres_run2_cognition_v1.py \
             tests/test_postgres_run2_rank_parity.py \
             tests/test_postgres_run2_atomic_decay.py \

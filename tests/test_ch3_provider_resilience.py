@@ -244,3 +244,182 @@ def test_failed_half_open_probe_reopens_until_new_deadline() -> None:
     )
     assert reopened.state is CircuitState.OPEN
     assert registry.routing_decision(task, now=now + timedelta(seconds=1)).excluded_names == frozenset({"groq"})
+
+
+@pytest.mark.asyncio
+async def test_run02_durable_transport_failure_is_not_retried_inside_proxy():
+    from amora.cognition.durable_realization import DURABLE_REALIZATION
+    context = _context()
+    provider = SequencedProvider([ProviderError("busy", status_code=429, retry_after="0.4")])
+    proxy = ResilientProviderProxy(provider, max_retries=3, base_delay_seconds=0)
+    marker = DURABLE_REALIZATION.set(str(context.turn_id))
+    try:
+        with pytest.raises(ProviderError):
+            await proxy.realize(context)
+        assert provider.calls == 1
+    finally:
+        DURABLE_REALIZATION.reset(marker)
+
+
+def test_run02_retry_after_and_input_specific_failure():
+    import httpx
+    assert retry_after_seconds("inf") is None
+    assert retry_after_seconds("nan") is None
+    failure = classify_provider_failure(ProviderError("too large", status_code=413))
+    assert failure.code == "PROVIDER_INPUT_TOO_LARGE" and not failure.retryable
+    assert classify_provider_failure(httpx.RemoteProtocolError("closed")).retryable
+
+
+def test_run02_compaction_keeps_original_and_does_not_repeat_payload():
+    from amora.cognition.context_budget import compact_rejected_payload
+    context = _context()
+    context.specialist_support = {"note": "x" * 4000}
+    def build(projected):
+        return {"text": projected.user_text, "identity": projected.self_model,
+                "plan": projected.dialogue_plan, "support": projected.specialist_support}
+    rejected = build(context)
+    reduced = compact_rejected_payload(context, build, rejected)
+    assert reduced is not None and reduced["support"] is None
+    assert reduced["text"] == rejected["text"]
+    assert reduced["identity"] == rejected["identity"]
+    assert reduced["plan"] == rejected["plan"]
+    assert context.specialist_support is not None
+    assert compact_rejected_payload(context, build, reduced) is None
+
+
+def test_run02_probe_is_acquired_at_dispatch_and_cannot_expire_in_flight():
+    registry = ProviderCircuitRegistry(half_open_probe_lease_seconds=2)
+    now = datetime(2026, 11, 24, tzinfo=timezone.utc)
+    task = TaskClass.SOCIAL_DIALOGUE.value
+    registry.open("groq", task, until=now, failure_count=1)
+    assert registry.excluded_names(task, now=now) == set()
+    assert registry.excluded_names(task, now=now) == set()
+    assert registry.begin_attempt("groq", task, now=now)
+    later = now + timedelta(seconds=200)
+    assert registry.excluded_names(task, now=later) == {"groq"}
+    assert not registry.begin_attempt("groq", task, now=later)
+    registry.end_attempt("groq", task, now=later)
+    assert registry.begin_attempt("groq", task, now=later)
+    registry.close("groq", task)
+    registry.end_attempt("groq", task, now=later)
+    assert registry.record("groq", task).state is CircuitState.CLOSED
+
+
+def test_run02_small_safe_reduction_is_accepted_without_cutting_literal_input():
+    from amora.cognition.context_budget import compact_rejected_payload
+    context = _context()
+    context.user_text = "z" * 4000
+    context.specialist_support = {"note": "x" * 100}
+    def build(item):
+        return {"text": item.user_text, "support": item.specialist_support}
+    original = build(context)
+    smaller = compact_rejected_payload(context, build, original)
+    assert smaller is not None and smaller["support"] is None
+    assert smaller["text"] == context.user_text
+    assert compact_rejected_payload(context, build, smaller) is None
+
+
+@pytest.mark.asyncio
+async def test_run02_shared_account_cooldown_across_dialogue_memory_vision_web():
+    from amora.cognition.provider_quota import ProviderQuotaCoordinator, ProviderQuotaDeferred
+    from amora.time import SimulatedClock
+    clock = SimulatedClock(datetime(2026, 11, 24, tzinfo=timezone.utc))
+    quota = ProviderQuotaCoordinator(clock)
+    with pytest.raises(ProviderError):
+        async with quota.admission("groq"):
+            raise ProviderError("synthetic", status_code=429, retry_after="120")
+    for provider in ("groq_memory", "groq_vision", "groq_web"):
+        with pytest.raises(ProviderQuotaDeferred) as caught:
+            async with quota.admission(provider):
+                pytest.fail("rate-limited shared account was contacted")
+        assert float(caught.value.retry_after) == 120
+    async with quota.admission("numes"):
+        pass
+    clock.advance(timedelta(seconds=121))
+    async with quota.admission("groq_memory"):
+        assert quota.snapshot()["groq"]["in_flight"]
+    assert not quota.snapshot()["groq"]["in_flight"]
+
+
+@pytest.mark.asyncio
+async def test_run02_account_admission_releases_on_cancellation_and_is_fifo():
+    import asyncio
+    from amora.cognition.provider_quota import ProviderQuotaCoordinator
+    from amora.time import SimulatedClock
+    quota = ProviderQuotaCoordinator(SimulatedClock())
+    entered = asyncio.Event()
+    order = []
+    async def owner():
+        async with quota.admission("groq"):
+            entered.set()
+            await asyncio.Event().wait()
+    async def contender(name):
+        async with quota.admission(name):
+            order.append(name)
+    task = asyncio.create_task(owner())
+    await entered.wait()
+    first = asyncio.create_task(contender("groq_memory"))
+    await asyncio.sleep(0)
+    second = asyncio.create_task(contender("groq_vision"))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.gather(first, second)
+    assert order == ["groq_memory", "groq_vision"]
+    assert not quota.snapshot()["groq"]["in_flight"]
+
+
+@pytest.mark.asyncio
+async def test_run02_groq_model_limit_preserves_distinct_model_fallback():
+    from amora.cognition.provider_quota import ProviderQuotaCoordinator, ProviderQuotaDeferred
+    from amora.time import SimulatedClock
+    clock = SimulatedClock(datetime(2026, 11, 24, tzinfo=timezone.utc))
+    quota = ProviderQuotaCoordinator(clock)
+    gpt = "openai/gpt-oss-120b"
+    qwen = "qwen/qwen3.8-27b"
+    with pytest.raises(ProviderError):
+        async with quota.admission("groq_memory", model=gpt):
+            raise ProviderError("synthetic", status_code=429, retry_after="60")
+    assert quota.remaining("groq_memory", model=gpt) == 60
+    assert quota.remaining("groq", model=qwen) == 0
+    with pytest.raises(ProviderQuotaDeferred):
+        async with quota.admission("groq", model=gpt):
+            pytest.fail("same model must respect cooldown across roles")
+    async with quota.admission("groq", model=qwen):
+        pass
+    quota.observe("groq_web", 429, "120", model=qwen)
+    for name in ("groq", "groq_web", "groq_vision"):
+        with pytest.raises(ProviderQuotaDeferred):
+            async with quota.admission(name, model=qwen):
+                pytest.fail("Qwen roles share the same model cooldown")
+    clock.advance(timedelta(seconds=61))
+    async with quota.admission("groq_memory", model=gpt):
+        pass
+    assert quota.remaining("groq", model=qwen) == 59
+
+
+@pytest.mark.asyncio
+async def test_run02_explicit_account_limit_blocks_all_models_and_keeps_other_providers():
+    from amora.cognition.provider_quota import ProviderQuotaCoordinator, ProviderQuotaDeferred
+    from amora.time import SimulatedClock
+    clock = SimulatedClock(datetime(2026, 11, 24, tzinfo=timezone.utc))
+    quota = ProviderQuotaCoordinator(clock)
+    gpt = "openai/gpt-oss-120b"
+    qwen = "qwen/qwen3.8-27b"
+    quota.block_for("groq", 180, model=qwen)
+    with pytest.raises(ProviderError):
+        async with quota.admission("groq_memory", model=gpt):
+            raise ProviderError("synthetic account limit", status_code=429, retry_after="60",
+                                diagnostics={"quota_scope": "account"})
+    for model in (gpt, qwen, "another-model", None):
+        with pytest.raises(ProviderQuotaDeferred):
+            async with quota.admission("groq", model=model):
+                pytest.fail("account-wide cooldown must win")
+    async with quota.admission("numes", model="other"):
+        pass
+    clock.advance(timedelta(seconds=61))
+    async with quota.admission("groq_memory", model=gpt):
+        pass
+    assert quota.remaining("groq", model=qwen) == 119
+    assert quota.snapshot()["groq"]["model_cooldowns_seconds"][qwen] == 119

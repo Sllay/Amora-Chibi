@@ -13,6 +13,20 @@ existem. Não substitui o canon de identidade, segurança e comportamento. Em
 conflito, seguir a precedência de AGENTS.md e registrar ADR explícito antes de
 alterar o canon. Atualizar este plano quando uma decisão aprovada o modificar.
 
+## Política de gates — decisão do proprietário de 24/11/2026
+
+Esta seção prevalece sobre exigências de live/certificação individual nas
+seções históricas e handoffs. RUN 01–07: implementar escopo, executar todos
+os workflows aplicáveis no HEAD, corrigir falhas, documentar e avançar com
+100% verde. Não desabilitar testes, não ocultar skips/falhas, não marcar
+escopo incompleto como entregue. A bateria profunda transversal (carga,
+causalidade, concorrência, restart, backup/restore/rollback, recursos,
+bugs ocultos e certificação live Northflank) ocorre após a implementação
+da RUN 07, com o sistema integrado. CI_PASS é gate de desenvolvimento,
+não LIVE_CERTIFIED. Bugs conhecidos que impeçam o escopo atual continuam
+bloqueantes. Sem deploy intermediário; manter a cadeia de branches/PRs
+até integração segura. Registrar cenários adiados e evidência final.
+
 ## 0. Como continuar sem o chat original
 
 1. Leia AGENTS.md, docs/canon/{SKILL,ARCHITECTURE,GDD}.md, docs/roadmap/VERSIONS.md,
@@ -541,4 +555,4 @@ Não deixar lacunas de implementação disfarçadas de requisitos prontos:
 
 Essas decisões são trabalho explícito de cada RUN, não autorização para
 inventar valores ou mudar escopo. O diário registra resolução, referência e
-evidência. **Próximo trabalho: RUN 01, a partir de main atualizado.**
+evidência. **Próximo trabalho: RUN 02, a partir do HEAD CI_PASS da RUN 01.**

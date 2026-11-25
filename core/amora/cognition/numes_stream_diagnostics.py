@@ -42,6 +42,7 @@ class NumesConnectionLiveness:
         self.http_ok = False
         self.request_id = None
         self.last_signal = None
+        self.last_progress = None
         self.keepalives = 0
         self.progress_deltas = 0
 
@@ -54,7 +55,12 @@ class NumesConnectionLiveness:
 
     def progress(self):
         self.last_signal = self.clock()
+        self.last_progress = self.last_signal
         self.progress_deltas += 1
+
+    def progressing(self, *, max_silence_seconds=23.0):
+        elapsed = self.clock() - self.last_progress if self.last_progress is not None else None
+        return self.http_ok and elapsed is not None and 0 <= elapsed <= max_silence_seconds
 
     def healthy(self, *, max_silence_seconds=23.0):
         elapsed = self.clock() - self.last_signal if self.last_signal is not None else None

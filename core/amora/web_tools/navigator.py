@@ -353,6 +353,7 @@ def _resolve_ddg_url(url: str) -> str:
 class WebIntent:
     action: str
     argument: str
+    depth: str = "quick"
 
 
 # The search index receives topical keywords, not a raw Discord sentence.
@@ -379,6 +380,7 @@ def _clean_search_query(raw: str, match: re.Match[str]) -> str:
     Godot Engine' -> 'novidade Android Godot Engine'. No model call needed.
     """
     subject = raw[match.end():match.end() + 400]
+    subject = _DEEP_REQUEST_RE.sub(" ", subject)
     # 'na web' describes the medium; preserve 'web' when it belongs to
     # a technical topic such as 'pesquise WebAssembly'.
     subject = re.sub(r"(?i)\b(?:na|pela|pela?\s+a|pela\s+|pela|por|via)\s+(?:web|internet)\b", " ", subject)
@@ -510,6 +512,18 @@ def _rank_search_results(results: list[dict[str, str]], query: str) -> list[dict
     return [item[2] for item in scored[:5]]
 
 
+_DEEP_REQUEST_RE = re.compile(
+    r"\b(?:a\s+fundo|em\s+profundidade|aprofundad\w*|detalhadamente|"
+    r"cruz[ae]\s+(?:as\s+)?fontes|compar[ae]\s+(?:as\s+)?fontes|"
+    r"investiga[cç][aã]o\s+completa)\b", re.I,
+)
+_CONTEXT_WEB_RE = re.compile(
+    r"\b(?:confir[am]|verifi(?:ca|que)|checa|cheque|consulta|consulte|"
+    r"descobr[ae]|descubra|veja|olha|olhe)\b.{0,40}?\b(?:na|pela|na\s+pr[oó]pria)\s+(?:web|internet)\b",
+    re.I | re.DOTALL,
+)
+
+
 def parse_web_intent(text: str) -> WebIntent | None:
     raw = str(text or "")[:12000]
     urls = _LINK_RE.findall(raw)
@@ -546,15 +560,21 @@ def parse_web_intent(text: str) -> WebIntent | None:
     if _WEB_HISTORY_RE.search(raw):
         return WebIntent("web_history", "")
     if _WEB_CONTINUE_RE.search(raw):
-        return WebIntent("search", "")
+        return WebIntent("search", "", "deep" if _DEEP_REQUEST_RE.search(raw) else "quick")
     follow = _FOLLOW_RE.search(raw) or _SCREENSHOT_FOLLOW_RE.search(raw)
     if follow:
         return WebIntent("follow", follow.group(1))
-    search = _SEARCH_RE.search(raw)
+    search = _SEARCH_RE.search(raw) or _CONTEXT_WEB_RE.search(raw)
     if search:
         # Do not send greetings, 'Okay', user instructions or Amora's name
         # ahead of the actual subject to search engines.
-        return WebIntent("search", _clean_search_query(raw, search))
+        depth = "deep" if _DEEP_REQUEST_RE.search(raw) else "quick"
+        # Strip only explicit research-mode modifiers from the topical query.
+        subject = _clean_search_query(raw, search)
+        if depth == "deep":
+            subject = _clean(_DEEP_REQUEST_RE.sub(" ", subject), 240)
+            subject = re.sub(r"(?i)^fundo\s+", "", subject)
+        return WebIntent("search", subject, depth)
     if _CAPTURE_CURRENT_RE.search(raw):
         return WebIntent("capture", "current")
     # A bare "envie a imagem" may refer to the preceding screenshot request;
@@ -742,6 +762,11 @@ class WebNavigator:
             try:
                 page = await self._call(self.fetch_page, url)
             except (WebFetchError, TimeoutError) as exc:
+                if isinstance(exc, WebFetchError) and exc.code in {
+                    "WEB_PRIVATE_NETWORK_DENIED", "WEB_URL_INVALID", "WEB_PORT_NOT_SUPPORTED",
+                    "WEB_EXTERNAL_READER_SENSITIVE_URL", "WEB_REDIRECT_INVALID",
+                }:
+                    raise
                 original_error = exc
         if force_browser or page is None or self._needs_browser(page):
             rendered = await self._remote_render(url)
@@ -771,8 +796,22 @@ class WebNavigator:
         return None
 
     async def _call(self, fn, *args):
-        async with self._semaphore:
-            return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=14)
+        # Cancellation of to_thread does NOT cancel a running socket/DNS call.
+        # Keep its slot until the actual worker exits, including after timeout.
+        await self._semaphore.acquire()
+        try:
+            task = asyncio.create_task(asyncio.to_thread(fn, *args))
+        except BaseException:
+            self._semaphore.release()
+            raise
+
+        def release(completed):
+            self._semaphore.release()
+            if not completed.cancelled():
+                completed.exception()  # consume late failure without logging content
+
+        task.add_done_callback(release)
+        return await asyncio.wait_for(asyncio.shield(task), timeout=14)
 
     def _save_refs(self, session_id: str, refs: list[dict[str, str]]) -> None:
         now = asyncio.get_running_loop().time()
@@ -814,7 +853,7 @@ class WebNavigator:
                 "focus": _clean(topic, 90),
                 "sources": [
                     {"url": str(item.get("url") or ""), "title": str(item.get("title") or "")}
-                    for item in (result.get("sources") or [])[:2] if isinstance(item, dict)
+                    for item in (result.get("sources") or [])[:5 if result.get("depth") == "deep" else 2] if isinstance(item, dict)
                     and item.get("status") == "opened"
                 ],
                 "references": [
@@ -893,7 +932,7 @@ class WebNavigator:
             "focus": str(record.get("topic") or "")[:90]
                 or (_page_topic(sources[0]) if sources else ""),
             "sources": [{"url": e["url"], "title": str(e.get("title") or "")}
-                        for e in sources[:2]],
+                        for e in sources[:5 if record.get("depth") == "deep" else 2]],
             "references": [{"url": e["url"], "title": str(e.get("title") or "")}
                            for e in refs[:12]],
         }
@@ -1155,6 +1194,16 @@ class WebNavigator:
                     "WEB_SEARCH_CONTEXT_REQUIRED" if contextual_search
                     else "WEB_SEARCH_QUERY_EMPTY"
                 )
+            if contextual_search and _WEB_CONTINUE_RE.search(text) is not None and self.workspace is not None:
+                from .deep_research import deep_search, resumable_checkpoint
+                latest = self.workspace.recent(session_id, 1)
+                checkpoint = latest[0] if latest else None
+                if resumable_checkpoint(checkpoint, search_topic):
+                    return self._record_delivery(session_id, await deep_search(
+                        self, search_topic, text, session_id, seconds=9.0, resume=checkpoint))
+            if intent.depth == "deep":
+                from .deep_research import deep_search
+                return self._record_delivery(session_id, await deep_search(self, search_topic, text, session_id))
             planned_queries = [search_topic]
             if self.planner is not None:
                 try:

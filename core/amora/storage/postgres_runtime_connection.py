@@ -328,6 +328,16 @@ class PostgresRuntimeConnection:
                 self._transaction_owner = None
             self._state_lock.release()
 
+    def verify_reply_component(self):
+        """Read-only verification of the opt-in reply-job schema."""
+        from .postgres_reply_job_migration import review_reply_schema
+        with self._state_lock:
+            self._ensure_ready()
+            report = review_reply_schema(self._raw, self._target)
+            if report["state"] != "prepared":
+                raise PostgresRuntimeError("PG_REPLY_SCHEMA_NOT_PREPARED")
+            return report
+
     def verify_prepared_schema(self, expected_version: int) -> None:
         """Verify an already-imported synthetic v18 schema; never apply DDL.
 

@@ -39,6 +39,9 @@ def _safe_entry(value: Any, *, read: bool) -> dict[str, Any] | None:
     if read and value.get("status") == "opened":
         item["excerpt"] = _clean(str(value.get("text") or ""), 950)
         item["fetched_at"] = _clean(str(value.get("fetched_at") or ""), 48)
+        retrieval = value.get("retrieval")
+        if retrieval in {"direct_http", "third_party_jina_reader", "browser_worker"}:
+            item["retrieval"] = retrieval
     if not read:
         item["snippet"] = _clean(str(value.get("snippet") or ""), 160)
     return item
@@ -71,7 +74,7 @@ class WebWorkspaceStore:
         action = str(result.get("action") or "")
         if action not in {"open", "open_many", "search", "follow"}:
             return False
-        sources = [_safe_entry(x, read=True) for x in (result.get("sources") or [])[:3]]
+        sources = [_safe_entry(x, read=True) for x in (result.get("sources") or [])[:5 if result.get("depth") == "deep" else 3]]
         refs = [_safe_entry(x, read=False) for x in (result.get("references") or [])[:12]]
         entries, seen = [], set()
         for entry in [*sources, *refs]:
@@ -83,6 +86,11 @@ class WebWorkspaceStore:
             return False
         return self._write(session_id, VISIT_EVENT, {
             "action": action,
+            **({"depth": "deep",
+                "discovered_at": _clean(str(result.get("discovered_at") or ""), 48),
+                "resume_eligible": result.get("resume_eligible") is True
+                    and result.get("query") == result.get("topic"),
+                } if result.get("depth") == "deep" else {}),
             "topic": _clean(str(result.get("topic") or ""), 90),
             "entries": entries[:15],
             # Keep the *actual* numbered reference order separately.

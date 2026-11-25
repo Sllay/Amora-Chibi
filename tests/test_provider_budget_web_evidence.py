@@ -60,3 +60,17 @@ def test_drop_source_only_if_even_its_shortened_version_does_not_fit():
     assert projected.web_research["sources"] == []
     assert estimate_payload(payload) <= ceiling
     assert original.web_research["sources"][0]["text"].startswith("EVIDENCE ")
+
+
+def test_deep_projection_preserves_diversity_before_omitting_sources():
+    original = _context()
+    original.web_research.update({"depth":"deep", "status":"opened"})
+    original.web_research["sources"].append({
+        "title":"Contraponto", "url":"https://second.example/claim", "text":"b"*8000})
+    projected, payload = fit_provider_payload(original, _payload, ceiling=650, strict=True)
+    assert len(projected.web_research["sources"]) == 2
+    assert all(len(s["text"]) <= 600 for s in projected.web_research["sources"])
+    meta = projected.web_research["provider_evidence_projection"]
+    assert meta["original_read_count"] == 2
+    assert meta["shortened_count"] == 2 and meta["omitted_count"] == 0
+    assert len(original.web_research["sources"][0]["text"]) > 8000

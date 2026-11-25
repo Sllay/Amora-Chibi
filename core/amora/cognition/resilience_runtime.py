@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from amora.models import TaskClass
 
 from .identity_runtime import CognitiveEngine as IdentityAwareCognitiveEngine
@@ -81,6 +82,11 @@ class CognitiveEngine(IdentityAwareCognitiveEngine):
         super()._backoff(descriptor, status_code=status_code, retry_after=normalized)
 
         until = self._provider_cooldowns.get(descriptor.name)
+        # The legacy 300s ceiling must not permit another dialogue to hit a
+        # provider before a valid server-specified cooldown expires.
+        if parsed is not None and parsed > 300:
+            until = self.clock.now() + timedelta(seconds=min(604800, parsed))
+            self._provider_cooldowns[descriptor.name] = until
         if until is None:
             return
         failure_count = self._provider_failures.get(descriptor.name, 1)
@@ -120,22 +126,23 @@ class CognitiveEngine(IdentityAwareCognitiveEngine):
 
     def _cooldown_names(self) -> set[str]:
         now = self.clock.now()
-        decision = self._provider_circuits.routing_decision(self._CIRCUIT_TASK, now=now)
+        excluded = self._provider_circuits.excluded_names(self._CIRCUIT_TASK, now=now)
+        # Expiry restores router eligibility, but does not claim any probe.
+        for name, until in list(self._provider_cooldowns.items()):
+            if until <= now and name not in excluded:
+                self._provider_cooldowns.pop(name, None)
+                if self.router.descriptor(name) is not None:
+                    self.router.set_quota(name, None)
+            elif until > now:
+                excluded.add(name)
+        return excluded
 
-        # OPEN providers remain excluded. An expired OPEN gets exactly one
-        # HALF_OPEN routing lease; clear the legacy cooldown/quota only for that
-        # probe so the normal router can select it. Concurrent turns see the
-        # active probe lease and keep the provider excluded.
-        for name in decision.half_open_probe_names:
-            self._provider_cooldowns.pop(name, None)
-            if self.router.descriptor(name) is not None:
-                self.router.set_quota(name, None)
+    def _begin_structured_attempt(self, descriptor) -> bool:
+        if descriptor.name in self._cooldown_names():
+            return False
+        return self._provider_circuits.begin_attempt(
+            descriptor.name, self._CIRCUIT_TASK, now=self.clock.now())
 
-        # Preserve any legacy cooldown that predates circuit initialization. This
-        # is mostly defensive for hot-reload/migration scenarios.
-        legacy_excluded = {
-            name
-            for name, until in self._provider_cooldowns.items()
-            if until > now
-        }
-        return set(decision.excluded_names) | legacy_excluded
+    def _end_structured_attempt(self, descriptor) -> None:
+        self._provider_circuits.end_attempt(
+            descriptor.name, self._CIRCUIT_TASK, now=self.clock.now())

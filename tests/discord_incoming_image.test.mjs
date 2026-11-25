@@ -218,3 +218,44 @@ test('image-only overlimit still passes an explicit error code to authenticated 
     globalThis.fetch = oldFetch;
   }
 });
+
+
+test('multi-image worker preserves order, failures, total cap and single-image compatibility', async () => {
+  const input = message();
+  const ids = [ATTACHMENT, '987654321098765433', '987654321098765434', '987654321098765435'];
+  input.attachments = ids.map(id => ({id, filename:'foto.png',content_type:'image/png',
+    size:PNG.length,url:`https://cdn.discordapp.com/attachments/${CHANNEL}/${id}/foto.png`}));
+  const oldFetch = globalThis.fetch;
+  const requested = [];
+  globalThis.fetch = async url => {
+    requested.push(url);
+    if (url.includes(ids[1])) return new Response('',{status:503});
+    return response();
+  };
+  const received = [];
+  try {
+    const worker = new DiscordWorker({token:'test-token',remoteProcessingAllowed:true,
+      core:{inbound:async p => {
+        received.push(structuredClone(p));
+        if (received.length === 1) throw Object.assign(new Error('too large'),{status:413});
+        return {decision:{action:'context_only'},outbound:[]};
+      }}});
+    worker.botUserId = '555555555555555555';
+    worker.referencedAuthorId = async () => null;
+    worker.beginTypingProgress = () => () => {};
+    await worker.deliverNormalized(input);
+    assert.equal(requested.length,3);
+    assert.equal(received.length,2);
+    const first = received[0];
+    assert.equal(first.incoming_image,undefined);
+    assert.deepEqual(first.incoming_images.map(x=>x.attachment_id),ids.slice(0,3));
+    assert.equal(first.incoming_images[1].ingest_status,'IMAGE_CDN_UNAVAILABLE');
+    assert.ok(first.incoming_images[0].image && first.incoming_images[2].image);
+    assert.equal(first.attachments.length,4);
+    assert.ok(first.incoming_images.reduce((n,x)=>n+(x.image?.content_base64.length||0),0)<=3733336);
+    assert.ok(received[1].incoming_images.every(x=>!x.image));
+    assert.equal(received[1].incoming_images[0].ingest_status,'IMAGE_TRANSPORT_TOO_LARGE');
+    assert.equal(received[1].incoming_images[1].ingest_status,'IMAGE_CDN_UNAVAILABLE');
+    assert.equal(received[1].text,first.text);
+  } finally { globalThis.fetch = oldFetch; }
+});

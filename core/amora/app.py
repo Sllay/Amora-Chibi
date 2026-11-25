@@ -331,8 +331,8 @@ class AmoraCore:
         from amora.messaging.nvidia_incoming_vision import NvidiaMistralIncomingImageVision
         messaging = PlatformMessagingService(
             incoming_vision=IncomingVisionCascade(
-                primary=GroqIncomingImageVision(secrets),
-                fallback=NvidiaMistralIncomingImageVision(secrets),
+                primary=GroqIncomingImageVision(secrets, quota=cognition._provider_quota),
+                fallback=NvidiaMistralIncomingImageVision(secrets, quota=cognition._provider_quota),
             ),
             store=messaging_store,
             attention=SocialAttentionRouter(profiles=profiles, clock=active_clock),

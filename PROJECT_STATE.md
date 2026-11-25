@@ -1,5 +1,9 @@
 # AMORA — Project State / Checkpoint Operacional
 
+## Adendo 2026-11-24 — Cognitive Evolution V2 / RUN 07
+
+PR #388 é o candidato cumulativo de integração, baseado em 1638748 (RUN06 11/11). RUNs 01–06 têm checkpoints CI_PASS com escopo residual, não certificação final. RUN07 IN_PROGRESS. Consultar [diário](docs/engineering/cognitive-evolution-v2/RUN_LOG.md) e [matriz de certificação](docs/engineering/cognitive-evolution-v2/CERTIFICATION.md). Produção não alterada; Northflank LIVE_PENDING, sem mudança de voz ou rig. Não promover antes de fechar contratos e executar a bateria final.
+
 ## Adendo 2026-11-23 — Cognitive Evolution V2 / RUN 00
 
 Programa transversal de sete RUNs aprovado para resiliência, contexto,

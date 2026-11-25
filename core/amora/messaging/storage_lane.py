@@ -5,12 +5,17 @@ from amora.storage.database import AmoraDatabase
 from amora.storage.owned_lane import OwnedStorageLane
 from .generation_lifecycle import InboundGeneration, InboundGenerationLost
 from .store import MessagingStore
+from .reply_jobs import ReplyJobRepository
+from .visual_checkpoint import VisualCheckpointStore
 
 
 class MessagingStorageWorker:
     def __init__(self, database, clock):
         self.database = AmoraDatabase(database.path, backend=database.backend)
         self.generations = InboundGeneration(self.database, clock)
+        self.reply_jobs = None
+        self.visual_checkpoints = VisualCheckpointStore(self.database, clock)
+        self.clock = clock
         if database.backend.capabilities.name == "postgres-candidate":
             from .postgres_store import PostgresMessagingStore
             self.store = PostgresMessagingStore(self.database, clock)
@@ -35,6 +40,27 @@ class MessagingStorageWorker:
     def append_audit(self, audit):
         return self.store.append_audit(audit)
 
+    def visual_checkpoint(self, operation, *args):
+        if operation not in {"load", "save", "source_current", "save_reference", "load_reference"}:
+            raise ValueError("VISUAL_CHECKPOINT_OPERATION_NOT_ALLOWED")
+        return getattr(self.visual_checkpoints, operation)(*args)
+
+    def reply_job(self, operation, *args, **kwargs):
+        if self.reply_jobs is None:
+            self.reply_jobs = ReplyJobRepository(self.database, self.clock)
+        if operation == "finalize":
+            claim, *rest = args
+            return self.reply_jobs.finalize(claim, self.store, *rest)
+        if operation == "stage":
+            return self.generations.stage(*args)
+        if operation == "prepared":
+            return self.generations.prepared(*args)
+        if operation not in {"state", "counts", "verify_schema", "admit", "enqueue_turn", "load", "claim",
+                             "renew", "defer", "block", "cancel_invalidated",
+                             "reconcile_missing", "reconcile_outbound"}:
+            raise ValueError("REPLY_JOB_OPERATION_NOT_ALLOWED")
+        return getattr(self.reply_jobs, operation)(*args, **kwargs)
+
     def persist_reply(self, message, decision, outbound, reasons, lease, native_hash):
         # Keep the existing durable prepared-response recovery boundary.
         # These are separate commits, not a new transaction or retry policy.
@@ -46,7 +72,7 @@ class MessagingStorageWorker:
 
 class MessagingStorageLane(OwnedStorageLane):
     trace_name = "messaging_db_lane"
-    allowed = frozenset({"claim", "release", "prepared", "get_audit", "append_audit", "persist_reply"})
+    allowed = frozenset({"claim", "release", "prepared", "get_audit", "append_audit", "persist_reply", "reply_job", "visual_checkpoint"})
 
     def __init__(self, database, clock):
         super().__init__(thread_name="amora-messaging-db")

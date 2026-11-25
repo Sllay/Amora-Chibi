@@ -34,6 +34,17 @@ def identity_statements(*, schema: str = "amora_pg_v18_lab") -> dict[str, Review
         "SELECT * FROM amora_pg_v18_lab.events WHERE id=%s AND event_type=%s", 2, 1)
     add("SELECT COUNT(*) FROM events",
         "SELECT COUNT(*) FROM amora_pg_v18_lab.events", 0, 1)
+    # Exact indexed checkpoint keys, both adjacent TTL buckets. No scan of
+    # private event streams and no caller-controlled table or projection.
+    add(
+        "SELECT * FROM events WHERE dedupe_key IN (?,?) AND event_type=? "
+        "AND source=? AND session_id=? AND privacy_scope='PERSONAL' "
+        "AND actor='PERSON_BK' ORDER BY timestamp DESC LIMIT 2",
+        "SELECT * FROM amora_pg_v18_lab.events WHERE dedupe_key IN (%s,%s) AND event_type=%s "
+        "AND source=%s AND session_id=%s AND privacy_scope='PERSONAL' "
+        "AND actor='PERSON_BK' ORDER BY timestamp DESC LIMIT 2",
+        5, 2,
+    )
     # Research evidence lookup is an audited, bounded owner-DM read.
     # It uses v18 events without new DDL and cannot read another scope.
     add(

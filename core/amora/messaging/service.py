@@ -100,6 +100,27 @@ class PlatformMessagingService:
         self.reflections = ReflectionQueue(store.database, cognition, clock)
         self.generations = InboundGeneration(store.database, clock)
         self.storage_lane = None
+        self.durable_replies = None
+
+    def configure_durable_replies(self):
+        """Explicit opt-in after candidate schema/registry installation.
+
+        No automatic production migration or environment activation.
+        """
+        if self.durable_replies is None:
+            from .durable_reply_runtime import DurableReplyRuntime
+            self.durable_replies = DurableReplyRuntime(self)
+        return self.durable_replies
+
+    async def start_durable_replies(self):
+        from amora.storage.reply_job_rollout import durable_reply_mode
+        mode = durable_reply_mode()
+        if mode != "off":
+            runtime = self.configure_durable_replies()
+            if mode == "drain":
+                runtime.stop_admissions()
+        if self.durable_replies is not None:
+            await self.durable_replies.start()
 
     async def receive(self, message: InboundMessage) -> InboundResult:
         """Process one logical inbound exactly once per Core process.
@@ -108,6 +129,11 @@ class PlatformMessagingService:
         same process joins the same shielded task; a retry after process replacement
         is recovered from deterministic audit/turn/outbound identifiers.
         """
+        if self.durable_replies is not None:
+            receipt = await self.durable_replies.existing_ack(message)
+            if receipt is not None:
+                return receipt
+            await self.durable_replies.admission_guard(message)
         key = self._inbound_key(message)
         task = self._inflight.get(key)
         if task is None or task.done():
@@ -152,6 +178,8 @@ class PlatformMessagingService:
     async def stop_inflight(self):
         # ASGI shutdown can outlive shielded inbound HTTP waiters. Join the
         # owned tasks before closing their dedicated storage/HTTP lanes.
+        if self.durable_replies is not None:
+            await self.durable_replies.stop()
         tasks = tuple(task for task in self._inflight.values() if not task.done())
         for task in tasks:
             task.cancel()
@@ -207,6 +235,8 @@ class PlatformMessagingService:
             self._active_dm_progress.discard(turn_id)
             _GENERATION_LEASE.reset(context_token)
             await self._generation_call(message, "release", turn_id, token, completed=completed)
+            if self.durable_replies is not None:
+                self.durable_replies.notify()
 
     def _invalidated_result(self, message):
         audit = self.store.get_audit(platform=message.platform, account_scope=message.account_scope,
@@ -258,6 +288,7 @@ class PlatformMessagingService:
             conversation_id=message.conversation_id,
             message_id=message.message_id,
         )
+        durable_audit = existing_audit
         if existing_audit is not None:
             if self._use_storage_lane(message) and self._source_invalidated(message):
                 return self._invalidated_result(message)
@@ -308,8 +339,11 @@ class PlatformMessagingService:
                     "transport_revision": message.transport_revision,
                     "deterministic_turn_id": str(self._turn_id(message)),
                     "deterministic_outbound_id": str(self._outbound_id(message)),
+                    **(self.durable_replies.transport_metadata(message, decision)
+                       if self.durable_replies is not None else {}),
                 },
             )
+            durable_audit = inbound_audit
             if not await self._audit_call(message, "append_audit", inbound_audit):
                 raced = await self._audit_call(message, "get_audit",
                     platform=message.platform,
@@ -318,6 +352,7 @@ class PlatformMessagingService:
                     message_id=message.message_id,
                 )
                 if raced is not None:
+                    durable_audit = raced
                     if self._use_storage_lane(message) and self._source_invalidated(message):
                         return self._invalidated_result(message)
                     duplicate_result = self._completed_duplicate_result(message, raced)
@@ -377,8 +412,13 @@ class PlatformMessagingService:
         # Specialist visual perception is explicitly authorized by attention,
         # identity, privacy and consent; never send an unverified/group image to Groq.
         visual_observation = await self._incoming_visual_observation(message, decision)
+        if (visual_observation is not None or message.incoming_image is not None
+                or message.incoming_images) and self._source_invalidated(message):
+            return self._invalidated_result(message)
         if visual_observation is not None and not message.text.strip():
-            if visual_observation.get("status") == "analyzed":
+            if visual_observation.get("observation_version") == 3:
+                cognitive_text = "[Usuário enviou múltiplas imagens; consulte o estado de cada observação visual.]"
+            elif visual_observation.get("status") == "analyzed":
                 cognitive_text = "[Usuário enviou uma imagem]"
             else:
                 # This is a Core-generated transport note, not claimed OCR or
@@ -512,6 +552,24 @@ class PlatformMessagingService:
         # Persist the intent with the input. The queue reconciles the crash
         # window between these separate writes, without importing old history.
         request.metadata["reflection_enqueue_requested"] = enqueue_reflection
+        durable = bool(
+            self.durable_replies is not None and durable_audit is not None
+            and durable_audit.metadata.get("durable_reply_transport")
+            and self.durable_replies.eligible(message, decision)
+        )
+        if durable:
+            # The existing audit owns the original exact text and the
+            # allowlisted reconstruction data. Cognitive metadata carries
+            # only its reference, not native transport IDs or attachment bytes.
+            request.text = message.text
+            request.metadata.update({
+                "reply_enqueue_requested": True,
+                "reply_audit_id": str(durable_audit.id),
+                "reply_outbound_id": str(self._outbound_id(message)),
+            })
+        if durable:
+            return await self.durable_replies.accept(
+                message, decision, request, duplicate=duplicate_recovery)
         await self.cognition.observe_input_async(request)
         if enqueue_reflection:
             self.reflections.enqueue(request)
@@ -1393,6 +1451,7 @@ class PlatformMessagingService:
             "messaging_audit_count": self.store.count_audit(),
             "messaging_outbound_pending_count": self.store.pending_outbound_count(),
             "messaging_inflight_count": len(self._inflight),
+            "durable_reply_active": bool(self.durable_replies and self.durable_replies.active),
             "memory_reflection_jobs": self.reflections.counts(),
             "messaging_cognition_timeout_seconds": self.cognition_timeout_seconds,
             "messaging_provider_total_budget_seconds": self.provider_total_budget_seconds,

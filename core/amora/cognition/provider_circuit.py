@@ -40,6 +40,7 @@ class ProviderCircuitRegistry:
     def __init__(self, *, half_open_probe_lease_seconds: float = 5.0) -> None:
         self.half_open_probe_lease_seconds = max(0.1, float(half_open_probe_lease_seconds))
         self._records: dict[tuple[str, str], ProviderCircuit] = {}
+        self._active_probes: set[tuple[str, str]] = set()
 
     def _key(self, provider: str, task_class: str) -> tuple[str, str]:
         return (str(provider), str(task_class))
@@ -77,6 +78,43 @@ class ProviderCircuitRegistry:
         current.probe_lease_until = None
         current.last_failure_code = None
         return current
+
+    def excluded_names(self, task_class: str, *, now: datetime) -> set[str]:
+        """Read-only candidate filtering; ranking never consumes a probe."""
+        return {
+            provider for (provider, task), record in self._records.items()
+            if task == str(task_class) and (
+                (provider, task) in self._active_probes
+                or (record.state is CircuitState.OPEN
+                    and record.open_until is not None and record.open_until > now)
+                or (record.state is CircuitState.HALF_OPEN
+                    and record.probe_lease_until is not None and record.probe_lease_until > now)
+            )
+        }
+
+    def begin_attempt(self, provider: str, task_class: str, *, now: datetime) -> bool:
+        """Acquire a half-open probe at actual dispatch, not at ranking."""
+        key = self._key(provider, task_class)
+        if provider in self.excluded_names(task_class, now=now):
+            return False
+        current = self.record(provider, task_class)
+        if current.state is not CircuitState.CLOSED:
+            current.state = CircuitState.HALF_OPEN
+            current.probe_lease_until = None
+            self._active_probes.add(key)
+        return True
+
+    def end_attempt(self, provider: str, task_class: str, *, now: datetime) -> None:
+        """Release on success, failure or cancellation; unresolved probes reopen."""
+        key = self._key(provider, task_class)
+        if key not in self._active_probes:
+            return
+        self._active_probes.discard(key)
+        current = self.record(provider, task_class)
+        if current.state is CircuitState.HALF_OPEN:
+            current.state = CircuitState.OPEN
+            current.open_until = now
+            current.probe_lease_until = None
 
     def routing_decision(self, task_class: str, *, now: datetime) -> CircuitRoutingDecision:
         excluded: set[str] = set()
