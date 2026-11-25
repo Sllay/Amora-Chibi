@@ -275,7 +275,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
             try:
                 evidence = await asyncio.wait_for(
                     navigator.research(request.text, request.session_id),
-                    timeout=16.0 if (navigator.reader is not None or navigator.browser is not None) else 11.0,
+                    timeout=16.0 if (navigator.reader is not None or navigator.browser is not None
+                                     or (web_intent is not None and web_intent.depth == "deep")) else 11.0,
                 )
             except Exception:
                 evidence = {"action": "unknown", "status": "failed",
@@ -906,7 +907,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 "realization_validated": True,
                 "web_sources": [
                     {"url": item.get("url", ""), "title": item.get("title", "")}
-                    for item in (context.web_research.get("sources") or [])[:2]
+                    for item in (context.web_research.get("sources") or [])[:5 if context.web_research.get("depth") == "deep" else 2]
                     if item.get("status") == "opened"
                 ] if context is not None and context.web_research else [],
                 "web_references": [

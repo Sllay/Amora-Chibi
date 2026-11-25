@@ -191,7 +191,7 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
         "research_progress":{
             "search_calls_started":attempted, "reads_started":reads_started,
             "read_count":len(sources), "found_count":len(references),
-            "partial":partial or bool(failures) or not sources,
+            "partial":partial or bool(errors) or bool(failures) or not sources,
             "stop_reason":"deadline" if partial else "bounded_pass_complete",
             "search_failures":errors[:MAX_SEARCH_CALLS], "read_failures":failures[:MAX_READS],
             "cross_source_claims_verified":False,

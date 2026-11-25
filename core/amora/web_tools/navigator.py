@@ -380,6 +380,7 @@ def _clean_search_query(raw: str, match: re.Match[str]) -> str:
     Godot Engine' -> 'novidade Android Godot Engine'. No model call needed.
     """
     subject = raw[match.end():match.end() + 400]
+    subject = _DEEP_REQUEST_RE.sub(" ", subject)
     # 'na web' describes the medium; preserve 'web' when it belongs to
     # a technical topic such as 'pesquise WebAssembly'.
     subject = re.sub(r"(?i)\b(?:na|pela|pela?\s+a|pela\s+|pela|por|via)\s+(?:web|internet)\b", " ", subject)
@@ -852,7 +853,7 @@ class WebNavigator:
                 "focus": _clean(topic, 90),
                 "sources": [
                     {"url": str(item.get("url") or ""), "title": str(item.get("title") or "")}
-                    for item in (result.get("sources") or [])[:2] if isinstance(item, dict)
+                    for item in (result.get("sources") or [])[:5 if result.get("depth") == "deep" else 2] if isinstance(item, dict)
                     and item.get("status") == "opened"
                 ],
                 "references": [
@@ -931,7 +932,7 @@ class WebNavigator:
             "focus": str(record.get("topic") or "")[:90]
                 or (_page_topic(sources[0]) if sources else ""),
             "sources": [{"url": e["url"], "title": str(e.get("title") or "")}
-                        for e in sources[:2]],
+                        for e in sources[:5 if record.get("depth") == "deep" else 2]],
             "references": [{"url": e["url"], "title": str(e.get("title") or "")}
                            for e in refs[:12]],
         }

@@ -341,6 +341,14 @@ def realization_instruction(context: CognitiveContext) -> str:
             "as afirmações, sem transformar alegações controversas em fatos "
             "apenas por terem aparecido numa página. "
         )
+        if context.web_research.get("depth") == "deep":
+            web_cue += (
+                " Pesquisa aprofundada: compare as fontes realmente lidas, indique divergências "
+                "e não trate a quantidade de domínios como confirmação independente. "
+                "Respeite research_progress; se parcial ou limitado, deixe explícito o que falta. "
+                "Resultados encontrados mas não lidos não sustentam conclusões. "
+            )
+
     specialist = ""
     if context.specialist_support:
         specialist = (
