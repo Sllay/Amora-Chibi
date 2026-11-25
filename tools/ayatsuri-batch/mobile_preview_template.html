@@ -280,7 +280,7 @@ function eye(side,opening,lookX,lookY,irisScale){
  g.clearRect(0,0,c.width,c.height);
  g.drawImage(images[id],b.x,b.y,b.w,b.h,0,0,b.w,b.h);
  g.globalCompositeOperation="source-atop";
- const tx=Math.min(b.w*.22,Math.max(b.w*.12,b.w-ib.w)*.56)*lookX*opening;
+ const tx=Math.min(b.w*.22,Math.max(b.w*.18,b.w-ib.w)*.56)*lookX*opening;
  const ty=Math.min(b.h*.16,Math.max(b.h*.12,b.h-ib.h)*.48)*lookY*opening;
  const kinetic=Math.min(.085,Math.abs(bounce.vx)*.008+Math.abs(bounce.vy)*.006);
  g.save();

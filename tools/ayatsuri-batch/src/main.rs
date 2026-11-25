@@ -525,7 +525,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported, doc: &Document) -> 
             // Real eye movement: drive toward the outer rim but clip to the
             // original sclera. At maximum look, an iris reaches ~55% of the
             // available edge gap, instead of barely shifting at all.
-            let travel_x=((eye.w-iris_region.w).max(eye.w*0.12)*0.56).min(eye.w*0.22);
+            let travel_x=((eye.w-iris_region.w).max(eye.w*0.18)*0.56).min(eye.w*0.22);
             let travel_y=((eye.h-iris_region.h).max(eye.h*0.12)*0.48).min(eye.h*0.16);
             // Inertial bounce channels are driven by exported Cubism physics3.
             // Gentle overshoot and elastic squash accompany gaze transitions.

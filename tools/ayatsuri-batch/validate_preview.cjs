@@ -213,7 +213,7 @@ async function run() {
       Math.max(...samples.slice(57,76))
     ];
     const b=box("eye_white_L"),ib=box("iris_L");
-    const travelX=Math.min(b.w*.22,Math.max(b.w*.12,b.w-ib.w)*.56);
+    const travelX=Math.min(b.w*.22,Math.max(b.w*.18,b.w-ib.w)*.56);
     return {closed,peaks,atEnd:samples[samples.length-1],travelRatio:travelX/b.w};
   });
   if(irisChecks.closed<.94||irisChecks.closed>.96||
