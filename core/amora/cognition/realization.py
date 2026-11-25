@@ -299,7 +299,17 @@ def realization_instruction(context: CognitiveContext) -> str:
     # image as if it were a separate message.
     visual_cue = ""
     if isinstance(context.visual_observation, dict):
-        if context.visual_observation.get("status") == "analyzed":
+        if context.visual_observation.get("observation_version") == 3:
+            visual_cue = (
+                " A pessoa enviou várias imagens na mesma mensagem. Cada image_number "
+                "representa a ordem original entre os anexos de imagem; image_count é o total. "
+                "Compare somente as observações analisadas, sempre identifique a imagem correta. "
+                "Não atribua evidência de uma imagem a outra nem invente pixels. "
+                "Se status=partial/unavailable ou faltarem números, informe quais imagens "
+                "não pôde analisar e responda a legenda e as partes independentes. "
+                "A comparação usa descrições do sensor, não visão simultânea direta. "
+            )
+        elif context.visual_observation.get("status") == "analyzed":
             visual_cue = (
                 " A pessoa enviou UMA mensagem com texto e imagem. Responda "
                 "ao pedido literal dela usando a observação visual permitida "

@@ -173,6 +173,23 @@ class ExpressionRef(BaseModel):
     fingerprint_source: str | None = Field(default=None, max_length=64)
 
 
+class InboundImageItem(BaseModel):
+    """One attempted native attachment; no synthetic observations from worker."""
+    model_config = ConfigDict(extra="forbid")
+    attachment_id: str = Field(min_length=1, max_length=256)
+    image: InboundImageContent | None = None
+    ingest_status: str | None = Field(default=None, max_length=96)
+
+    @model_validator(mode="after")
+    def check_item(self):
+        if self.image is not None:
+            if self.image.attachment_id != self.attachment_id or self.ingest_status:
+                raise ValueError("image item identity or status mismatch")
+        elif not self.ingest_status or not self.ingest_status.startswith("IMAGE_"):
+            raise ValueError("missing image ingest status")
+        return self
+
+
 class InboundMessage(BaseModel):
     """Provider/platform-independent inbound envelope.
 
@@ -202,6 +219,7 @@ class InboundMessage(BaseModel):
     attachments: list[AttachmentRef] = Field(default_factory=list, max_length=16)
     incoming_image: InboundImageContent | None = None
     incoming_image_status: str | None = Field(default=None, max_length=96)
+    incoming_images: list[InboundImageItem] = Field(default_factory=list, max_length=3)
     expressions: list[ExpressionRef] = Field(default_factory=list, max_length=8)
     available_expressions: list[ExpressionRef] = Field(default_factory=list, max_length=64)
     timestamp: datetime
@@ -212,7 +230,24 @@ class InboundMessage(BaseModel):
 
     @model_validator(mode="after")
     def require_content(self) -> "InboundMessage":
-        if self.incoming_image is not None:
+        if self.incoming_images:
+            if (self.incoming_image is not None or self.incoming_image_status
+                    or self.platform != MessagingPlatform.DISCORD
+                    or self.channel_type != ChannelType.DM
+                    or not self.remote_processing_allowed
+                    or self.privacy_scope != PrivacyScope.PERSONAL):
+                raise ValueError("image batch requires exclusively authorized DM transport")
+            ids = [item.attachment_id for item in self.incoming_images]
+            native = [a.attachment_id for a in self.attachments]
+            if (len(set(ids)) != len(ids) or any(native.count(i) != 1 for i in ids)
+                    or ids != sorted(ids, key=native.index)):
+                raise ValueError("image batch order or attachment identity mismatch")
+            if sum(len(item.image.content_base64) for item in self.incoming_images
+                   if item.image is not None) > 3_733_336:
+                raise ValueError("image batch aggregate payload exceeds limit")
+        images = ([self.incoming_image] if self.incoming_image is not None else
+                  [item.image for item in self.incoming_images if item.image is not None])
+        for image in images:
             image_mimes = {
                 "image/png", "image/jpeg", "image/webp",
                 # Native iPhone/modern browser formats are converted to WebP
@@ -224,19 +259,19 @@ class InboundMessage(BaseModel):
             # WebP. The native attachment ID and original raster MIME remain
             # mandatory; Core independently checks the converted byte signature.
             if (self.platform != MessagingPlatform.DISCORD or self.channel_type != ChannelType.DM
-                    or self.incoming_image.content_mime not in provider_mimes
-                    or not any(a.attachment_id == self.incoming_image.attachment_id
+                    or image.content_mime not in provider_mimes
+                    or not any(a.attachment_id == image.attachment_id
                                and a.media_type
                                and a.media_type.lower().split(";", 1)[0] in image_mimes
                                for a in self.attachments)):
                 raise ValueError("incoming image must match a native Discord DM raster attachment")
-            if self.incoming_image.source_url and (
+            if image.source_url and (
                 not self.remote_processing_allowed
                 or self.privacy_scope != PrivacyScope.PERSONAL
                 or not _verified_discord_cdn_url(
-                    self.incoming_image.source_url,
+                    image.source_url,
                     self.conversation_id,
-                    self.incoming_image.attachment_id,
+                    image.attachment_id,
                 )
             ):
                 raise ValueError("incoming image URL must be a verified same-channel Discord attachment")

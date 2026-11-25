@@ -57,9 +57,7 @@ class IncomingVisualObservation(BaseModel):
         return data
 
 
-def visual_context_for_request(value, *, remote: bool, private: bool, mode: str) -> dict | None:
-    if not remote or not private or mode in {"reflection", "autonomous_initiation"}:
-        return None
+def _single_context(value) -> dict | None:
     try:
         observation = IncomingVisualObservation.model_validate(value)
     except (ValueError, TypeError):
@@ -71,3 +69,48 @@ def visual_context_for_request(value, *, remote: bool, private: bool, mode: str)
     elif observation.source != "core_unavailable" or observation.description or observation.visible_text:
         return None
     return observation.as_context()
+
+
+class VisualBatchItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    image_number: int = Field(ge=1, le=16)
+    observation: IncomingVisualObservation
+
+
+class VisualBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    observation_version: Literal[3]
+    source: Literal["vision_batch"]
+    status: Literal["analyzed", "partial", "unavailable"]
+    image_count: int = Field(ge=2, le=16)
+    images: list[VisualBatchItem] = Field(min_length=1, max_length=3)
+
+    @model_validator(mode="after")
+    def validate_batch(self):
+        numbers = [item.image_number for item in self.images]
+        if numbers != list(range(1, len(numbers) + 1)) or len(numbers) > self.image_count:
+            raise ValueError("invalid visual order")
+        if any(_single_context(item.observation.as_context()) is None for item in self.images):
+            raise ValueError("invalid image evidence")
+        analyzed = sum(item.observation.status == "analyzed" for item in self.images)
+        expected = "analyzed" if analyzed == self.image_count else "partial" if analyzed else "unavailable"
+        if expected != self.status:
+            raise ValueError("visual batch outcome mismatch")
+        return self
+
+    def as_context(self):
+        return {"observation_version":3, "source":self.source, "status":self.status,
+                "image_count":self.image_count,
+                "images":[{"image_number":item.image_number,
+                           "observation":item.observation.as_context()} for item in self.images]}
+
+
+def visual_context_for_request(value, *, remote: bool, private: bool, mode: str) -> dict | None:
+    if not remote or not private or mode in {"reflection", "autonomous_initiation", "scheduled_reminder"}:
+        return None
+    if isinstance(value, dict) and value.get("observation_version") == 3:
+        try:
+            return VisualBatch.model_validate(value).as_context()
+        except (ValueError, TypeError):
+            return None
+    return _single_context(value)

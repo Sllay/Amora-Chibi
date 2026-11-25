@@ -171,6 +171,55 @@ class PlatformMessagingService(BasePlatformMessagingService):
                 and decision.action == RoutingAction.RESPOND
                 and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)):
             return None
+        if message.incoming_images:
+            return await self._visual_batch(message, decision)
+        return await self._visual_single(message)
+
+    async def _visual_batch(self, message, decision):
+        from amora.cognition.visual_context import visual_context_for_request
+        # Attachment order is the only numbering authority. Include skipped
+        # native images, not non-image documents in the count.
+        supplied = {item.attachment_id: item for item in message.incoming_images}
+        refs = [a for a in message.attachments if a.attachment_id in supplied
+                or (a.media_type or '').lower().split(';', 1)[0].startswith('image/')]
+        count = len(refs)
+        if count < 2:
+            return unavailable_visual_observation('invalid_observation')
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 27
+        observations = []
+        for index, ref in enumerate(refs[:3], 1):
+            item = supplied.get(ref.attachment_id)
+            # Do not turn a cached owner decision into authorization for a
+            # subsequent image when a binding has since been revoked.
+            if not is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id):
+                return None
+            remaining = deadline - loop.time()
+            if item is None:
+                result = unavailable_visual_observation('processing_failed')
+            elif remaining <= 0:
+                result = unavailable_visual_observation('timeout')
+            else:
+                single = message.model_copy(update={'incoming_images': [], 'attachments': [ref],
+                    'incoming_image': item.image, 'incoming_image_status': item.ingest_status})
+                try:
+                    # Reserve a fair share of the existing 27-second budget.
+                    result = await asyncio.wait_for(self._visual_single(single),
+                        timeout=remaining / (min(3, count) - index + 1))
+                except TimeoutError:
+                    result = unavailable_visual_observation('timeout')
+                result = visual_context_for_request(result, remote=True, private=True, mode='reply')
+                if result is None:
+                    result = unavailable_visual_observation('invalid_observation')
+            observations.append({'image_number': index, 'observation': result})
+        if not is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id):
+            return None
+        analyzed = sum(row['observation']['status'] == 'analyzed' for row in observations)
+        return {'observation_version': 3, 'source': 'vision_batch', 'image_count': count,
+                'images': observations, 'status': 'analyzed' if analyzed == count else
+                'partial' if analyzed else 'unavailable'}
+
+    async def _visual_single(self, message):
         has_image = bool(message.incoming_image) or any(
             a.media_type and a.media_type.lower().split(";", 1)[0].startswith("image/")
             for a in message.attachments

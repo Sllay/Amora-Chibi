@@ -413,7 +413,9 @@ class PlatformMessagingService:
         # identity, privacy and consent; never send an unverified/group image to Groq.
         visual_observation = await self._incoming_visual_observation(message, decision)
         if visual_observation is not None and not message.text.strip():
-            if visual_observation.get("status") == "analyzed":
+            if visual_observation.get("observation_version") == 3:
+                cognitive_text = "[Usuário enviou múltiplas imagens; consulte o estado de cada observação visual.]"
+            elif visual_observation.get("status") == "analyzed":
                 cognitive_text = "[Usuário enviou uma imagem]"
             else:
                 # This is a Core-generated transport note, not claimed OCR or

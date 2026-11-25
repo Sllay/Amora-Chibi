@@ -124,8 +124,10 @@ export async function collectDiscordIncomingImage(message, {
   timeoutMs = MAX_TIMEOUT_MS,
   convertImpl = transcodeOversizedImage,
   onStage = () => {},
+  maxBytes = MAX_INBOUND_IMAGE_BYTES,
 } = {}) {
   if (!message?.id || !snowflake(message?.channel_id) || message.guild_id) return null;
+  if (!Number.isInteger(maxBytes) || maxBytes < 12 || maxBytes > MAX_INBOUND_IMAGE_BYTES) throw new IncomingImageError('IMAGE_TRANSPORT_TOO_LARGE');
   const candidate = (Array.isArray(message.attachments) ? message.attachments.slice(0, 16) : [])
     .find((item) => nativeMimeHint(item) !== null);
   if (!candidate) return null;
@@ -180,11 +182,11 @@ export async function collectDiscordIncomingImage(message, {
       ) ? url : null;
       // HEIC and AVIF are decoded locally into the closed, provider-safe
       // image MIME contract even when the native file is under 4 MiB.
-      if (source.length > MAX_INBOUND_IMAGE_BYTES || !CORE_MIMES.has(mime)) {
+      if (source.length > maxBytes || !CORE_MIMES.has(mime)) {
         onStage('transcode_started');
-        const converted = await convertImpl(source, mime);
+        const converted = await convertImpl(source, mime, { maxBytes });
         if (!converted || !Buffer.isBuffer(converted.bytes) ||
-            !converted.bytes.length || converted.bytes.length > MAX_INBOUND_IMAGE_BYTES ||
+            !converted.bytes.length || converted.bytes.length > maxBytes ||
             converted.mime !== mimeFromSignature(converted.bytes)) {
           throw new IncomingImageError('IMAGE_TRANSFORM_OUTPUT_INVALID');
         }
@@ -214,4 +216,33 @@ export async function collectDiscordIncomingImage(message, {
     }
   }
   throw lastFetchError || new IncomingImageError('IMAGE_URL_INVALID');
+}
+
+
+export function discordImageCandidates(message) {
+  return (Array.isArray(message?.attachments) ? message.attachments.slice(0, 16) : [])
+    .filter(item => nativeMimeHint(item) !== null ||
+      String(item?.content_type || '').toLowerCase().startsWith('image/'));
+}
+
+export async function collectDiscordIncomingImages(message, options = {}) {
+  if (message?.guild_id || !message?.id || !snowflake(message?.channel_id)) return [];
+  const candidates = discordImageCandidates(message).slice(0, 3);
+  const maxBytes = Math.floor(MAX_INBOUND_IMAGE_BYTES / Math.max(1, candidates.length)) - 4;
+  const items = [];
+  // Sequential download/transcode: do not multiply native image RAM pressure.
+  for (const candidate of candidates) {
+    const attachment_id = String(candidate.id);
+    if (!snowflake(attachment_id)) continue;
+    try {
+      const image = await collectDiscordIncomingImage({...message, attachments:[candidate]},
+        {...options, maxBytes});
+      items.push(image ? {attachment_id, image} :
+        {attachment_id, ingest_status:'IMAGE_UNSUPPORTED_FORMAT'});
+    } catch (error) {
+      items.push({attachment_id, ingest_status:error instanceof IncomingImageError ?
+        error.code : 'IMAGE_FETCH_FAILED'});
+    }
+  }
+  return items;
 }

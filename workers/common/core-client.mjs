@@ -96,7 +96,7 @@ export class MessagingCoreClient {
     return this.request('/v1/messaging/worker/inbound', {
       method: 'POST',
       body: message,
-      timeoutMs: message?.incoming_image || message?.incoming_image_status
+      timeoutMs: message?.incoming_image || message?.incoming_image_status || message?.incoming_images?.length
         ? IMAGE_INBOUND_TIMEOUT_MS : INBOUND_TIMEOUT_MS,
     });
   }

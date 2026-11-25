@@ -15,7 +15,7 @@ import {
   splitDiscordText,
 } from './normalize.mjs';
 import { DiscordSocialRuntime } from './social-runtime.mjs';
-import { collectDiscordIncomingImage, IncomingImageError } from './incoming-image.mjs';
+import { collectDiscordIncomingImage, collectDiscordIncomingImages, discordImageCandidates, IncomingImageError } from './incoming-image.mjs';
 import { transcodeOversizedImage } from './incoming-image-transform.mjs';
 import { WebScreenshotService, screenshotMultipart } from './web-screenshot.mjs';
 import { messagingTurnId, startTypingProgress } from './typing-progress.mjs';
@@ -603,7 +603,18 @@ export class DiscordWorker {
           ? Math.ceil(announced / (1024 * 1024)) : -1;
         safeLog('IMAGE_INGEST_BEGIN', `pipeline=${IMAGE_PIPELINE_VERSION} native_mib_ceil=${mib}`);
       }
-      try {
+      if (discordImageCandidates(message).length > 1) {
+        const batch = await collectDiscordIncomingImages(message, {
+          onStage: (stage) => safeLog('IMAGE_INGEST_STAGE', stage),
+        });
+        for (const item of batch) {
+          const nativeRef = normalized.attachments?.find(a => a.attachment_id === item.attachment_id);
+          if (nativeRef && (!nativeRef.media_type || nativeRef.media_type === 'application/octet-stream')) {
+            nativeRef.media_type = item.image?.content_mime || 'image/unknown';
+          }
+        }
+        normalized.incoming_images = batch;
+      } else try {
         normalized.incoming_image = await collectDiscordIncomingImage(message, {
           onStage: (stage) => safeLog('IMAGE_INGEST_STAGE', stage),
         });
@@ -656,6 +667,16 @@ export class DiscordWorker {
           // A gateway can reject a 4 MiB image after Base64 expands JSON
           // beyond its request-body cap. Never silently lose the entire turn.
           // Try one smaller visual derivative, then metadata-only delivery.
+          if (Number(error?.status) === 413 && normalized.incoming_images?.some(item => item.image)) {
+            // One metadata-only retry preserves ordering and caption without
+            // dropping the message or retrying an oversized aggregate body.
+            normalized.incoming_images = normalized.incoming_images.map(item => ({
+              attachment_id:item.attachment_id,
+              ingest_status:item.ingest_status || 'IMAGE_TRANSPORT_TOO_LARGE',
+            }));
+            safeLog('IMAGE_TRANSPORT_RECOVERY', 'reason=CORE_HTTP_413 action=batch_metadata_only');
+            continue;
+          }
           if (Number(error?.status) === 413 && normalized.incoming_image) {
             if (image413Recovery === 0) {
               image413Recovery = 1;
