@@ -64,3 +64,6 @@
 
 ## RUN03 A — continuidade após falha e intenção de captura
 - Pesquisa sem fontes mantém tópico explícito e profundidade em snapshot privado de workspace (sem entradas falsas); retorno de erro não fornece links antigos. Falha recente recuperável após restart, TTL 15 min. Continuação conserva profundidade e até 240 caracteres. Detector de captura compartilhado, inclui flexões de envio e negação explícita. Retry genérico ainda exige lease owner DM; SSRF e transportes inalterados. CI pendente; refinamento, evidência comparativa, entrega física e certificação live pendentes. Sem merge/deploy/monitoramento.
+
+### RUN03 A1 — preservação do contrato de falha
+- d98aff4: 10/12 workflows PASS; Core 45692969831 e Browser 45692969768 falharam no mesmo teste test_all_irrelevant_results_are_not_cited_or_opened. Core 2234 passed, 166 skipped, 1 failed. Causa: metadados de continuidade adicionados ao retorno público de falha. Corrigido para registrar tópico/profundidade exclusivamente na projeção interna e workspace privado, retornando o formato original tanto em busca rápida quanto profunda. Teste original intacto; regressão adicional verifica ausência dos metadados no retorno e recuperação após restart. CI pendente. Sem merge/deploy/monitoramento.

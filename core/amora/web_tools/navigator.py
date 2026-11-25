@@ -1222,11 +1222,19 @@ class WebNavigator:
                 latest = self.workspace.recent(session_id, 1)
                 checkpoint = latest[0] if latest else None
                 if resumable_checkpoint(checkpoint, search_topic):
-                    return self._record_delivery(session_id, await deep_search(
-                        self, search_topic, text, session_id, seconds=9.0, resume=checkpoint))
+                    result = await deep_search(
+                        self, search_topic, text, session_id, seconds=9.0, resume=checkpoint)
+                    if result.get("status") == "failed":
+                        self._record_delivery(session_id, {**result, "topic": search_topic})
+                        return result
+                    return self._record_delivery(session_id, result)
             if intent.depth == "deep":
                 from .deep_research import deep_search
-                return self._record_delivery(session_id, await deep_search(self, search_topic, text, session_id))
+                result = await deep_search(self, search_topic, text, session_id)
+                if result.get("status") == "failed":
+                    self._record_delivery(session_id, {**result, "topic": search_topic})
+                    return result
+                return self._record_delivery(session_id, result)
             planned_queries = [search_topic]
             if self.planner is not None:
                 try:
@@ -1313,7 +1321,7 @@ class WebNavigator:
             failure={"action": intent.action, "status": "failed", "reason": code,
                      "sources": [], "references": []}
             if intent.action=="search" and search_topic:
-                return self._record_delivery(session_id,{**failure,"topic":search_topic,"depth":intent.depth})
+                self._record_delivery(session_id,{**failure,"topic":search_topic,"depth":intent.depth})
             return failure
         except Exception:
             # DNS/HTML/parser failures are not evidence. Avoid dumping user
@@ -1321,7 +1329,7 @@ class WebNavigator:
             failure={"action": intent.action, "status": "failed", "reason": "WEB_RUNTIME_FAILED",
                      "sources": [], "references": []}
             if intent.action=="search" and search_topic:
-                return self._record_delivery(session_id,{**failure,"topic":search_topic,"depth":intent.depth})
+                self._record_delivery(session_id,{**failure,"topic":search_topic,"depth":intent.depth})
             return failure
 
     async def _open(self, url: str, session_id: str, action: str,

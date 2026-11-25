@@ -254,6 +254,7 @@ async def test_run03_empty_research_recovers_topic_without_inventing_sources(not
     nav=WebNavigator(fetch_page=open_page,search=lambda _: [],workspace=notebook)
     result=await nav.research("pesquise "+("a fundo " if deep else "")+"Godot Engine","owner-dm")
     assert result["status"]=="failed" and not result["sources"] and not result["references"]
+    assert not {"topic","query","discovered_at"}.intersection(result)
     record=notebook.recent("owner-dm")[0]
     assert record["topic"]=="Godot Engine" and record["entries"]==[]
     assert record["status"]=="failed"
