@@ -20,6 +20,8 @@ async function run() {
   await page.goto("file://"+html,{waitUntil:"load",timeout:45000});
   await page.waitForFunction(()=>document.querySelector("#status")?.textContent.includes("prévia pronta"),{timeout:45000});
   await page.waitForFunction(()=>!!document.querySelector("canvas")?.getContext("2d")?.getImageData(600,600,1,1)?.data[3],{timeout:30000});
+  const identity=await page.evaluate(()=>({label:document.getElementById("ui-version")?.textContent,build:document.getElementById("ui-build")?.textContent,api:window.AmoraVisualEngine.version}));
+  if(identity.label!==`Visual Engine V${identity.api}`||!/^Build (?:[a-f0-9]{7,40}|local-[a-f0-9]{12})$/.test(identity.build))throw Error("Missing or stale visible build identity: "+JSON.stringify(identity));
   // Geometry tests in the real browser, not just "canvas hash changed".
   const lidChecks=await page.evaluate(()=>{
    const samples=[0,.03,.06,.18,.35,.5,.65,1].map(opening=>({

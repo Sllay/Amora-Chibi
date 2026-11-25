@@ -11,6 +11,8 @@ import hashlib
 import io
 import json
 import sys
+import subprocess
+import re
 from pathlib import Path
 
 from PIL import Image
@@ -85,7 +87,11 @@ def build(manifest: Path, output: Path) -> None:
     if "__AMORA_PREVIEW_DATA__" not in template:
         raise ValueError("Preview template placeholder was not found")
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(template.replace("__AMORA_PREVIEW_DATA__", payload), encoding="utf-8")
+    revision = subprocess.run(["git", "rev-parse", "--short=12", "HEAD"], cwd=Path(__file__).parent,
+                              capture_output=True, text=True, check=False).stdout.strip()
+    if not re.fullmatch(r"[a-f0-9]{7,40}", revision):
+        revision = "local-" + hashlib.sha256((template + payload).encode("utf-8")).hexdigest()[:12]
+    output.write_text(template.replace("__AMORA_BUILD_ID__", revision).replace("__AMORA_PREVIEW_DATA__", payload), encoding="utf-8")
     print(f"Offline interactive rig preview: {output} ({output.stat().st_size} bytes)")
 
 
