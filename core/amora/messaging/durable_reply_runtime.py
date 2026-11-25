@@ -18,7 +18,8 @@ from uuid import NAMESPACE_URL, uuid5
 from pydantic import ValidationError
 
 from amora.cognition import CognitiveRequest
-from amora.cognition.durable_realization import DURABLE_REALIZATION, DeferredRealization, DURABLE_AUTHORIZATION
+from amora.cognition.durable_realization import (DURABLE_REALIZATION, DeferredRealization,
+    DURABLE_AUTHORIZATION, DURABLE_CAUSAL_CHECK, CausalReplanRequired)
 from amora.cognition.models import JournalStage
 from amora.cognition.speech import SpeechSegmenter
 from amora.events import PrivacyScope
@@ -276,23 +277,67 @@ class DurableReplyRuntime:
         async def live_guard():
             return (self.authorize(message, request) is not None
                     and await self.call("renew", claim))
-        from amora.cognition.causal_conversation import composition_window
+        from amora.cognition.causal_conversation import composition_window, causal_partition
         window = composition_window(request.text)
         age = max(0.0, (self.service.clock.now() - message.timestamp).total_seconds())
         if claim.attempts == 1 and window > age:
             await asyncio.sleep(window - age)
             if not await live_guard():
                 raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
+        async def causal_check(context):
+            engine = self.service.cognition
+            options = {"limit":96, "session_id":request.session_id, "exclude_invalidated":True}
+            lane = engine.store.async_lane
+            if lane is not None:
+                rows = await lane.call("list_messages", **options)
+            else:
+                rows = engine.store.list_messages(**options)
+            _, followups, state = causal_partition(request, rows,
+                allowed=lambda item: engine.compiler.privacy_gate.message_allowed(
+                    item, remote=True, recipient_id=request.speaker_id))
+            original_state = ("anchor_missing" if "CAUSAL_HISTORY_ANCHOR_MISSING" in context.reason_codes
+                              else "partitioned")
+            return state == original_state and followups == context.causal_followups
+
         token = DURABLE_REALIZATION.set(claim.turn_id)
         guard_token = DURABLE_AUTHORIZATION.set(live_guard)
+        causal_token = DURABLE_CAUSAL_CHECK.set(causal_check)
         self.service._active_dm_progress.add(claim.turn_id)
         try:
-            return await asyncio.wait_for(
-                self.service.cognition.respond_observed(request, on_segment=None,
-                    fallback_text=self.service.conversation.composer.operational_provider_fallback()),
-                timeout=self.service.cognition_timeout_seconds + 120.0)
+            started = monotonic()
+            deadline = started + self.service.cognition_timeout_seconds + 120.0
+            total_budget = float(request.metadata["provider_total_budget_seconds"])
+            for index in range(2):
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise TimeoutError()
+                current = request
+                if index:
+                    # Conservative: charge all elapsed wall time against the
+                    # original provider budget; never give replan a fresh one.
+                    budget = min(remaining, total_budget - (monotonic() - started))
+                    if budget < 0.25:
+                        raise CausalReplanRequired()
+                    current = request.model_copy(update={"metadata":{
+                        **request.metadata, "provider_total_budget_seconds":budget}})
+                    if not await live_guard():
+                        raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
+                try:
+                    plan = await asyncio.wait_for(
+                        self.service.cognition.respond_observed(current,on_segment=None,
+                            fallback_text=self.service.conversation.composer.operational_provider_fallback()),
+                        timeout=remaining)
+                except CausalReplanRequired:
+                    if index:
+                        raise
+                    _LOG.info("durable_causal_replan turn_id=%s",claim.turn_id)
+                    continue
+                if index:
+                    plan.reason_codes.append("DURABLE_CAUSAL_REPLANNED")
+                return plan
         finally:
             self.service._active_dm_progress.discard(claim.turn_id)
+            DURABLE_CAUSAL_CHECK.reset(causal_token)
             DURABLE_AUTHORIZATION.reset(guard_token)
             DURABLE_REALIZATION.reset(token)
 

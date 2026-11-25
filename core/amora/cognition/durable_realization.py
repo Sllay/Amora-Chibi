@@ -10,6 +10,12 @@ DURABLE_AUTHORIZATION: ContextVar[Callable[[], Awaitable[bool]] | None] = Contex
     "amora_durable_authorization", default=None)
 
 
+# Only the text dispatcher binds this check. Compare the compiled causal
+# evidence against committed inputs before realizing a response.
+DURABLE_CAUSAL_CHECK: ContextVar[Callable[..., Awaitable[bool]] | None] = ContextVar(
+    "amora_durable_causal_check", default=None)
+
+
 def durable_realization(request):
     return DURABLE_REALIZATION.get() == str(request.turn_id)
 
@@ -21,6 +27,11 @@ class DeferredRealization(RuntimeError):
         self.reasons = tuple(reasons)
         self.retry_after_seconds = retry_after_seconds
         super().__init__("DURABLE_REALIZATION_DEFERRED")
+
+
+class CausalReplanRequired(DeferredRealization):
+    def __init__(self):
+        super().__init__(["DURABLE_CAUSAL_CONTEXT_CHANGED"])
 
 
 def adaptive_context_allowed(context):

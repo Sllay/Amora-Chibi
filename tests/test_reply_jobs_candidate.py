@@ -1104,3 +1104,64 @@ async def test_visual_reference_across_turns_reopened_backend_and_exact_reply(la
         assert (await service._incoming_visual_observation(expired,decision))["status"] == "unavailable"
         assert len(calls) == 2
     service.visual_checkpoints = VisualCheckpointStore(core.database,clock)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("related", [True, False])
+async def test_inflight_correction_replans_only_related_uncommitted_reply(lab, related):
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    service = core.messaging
+    provider = CountingStructuredProvider(name="durable-causal-replan")
+    began, release = asyncio.Event(), asyncio.Event()
+    calls = []
+    async def realize(context):
+        calls.append((context.user_text, list(context.causal_followups)))
+        if len(calls) == 1:
+            began.set()
+            await release.wait()
+        text = ("Resposta revisada para Android." if context.causal_followups
+                else "Resposta inicial sobre Godot.")
+        return {"moves":[{"kind":context.dialogue_plan["response_moves"][0],"text":text}],
+                "closing":"statement","_usage":{"input_tokens":12,"output_tokens":4,"status_code":200}}
+    provider.realize = realize
+    core.cognition.register_provider(provider)
+    first = _dm(core,"causal-replan-first",text="Explique Godot para PC.")
+    first_turn = service._turn_id(first)
+    work = None
+    try:
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(first)).decision.reason_codes
+        work = asyncio.create_task(runtime.run_once())
+        await asyncio.wait_for(began.wait(),timeout=10)
+        clock.advance(timedelta(seconds=1))
+        next_text = "Na verdade, Godot para Android." if related else "Outra pergunta, qual é a capital?"
+        second = _dm(core,"causal-replan-second",text=next_text)
+        second_turn = service._turn_id(second)
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(second)).decision.reason_codes
+        assert core.messaging_store.get_outbound(service._outbound_id(first)) is None
+        assert not core.cognition.store.list_segments(first_turn)
+        release.set()
+        assert await asyncio.wait_for(work,timeout=20)
+        assert (await runtime.call("state",first_turn))["status"] == "ready"
+        assert (await runtime.call("state",second_turn))["status"] == "pending"
+        assert len(calls) == (2 if related else 1)
+        assert calls[0] == (first.text,[])
+        if related:
+            assert calls[1][0] == first.text
+            assert calls[1][1][0]["literal_text"] == next_text
+            assert calls[1][1][0]["turn_id"] == str(second_turn)
+        outbound = core.messaging_store.get_outbound(service._outbound_id(first))
+        assert outbound.text == ("Resposta revisada para Android." if related else "Resposta inicial sobre Godot.")
+        history = core.cognition.store.list_messages(turn_id=first_turn,speaker_id="ENTITY_AMORA")
+        assert history
+        if related:
+            assert all("Resposta inicial" not in (item.raw_text or "") for item in history)
+            assert "DURABLE_CAUSAL_REPLANNED" in outbound.metadata["cognitive_reason_codes"]
+        assert core.cognition.store.get_message_by_dedupe("cognitive-input:"+str(second_turn)).raw_text == next_text
+        assert not core.cognition.store.list_segments(second_turn)
+    finally:
+        release.set()
+        if work is not None and not work.done():
+            work.cancel()
+            await asyncio.gather(work,return_exceptions=True)
+        await _stop_runtime(core)

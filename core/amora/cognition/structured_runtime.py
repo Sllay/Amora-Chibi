@@ -24,7 +24,8 @@ from .providers_structured import GeminiCognitiveProvider
 from .realization import RealizationError, RealizationValidator, ValidatedRealization, response_semantic_filter_enabled
 from .speech import SpeechSegmenter
 from .service import SegmentSink
-from .durable_realization import durable_realization, DeferredRealization, DURABLE_AUTHORIZATION, adaptive_context_allowed
+from .durable_realization import (durable_realization, DeferredRealization, DURABLE_AUTHORIZATION,
+    DURABLE_CAUSAL_CHECK, CausalReplanRequired, adaptive_context_allowed)
 from .provider_resilience import classify_provider_failure, context_rejection
 from .provider_quota import ProviderQuotaDeferred
 
@@ -818,6 +819,13 @@ class CognitiveEngine(ProductionCognitiveEngine):
             guard = DURABLE_AUTHORIZATION.get()
             if guard is None or not await guard():
                 raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
+            causal_check = DURABLE_CAUSAL_CHECK.get()
+            if causal_check is not None and context is not None:
+                if not await causal_check(context):
+                    raise CausalReplanRequired()
+                # The history read may have yielded to source invalidation.
+                if not await guard():
+                    raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
             if validated.frame.self_choices and context is not None:
                 try:
                     choice_decision = commit_self_choices(

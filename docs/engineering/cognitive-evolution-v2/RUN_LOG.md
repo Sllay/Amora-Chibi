@@ -343,6 +343,13 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Referências ficam no caminho multimodal síncrono existente, excluídas do piloto de fila textual, tal como web/imagem. Não migrar jobs já aceitos durante rollout sem drain. TTL não exclui fisicamente eventos. Não há garantia de revogação de conteúdo depois do envio ao provedor cognitivo; rechecagem de origem anterior antes da projeção. Ainda faltam retenção física, recuperação de anexos ausentes, análise visual conjunta, continuidade de referência implícita e certificação real.
 - Testes SQLite/PG18 de conexão reaberta, referência exata vs última, comparação, consentimento, isolamento, expiração e edição/exclusão, validação do envelope histórico. Novo CI pendente. Sem merge na main, sem deploy/monitoramento.
 
+### Integração final — incremento F: replanejamento causal antes da realização
+
+- a20a346 13/13 CI PASS (Core 45535802787, PG18 45535802731), mergeable. Continuidade visual explícita aprovada no CI; proprietário autorizou continuar.
+- No piloto textual durável, a realização validada compara a lista de followups causais do snapshot com a mesma partição de entradas persistidas e filtradas (sessão, privacidade, revisão, consentimento, 96 registros). Fence antes de self choices, histórico, segmentos e entrega. Se divergência, descarta a realização não comprometida, recompila uma vez e revalida. Segundo desvio ou orçamento insuficiente retorna ao mecanismo de retry existente, não envia texto obsoleto. Novo cálculo usa orçamento restante, desconta wall time conservadoramente; mensagens independentes não causam replanejamento. Não altera texto original nem cancela o job do complemento.
+- Teste concorrente com provider sintético bloqueado por evento, correção ou assunto independente admitido enquanto gera, valida snapshot, ausência de saída antiga e preservação da fila em SQLite e PG18.
+- Limites: revisão por leitura antes do commit, NÃO fence transacional de versão da sessão; ainda há janela entre última leitura e stage/finalize. Não cancela tokens em voo, não replaneja uma resposta já enviada ou preparada, não agrupa/desduplica respostas a mensagens distintas, não cobre voz, multimodal ou correções ambíguas. O gate anterior de 8s/3 followups/1800 caracteres permanece. CI e certificação live pendentes. Sem deploy ou monitoramento.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
