@@ -63,7 +63,7 @@ def build(manifest: Path, output: Path) -> None:
             "src":"data:image/png;base64,"+base64.b64encode(closed_data.getvalue()).decode("ascii"),
             "box":list(closure.getchannel("A").getbbox()),
         }
-    # Embed the exact same six extra art layers used in the .moc3 export,
+    # Embed the exact same eight extra art layers used in the .moc3 export,
     # keeping this self-contained HTML functional offline on iOS.
     for name,im in load_extra_assets(manifest).items():
         data_bytes=io.BytesIO()

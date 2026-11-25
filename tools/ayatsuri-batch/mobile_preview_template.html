@@ -61,6 +61,9 @@ footer{font-size:.74rem;color:#aaa7ba;line-height:1.5;margin-top:12px}
 <button data-expr="Sad">Triste</button>
 <button data-expr="Crying">Chorando</button>
 <button data-expr="Sobbing">Choro forte</button>
+<button data-expr="LaughingTears">Chorando de rir</button>
+<button data-expr="Deadpan">Sem reação</button>
+<button data-expr="Enchanted">Encantada</button>
 <button data-expr="Angry">Raiva</button>
 <button data-expr="Shouting">Gritando</button>
 </div>
@@ -73,7 +76,7 @@ footer{font-size:.74rem;color:#aaa7ba;line-height:1.5;margin-top:12px}
 </div>
 <footer>
 <div id="status" role="status">Carregando imagens incorporadas…</div>
-Esta prévia representa a lógica visual das expressões. A exportação <code>.moc3</code> deve ser validada separadamente em um aplicativo Cubism. Seis PNGs novos incorporados. No VTube Studio, somente os canais do modelo Cubism compilado têm efeito; esta versão HTML permite testar visualmente os extras e a física.
+Esta prévia representa a lógica visual das expressões. A exportação <code>.moc3</code> deve ser validada separadamente em um aplicativo Cubism. Oito PNGs de expressão incorporados. No VTube Studio, somente os canais do modelo Cubism compilado têm efeito; esta versão HTML permite testar visualmente os extras e a física.
 </footer>
 </section>
 </main>
@@ -83,7 +86,8 @@ document.getElementById("js-disabled").remove();
 const source=__AMORA_PREVIEW_DATA__;
 const W=source.width,H=source.height, cv=document.getElementById("amora"),ctx=cv.getContext("2d",{alpha:true});
 cv.width=W;cv.height=H;
-const images={}, boxes={};
+const images={}, boxes={}, lowerProfiles={};
+let displayedMouthWeights=[1,0,0,0,0,0];
 const wanted={eyeL:1,eyeR:1,lookX:0,lookY:0,mouth:0,form:0,angle:0,headX:0,headY:0,bodyX:0,bodyY:0,blush:0,tearL:0,tearR:0,mouthPose:0};
 const smoothed={...wanted};
 const spec=[
@@ -95,7 +99,7 @@ const spec=[
  ["bodyX","Corpo 3/4 X",-10,10,.25],["bodyY","Corpo 3/4 Y",-10,10,.25],
  ["blush","Corada dinâmica",0,1,.01],
  ["tearL","Lágrimas E",0,1,.01],["tearR","Lágrimas D",0,1,.01],
- ["mouthPose","Boca (0 auto; 1 fala; 2 grito; 3 triste)",0,3,.01]
+ ["mouthPose","Boca (0 auto; 1 fala; 2 grito; 3 triste; 4 reta; 5 mordendo)",0,5,1]
 ];
 const controls=document.getElementById("controls");
 for(const [id,title,min,max,step] of spec){
@@ -114,12 +118,15 @@ const presets={
  Annoyed:{eyeL:.54,eyeR:.54,mouth:0,form:-.85,mouthPose:3,blush:.58},
  WinkLeft:{eyeL:0,eyeR:1,mouth:.05,form:.7},
  WinkRight:{eyeL:1,eyeR:0,mouth:.05,form:.7},
- Shy:{eyeL:.58,eyeR:.58,mouth:.08,form:.6,lookY:.3,mouthPose:1,blush:1},
+ Shy:{eyeL:.70,eyeR:.70,mouth:0,form:0,lookY:.3,mouthPose:5,blush:1},
  Curious:{eyeL:1,eyeR:.76,mouth:.1,form:.2,lookX:.56,headX:10},
  Sad:{eyeL:.52,eyeR:.52,mouth:0,form:-1,mouthPose:3,blush:.20,tearL:0,tearR:0},
  Crying:{eyeL:.38,eyeR:.38,mouth:.13,form:-.90,mouthPose:3,blush:.23,tearL:.91,tearR:.91},
- Sobbing:{eyeL:.16,eyeR:.16,mouth:.9,form:-.95,mouthPose:2,blush:.35,tearL:1,tearR:1},
- Angry:{eyeL:.6,eyeR:.6,mouth:.36,form:-1,mouthPose:1,blush:.72,tearL:0,tearR:0},
+ Sobbing:{eyeL:.36,eyeR:.36,mouth:0,form:-1,mouthPose:3,headY:8,blush:.23,tearL:1,tearR:1},
+ LaughingTears:{eyeL:.10,eyeR:.10,mouth:.9,form:.9,mouthPose:2,blush:.35,tearL:1,tearR:1},
+ Deadpan:{eyeL:.86,eyeR:.86,mouth:0,form:0,mouthPose:4},
+ Enchanted:{eyeL:.96,eyeR:.96,mouth:0,form:0,mouthPose:5,lookY:-.13,blush:.70},
+ Angry:{eyeL:.6,eyeR:.6,mouth:0,form:-1,mouthPose:4,blush:.72,tearL:0,tearR:0},
  Shouting:{eyeL:.90,eyeR:.90,mouth:1,form:.25,mouthPose:2,blush:.40,tearL:0,tearR:0}
 };
 for(const btn of document.querySelectorAll("[data-expr]")){
@@ -164,8 +171,8 @@ window.AmoraVisualEngine=Object.freeze({
   return true;
  },
  getParameters(){return {...wanted};},
- getMouthWeights(){return mouthLayerWeights(smoothed.mouth,smoothed.mouthPose);},
- version:"4.2"
+ getMouthWeights(){return [...displayedMouthWeights];},
+ version:"4.3"
 });
 function box(id) {
  const b=boxes[id];return {x:b[0],y:b[1],w:b[2]-b[0],h:b[3]-b[1],cx:(b[0]+b[2])/2,cy:(b[1]+b[3])/2};
@@ -214,11 +221,34 @@ function eyeVisibility(opening){
  const t=Math.max(0,Math.min(1,(opening-.010)/.105));
  return t*t*(3-2*t);
 }
+// Build the true outer lash contour once from the approved alpha channel.
+function buildLowerProfile(side){
+ const id="lower_lid_"+side,b=box(id),c=document.createElement("canvas");
+ c.width=b.w;c.height=b.h;
+ const g=c.getContext("2d",{willReadFrequently:true});
+ g.drawImage(images[id],b.x,b.y,b.w,b.h,0,0,b.w,b.h);
+ const a=g.getImageData(0,0,b.w,b.h).data, profile=[];
+ for(let x=0;x<b.w;x++){
+  let edge=null;
+  for(let y=b.h-1;y>=0;y--)if(a[(y*b.w+x)*4+3]>=96){edge=b.y+y+1;break;}
+  profile.push(edge);
+ }
+ lowerProfiles[side]=profile;
+}
+function lowerEdgeAt(side,x,eye,lid){
+ const profile=lowerProfiles[side],i=Math.floor(x-lid.x);
+ const edge=profile&&i>=0&&i<profile.length?profile[i]:null;
+ return edge!==null&&edge!==undefined&&edge>eye.cy-eye.h*.1
+  ?Math.min(eye.y+eye.h,edge):eye.y+eye.h;
+}
+function lowerApertureY(side,x,eye,lid,opening){
+ return lidY(x,lowerEdgeAt(side,x,eye,lid),eye,lid,opening,false);
+}
 function eye(side,opening,lookX,lookY,irisScale){
  const id="eye_white_"+side,irid="iris_"+side;
  const b=box(id),ib=box(irid);
  const top=box("upper_lid_"+side),bottom=box("lower_lid_"+side);
- const strips=60;
+ const strips=Math.ceil(b.w);
  // Cut the visible aperture out of the untouched face. Its two edges
  // exactly follow the upper/lower lash transforms. The iris remains ROUND.
  ctx.save();
@@ -231,7 +261,7 @@ function eye(side,opening,lookX,lookY,irisScale){
  }
  for(let i=strips;i>=0;i--){
   const x=b.x+b.w*i/strips;
-  const y=apertureY(x,b.y+b.h,b,top,bottom,opening);
+  const y=Math.max(apertureY(x,b.y,b,top,bottom,opening),lowerApertureY(side,x,b,bottom,opening));
   ctx.lineTo(x,y);
  }
  ctx.closePath();ctx.clip();
@@ -268,7 +298,7 @@ function apertureY(x,y,eye,top,bottom,opening){
 }
 function lid(side,type,opening){
  const lidName=type+"_lid_"+side,rect=box(lidName),eye=box("eye_white_"+side);
- const img=images[lidName],strips=48,stripW=rect.w/strips;
+ const img=images[lidName],strips=96,stripW=rect.w/strips;
  const upper=type==="upper";
  // One timing curve shared with the exported Cubism mesh. Never allow the
  // upper layer to lead while the lower one trails behind.
@@ -302,20 +332,19 @@ function mouthLayerWeights(opening,pose){
  // Exact semantic contract shared with the Rust/Cubism exporter.
  // 0 automatic; 1 talking; 2 shouting; 3 sad. Large mouth opening
  // overrides talking to show the wide-open drawing.
- const value=Math.max(0,Math.min(3,pose));
+ const value=Math.max(0,Math.min(5,pose));
  const poseWeight=id=>Math.max(0,1-Math.abs(value-id));
  const base=1-smoother((opening-.06)/.20);
  const wideAuto=smoother((opening-.57)/.25);
- const sad=poseWeight(3);
- const remaining=1-sad;
+ const sad=poseWeight(3),flat=poseWeight(4),bite=poseWeight(5);
+ const remaining=Math.max(0,1-sad-flat-bite);
  const wide=remaining*Math.max(wideAuto,poseWeight(2));
  const talk=(remaining-wide)*Math.max(1-base,poseWeight(1));
- return [remaining-wide-talk,talk,wide,sad];
+ return [remaining-wide-talk,talk,wide,sad,flat,bite];
 }
-function drawMouthPose(opening,form,pose){
+function drawMouthPose(opening,form,pose,weights=mouthLayerWeights(opening,pose)){
  // Four original-aligned mouth PNGs with normalized weights.
- const mouthIds=["mouth","extra_mouth_talk","extra_mouth_open_wide","extra_mouth_sad"];
- const weights=mouthLayerWeights(opening,pose);
+ const mouthIds=["mouth","extra_mouth_talk","extra_mouth_open_wide","extra_mouth_sad","extra_mouth_flat","extra_mouth_bite"];
  for(const [idx,weight] of weights.entries()){
   if(weight<.001)continue;
   ctx.save();ctx.globalAlpha*=weight;
@@ -330,8 +359,8 @@ function drawMouthPose(opening,form,pose){
    }
   } else {
    const id=mouthIds[idx],b=box(id);
-   const swell=1+(idx===2?0.038:0.022)*opening;
-   draw(id,{px:b.cx,py:b.cy,sx:swell,sy:swell*(1+.04*opening)});
+   const swell=idx>=3?1:1+(idx===2?0.038:0.022)*opening;
+   draw(id,{px:b.cx,py:b.cy,sx:swell,sy:idx>=3?1:swell*(1+.04*opening)});
   }
   ctx.restore();
  }
@@ -418,7 +447,10 @@ function tick(ms){
  tearFollow("L",smoothed.tearL,openL,t);
  tearFollow("R",smoothed.tearR,openR,t);
  // Mouth uses four pieces of user-approved art, not an invented image.
- drawMouthPose(smoothed.mouth,smoothed.form,smoothed.mouthPose);
+ const targetMouth=mouthLayerWeights(smoothed.mouth,wanted.mouthPose);
+ const mouthEase=1-Math.exp(-delta*19);
+ displayedMouthWeights=displayedMouthWeights.map((v,i)=>v+(targetMouth[i]-v)*mouthEase);
+ drawMouthPose(smoothed.mouth,smoothed.form,wanted.mouthPose,displayedMouthWeights);
  ctx.restore();
  requestAnimationFrame(tick);
 }
@@ -428,7 +460,8 @@ Promise.all(Object.entries(source.layers).map(([name,info])=>new Promise((resolv
  img.onload=resolve;img.onerror=()=>reject(new Error("Falha na camada "+name));
  img.src=info.src;
 }))).then(()=>{
- document.getElementById("status").textContent="10 camadas originais + 6 extras + 4 peças técnicas carregadas · prévia pronta";
+ for(const side of ["L","R"])buildLowerProfile(side);
+ document.getElementById("status").textContent="10 camadas originais + 8 extras + 4 peças técnicas carregadas · prévia pronta";
  requestAnimationFrame(tick);
 }).catch(error=>{document.getElementById("status").textContent=error.message;});
 </script>

@@ -106,13 +106,13 @@ jobs:
               assert payload["Parameters"]
           html = Path("artifacts/amora-mobile-preview.html").read_text()
           assert "data:image/png;base64," in html, "Offline assets are not embedded"
-          assert html.count("data:image/png;base64,") >= 20, "Missing original and six new emotion layers"
+          assert html.count("data:image/png;base64,") >= 22, "Missing original and six new emotion layers"
           assert "__AMORA_PREVIEW_DATA__" not in html
           prepared=json.loads(Path("artifacts/amora-prepared/manifest.json").read_text())
           names={x["name"] for x in prepared["layers"]}
-          assert len(names)==20, f"Expected 20 meshes, got {len(names)}"
-          assert {"extra_blush","extra_mouth_talk","extra_mouth_open_wide","extra_mouth_sad","extra_tear_L","extra_tear_R"}.issubset(names)
-          assert len(refs["Textures"])>=20, "Missing original + extra art textures"
+          assert len(names)==22, f"Expected 22 meshes, got {len(names)}"
+          assert {"extra_blush","extra_mouth_talk","extra_mouth_open_wide","extra_mouth_sad","extra_mouth_flat","extra_mouth_bite","extra_tear_L","extra_tear_R"}.issubset(names)
+          assert len(refs["Textures"])>=22, "Missing original + extra art textures"
           print("Rig bundle, expressions and offline mobile preview verified.")
           PY
       - name: Publish self-contained HTML on public GitHub branch for Safari
@@ -136,6 +136,9 @@ jobs:
           cp artifacts/amora-browser-shy.png preview/shy.png
           cp artifacts/amora-browser-crying.png preview/crying.png
           cp artifacts/amora-browser-sobbing.png preview/sobbing.png
+          cp artifacts/amora-browser-laughingtears.png preview/laughingtears.png
+          cp artifacts/amora-browser-deadpan.png preview/deadpan.png
+          cp artifacts/amora-browser-enchanted.png preview/enchanted.png
           cp artifacts/amora-browser-sad.png preview/sad.png
           cp artifacts/amora-browser-angry.png preview/angry.png
           cp artifacts/amora-browser-shouting.png preview/shouting.png
@@ -143,7 +146,7 @@ jobs:
           cp artifacts/amora-browser-mouth-wide.png preview/mouth-wide.png
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png preview/wink-left.png preview/half-blink.png preview/nearly-closed.png preview/closed-smile.png preview/head-left.png preview/head-right.png preview/head-up.png preview/head-down.png preview/gaze-left.png preview/gaze-right.png preview/shy.png preview/crying.png preview/sobbing.png preview/sad.png preview/angry.png preview/shouting.png preview/mouth-talk.png preview/mouth-wide.png
+          git add preview/laughingtears.png preview/deadpan.png preview/enchanted.png preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png preview/wink-left.png preview/half-blink.png preview/nearly-closed.png preview/closed-smile.png preview/head-left.png preview/head-right.png preview/head-up.png preview/head-down.png preview/gaze-left.png preview/gaze-right.png preview/shy.png preview/crying.png preview/sobbing.png preview/sad.png preview/angry.png preview/shouting.png preview/mouth-talk.png preview/mouth-wide.png
           if ! git diff --cached --quiet; then
             git commit -m "ci(live2d): publish browser animation test [skip ci]"
             git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" || echo "Branch advanced while building; keeping artifact only."

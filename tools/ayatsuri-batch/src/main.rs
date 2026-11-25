@@ -208,15 +208,17 @@ fn mouth_auto_weights(open:f32)->(f32,f32,f32) {
     let wide=smoothstep((open-0.57)/0.25);
     (base,(1.-base)*(1.-wide),(1.-base)*wide)
 }
-fn mouth_layer_weights(open:f32,pose:f32)->[f32;4] {
+fn mouth_layer_weights(open:f32,pose:f32)->[f32;6] {
     // pose=0 auto, 1 talking, 2 shouting, 3 sad. A loud opening always
     // takes priority over the talk pose; sadness is the explicit override.
     let (base,_,wide_auto)=mouth_auto_weights(open);
     let sad=mouth_pose_weight(pose,3.);
-    let remaining=1.-sad;
+    let flat=mouth_pose_weight(pose,4.);
+    let bite=mouth_pose_weight(pose,5.);
+    let remaining=(1.-sad-flat-bite).max(0.);
     let wide=remaining*wide_auto.max(mouth_pose_weight(pose,2.));
     let talk=(remaining-wide)*(1.-base).max(mouth_pose_weight(pose,1.));
-    [remaining-wide-talk,talk,wide,sad]
+    [remaining-wide-talk,talk,wide,sad,flat,bite]
 }
 
 fn smoothstep(value:f32)->f32 {
@@ -264,6 +266,40 @@ fn aperture_vertex(x:f32,y:f32,eye:Region,
     let (_,bottom)=eyelid_vertex(x,y,eye,lower_lid,opening,LidSide::Lower);
     (x,top*(1.-v)+bottom*v)
 }
+
+// Measure the original nontransparent lash columns in source-pixel space.
+// Values are relative to the alpha bounds, then mapped into the imported quad.
+fn lower_lash_profile(layer:&Layer)->Vec<Option<f32>> {
+    let (w,h)=(layer.width as usize,layer.height as usize);
+    let alpha=|x:usize,y:usize|layer.rgba[(y*w+x)*4+3];
+    let (mut x0,mut y0,mut x1,mut y1)=(w,h,0usize,0usize);
+    for y in 0..h { for x in 0..w { if alpha(x,y)>0 {
+        x0=x0.min(x); y0=y0.min(y); x1=x1.max(x+1); y1=y1.max(y+1);
+    } } }
+    if x0>=x1||y0>=y1{return vec![];}
+    (x0..x1).map(|x|(y0..y1).rev().find(|&y|alpha(x,y)>=96)
+        .map(|y|(y+1-y0) as f32/(y1-y0) as f32)).collect()
+}
+fn lower_edge_at(x:f32,eye:Region,lid:Region,profile:&[Option<f32>])->f32{
+    let bottom=eye.cy+eye.h*0.5;
+    let u=(x-(lid.cx-lid.w*0.5))/lid.w.max(0.0001);
+    if !(0.0..1.0).contains(&u)||profile.is_empty(){return bottom;}
+    let i=(u*profile.len() as f32) as usize;
+    profile.get(i).copied().flatten().map(|v|lid.cy-lid.h*0.5+v*lid.h)
+        .filter(|v|*v>eye.cy-eye.h*0.1).map(|v|v.min(bottom)).unwrap_or(bottom)
+}
+fn aperture_vertex_contour(x:f32,y:f32,eye:Region,upper:Region,lower:Region,
+                          profile:&[Option<f32>],opening:f32)->(f32,f32){
+    let top=eye.cy-eye.h*0.5;
+    let bottom=lower_edge_at(x,eye,lower,profile);
+    let clipped=y.min(bottom);
+    let v=((clipped-top)/(bottom-top).max(0.0001)).clamp(0.,1.);
+    let (_,a)=eyelid_vertex(x,clipped,eye,upper,opening,LidSide::Upper);
+    let (_,b)=eyelid_vertex(x,clipped,eye,lower,opening,LidSide::Lower);
+    (x,a*(1.-v)+b*v)
+}
+
+
 
 /// Lightweight 2.5D face turn: the entire fluffy body, horns, eyes and
 /// mouth share one gentle pseudo-perspective lattice. This bends the body
@@ -411,7 +447,7 @@ fn add_root_motion(model: &mut ayatsuri_format::model::Model, angle: u32, body_a
 
 /// Every changed layer stays derived from the user's originals. There is no
 /// fabricated additional eye art or baked animation sheet.
-fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
+fn attach_live_rig(imported: &mut ayatsuri_import::Imported, doc: &Document) -> Result<()> {
     let par = |id: &str| -> Result<u32> {
         imported.model.parameters.iter().position(|p| p.id == id)
             .map(|i| i as u32).ok_or_else(|| format!("missing rig parameter: {id}").into())
@@ -435,7 +471,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
     let open_keys = [0.,0.010,0.06,0.115,0.18,0.50,1.];
     let look_keys = [-1., 0., 1.];
     let tears_keys=[0.,0.5,1.];
-    let pose_keys=[0.,1.,2.,3.];
+    let pose_keys=[0.,1.,2.,3.,4.,5.];
     for (side, eye_param) in [("L",leye),("R",reye)] {
         let iris_recoil=par(&format!("ParamIrisRecoil{side}"))?;
         let white_name = format!("eye_white_{side}");
@@ -455,14 +491,16 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
                 |_,x,y|(x,y), |_|0.);
         }
         let white = &mut imported.model.art_meshes[white_index];
-        subdivide(white, 10, 6);
+        subdivide(white, 48, 16);
         // Deform ONLY the sclera's silhouette: its top/bottom edges follow
         // the matching eyelash. Behind it is the clean original face skin.
         // The iris itself NEVER stretches and is clipped to this aperture.
         let top=regions[&format!("upper_lid_{side}")];
         let bottom=regions[&format!("lower_lid_{side}")];
+        let lower_source=doc.layers.iter().find(|l|l.name==format!("lower_lid_{side}")).ok_or("missing lower lash source")?;
+        let profile=lower_lash_profile(lower_source);
         key_mesh(white, &[(eye_param,&open_keys)],
-            |v,x,y| aperture_vertex(x,y,eye,top,bottom,v[0]),
+            |v,x,y| aperture_vertex_contour(x,y,eye,top,bottom,&profile,v[0]),
             |v| eye_visibility(v[0]));
         let iris_name=format!("iris_{side}");
         if let Some(i)=idx(&iris_name) {
@@ -500,7 +538,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
             if let Some(i)=idx(&name) {
                 let old=regions[&name];
                 let lid=&mut imported.model.art_meshes[i];
-                subdivide(lid, 12, 5);
+                subdivide(lid, 48, 5);
                 // Retarget BOTH lid meshes to the same smiling closure
                 // seam. At 0 they form one curved line; at 1 the original
                 // upper and lower art geometry is reproduced exactly.
@@ -564,14 +602,17 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported) -> Result<()> {
         ("extra_mouth_talk",1.),
         ("extra_mouth_open_wide",2.),
         ("extra_mouth_sad",3.),
+        ("extra_mouth_flat",4.),
+        ("extra_mouth_bite",5.),
     ] {
         if let Some(i)=idx(name) {
             let region=regions[name];
             let mesh=&mut imported.model.art_meshes[i];
             key_mesh(mesh,&[(mouth_pose,&pose_keys),(mouth_open,&[0.,0.06,0.16,0.32,0.57,0.72,0.82,1.])],
                 |v,x,y| {
-                    let sx=1.+0.035*v[1];
-                    let sy=1.+0.045*v[1];
+                    let movement=if position>=3. {0.} else {v[1]};
+                    let sx=1.+0.035*movement;
+                    let sy=1.+0.045*movement;
                     (region.cx+(x-region.cx)*sx,region.cy+(y-region.cy)*sy)
                 },|v| mouth_layer_weights(v[1],v[0])[position as usize]);
         }
@@ -601,12 +642,15 @@ fn export_expressions(root: &Path, name: &str) -> Result<Vec<serde_json::Value>>
         ("Annoyed",&[("ParamEyeLOpen",0.54),("ParamEyeROpen",0.54),("ParamMouthForm",-0.85),("ParamMouthOpenY",0.),("ParamMouthPose",3.),("ParamBlush",0.58)]),
         ("WinkLeft",&[("ParamEyeLOpen",0.),("ParamEyeROpen",1.),("ParamMouthForm",0.7)]),
         ("WinkRight",&[("ParamEyeLOpen",1.),("ParamEyeROpen",0.),("ParamMouthForm",0.7)]),
-        ("Shy",&[("ParamEyeLOpen",0.58),("ParamEyeROpen",0.58),("ParamMouthForm",0.6),("ParamMouthOpenY",0.08),("ParamEyeBallY",0.3),("ParamBlush",1.),("ParamMouthPose",1.)]),
+        ("Shy",&[("ParamEyeLOpen",0.70),("ParamEyeROpen",0.70),("ParamMouthForm",0.),("ParamMouthOpenY",0.),("ParamEyeBallY",0.3),("ParamBlush",1.),("ParamMouthPose",5.)]),
         ("Curious",&[("ParamEyeLOpen",1.),("ParamEyeROpen",0.76),("ParamMouthForm",0.2),("ParamMouthOpenY",0.1),("ParamEyeBallX",0.42)]),
         ("Sad",&[("ParamEyeLOpen",0.52),("ParamEyeROpen",0.52),("ParamMouthPose",3.),("ParamBlush",0.20)]),
         ("Crying",&[("ParamEyeLOpen",0.38),("ParamEyeROpen",0.38),("ParamMouthPose",3.),("ParamBlush",0.22),("ParamTearL",0.92),("ParamTearR",0.92)]),
-        ("Sobbing",&[("ParamEyeLOpen",0.16),("ParamEyeROpen",0.16),("ParamMouthPose",2.),("ParamMouthOpenY",1.),("ParamBlush",0.38),("ParamTearL",1.),("ParamTearR",1.)]),
-        ("Angry",&[("ParamEyeLOpen",0.63),("ParamEyeROpen",0.63),("ParamMouthPose",1.),("ParamBlush",0.73)]),
+        ("Sobbing",&[("ParamEyeLOpen",0.36),("ParamEyeROpen",0.36),("ParamMouthPose",3.),("ParamMouthOpenY",0.),("ParamMouthForm",-1.),("ParamAngleY",8.),("ParamBlush",0.23),("ParamTearL",1.),("ParamTearR",1.)]),
+        ("LaughingTears",&[("ParamEyeLOpen",0.10),("ParamEyeROpen",0.10),("ParamMouthPose",2.),("ParamMouthOpenY",0.9),("ParamMouthForm",0.9),("ParamBlush",0.35),("ParamTearL",1.),("ParamTearR",1.)]),
+        ("Deadpan",&[("ParamEyeLOpen",0.86),("ParamEyeROpen",0.86),("ParamMouthPose",4.),("ParamMouthOpenY",0.)]),
+        ("Enchanted",&[("ParamEyeLOpen",0.96),("ParamEyeROpen",0.96),("ParamMouthPose",5.),("ParamMouthOpenY",0.),("ParamEyeBallY",-0.13),("ParamBlush",0.70)]),
+        ("Angry",&[("ParamEyeLOpen",0.60),("ParamEyeROpen",0.60),("ParamMouthPose",4.),("ParamMouthOpenY",0.),("ParamMouthForm",-1.),("ParamBlush",0.72)]),
         ("Shouting",&[("ParamMouthPose",2.),("ParamMouthOpenY",1.),("ParamBlush",0.40)]),
     ];
     let mut files=Vec::new();
@@ -709,7 +753,7 @@ fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
         parameter("ParamIrisBounceY", -1.0, 1.0, 0.0),
         parameter("ParamMouthOpenY", 0.0, 1.0, 0.0),
         parameter("ParamMouthForm", -1.0, 1.0, 0.0),
-        parameter("ParamMouthPose", 0.0, 3.0, 0.0),
+        parameter("ParamMouthPose", 0.0, 5.0, 0.0),
         parameter("ParamBlush", 0.0, 1.0, 0.0),
         parameter("ParamTearL", 0.0, 1.0, 0.0),
         parameter("ParamTearR", 0.0, 1.0, 0.0),
@@ -722,7 +766,7 @@ fn compile(name: &str, doc: &Document, out: &Path) -> Result<()> {
         parameter("ParamBreath", 0.0, 1.0, 0.5),
         parameter("ParamBodySquash", -1.0, 1.0, 0.0),
     ]);
-    attach_live_rig(&mut imported)?;
+    attach_live_rig(&mut imported, doc)?;
     fs::create_dir_all(out)?;
     let moc = to_moc3(&imported.model, ExportVersion::V5_00)?;
     if !moc.starts_with(b"MOC3") {
@@ -897,6 +941,20 @@ mod tests {
     }
 
     #[test]
+    fn contour_attachment_uses_actual_lower_lash_edge() {
+        let eye=Region{cx:0.,cy:0.,w:2.,h:2.};
+        let upper=Region{cx:0.,cy:-0.8,w:2.,h:0.4};
+        let lower=Region{cx:0.,cy:0.6,w:2.,h:0.6};
+        let profile=vec![Some(0.5);32];
+        let y=lower_edge_at(0.,eye,lower,&profile);
+        for opening in [1.,0.95,0.8,0.5,0.18,0.] {
+            let (_,actual)=aperture_vertex_contour(0.,y,eye,upper,lower,&profile,opening);
+            let (_,lash)=eyelid_vertex(0.,y,eye,lower,opening,LidSide::Lower);
+            assert!((actual-lash).abs()<1e-5);
+        }
+    }
+
+    #[test]
     fn mouth_and_emotion_crossfades_preserve_neutral() {
         assert_eq!(mouth_pose_weight(0.,0.),1.);
         assert_eq!(mouth_pose_weight(0.,1.),0.);
@@ -910,10 +968,12 @@ mod tests {
         assert!(small[1]>small[0] && small[1]>small[2], "small opening must talk");
         let large=mouth_layer_weights(0.95,1.);
         assert!(large[2]>0.999, "large opening overrides Talk pose");
+        assert_eq!(mouth_layer_weights(1.,4.),[0.,0.,0.,0.,1.,0.]);
+        assert_eq!(mouth_layer_weights(1.,5.),[0.,0.,0.,0.,0.,1.]);
         let sad=mouth_layer_weights(0.8,3.);
         assert!((sad[3]-1.).abs()<1e-6, "sad is explicit emotion");
         for open in [0.,0.2,0.5,0.95,1.] {
-            for pose in [0.,1.,1.5,2.,2.5,3.] {
+            for pose in [0.,1.,1.5,2.,2.5,3.,3.5,4.,4.5,5.] {
                 let w=mouth_layer_weights(open,pose);
                 assert!((w.iter().sum::<f32>()-1.).abs()<1e-5,
                         "mouth layers must always sum to one");

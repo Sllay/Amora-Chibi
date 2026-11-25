@@ -231,7 +231,8 @@ def closed_smile_art(eye_white: Image.Image, upper_lid: Image.Image, side: str) 
 
 EXTRA_NAMES = (
     "extra_blush", "extra_mouth_open_wide", "extra_mouth_sad",
-    "extra_mouth_talk", "extra_tear_L", "extra_tear_R"
+    "extra_mouth_talk", "extra_tear_L", "extra_tear_R",
+    "extra_mouth_flat", "extra_mouth_bite"
 )
 
 def load_extra_assets(manifest_path: Path) -> dict[str, Image.Image]:
@@ -258,6 +259,8 @@ def load_extra_assets(manifest_path: Path) -> dict[str, Image.Image]:
         if not (0<=x0<x1<=1254 and 0<=y0<y1<=1254):
             raise ValueError(f"{name}: out-of-range bounds")
         raw=base64.b85decode(row["b85"].encode("ascii"))
+        if "sha256" in row and hashlib.sha256(raw).hexdigest() != row["sha256"]:
+            raise ValueError(f"{name}: uploaded PNG checksum mismatch")
         with Image.open(io.BytesIO(raw)) as src:
             src.load()
             if src.format!="PNG" or src.size!=(x1-x0,y1-y0):
@@ -269,7 +272,7 @@ def load_extra_assets(manifest_path: Path) -> dict[str, Image.Image]:
             raise ValueError(f"{name}: empty extra")
         extras[name]=full
     if set(extras)!=set(EXTRA_NAMES):
-        raise ValueError(f"expected six user extras, found {sorted(extras)}")
+        raise ValueError(f"expected eight user extras, found {sorted(extras)}")
     return extras
 
 
@@ -400,7 +403,7 @@ def prepare(manifest_path: Path, out: Path) -> None:
                     "Body source is opaque JPEG. Preview places body behind eyes; source files untouched."},
                    indent=2) + "\n", encoding="utf-8")
     print("Validated 10 source layers. Only eye whites #1 and #3 replaced.")
-    print("Prepared 20 art meshes: ten approved inputs, six expression assets, four technical layers.")
+    print("Prepared 22 art meshes: ten approved inputs, eight expression assets, four technical layers.")
 
 
 if __name__ == "__main__":

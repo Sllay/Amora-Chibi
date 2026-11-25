@@ -134,6 +134,16 @@ async function run() {
       speaking:mouthLayerWeights(open,1)
     }));
     const sad=mouthLayerWeights(.7,3);
+    const flat=mouthLayerWeights(1,4),bite=mouthLayerWeights(1,5);
+    if(flat[4]!==1||bite[5]!==1||presets.Sobbing.mouthPose===presets.LaughingTears.mouthPose)throw Error("New mouth semantics invalid");
+    for(const side of ["L","R"]){
+      const eye=box("eye_white_"+side),lid=box("lower_lid_"+side);
+      if(!lowerProfiles[side].some(v=>v!==null))throw Error("Empty measured lash profile");
+      for(const opening of [1,.95,.8,.65,.5,.18])for(let x=eye.x;x<eye.x+eye.w;x+=4){
+        const edge=lowerEdgeAt(side,x,eye,lid);
+        if(Math.abs(lowerApertureY(side,x,eye,lid,opening)-lidY(x,edge,eye,lid,opening,false))>1e-6)throw Error("Lower lash contour detached");
+      }
+    }
     const enabled=window.AmoraVisualEngine.setParameters({
       ParamMouthOpenY:0.22,ParamMouthPose:0,ParamBlush:.4
     });
@@ -169,18 +179,18 @@ async function run() {
   if(mouthTalk.hash===mouthShout.hash)throw Error("Talk and wide mouth screenshots identical");
   // Regression snapshots for the newly supplied PNG art and emotion weights.
   const emotional={};
-  for(const name of ["Shy","Crying","Sobbing","Sad","Angry","Shouting"]){
+  for(const name of ["Shy","Crying","Sobbing","Sad","Angry","Shouting","LaughingTears","Deadpan","Enchanted"]){
    await page.click('[data-expr="'+name+'"]');
    await new Promise(resolve=>setTimeout(resolve,680));
    emotional[name]=await digest();
    await page.screenshot({path:path.join(path.dirname(html),"amora-browser-"+name.toLowerCase()+".png"),fullPage:true});
    if(emotional[name].hash===neutral.hash)throw Error("Emotion "+name+" did not affect canvas");
   }
-  const sixExtras=await page.evaluate(()=>[
+  const eightExtras=await page.evaluate(()=>[
      "extra_blush","extra_tear_L","extra_tear_R",
-     "extra_mouth_talk","extra_mouth_open_wide","extra_mouth_sad"
+     "extra_mouth_talk","extra_mouth_open_wide","extra_mouth_sad","extra_mouth_flat","extra_mouth_bite"
    ].every(name=>images[name]&&images[name].complete&&box(name).w>0));
-  if(!sixExtras)throw Error("User-supplied expression PNG not loaded");
+  if(!eightExtras)throw Error("User-supplied expression PNG not loaded");
   await page.click('[data-expr="Sleepy"]');
   await new Promise(resolve=>setTimeout(resolve,500));
   const sleepy=await digest();
@@ -225,7 +235,7 @@ async function run() {
   if(neutral.corner!==0||sleepy.corner!==0||surprised.corner!==0||wink.corner!==0||half.corner!==0||near.corner!==0||closed.corner!==0)throw Error("Opaque background remains around Amora");
   if(!neutral.center||!sleepy.center||!surprised.center||!wink.center||!half.center||!near.center||!closed.center)throw Error("Center of Amora is not rendered");
   if(neutral.hash===sleepy.hash||sleepy.hash===surprised.hash||wink.hash===surprised.hash||half.hash===wink.hash||half.hash===neutral.hash||near.hash===half.hash||closed.hash===near.hash)throw Error("Expressions did not change canvas pixels");
-  console.log(JSON.stringify({ok:true,loaded_layers:20,sixExtras,lidChecks,irisChecks,mouthCheck,mouthTalk,mouthShout,poses,emotional,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
+  console.log(JSON.stringify({ok:true,loaded_layers:22,eightExtras,lidChecks,irisChecks,mouthCheck,mouthTalk,mouthShout,poses,emotional,neutral,sleepy,surprised,wink,half,near,closed,errors},null,2));
  }finally{await browser.close();}
 }
 run().catch(err=>{console.error(err.stack||err);process.exitCode=1;});
