@@ -814,3 +814,44 @@ async def test_run02_permanent_provider_auth_failure_blocks_without_social_fallb
         assert not core.cognition.store.list_messages(turn_id=turn, speaker_id="ENTITY_AMORA")
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("normal_fits", [True, False])
+async def test_run03_durable_adaptive_only_after_full_context_rejection(lab, normal_fits):
+    from amora.cognition.context_budget import ContextBudgetExceeded
+    core, clock, _ = lab
+    runtime = await _start_runtime(core)
+    provider = CountingStructuredProvider(name="durable-adaptive-synthetic")
+    original_realize = provider.realize
+    calls = []
+    text = ("Amora, explica estas ideias. " + "x" * 4400
+            + " Mas não vou escolher A, escolhi B. Qual a diferença?")
+    async def normal(context):
+        calls.append("full")
+        assert context.user_text == text
+        if not normal_fits:
+            raise ContextBudgetExceeded(8000, 5200)
+        return await original_realize(context)
+    async def adaptive(context):
+        calls.append("adaptive")
+        assert context.user_text == text
+        return await original_realize(context)
+    provider.realize = normal
+    provider.realize_adaptive = adaptive
+    core.cognition.register_provider(provider)
+    msg = _dm(core, text=text)
+    turn = core.messaging._turn_id(msg)
+    try:
+        accepted = await core.messaging.receive(msg)
+        assert "DURABLE_REPLY_ACCEPTED" in accepted.decision.reason_codes
+        assert await runtime.run_once()
+        state = await runtime.call("state", turn)
+        assert state["status"] == "ready"
+        assert calls == (["full"] if normal_fits else ["full", "adaptive"])
+        assert core.cognition.store.get_message_by_dedupe(
+            f"cognitive-input:{turn}").raw_text == text
+        assert len(core.cognition.store.list_messages(
+            turn_id=turn, speaker_id="ENTITY_AMORA")) == 1
+    finally:
+        await _stop_runtime(core)
