@@ -20,6 +20,8 @@ class IncomingVisualObservation(BaseModel):
     failure_reason: Literal[
         "", "too_large", "download_failed", "unsupported_format",
         "processing_failed", "provider_failed", "unconfigured",
+        "quota", "timeout", "refused", "invalid_observation", "provider_unavailable",
+        "invalid_image", "focus_limit", "expired",
     ] = ""
 
     @field_validator("visible_text", "uncertainties")

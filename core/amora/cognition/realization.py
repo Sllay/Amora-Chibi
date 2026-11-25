@@ -314,7 +314,9 @@ def realization_instruction(context: CognitiveContext) -> str:
                 "responda normalmente ao texto e explique brevemente que "
                 "não conseguiu visualizar a imagem; nunca alegue ter visto "
                 "pixels pretos, pessoas ou objetos. Se não há texto, diga "
-                "que não conseguiu acessar a foto. "
+                "que não conseguiu acessar a foto. Se a pergunta depende da imagem, "
+                "não responda como se a tivesse visto; indique a parte indisponível. "
+                "Use o código de falha como limitação, não como característica dos pixels. "
             )
     web_cue = ""
     if context.web_research is not None:

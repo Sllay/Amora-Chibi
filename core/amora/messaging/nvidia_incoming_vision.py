@@ -18,6 +18,7 @@ from amora.cognition.provider_quota import ProviderQuotaDeferred
 from .groq_vision import GroqVisionError
 from .incoming_vision import VisionResponse, valid_image_bytes
 from .models import InboundImageContent
+from .visual_focus import visual_focus, focus_instruction
 
 
 class NvidiaMistralIncomingImageVision:
@@ -52,7 +53,10 @@ class NvidiaMistralIncomingImageVision:
         if not key:
             raise GroqVisionError("NVIDIA_VISION_NOT_CONFIGURED", "NVIDIA vision key unavailable")
 
-        focus = (user_text or "").strip()[:500]
+        try:
+            focus = visual_focus(user_text)
+        except ValueError as exc:
+            raise GroqVisionError("INCOMING_VISION_FOCUS_LIMIT", "visual focus exceeds accepted caption limit") from exc
         prompt = (
             "Você é um sensor visual, não a personagem Amora. Descreva APENAS "
             "o que aparece nesta imagem, brevemente em português brasileiro. "
@@ -64,7 +68,7 @@ class NvidiaMistralIncomingImageVision:
             "confidence (número de 0 a 1). Não inclua outras chaves. "
             "Máximos: description 650 caracteres; cada item de lista 120 caracteres. "
             "Pergunta do usuário apenas como referência visual: "
-            + json.dumps(focus, ensure_ascii=False)
+            + focus_instruction(focus) + focus.wire()
         )
         body = {
             "model": self.model,
@@ -78,7 +82,7 @@ class NvidiaMistralIncomingImageVision:
                 ],
             }],
             "stream": False,
-            "max_tokens": 1400,
+            "max_tokens": focus.output_tokens,
             "temperature": 0.1,
             "reasoning_effort": "none",
         }
@@ -99,7 +103,9 @@ class NvidiaMistralIncomingImageVision:
                         "Accept": "application/json",
                     },
                 )
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
+        except httpx.TimeoutException as exc:
+            raise GroqVisionError("NVIDIA_VISION_TIMEOUT", "NVIDIA visual request timed out") from exc
+        except httpx.TransportError as exc:
             raise GroqVisionError(
                 "NVIDIA_VISION_TRANSPORT_FAILED", "NVIDIA visual transport failed"
             ) from exc

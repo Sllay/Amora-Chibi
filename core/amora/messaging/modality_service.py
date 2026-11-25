@@ -16,7 +16,7 @@ from .service import PlatformMessagingService as BasePlatformMessagingService
 from .explicit_memory import is_verified_owner
 from .models import ChannelType, RoutingAction
 from amora.events import PrivacyScope
-from .incoming_vision import unavailable_visual_observation
+from .incoming_vision import unavailable_visual_observation, visual_failure_reason
 from .visual_enrichment import VisualExpressionEnrichmentService
 
 
@@ -235,7 +235,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
                 str(getattr(exc, "code", type(exc).__name__))[:80],
                 max(0, round((asyncio.get_running_loop().time() - vision_started) * 1000)),
             )
-            return unavailable_visual_observation("provider_failed")
+            return unavailable_visual_observation(visual_failure_reason(exc))
 
     def _queue_outbound(
         self,
