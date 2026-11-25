@@ -299,11 +299,30 @@ fn upper_edge_at(x:f32,eye:Region,lid:Region,profile:&[Option<f32>])->f32{
     profile.get(i).copied().flatten().map(|v|lid.cy-lid.h*0.5+v*lid.h)
         .map(|v|v.clamp(top,eye.cy+eye.h*0.5)).unwrap_or(top)
 }
+// Only compress the nasal part of the sclera as the lid closes.
+// Keep the texture and neutral mesh exactly as authored.
+fn nasal_x(x:f32,eye:Region,upper:Region,lower:Region,opening:f32)->f32{
+    let left=eye.cx<0.;
+    let tip=eye.cx+eye.w*if left {0.5} else {-0.5};
+    let reach=if left {
+        (upper.cx+upper.w*0.5).min(lower.cx+lower.w*0.5)
+    }else{
+        (upper.cx-upper.w*0.5).max(lower.cx-lower.w*0.5)
+    };
+    let distance=(if left {tip-reach}else{reach-tip}).max(0.);
+    let band=(eye.w*0.38).max(distance*2.2+eye.w*0.031);
+    let amount=smoothstep((1.-opening)/0.60)*distance.min(band*0.45);
+    let t=(1.-(x-tip).abs()/band.max(0.0001)).clamp(0.,1.);
+    x+(if left {-1.}else{1.})*amount*t*t
+}
 fn aperture_vertex_contour(x:f32,y:f32,eye:Region,upper:Region,lower:Region,
                           upper_profile:&[Option<f32>],lower_profile:&[Option<f32>],opening:f32)->(f32,f32){
+    if opening>=1. {return (x,y);}
+    let x=nasal_x(x,eye,upper,lower,opening);
     let bottom=lower_edge_at(x,eye,lower,lower_profile);
     let top=upper_edge_at(x,eye,upper,upper_profile).min(bottom);
-    let clipped=y.clamp(top,bottom);
+    let cover=smoothstep((1.-opening)/0.12);
+    let clipped=y+(y.clamp(top,bottom)-y)*cover;
     let v=((clipped-top)/(bottom-top).max(0.0001)).clamp(0.,1.);
     let (_,a)=eyelid_vertex(x,clipped,eye,upper,opening,LidSide::Upper);
     let (_,b)=eyelid_vertex(x,clipped,eye,lower,opening,LidSide::Lower);
@@ -480,6 +499,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported, doc: &Document) -> 
     let regions: HashMap<String,Region> = names.iter().cloned().zip(imported.model.art_meshes.iter().map(Region::of)).collect();
     let idx = |name: &str| names.iter().position(|n| n==name);
     let open_keys = [0.,0.010,0.06,0.115,0.18,0.50,1.];
+    let aperture_keys = [0.,0.010,0.06,0.115,0.18,0.35,0.50,0.70,0.85,0.95,1.];
     let look_keys = [-1., 0., 1.];
     let tears_keys=[0.,0.5,1.];
     let pose_keys=[0.,1.,2.,3.,4.,5.];
@@ -512,7 +532,7 @@ fn attach_live_rig(imported: &mut ayatsuri_import::Imported, doc: &Document) -> 
         let upper_source=doc.layers.iter().find(|l|l.name==format!("upper_lid_{side}")).ok_or("missing upper lash source")?;
         let lower_profile=lash_profile(lower_source,false);
         let upper_profile=lash_profile(upper_source,true);
-        key_mesh(white, &[(eye_param,&open_keys)],
+        key_mesh(white, &[(eye_param,&aperture_keys)],
             |v,x,y| aperture_vertex_contour(x,y,eye,top,bottom,&upper_profile,&lower_profile,v[0]),
             |v| eye_visibility(v[0]));
         let iris_name=format!("iris_{side}");
@@ -978,6 +998,31 @@ mod tests {
             let (_,actual)=aperture_vertex_contour(0.,y,eye,upper,lower,&profile,&[],opening);
             let (_,lash)=eyelid_vertex(0.,y,eye,upper,opening,LidSide::Upper);
             assert!((actual-lash).abs()<1e-5);
+        }
+    }
+
+    #[test]
+    fn neutral_eye_preserves_source_and_nasal_deformation_is_monotonic() {
+        for sign in [-1.,1.] {
+            let eye=Region{cx:sign*0.18,cy:0.,w:0.2,h:0.22};
+            let upper=Region{cx:sign*0.19,cy:-0.05,w:0.18,h:0.08};
+            let lower=Region{cx:sign*0.20,cy:0.05,w:0.16,h:0.05};
+            for i in 0..=100 {
+                let x=eye.cx-eye.w*0.5+eye.w*i as f32/100.;
+                for j in 0..=10 {
+                    let y=eye.cy-eye.h*0.5+eye.h*j as f32/10.;
+                    assert_eq!(aperture_vertex_contour(x,y,eye,upper,lower,&[],&[],1.),(x,y));
+                }
+            }
+            for opening in [1.,0.98,0.95,0.85,0.7,0.5,0.35,0.18,0.] {
+                let mut previous=f32::NEG_INFINITY;
+                for i in 0..=100 {
+                    let x=eye.cx-eye.w*0.5+eye.w*i as f32/100.;
+                    let mapped=nasal_x(x,eye,upper,lower,opening);
+                    assert!(mapped>=previous,"folded nasal mesh");
+                    previous=mapped;
+                }
+            }
         }
     }
 

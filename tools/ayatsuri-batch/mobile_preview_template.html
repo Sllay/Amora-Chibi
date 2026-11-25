@@ -39,7 +39,7 @@ footer{font-size:.74rem;color:#aaa7ba;line-height:1.5;margin-top:12px}
 <body>
 <header>
 <h1>Amora Bolinha · Rig Lab</h1>
-<div class="build-info"><strong id="ui-version">Visual Engine V4.4</strong><span id="ui-build">Build __AMORA_BUILD_ID__</span></div>
+<div class="build-info"><strong id="ui-version">Visual Engine V4.5</strong><span id="ui-build">Build __AMORA_BUILD_ID__</span></div>
 <div class="sub">Máscara ocular, piscada, slime, expressões e corpo 2,5D. Prévia HTML, não Cubism.</div>
 </header>
 <div id="js-disabled" role="alert" style="padding:10px;margin-bottom:10px;border:1px solid #a58db6;border-radius:8px;color:#e7d7f7;background:#35283c">Se esta mensagem permanecer na tela, o visualizador do iPhone não executou JavaScript. Abra a versão online no Safari para testar as animações.</div>
@@ -174,7 +174,7 @@ window.AmoraVisualEngine=Object.freeze({
  },
  getParameters(){return {...wanted};},
  getMouthWeights(){return [...displayedMouthWeights];},
- version:"4.4"
+ version:"4.5"
 });
 function box(id) {
  const b=boxes[id];return {x:b[0],y:b[1],w:b[2]-b[0],h:b[3]-b[1],cx:(b[0]+b[2])/2,cy:(b[1]+b[3])/2};
@@ -255,24 +255,43 @@ function upperEdgeAt(side,x,eye,lid){
 function lowerApertureY(side,x,eye,lid,opening){
  return lidY(x,lowerEdgeAt(side,x,eye,lid),eye,lid,opening,false);
 }
+// Only the nasal third of the eye changes horizontally. Preserve the
+// original curved silhouette by compressing its alpha, never chopping a
+// rectangle through the iris. At full opening the mapping is identity.
+function nasalGeometry(side,b,opening){
+ const u=box("upper_lid_"+side),l=box("lower_lid_"+side);
+ const left=b.cx<W/2;
+ const reach=left?Math.min(u.x+u.w,l.x+l.w):Math.max(u.x,l.x);
+ const tip=left?b.x+b.w:b.x;
+ const distance=Math.max(0,left?tip-reach:reach-tip);
+ const band=Math.max(b.w*.38,distance*2.2+8);
+ const amount=smoother((1-opening)/.60)*Math.min(distance,band*.45);
+ return {left,tip,band,amount};
+}
+function mapNasalX(x,n){
+ const t=Math.max(0,Math.min(1,1-Math.abs(x-n.tip)/n.band));
+ return x+(n.left?-1:1)*n.amount*t*t;
+}
 function eye(side,opening,lookX,lookY,irisScale){
  const id="eye_white_"+side,irid="iris_"+side;
  const b=box(id),ib=box(irid);
  const top=box("upper_lid_"+side),bottom=box("lower_lid_"+side);
- // Both lashes and the aperture use the same integer source columns.
- // A step-shaped clip follows the actual raster column, avoiding the
- // interpolated polygon's overshoot at abrupt lash tips. A 1px inset
- // sits inside the lash pigment rather than exposing its outer AA fringe.
+ const nasal=nasalGeometry(side,b,opening);
+ // Open pose is the exact original alpha. Begin coverage continuously,
+ // then track the animated lash edges column-for-column.
  ctx.save();
  ctx.globalAlpha*=eyeVisibility(opening);
- ctx.beginPath();
- for(let x=b.x;x<b.x+b.w;x++){
-  const mid=x+.5;
-  const high=lidY(mid,upperEdgeAt(side,mid,b,top),b,top,opening,true)+1;
-  const low=lowerApertureY(side,mid,b,bottom,opening)-1;
-  if(low>high)ctx.rect(x,high,1,low-high);
+ if(opening<1){
+  const cover=smoother((1-opening)/.12);
+  ctx.beginPath();
+  for(let x=b.x;x<b.x+b.w;x++){
+   const mid=x+.5;
+   const high=b.y*(1-cover)+(lidY(mid,upperEdgeAt(side,mid,b,top),b,top,opening,true)+1)*cover;
+   const low=(b.y+b.h)*(1-cover)+(lowerApertureY(side,mid,b,bottom,opening)-1)*cover;
+   if(low>high)ctx.rect(x,high,1,low-high);
+  }
+  ctx.clip();
  }
- ctx.clip();
  // Cache one small per-eye canvas, not a full avatar framebuffer.
  // Source-atop preserves the exact derived sclera alpha. Unlike an ellipse,
  // neither gaze overshoot nor a large pupil can escape the nasal corner.
@@ -280,7 +299,19 @@ function eye(side,opening,lookX,lookY,irisScale){
  g.setTransform(1,0,0,1,0,0);
  g.globalCompositeOperation="source-over";
  g.clearRect(0,0,c.width,c.height);
- g.drawImage(images[id],b.x,b.y,b.w,b.h,0,0,b.w,b.h);
+ if(nasal.amount<.001)g.drawImage(images[id],b.x,b.y,b.w,b.h,0,0,b.w,b.h);
+ else{
+  // Fill contiguous destination columns by inverse sampling. Avoid
+  // fractional strip seams and keep the original round inner contour.
+  let src=b.x;
+  const start=Math.floor(mapNasalX(b.x,nasal)),end=Math.ceil(mapNasalX(b.x+b.w,nasal));
+  for(let x=start;x<end;x++){
+   const mid=x+.5;
+   if(mid<mapNasalX(b.x,nasal)||mid>=mapNasalX(b.x+b.w,nasal))continue;
+   while(src+1<b.x+b.w&&mapNasalX(src+1,nasal)<=mid)src++;
+   g.drawImage(images[id],src,b.y,1,b.h,x-b.x,0,1,b.h);
+  }
+ }
  g.globalCompositeOperation="source-atop";
  const tx=Math.min(b.w*.22,Math.max(b.w*.18,b.w-ib.w)*.56)*lookX*opening;
  const ty=Math.min(b.h*.16,Math.max(b.h*.12,b.h-ib.h)*.48)*lookY*opening;

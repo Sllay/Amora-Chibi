@@ -71,7 +71,7 @@ async function run() {
     const openings=[1,.98,.95,.85,.7,.5,.35,.18,.115,.06,0];
     const gazes=[[0,0],[-1.25,0],[1.25,0],[0,-1.25],[0,1.25],[-1.25,-1.25],[1.25,1.25]];
     const report={samples:0,eyePixels:0,nasalLeakPixels:0,verticalLeakPixels:0,
-      unpaintedSkinPixels:0,closedEyePixels:0,worst:[],sides:[]};
+      unpaintedSkinPixels:0,closedEyePixels:0,neutralAlphaDiff:0,cheekDiff:0,worst:[],sides:[]};
     function sourceAlphaBounds(id){
       const b=box(id),c=document.createElement("canvas");c.width=b.w;c.height=b.h;
       const g=c.getContext("2d",{willReadFrequently:true});
@@ -101,6 +101,9 @@ async function run() {
         const sample=()=>ctx.getImageData(x0,y0,w,h).data;
         const clear=()=>ctx.clearRect(0,0,W,H);
         const isNasal=x=>left?x>=cap:x<cap;
+        if(b.x!==orig[0]||b.y!==orig[1]||b.x+b.w!==orig[2]||b.y+b.h!==orig[3])throw Error("Permanent neutral-eye crop");
+        clear();draw("eye_white_"+side);
+        const neutralAlpha=sample();
         clear();draw("body_horns");
         const body=sample();
         let skinArea=0;
@@ -110,8 +113,16 @@ async function run() {
           skinArea++;
           if(body[((y-y0)*w+x-x0)*4+3]<250)report.unpaintedSkinPixels++;
         }
-        let openArea=0;
+        let openArea=0,previousArea=Infinity;
         for(const opening of openings){
+          // The original neutral shape is the reference, not a rectangular
+          // fixed cap. The corner is allowed to travel only during closure.
+          const reach=left?Math.min(top.x+top.w,low.x+low.w):Math.max(top.x,low.x);
+          const tip=left?orig[2]:orig[0];
+          const t=Math.max(0,Math.min(1,(1-opening)/.60));
+          const distance=Math.max(0,left?tip-reach:reach-tip);
+          const movingTip=tip+(left?-1:1)*distance*t*t*(3-2*t);
+          let sampleArea=0;
           const upper=new Int32Array(w).fill(h),lower=new Int32Array(w).fill(-1);
           if(opening>=.115){
             clear();lid(side,"upper",opening);
@@ -128,25 +139,41 @@ async function run() {
             const data=sample();let area=0,nasal=0,vertical=0;
             for(let y=0;y<h;y++)for(let x=0;x<w;x++){
               const alpha=data[(y*w+x)*4+3];
+              if(opening===1&&alpha!==neutralAlpha[(y*w+x)*4+3])report.neutralAlphaDiff++;
               if(alpha===0)continue;
               area++;
-              if(isNasal(x+x0))nasal++;
+              if(left?x+x0>=Math.ceil(movingTip)+1:x+x0<Math.floor(movingTip)-1)nasal++;
               // The upper/lower real lash raster is the independent bound.
               // Two/three pixels of strip AA are tolerated, not a visible
               // sliver. Check every column that has both physical lashes.
-              if(alpha>=32&&upper[x]<h&&lower[x]>=0&&upper[x]<=lower[x]&&
+              if(opening<=.85&&alpha>=32&&upper[x]<h&&lower[x]>=0&&upper[x]<=lower[x]&&
                   (y<upper[x]-3||y>lower[x]+3))vertical++;
             }
             report.samples++;report.eyePixels+=area;
             report.nasalLeakPixels+=nasal;report.verticalLeakPixels+=vertical;
             if(opening===0)report.closedEyePixels+=area;
-            if(opening===1&&gx===0&&gy===0)openArea=area;
+            if(gx===0&&gy===0){sampleArea=area;if(opening===1)openArea=area;}
             if((nasal||vertical)&&report.worst.length<12)
               report.worst.push({side,opening,gx,gy,nasal,vertical});
           }
+          if(sampleArea>previousArea+Math.max(10,openArea*.005))throw Error("Eye aperture grew while closing: "+side+" "+opening);
+          previousArea=sampleArea;
         }
         if(openArea<.25*b.w*b.h)throw Error("Eye disappears instead of being correctly masked: "+side);
         report.sides.push({side,cap,openArea,skinArea,derived:[b.x,b.y,b.x+b.w,b.y+b.h],original:orig});
+      }
+      // The eye and lash renderer must not paint on the cheek region.
+      const y=Math.ceil(Math.max(...["L","R"].flatMap(side=>["eye_white_","upper_lid_","lower_lid_","closed_smile_"].map(prefix=>{const b=box(prefix+side);return b.y+b.h;}))))+4;
+      const height=Math.min(140,H-y);
+      if(height<=0)throw Error("Missing cheek reference");
+      clearCheeks();
+      function clearCheeks(){ctx.clearRect(0,0,W,H);draw("body_horns");}
+      const cheek=ctx.getImageData(240,y,774,height).data;
+      for(const opening of openings){
+        clearCheeks();
+        for(const side of ["L","R"]){eye(side,opening,0,0,1);lid(side,"lower",opening);lid(side,"upper",opening);happyClosedPose(side,opening);}
+        const actual=ctx.getImageData(240,y,774,height).data;
+        for(let i=0;i<cheek.length;i+=4)if(cheek[i]!==actual[i]||cheek[i+1]!==actual[i+1]||cheek[i+2]!==actual[i+2]||cheek[i+3]!==actual[i+3])report.cheekDiff++;
       }
       return report;
     } finally {ctx.clearRect(0,0,W,H);ctx.restore();}
@@ -154,7 +181,7 @@ async function run() {
   fs.writeFileSync(path.join(path.dirname(html),"amora-eye-coverage.json"),JSON.stringify(eyeCoverage,null,2));
   console.log("EYE_COVERAGE "+JSON.stringify(eyeCoverage));
   if(eyeCoverage.nasalLeakPixels||eyeCoverage.verticalLeakPixels||
-     eyeCoverage.unpaintedSkinPixels||eyeCoverage.closedEyePixels)
+     eyeCoverage.unpaintedSkinPixels||eyeCoverage.closedEyePixels||eyeCoverage.neutralAlphaDiff||eyeCoverage.cheekDiff)
     throw Error("Eye coverage regression: "+JSON.stringify(eyeCoverage));
   await page.waitForFunction(()=>!!document.querySelector("canvas").getContext("2d").getImageData(600,600,1,1).data[3]);
   await page.screenshot({path:path.join(path.dirname(html),"amora-browser-neutral.png"),fullPage:true});

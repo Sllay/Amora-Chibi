@@ -68,10 +68,9 @@ def fill_eye_hole(body: Image.Image, white: Image.Image) -> Image.Image:
     bx0,by0,bx1,by1=filled_bounds
     if (bx1-bx0)*(by1-by0) < 250:
         raise ValueError("eye hole detected area is suspiciously small")
-    # Cover the complete *original* sclera footprint, including disconnected
-    # JPEG fringe at the nasal edge. A flood fill alone can miss this fringe.
-    socket=white.getchannel("A").point(lambda a: 255 if a>0 else 0)
-    broad = ImageChops.lighter(mask,socket).filter(ImageFilter.MaxFilter(31))
+    # Repair only the actual white socket, not the entire sclera footprint.
+    # The latter intersects the four original red cheek markings.
+    broad = mask.filter(ImageFilter.MaxFilter(19))
     bb=broad.getbbox()
     if bb is None:
         raise ValueError("eye socket expansion failed")
@@ -85,7 +84,13 @@ def fill_eye_hole(body: Image.Image, white: Image.Image) -> Image.Image:
             for dy in (-2,0,2):
                 xx=min(body.width-1,max(0,x+dx))
                 yy=min(body.height-1,max(0,y+dy))
-                samples.append(pix[xx,yy])
+                c=pix[xx,yy]
+                if max(c[:3])-min(c[:3])<=45 and min(c[:3])>=180:
+                    samples.append(c)
+        # Never stretch red makeup or white socket pixels into the skin.
+        samples=[c for c in samples if not (min(c[:3])>=251 and max(c[:3])-min(c[:3])<=2)]
+        if not samples:
+            samples=[(250,230,241,255)]
         return tuple(round(sum(c[i] for c in samples)/len(samples)) for i in range(4))
     for x in range(bb[0],bb[2]):
         ys=[y for y in range(bb[1],bb[3]) if broad_pix[x,y]]
@@ -101,6 +106,13 @@ def fill_eye_hole(body: Image.Image, white: Image.Image) -> Image.Image:
             edited[x,y]=tuple(round((1-t)*a[i]+t*b[i]) for i in range(4))
     # Blend only the reconstructed eye hole into the unchanged source.
     feather=broad.filter(ImageFilter.GaussianBlur(4))
+    # Preserve makeup pigment and every pixel below the source eye bounds.
+    fp=feather.load()
+    for y in range(max(0,bb[1]-16),min(body.height,bb[3]+16)):
+        for x in range(max(0,bb[0]-16),min(body.width,bb[2]+16)):
+            r,g,b=pix[x,y][:3]
+            if y>=y1 or (r-g>45 and r-b>15):
+                fp[x,y]=0
     return Image.composite(output,body,feather)
 
 
@@ -132,48 +144,10 @@ def prepared_body(body: Image.Image, eye_white_l: Image.Image, eye_white_r: Imag
 
 
 def prepared_eye_white(white: Image.Image, lower: Image.Image, upper: Image.Image) -> Image.Image:
-    """Derived render mask: clip the nasal sclera to the shared lash tips.
-
-    The user-approved original PNG stays untouched. Each lash may extend
-    beyond the other; the eye must not protrude past either at the nose.
-    Measure the actual alpha, not the nominal full-canvas rectangle.
-    """
-    original=white.getchannel("A")
-    bounds=original.getbbox()
-    if bounds is None:
+    """Neutral sclera is the approved source, not a permanently cropped mask."""
+    if white.getchannel("A").getbbox() is None:
         raise ValueError("empty source sclera")
-    x0,y0,x1,y1=bounds
-    lower_alpha=lower.getchannel("A").point(lambda a:255 if a>=96 else 0)
-    upper_alpha=upper.getchannel("A").point(lambda a:255 if a>=96 else 0)
-    lb,ub=lower_alpha.getbbox(),upper_alpha.getbbox()
-    if lb is None or ub is None:
-        raise ValueError("empty lash alpha")
-    left=(x0+x1)/2<white.width/2
-    # Exclusive right edge / inclusive left edge of the shared nasal extent.
-    cap=min(lb[2],ub[2],x1)-2 if left else max(lb[0],ub[0],x0)+2
-    width=x1-x0
-    if (cap-x0 if left else x1-cap)<width*.72:
-        raise ValueError(f"nasal mask would cut too much sclera: {bounds}, {lb}, {ub}")
-    # A small rounded inset follows the natural corner instead of a straight
-    # rectangular chop. Keep all pixels outside the narrow nasal zone intact.
-    mask=Image.new("L",white.size,255)
-    painter=ImageDraw.Draw(mask)
-    center=(max(lb[1],ub[1])+min(lb[3],ub[3]))/2
-    center=max(y0,min(y1,center))
-    radius=max(2,min(7,round(width*.025)))
-    for y in range(y0,y1):
-        taper=round(radius*min(1,abs(y-center)/max(1,(y1-y0)*.5))**2)
-        edge=cap-taper if left else cap+taper
-        if left:
-            painter.line((edge,y,x1,y),fill=0)
-        else:
-            painter.line((x0,y,edge-1,y),fill=0)
-    result=white.copy()
-    result.putalpha(ImageChops.multiply(original,mask))
-    new=result.getchannel("A").getbbox()
-    if new is None or (left and new[2]>min(lb[2],ub[2])-2) or (not left and new[0]<max(lb[0],ub[0])+2):
-        raise ValueError("nasal mask did not contain sclera")
-    return result
+    return white.copy()
 
 
 def face_patch(body: Image.Image, white: Image.Image, lower: Image.Image, upper: Image.Image) -> Image.Image:
@@ -398,24 +372,31 @@ def prepare(manifest_path: Path, out: Path) -> None:
     # Both the MOC3 and HTML consume the same derived sclera alpha.
     eyes={side:prepared_eye_white(rgba[f"eye_white_{side}"],
                  rgba[f"lower_lid_{side}"],rgba[f"upper_lid_{side}"]) for side in ("L","R")}
-    # Independent pixel check of the repaired face behind the removed sclera.
-    # A source pixel that is removed must reveal opaque skin, not the old
-    # white JPEG eye socket. Retain original pixels outside the nasal edit.
+    # Regressions must fail if the fully-open eye loses even one alpha pixel,
+    # or if original saturated cheek pigment is changed during reconstruction.
+    original_body=rgba["body_horns"]
     for side in ("L","R"):
-        raw=rgba[f"eye_white_{side}"].getchannel("A")
-        cut=eyes[side].getchannel("A")
-        box=raw.getbbox()
-        raw_pixels,cut_pixels,face=raw.load(),cut.load(),clean_body.load()
-        removed=0
-        for y in range(box[1],box[3]):
-            for x in range(box[0],box[2]):
-                if raw_pixels[x,y]<96 or cut_pixels[x,y]!=0:
-                    continue
-                removed+=1
-                r,g,b,a=face[x,y]
-                if a<250 or (min(r,g,b)>=251 and max(r,g,b)-min(r,g,b)<=2):
-                    raise ValueError(f"{side}: uncovered JPEG eye socket at {(x,y)}")
-        print(f"{side}: {removed} source eye pixels concealed by opaque skin")
+        original=rgba[f"eye_white_{side}"]
+        if eyes[side].tobytes()!=original.tobytes():
+            raise ValueError(f"{side}: neutral sclera modified")
+    op,cp=original_body.load(),clean_body.load()
+    preserved=0
+    cheek_y=max(eyes[side].getchannel("A").getbbox()[3] for side in ("L","R"))
+    for y in range(500,1000):
+        for x in range(240,1014):
+            r,g,b=op[x,y][:3]
+            if r-g>45 and r-b>15 and cp[x,y][3]>=250:
+                if cp[x,y][:3]!=(r,g,b):
+                    raise ValueError(f"natural face pigment changed at {(x,y)}")
+                preserved+=1
+            rr,gg,bb,aa=cp[x,y]
+            if aa>=250 and rr-gg>45 and rr-bb>15 and not (r-g>45 and r-b>15):
+                raise ValueError(f"new red pigment on reconstructed face at {(x,y)}")
+            if y>=cheek_y and aa>=250 and (rr,gg,bb)!=(r,g,b):
+                raise ValueError(f"cheek pixels modified at {(x,y)}")
+    if preserved<100:
+        raise ValueError("natural makeup reference unexpectedly empty")
+    print(f"Preserved {preserved} original saturated face pixels; both neutral sclera textures exact")
     # Closed-eye silhouettes are exactly the user's latest two edited PNGs.
     closed=load_user_closed_eyes(manifest_path)
     extras=load_extra_assets(manifest_path)
@@ -427,8 +408,6 @@ def prepare(manifest_path: Path, out: Path) -> None:
         target = out / "layers" / filename
         if spec["name"] == "body_horns":
             clean_body.save(target)
-        elif spec["name"].startswith("eye_white_"):
-            eyes[spec["name"][-1]].save(target)
         else:
             shutil.copyfile(orig, target)  # exact unchanged original PNG bytes
         render=clean_body if spec["name"]=="body_horns" else eyes[spec["name"][-1]] if spec["name"].startswith("eye_white_") else rgba[spec["name"]]
@@ -444,7 +423,6 @@ def prepare(manifest_path: Path, out: Path) -> None:
                 technical = f"skin_patch_{side}"
                 technical_file = f"layers/{technical}.png"
                 skin[side].save(out / technical_file)
-                preview.alpha_composite(skin[side])
                 prepared_layers.append({"name":technical,"group":"Face", "file":technical_file})
         # The bold smiling eye exists only as a hidden animated expression
         # pose; do not add it to the static open-eye assembled preview.
@@ -471,14 +449,14 @@ def prepare(manifest_path: Path, out: Path) -> None:
                     "layers": prepared_layers}, indent=2) + "\n", encoding="utf-8")
     (out / "source_order.json").write_text(
         json.dumps({"source_order": expected_names, "render_order": [v["name"] for v in prepared_layers],
-                    "derived_render_sclera": ["eye_white_L","eye_white_R"],
+                    "neutral_sclera_original": ["eye_white_L","eye_white_R"],
                     "technical_derived_layers": ["skin_patch_L","skin_patch_R",
                                                   "closed_smile_L","closed_smile_R"],
                     "user_expression_assets": list(EXTRA_NAMES),
                     "user_closed_eye_assets": ["closed_smile_L","closed_smile_R"], "warning":
                     "Body source is opaque JPEG. Preview places body behind eyes; source files untouched."},
                    indent=2) + "\n", encoding="utf-8")
-    print("Validated 10 source layers; derived nasal masks in export only, original bytes unchanged.")
+    print("Validated 10 source layers; neutral sclera and face pigment preserved.")
     print("Prepared 22 art meshes: ten approved inputs, eight expression assets, four technical layers.")
 
 
