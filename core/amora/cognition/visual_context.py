@@ -74,6 +74,41 @@ def _single_context(value) -> dict | None:
     return observation.as_context()
 
 
+class PixelComparison(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: Literal["decoded_preview_pixels"]
+    status: Literal["compared","different_dimensions"]
+    first_size: tuple[int,int]
+    second_size: tuple[int,int]
+    sample_size: tuple[int,int] | None = None
+    sampled: bool | None = None
+    changed_pixels: int | None = Field(default=None, ge=0)
+    changed_fraction: float | None = Field(default=None, ge=0, le=1)
+    mean_channel_delta: float | None = Field(default=None, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def check_metrics(self):
+        if any(w<1 or h<1 or w*h>4194304 for w,h in (self.first_size,self.second_size)):
+            raise ValueError("invalid decoded dimensions")
+        values = (self.sample_size,self.sampled,self.changed_pixels,
+                  self.changed_fraction,self.mean_channel_delta)
+        if self.status=="different_dimensions":
+            if self.first_size==self.second_size or any(x is not None for x in values):
+                raise ValueError("invalid unequal dimensions")
+            return self
+        if self.first_size!=self.second_size or any(x is None for x in values):
+            raise ValueError("incomplete pixel comparison")
+        w,h=self.sample_size
+        if not (1<=w<=min(512,self.first_size[0]) and 1<=h<=min(512,self.first_size[1])):
+            raise ValueError("invalid sample size")
+        if (self.sampled!=(self.sample_size!=self.first_size) or self.changed_pixels>w*h
+                or abs(self.changed_fraction-self.changed_pixels/(w*h))>1e-9
+                or self.mean_channel_delta>self.changed_fraction+1e-9
+                or (self.changed_pixels==0)!=(self.mean_channel_delta==0)):
+            raise ValueError("inconsistent pixel comparison")
+        return self
+
+
 class VisualBatchItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
     image_number: int = Field(ge=1, le=16)
@@ -87,6 +122,7 @@ class VisualBatch(BaseModel):
     status: Literal["analyzed", "partial", "unavailable"]
     image_count: int = Field(ge=2, le=16)
     images: list[VisualBatchItem] = Field(min_length=1, max_length=3)
+    first_two_pixels: PixelComparison | None = None
 
     @model_validator(mode="after")
     def validate_batch(self):
@@ -95,6 +131,8 @@ class VisualBatch(BaseModel):
             raise ValueError("invalid visual order")
         if any(_single_context(item.observation.as_context()) is None for item in self.images):
             raise ValueError("invalid image evidence")
+        if self.first_two_pixels is not None and len(self.images)<2:
+            raise ValueError("pixel pair requires two images")
         analyzed = sum(item.observation.status == "analyzed" for item in self.images)
         expected = "analyzed" if analyzed == self.image_count else "partial" if analyzed else "unavailable"
         if expected != self.status:
@@ -104,6 +142,7 @@ class VisualBatch(BaseModel):
     def as_context(self):
         return {"observation_version":3, "source":self.source, "status":self.status,
                 "image_count":self.image_count,
+                **({"first_two_pixels":self.first_two_pixels.model_dump(mode="json",exclude_none=True)} if self.first_two_pixels else {}),
                 "images":[{"image_number":item.image_number,
                            "observation":item.observation.as_context()} for item in self.images]}
 
@@ -129,6 +168,8 @@ class HistoricalVisualContext(BaseModel):
     historical_disputed: Literal[True] | None = None
     review_requested: Literal[True] | None = None
     current: dict | None = None
+    reinspection: dict | None = None
+    historical_current_pixels: PixelComparison | None = None
 
     @model_validator(mode="after")
     def validate_reference(self):
@@ -144,6 +185,12 @@ class HistoricalVisualContext(BaseModel):
             self.current = _current_context(self.current)
             if self.current is None:
                 raise ValueError("invalid current visual evidence")
+        if self.reinspection is not None:
+            self.reinspection = _single_context(self.reinspection)
+            if self.reinspection is None or not self.review_requested or self.historical is None:
+                raise ValueError("invalid fresh reinspection")
+        if self.historical_current_pixels is not None and (self.historical is None or self.current is None):
+            raise ValueError("pixel pair requires historical and current image")
         states = [v["status"] for v in (self.current,self.historical) if v is not None]
         expected = ("analyzed" if self.historical is not None and states and all(x=="analyzed" for x in states)
                     else "partial" if any(x in {"analyzed","partial"} for x in states)

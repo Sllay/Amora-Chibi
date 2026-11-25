@@ -21,6 +21,7 @@ from .visual_enrichment import VisualExpressionEnrichmentService
 from .visual_checkpoint import VisualCheckpointStore, checkpoint_key, contains_transport_input
 from .visual_authorization import VISUAL_AUTHORIZATION, require_visual_authorization
 from .visual_reference import visual_reference_intent, visual_review_intent
+from .visual_pixels import VisualPreviewCache, compare_pixels
 
 
 _CURRENT_MESSAGE: ContextVar[InboundMessage | None] = ContextVar(
@@ -144,6 +145,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
         self.visual_enrichment = VisualExpressionEnrichmentService(self.expression_memory)
         self.incoming_vision = incoming_vision
         self.visual_checkpoints = VisualCheckpointStore(self.store.database, self.clock)
+        self.visual_previews = VisualPreviewCache(self.clock)
         self.response_modality = response_modality or PerceptualResponseModalitySelector()
         self.cognition = _CapabilityAwareCognitionProxy(self.cognition)
         self._recent_expressions: dict[str, deque[str]] = {}
@@ -229,6 +231,10 @@ class PlatformMessagingService(BasePlatformMessagingService):
                             native_hash,message.transport_revision,message.timestamp,current)
                     except Exception:
                         logging.getLogger("amora.incoming_vision").warning("visual_reference_write_failed")
+                    if message.incoming_image is not None and current.get("status")=="analyzed":
+                        # A real decoded raster is required; transport signatures alone do not suffice.
+                        self.visual_previews.put((session,native_hash,message.transport_revision),
+                                                 message.incoming_image)
             if not await guard():
                 return None
             if reference is None:
@@ -259,6 +265,48 @@ class PlatformMessagingService(BasePlatformMessagingService):
                             "observation":unavailable_visual_observation("invalid_observation")}
             if not await guard():
                 return None
+            reinspection = None
+            pixel_pair = None
+            if historical is not None and (review or message.incoming_image is not None):
+                old_key = (session,historical["native_hash"],historical["revision"])
+                async def historical_guard():
+                    if not await guard():
+                        return False
+                    try:
+                        return await self._visual_checkpoint_call(message,"source_current",*old_key)
+                    except Exception:
+                        return False
+                if await historical_guard():
+                    preview = self.visual_previews.get(old_key)
+                    if preview is not None:
+                        if message.incoming_image is not None:
+                            pixel_pair = compare_pixels(preview,message.incoming_image)
+                        elif review and self.incoming_vision is not None and self.incoming_vision.available:
+                            # Fresh inference, not the checkpoint cache or old description.
+                            old_token=VISUAL_AUTHORIZATION.set(historical_guard)
+                            try:
+                                import os
+                                from amora.cognition.visual_context import visual_context_for_request
+                                if os.getenv("AMORA_DISCORD_IMAGE_VISION","1").strip().lower() not in {"0","false","off","no"}:
+                                    result=await asyncio.wait_for(
+                                        self.incoming_vision.analyze(preview,message.text),timeout=27)
+                                    if not contains_transport_input(result,preview):
+                                        reinspection=visual_context_for_request(result,remote=True,private=True,mode="reply")
+                                        if reinspection and reinspection.get("source")!="vision_model":
+                                            reinspection=None
+                            except Exception:
+                                logging.getLogger("amora.incoming_vision").warning("visual_reinspection_failed")
+                            finally:
+                                VISUAL_AUTHORIZATION.reset(old_token)
+                    if not await historical_guard():
+                        self.visual_previews.discard(old_key)
+                        reinspection=pixel_pair=None
+                        historical=None
+                else:
+                    self.visual_previews.discard(old_key)
+                    historical=None
+            if not await guard():
+                return None
             prior = historical["observation"] if historical else None
             states = [o["status"] for o in (current,prior) if o is not None]
             status = ("analyzed" if prior is not None and states and all(x=="analyzed" for x in states)
@@ -269,7 +317,9 @@ class PlatformMessagingService(BasePlatformMessagingService):
                     **({"review_requested":True} if review else {}),
                     **({"historical_disputed":True} if historical and historical.get("disputed") else {}),
                     **({"historical":prior,"observed_at":historical["observed_at"]} if historical else {}),
-                    **({"current":current} if current is not None else {})}
+                    **({"current":current} if current is not None else {}),
+                    **({"reinspection":reinspection} if reinspection is not None else {}),
+                    **({"historical_current_pixels":pixel_pair} if pixel_pair is not None else {})}
         finally:
             VISUAL_AUTHORIZATION.reset(token)
 
@@ -360,9 +410,15 @@ class PlatformMessagingService(BasePlatformMessagingService):
             observations.append({'image_number': index, 'observation': result})
         if not is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id):
             return None
+        pair=None
+        first,second=(supplied.get(ref.attachment_id) for ref in refs[:2])
+        if first and second and first.image and second.image:
+            await require_visual_authorization()
+            pair=compare_pixels(first.image,second.image)
+            await require_visual_authorization()
         analyzed = sum(row['observation']['status'] == 'analyzed' for row in observations)
         return {'observation_version': 3, 'source': 'vision_batch', 'image_count': count,
-                'images': observations, 'status': 'analyzed' if analyzed == count else
+                'images': observations, **({'first_two_pixels':pair} if pair is not None else {}), 'status': 'analyzed' if analyzed == count else
                 'partial' if analyzed else 'unavailable'}
 
     async def _visual_single(self, message):
