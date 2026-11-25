@@ -34,7 +34,6 @@ def test_amd_preserves_unicode_whitespace_and_late_correction():
 
 
 def test_amd_cross_boundary_marker_and_unbroken_unicode():
-    original = "abcna verdade " + "🚀" * 25
     # The phrase starts at a word boundary and can span the byte cap.
     original = "abc na verdade " + "🚀" * 25
     indexed = index_message(original, max_block_bytes=8)
@@ -79,3 +78,20 @@ def test_provider_projection_retains_original_and_reserves_requested_output():
     assert fitted.user_text == ctx.user_text
     assert fitted.specialist_support is None and ctx.specialist_support is not None
     assert measure_envelope(fitted, payload, descriptor=descriptor).fits
+
+
+def test_wire_dedup_preserves_canonical_acir_and_resolves_reference():
+    import json
+    from amora.cognition.prompt_frame import render_turn_frame, turn_frame
+    ctx = context(acir={"speaker": "PERSON_BK", "addressee": "ENTITY_AMORA",
+                       "entities": ["PERSON_BK", "ENTITY_AMORA"],
+                       "intent": "communicate", "proposition": {"roles": {"content": "LITERAL"}}})
+    ctx.dialogue_plan["input_acir"] = ctx.acir
+    baseline = turn_frame(ctx)
+    wire = render_turn_frame(ctx)
+    compact = json.loads(wire.split("\n", 1)[1])
+    assert compact["dialogue_plan"]["input_acir"] == {"same_as": "current_turn.acir"}
+    assert compact["current_turn"]["acir"] == baseline["current_turn"]["acir"]
+    assert ctx.dialogue_plan["input_acir"] == ctx.acir
+    assert "LITERAL" not in wire
+    assert len(wire.split("\n", 1)[1]) < len(json.dumps(baseline, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
