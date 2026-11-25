@@ -12,6 +12,7 @@ from amora.events import PrivacyScope
 from amora.models import TaskClass
 
 from .context_budget import ContextBudgetExceeded
+from .adaptive_message import index_message, MessageDecompositionLimit
 from .models import CognitiveContext, CognitiveRequest, CognitiveResponsePlan, JournalStage
 from .self_choice import commit_self_choices
 from .production import CognitiveEngine as ProductionCognitiveEngine
@@ -236,6 +237,16 @@ class CognitiveEngine(ProductionCognitiveEngine):
         try:
             context = await self._prepare_context_async(request)
         except ContextBudgetExceeded:
+            # First AMD increment: preserve exact source and record coverage
+            # without invoking a model or emitting a partial interpretation.
+            try:
+                coverage = index_message(request.text, max_block_bytes=8192).metadata()
+            except MessageDecompositionLimit:
+                coverage = {"resource_limit": True}
+            await self._journal_async(request, JournalStage.ERROR,
+                summary="adaptive message analysis required; consolidation unavailable",
+                reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "AMD_CONSOLIDATION_REQUIRED"],
+                payload={"amd_coverage": coverage})
             return await self._fallback_plan(request, "Esse contexto ficou grande demais para processar com segurança.",
                 on_segment=on_segment, reason_codes=["CONTEXT_ENVELOPE_OVERFLOW", "LOCAL_FALLBACK"], started=started)
         # A verified owner-DM request can request read-only web retrieval.
