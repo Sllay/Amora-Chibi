@@ -7,7 +7,7 @@ Chromium in production or write avatar projects to the database.
 The `index.html` file is an immutable export copied from the validated
 `feat/ayatsuri2d-actions-prototype` branch's `preview/index.html`.
 It is a self-contained HTML+Canvas preview that embeds 10 original art layers,
-the 2 edited user closed-eye PNGs, 6 optional expression PNGs and technical
+the 2 edited user closed-eye PNGs, 8 optional expression PNGs and technical
 rendered layers. Never claim this is a native Cubism .moc3 renderer.
 
 ## Public URL
@@ -25,7 +25,7 @@ The preview exposes a local JS API, not a remote unauthenticated command endpoin
 ```js
 window.AmoraVisualEngine.setParameters({
   ParamMouthOpenY: .2,      // talk
-  ParamMouthPose: 0,       // 0 auto, 1 talk, 2 wide, 3 sad
+  ParamMouthPose: 0,       // 0 auto, 1 talk, 2 wide, 3 sad, 4 flat, 5 lip bite
   ParamBlush: .7,
   ParamTearL: .6,
   ParamTearR: .6,
@@ -49,3 +49,9 @@ mouth-open states, edited closed-eye art and mobile rendering.
 
 The Northflank deployment itself must be confirmed against the running
 service URL after merging; a GitHub merge alone is not proof of production rollout.
+
+## Current export
+
+- Source preview commit: `419584519e47fa45f715c03cc4a57fff9bd55977` (validated workflow 45523874733).
+- 22 layers; Sad V2, flat and lip-bite art; separate sobbing and laughing-tears presets; lower-lash contour changes.
+- Only the static HTML export is promoted; experimental MOC3 rig remains in PR #370.
