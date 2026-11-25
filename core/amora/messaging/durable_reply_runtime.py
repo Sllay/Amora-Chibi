@@ -27,6 +27,7 @@ from .explicit_memory import is_verified_owner
 from .generation_lifecycle import InboundGenerationBusy, InboundGenerationLost
 from .models import AttentionDecision, ChannelType, InboundMessage, InboundResult, RoutingAction
 from .reply_jobs import ReplyJobRepository, ReplyReason
+from .reply_diagnostics import ReplyDiagnostics
 
 _LOG = logging.getLogger("amora.messaging.durable_reply")
 
@@ -43,6 +44,7 @@ class DurableReplyRuntime:
         self.wake = None
         self._next_reconcile = 0.0
         self._execution = asyncio.Lock()
+        self.diagnostics = ReplyDiagnostics()
 
     async def call(self, operation, *args, **kwargs):
         lane = self.service.storage_lane
@@ -135,6 +137,7 @@ class DurableReplyRuntime:
         counts = await self.call("counts")
         return {"mode": "accept" if self.accepting else "drain",
                 "active": self.active, "counts": counts,
+                "diagnostics": self.diagnostics.snapshot(),
                 "unsettled": sum(counts.get(key, 0) for key in
                     ("pending", "running", "retry_wait", "ready", "blocked"))}
 
@@ -151,6 +154,7 @@ class DurableReplyRuntime:
             return InboundResult(decision=decision.model_copy(update={
                 "action": RoutingAction.BLOCK, "reason_codes": ["DURABLE_REPLY_AUTHORIZATION_REQUIRED"],
             }), duplicate=True)
+        self.diagnostics.receipt(True)
         return self.ack(decision, state["status"], duplicate=True)
 
     @staticmethod
@@ -189,6 +193,7 @@ class DurableReplyRuntime:
                 _LOG.warning("durable_reply_reflection_deferred turn_id=%s code=%s",
                              request.turn_id, type(exc).__name__)
         self.notify()
+        self.diagnostics.receipt(duplicate)
         return self.ack(decision, state["status"], duplicate=duplicate)
 
     def hydrate(self, claim, row):
@@ -416,6 +421,25 @@ class DurableReplyRuntime:
             else:
                 await self.defer(claim, ReplyReason.STORAGE_TEMPORARY)
 
+    async def _execute_observed(self, claim):
+        started = monotonic()
+        outcome, reason = "unknown", None
+        try:
+            await self.execute(claim)
+            try:
+                state = await self.call("state", claim.turn_id)
+                if state:
+                    outcome, reason = state["status"], state["last_reason"]
+            except Exception:
+                # Diagnostics must never alter a committed reply outcome.
+                pass
+        except asyncio.CancelledError:
+            outcome = "caller_cancelled"
+            raise
+        finally:
+            self.diagnostics.attempt(claim.turn_id, claim.attempts, outcome, reason,
+                                     (monotonic() - started) * 1000)
+
     async def run_once(self):
         if not self.active:
             return False
@@ -429,7 +453,7 @@ class DurableReplyRuntime:
             claim = await self.call("claim")
             if claim is None:
                 return False
-            work = asyncio.create_task(self.execute(claim))
+            work = asyncio.create_task(self._execute_observed(claim))
             heartbeat = asyncio.create_task(self._heartbeat(claim, work))
             try:
                 done, _ = await asyncio.wait({work, heartbeat}, return_when=asyncio.FIRST_COMPLETED)

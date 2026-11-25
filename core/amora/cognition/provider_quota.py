@@ -82,7 +82,10 @@ class ProviderQuotaCoordinator:
         lock = self._locks.setdefault(family, asyncio.Lock())
         # asyncio.Lock is FIFO; bound the wait independently of network time.
         try:
-            await asyncio.wait_for(lock.acquire(), timeout=max_wait)
+            # Acquire within the caller task: wait_for's child task may win
+            # the lock just as the caller is cancelled, leaking ownership.
+            async with asyncio.timeout(max_wait):
+                await lock.acquire()
         except TimeoutError:
             raise ProviderQuotaDeferred(1) from None
         try:
@@ -96,7 +99,7 @@ class ProviderQuotaCoordinator:
             except Exception as exc:
                 self.observe(provider, getattr(exc, "status_code", None),
                              getattr(exc, "retry_after", None), model=model,
-                             account_wide=(getattr(exc, "diagnostics", {}).get("quota_scope") == "account"))
+                             account_wide=((getattr(exc, "diagnostics", None) or {}).get("quota_scope") == "account"))
                 raise
         finally:
             lock.release()
