@@ -672,30 +672,41 @@ class CognitiveEngine(ProductionCognitiveEngine):
             remaining_requests = _optional_int(usage.get("remaining_requests"))
             remaining_tokens = _optional_int(usage.get("remaining_tokens"))
             effective_latency = _optional_float(usage.get("latency_ms")) or (perf_counter() - provider_started) * 1000.0
-            if empirical and not adaptive:
-                self._surface_performance.observe(descriptor,workload,perf_counter()-provider_started,True)
-            usage_persistence = self._record_usage(
-                provider=descriptor.name,
-                model=descriptor.model or "unknown",
-                task_class=TaskClass.SOCIAL_DIALOGUE.value,
-                success=True,
-                turn_id=request.turn_id,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                latency_ms=effective_latency,
-                status_code=status_code,
-                remaining_requests=remaining_requests,
-                remaining_tokens=remaining_tokens,
-                metadata={"candidate_index": provider_index, "phase": "structured_realization",
-                          **({"amd_blocks": usage.get("amd_blocks"), "amd_calls": usage.get("amd_calls")} if adaptive else {})},
-            )
-            if (remaining_requests is not None and remaining_requests <= 0
-                    or remaining_tokens is not None and remaining_tokens <= 0):
-                self._provider_quota.block_for(descriptor.name, 60, model=descriptor.model)
-            self._provider_succeeded(descriptor, remaining_requests, remaining_tokens)
+            if detail is not None and not adaptive:
+                # Each actual section was accounted against its own provider.
+                # A fully recovered draft does not count as a new successful API call.
+                usage_persistence = ("failed" if "failed" in detail.usage_persistence else
+                    "uncertain" if "uncertain" in detail.usage_persistence else
+                    "persisted" if detail.usage_persistence else "not_recorded")
+                response_provider,response_model = detail.providers[-1]
+            else:
+                response_provider,response_model = descriptor.name,descriptor.model
+                if empirical and not adaptive:
+                    self._surface_performance.observe(descriptor,workload,perf_counter()-provider_started,True)
+                usage_persistence = self._record_usage(
+                    provider=descriptor.name,
+                    model=descriptor.model or "unknown",
+                    task_class=TaskClass.SOCIAL_DIALOGUE.value,
+                    success=True,
+                    turn_id=request.turn_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    latency_ms=effective_latency,
+                    status_code=status_code,
+                    remaining_requests=remaining_requests,
+                    remaining_tokens=remaining_tokens,
+                    metadata={"candidate_index": provider_index, "phase": "structured_realization",
+                              **({"amd_blocks": usage.get("amd_blocks"), "amd_calls": usage.get("amd_calls")} if adaptive else {})},
+                )
+                if (remaining_requests is not None and remaining_requests <= 0
+                        or remaining_tokens is not None and remaining_tokens <= 0):
+                    self._provider_quota.block_for(descriptor.name, 60, model=descriptor.model)
+                self._provider_succeeded(descriptor, remaining_requests, remaining_tokens)
             reasons = [*validated.reason_codes, "REMOTE_PROVIDER_USED", "STRUCTURED_REALIZATION"]
             if detail is not None and not adaptive:
                 reasons.append("DETAIL_SECTIONS_ASSEMBLED")
+                if len(set(detail.providers))>1:
+                    reasons.append("DETAIL_MIXED_PROVIDER_SECTIONS")
             if adaptive:
                 reasons.append("AMD_GLOBAL_CONSOLIDATION_USED")
             elif provider_index:
@@ -703,8 +714,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
             return await self._plan_from_validated(
                 request,
                 validated,
-                provider=descriptor.name,
-                model=descriptor.model,
+                provider=response_provider,
+                model=response_model,
                 on_segment=on_segment,
                 started=started,
                 reason_codes=reasons,

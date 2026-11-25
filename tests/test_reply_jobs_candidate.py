@@ -1361,3 +1361,68 @@ async def test_run07_combined_failure_recovery_accounting(lab,monkeypatch,capsys
             },sort_keys=True),flush=True)
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_stabilization_section_checkpoint_resume_on_reopened_store(lab):
+    from amora.cognition.models import CognitiveContext, JournalStage
+    from amora.cognition.detail_sections import DetailSession, section_scopes
+    from amora.cognition.providers import ProviderError
+    core,clock,_=lab
+    request=_request().model_copy(update={"text":"Crie uma documentação técnica detalhada da arquitetura e do armazenamento. Explique cada sistema com seus algoritmos e restrições."})
+    ctx=CognitiveContext(turn_id=request.turn_id,created_at=clock.now(),speaker_id="PERSON_BK",
+        target_id="ENTITY_AMORA",user_text=request.text,privacy_scope=PrivacyScope.PERSONAL,
+        remote_processing_allowed=True,dialogue_plan={"response_moves":["answer_question"],"depth":"deep"})
+    scopes=section_scopes(request.text)
+    assert len(scopes)==2
+    authorized=True
+    async def guard():
+        return authorized
+    primary=CountingStructuredProvider(name="section-primary")
+    secondary=CountingStructuredProvider(name="section-secondary")
+    calls=[]
+    async def first(c):
+        calls.append(c._detail_section["index"])
+        assert c.user_text==request.text
+        if c._detail_section["index"]==2:
+            raise ProviderError("temporary",status_code=503)
+        return {"moves":[{"kind":"answer_question","text":"Primeira seção: arquitetura e armazenamento."}],
+                "closing":"statement","_usage":{"input_tokens":20,"output_tokens":10,"status_code":200}}
+    session=DetailSession(core.cognition,request,ctx,scopes,guard,False)
+    with pytest.raises(ProviderError):
+        await session.run(first,primary.descriptor)
+    assert calls==[1,2] and "incompleta" in session.partial().text
+    assert not core.cognition.store.list_segments(request.turn_id)
+    store=core.cognition.store
+    reopened=type(store)(store.database_path,clock,backend=store.backend)
+    try:
+        core.cognition.store=reopened
+        recovered=DetailSession(core.cognition,request,ctx.model_copy(update={"created_at":clock.now()}),scopes,guard,False)
+        async def second(c):
+            calls.append(c._detail_section["index"])
+            return {"moves":[{"kind":"answer_question","text":"Segunda seção: algoritmos e restrições."}],
+                    "closing":"statement","_usage":{"input_tokens":21,"output_tokens":11,"status_code":200}}
+        result=await recovered.run(second,secondary.descriptor)
+        assert calls==[1,2,2]
+        assert len(result["moves"])==2 and recovered.partial() is None
+        assert recovered.providers==[(primary.descriptor.name,primary.descriptor.model),
+            (secondary.descriptor.name,secondary.descriptor.model)]
+        assert len([j for j in reopened.journal_for_turn(request.turn_id)
+            if j.stage==JournalStage.DETAIL_SECTION_CHECKPOINT])==2
+        assert not reopened.list_segments(request.turn_id)
+        authorized=False
+        revoked=DetailSession(core.cognition,request,ctx,scopes,guard,False)
+        with pytest.raises(InboundGenerationLost):
+            await revoked.run(second,secondary.descriptor)
+        authorized=True
+        changed=DetailSession(core.cognition,request.model_copy(update={"metadata":{**request.metadata,"transport_revision":2}}),ctx,scopes,guard,False)
+        await changed.load()
+        assert not changed.frames
+        clock.advance(timedelta(seconds=901))
+        expired=DetailSession(core.cognition,request,ctx,scopes,guard,False)
+        await expired.load()
+        assert not expired.frames
+        assert calls==[1,2,2]
+    finally:
+        core.cognition.store=store
+        reopened.close()

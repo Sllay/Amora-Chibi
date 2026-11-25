@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 from datetime import timedelta
+from time import perf_counter
 
 from .models import JournalStage
 from .realization import RealizationFrame, RealizationValidator, RealizationError, ValidatedRealization
@@ -59,6 +60,7 @@ class DetailSession:
         self.frames=[]
         self.providers=[]
         self.usage=[]
+        self.usage_persistence=[]
         self.loaded=False
         snapshot=context.model_dump(mode="json",exclude={"created_at"})
         self.key=hashlib.sha256(json.dumps([VERSION,request.session_id,
@@ -131,6 +133,7 @@ class DetailSession:
             ctx._detail_section={"index":index+1,"count":len(self.scopes),
                 "scope":self.scopes[index],
                 "previous_scopes":list(self.scopes[:index])}
+            started=perf_counter()
             result=dict(await realize(ctx))
             usage=result.pop("_usage",{})
             frame=self.validate(result)
@@ -152,7 +155,28 @@ class DetailSession:
                 raise RealizationError("DETAIL_CHECKPOINT_CONFLICT","checkpoint was not committed")
             self.frames.append(frame)
             self.providers.append((descriptor.name,descriptor.model))
-            self.usage.append(usage if isinstance(usage,dict) else {})
+            usage=usage if isinstance(usage,dict) else {}
+            self.usage.append(usage)
+            from amora.models import TaskClass
+            from .provider_quota import ProviderQuotaDeferred
+            def count(field):
+                value=usage.get(field)
+                return value if type(value) is int and value>=0 else None
+            remaining_requests=count("remaining_requests")
+            remaining_tokens=count("remaining_tokens")
+            self.usage_persistence.append(self.engine._record_usage(
+                provider=descriptor.name, model=descriptor.model or "unknown",
+                task_class=TaskClass.SOCIAL_DIALOGUE.value, success=True,
+                turn_id=self.request.turn_id,input_tokens=count("input_tokens"),
+                output_tokens=count("output_tokens"),status_code=count("status_code"),
+                latency_ms=(perf_counter()-started)*1000,
+                remaining_requests=remaining_requests,remaining_tokens=remaining_tokens,
+                metadata={"phase":"detail_section","section_index":index}))
+            self.engine._provider_succeeded(descriptor,remaining_requests,remaining_tokens)
+            if remaining_requests==0 or remaining_tokens==0:
+                self.engine._provider_quota.block_for(descriptor.name,60,model=descriptor.model)
+                if len(self.frames)<len(self.scopes):
+                    raise ProviderQuotaDeferred(60)
             # Existing account admission stays held by the parent attempt.
             # No additional independent routing or retry loop.
         await self.authorize()
@@ -162,10 +186,6 @@ class DetailSession:
             vals=[u.get(field) for u in self.usage]
             if vals and all(type(v) is int and v>=0 for v in vals):
                 totals[field]=sum(vals)
-        if self.usage:
-            for field in ("status_code","remaining_requests","remaining_tokens"):
-                if field in self.usage[-1]:
-                    totals[field]=self.usage[-1][field]
         return {**combined.model_dump(mode="json"),"_usage":totals}
 
     def combined(self,partial=False):
@@ -178,7 +198,7 @@ class DetailSession:
         return RealizationFrame(moves=moves,closing="statement")
 
     def partial(self):
-        if not self.frames:
+        if not 0<len(self.frames)<len(self.scopes):
             return None
         frame=self.combined(partial=True)
         return ValidatedRealization(frame," ".join(m.text for m in frame.moves),

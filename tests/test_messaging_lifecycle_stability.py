@@ -213,3 +213,40 @@ def test_recent_dialogue_keeps_longer_session_and_latest_question(tmp_path, monk
         assert len(context.recent_messages) > 12
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_stabilization_live_dm_section_generation_and_usage(tmp_path,monkeypatch):
+    from amora.cognition.models import JournalStage
+    from test_platform_messaging_step2 import _bind_bk,_message
+    monkeypatch.setenv("AMORA_HOME",str(tmp_path/".amora"))
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE","off")
+    core=AmoraCore.bootstrap(clock=_clock())
+    _bind_bk(core)
+    provider=CountingStructuredProvider(name="detail-live-fixture")
+    calls=[]
+    async def realize(ctx):
+        section=ctx._detail_section
+        calls.append(section["index"] if section else 0)
+        return {"moves":[{"kind":ctx.dialogue_plan["response_moves"][0],
+            "text":f"Seção técnica sintética número {calls[-1]}."}],
+            "closing":"statement","_usage":{"input_tokens":12,"output_tokens":4,"status_code":200}}
+    provider.realize=realize
+    core.cognition.register_provider(provider)
+    try:
+        msg=_message(core,message_id="detail-live",actor_id="111111111111111111",
+            channel_type=ChannelType.DM,text="Crie uma documentação técnica detalhada da arquitetura e do armazenamento. Explique cada sistema com seus algoritmos e restrições. Não resuma.")
+        msg=msg.model_copy(update={"remote_processing_allowed":True})
+        response=await core.messaging.receive(msg)
+        assert len(response.outbound)==1
+        assert calls==[1,2]
+        assert "número 1" in response.outbound[0].text and "número 2" in response.outbound[0].text
+        assert "DETAIL_SECTIONS_ASSEMBLED" in response.outbound[0].metadata["cognitive_reason_codes"]
+        assert len([j for j in core.cognition.store.journal_for_turn(core.messaging._turn_id(msg))
+            if j.stage==JournalStage.DETAIL_SECTION_CHECKPOINT])==2
+        assert (await core.messaging.receive(msg)).duplicate
+        assert calls==[1,2]
+    finally:
+        await core.messaging.stop_inflight()
+        await core.messaging.stop_storage_lane()
+        core.close()
