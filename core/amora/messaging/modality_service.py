@@ -178,9 +178,8 @@ class PlatformMessagingService(BasePlatformMessagingService):
         )
 
     async def _incoming_visual_observation(self, message, decision):
-        # Text/sticker/audio-only turns never enter the visual storage or
-        # authorization path. Inspect only local transport metadata here;
-        # all visual inputs still pass the full live authorization fence.
+        # Ordinary non-image turns never enter visual storage or authorization.
+        # Explicit historical references are the sole text-only exception.
         has_visual = self._has_visual_input(message)
         reference = visual_reference_intent(message)
         if not has_visual and reference is None:

@@ -1036,3 +1036,71 @@ async def test_visual_checkpoint_exact_turn_ttl_source_and_backend_reopen(lab):
         assert await service._incoming_visual_observation(message,decision) is None
         assert len(calls) == 3
     service.visual_checkpoints = VisualCheckpointStore(core.database,clock)
+
+
+@pytest.mark.asyncio
+async def test_visual_reference_across_turns_reopened_backend_and_exact_reply(lab):
+    from amora.messaging.visual_checkpoint import VisualCheckpointStore
+    from amora.messaging.models import AttachmentRef
+    from amora.cognition.visual_context import visual_context_for_request
+    from test_discord_incoming_vision_ch2 import payload, observation
+    core, clock, _ = lab
+    _bind_bk(core)
+    service = core.messaging
+    image = payload()
+    decision = AttentionDecision(action=RoutingAction.RESPOND, score=1,
+        speaker_entity_id="PERSON_BK", speaker_actor_ref="synthetic",
+        addressee_id="ENTITY_AMORA")
+    calls = []
+    class Vision:
+        available = True
+        async def analyze(self,image,user_text):
+            calls.append(user_text)
+            return {**observation(),"description":"Imagem observada "+str(len(calls))}
+    service.incoming_vision = Vision()
+    def photo(mid,text):
+        msg = _dm(core,mid,text=text)
+        return InboundMessage.model_validate({**msg.model_dump(),
+            "attachments":[AttachmentRef(attachment_id=image.attachment_id,media_type="image/png").model_dump()],
+            "incoming_image":image.model_dump()})
+    first = photo("visual-history-first","Descreva a cor.")
+    prior = await service._incoming_visual_observation(first,decision)
+    clock.advance(timedelta(seconds=2))
+    with closing(AmoraDatabase(core.database.path,backend=core.database.backend)) as reopened:
+        service.visual_checkpoints = VisualCheckpointStore(reopened,clock)
+        follow = _dm(core,"visual-history-follow",text="Qual a cor da imagem anterior?")
+        recovered = await service._incoming_visual_observation(follow,decision)
+        assert recovered["historical"] == prior
+        assert recovered["status"] == "analyzed" and recovered["observation_version"] == 4
+        assert len(calls) == 1
+        assert visual_context_for_request(recovered,remote=True,private=True,mode="reply")["historical"] == prior
+        assert visual_context_for_request(recovered,remote=True,private=False,mode="reply") is None
+        assert visual_context_for_request(recovered,remote=True,private=True,mode="reflection") is None
+        assert await service._incoming_visual_observation(follow.model_copy(update={
+            "remote_processing_allowed":False}),decision) is None
+        other = follow.model_copy(update={"conversation_id":"other-dm"})
+        assert (await service._incoming_visual_observation(other,decision))["status"] == "unavailable"
+        clock.advance(timedelta(seconds=2))
+        second = photo("visual-history-second","Compare esta com a imagem anterior.")
+        comparison = await service._incoming_visual_observation(second,decision)
+        assert comparison["historical"] == prior
+        assert comparison["current"]["description"] == "Imagem observada 2"
+        assert len(calls) == 2
+        clock.advance(timedelta(seconds=2))
+        reply = _dm(core,"visual-history-reply",text="E a cor dessa foto?").model_copy(
+            update={"reply_to_message_id":first.native_source_message_id})
+        exact = await service._incoming_visual_observation(reply,decision)
+        assert exact["reference_kind"] == "reply" and exact["historical"] == prior
+        session = service._session_ref(second)
+        core.messaging.reflections.invalidate_source(session,
+            service._hash(second.native_source_message_id),through_revision=1)
+        latest = _dm(core,"visual-history-after-delete",text="Descreva a última foto.")
+        missing = await service._incoming_visual_observation(latest,decision)
+        assert missing["status"] == "unavailable" and "historical" not in missing
+        # An exact older reply is independent of the invalidated newer source.
+        assert (await service._incoming_visual_observation(reply,decision))["historical"] == prior
+        clock.advance(timedelta(seconds=86401))
+        expired = reply.model_copy(update={"timestamp":clock.now()})
+        assert (await service._incoming_visual_observation(expired,decision))["status"] == "unavailable"
+        assert len(calls) == 2
+    service.visual_checkpoints = VisualCheckpointStore(core.database,clock)

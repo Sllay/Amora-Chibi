@@ -256,3 +256,30 @@ async def test_non_image_inputs_never_touch_visual_identity_or_checkpoint_storag
             assert await service._incoming_visual_observation(candidate,decision) is None
     finally:
         core.close()
+
+
+def test_visual_reference_intent_does_not_select_ordinary_or_ambiguous_images():
+    from types import SimpleNamespace
+    from amora.messaging.visual_reference import visual_reference_intent
+    cases = [
+        ("Me explique como funciona uma imagem digital.",None,None),
+        ("Qual a cor da imagem anterior?",None,"latest"),
+        ("Compare com a última foto.",None,"latest"),
+        ("Descreva a penúltima imagem.",None,"unsupported"),
+        ("Qual o texto da foto?", "native-id","reply"),
+    ]
+    for text,reply,expected in cases:
+        msg=SimpleNamespace(text=text,reply_to_message_id=reply,reply_to_amora=False)
+        assert visual_reference_intent(msg)==expected
+
+
+def test_visual_reference_schema_rejects_recursive_and_unauthorized_history():
+    from test_discord_incoming_vision_ch2 import observation
+    from amora.cognition.visual_context import visual_context_for_request
+    value={"observation_version":4,"source":"visual_reference","status":"analyzed",
+           "reference_kind":"latest","observed_at":"2026-11-24T00:00:00Z","historical":observation()}
+    assert visual_context_for_request(value,remote=True,private=True,mode="reply") is not None
+    assert visual_context_for_request({**value,"historical":None},remote=True,private=True,mode="reply") is None
+    assert visual_context_for_request({**value,"historical":value},remote=True,private=True,mode="reply") is None
+    assert visual_context_for_request(value,remote=True,private=True,mode="autonomous_initiation") is None
+    assert visual_context_for_request(value,remote=True,private=True,mode="scheduled_reminder") is None

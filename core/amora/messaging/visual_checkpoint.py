@@ -166,6 +166,8 @@ class VisualCheckpointStore:
         if len({item[3] for item in tied}) != 1:
             return None
         chosen = max(tied,key=lambda item:(item[1],item[2]))
+        if any(item[1:3] == chosen[1:3] and item[4] != chosen[4] for item in tied):
+            return None
         sent_at, revision, observed_at, native_hash, data = chosen
         if not self.source_current(session,native_hash,revision):
             return None
