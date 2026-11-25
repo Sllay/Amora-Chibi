@@ -310,6 +310,13 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - a0d65d7: 10/11 workflows PASS, inclusive PG18 45531616967. Core 45531616760, Python 3.11 job 138928053065: 2183 passed, 156 skipped, 1 failed; 3.12/3.13/3.14 cancelados pelo fail-fast. Falha única: test_run02_groq_413_sends_only_one_smaller_authorized_request. Fixture antiga bindava somente DURABLE_REALIZATION, sem a autorização viva agora obrigatória para retentativa; DeferredRealization correto impediu novo envio.
 - Mantida a proteção de runtime. Teste existente expandido em matriz HTTP413/HTTP400 context_length_exceeded x autorização válida/revogada/ausente. Com autorização válida, exige exatamente duas chamadas, envelope menor e original preservado. Com revogação ou ausência, exige apenas a primeira chamada e erro DURABLE_AUTHORIZATION_LOST; não permite segundo envio. Não suprimir testes/skips. CI novo pendente. Sem deploy, sem monitoramento.
 
+### Integração final — incremento C: percepção multimodal ordenada (24/11/2026)
+
+- ab70b1b 11/11 CI PASS, mergeable; Core 45532154361, PG18 45532154276. Proprietário autorizou prosseguir.
+- 0391b4c implementa worker Discord → envelope Core → visão → contexto/realização para até três anexos de imagem. Mantém contrato singular, nova lista exclusiva com IDs nativos únicos e ordem verificada, mesmo limite agregado base64 3.733.336 e HTTP 5 MiB, consentimento PERSONAL/DM, validação MIME/CDN existente. Worker sequencial divide orçamento de 2,8 MB entre imagens, usa transcode existente e retry 413 metadata-only preservando legenda/ordem. Core divide 27s entre imagens, revalida identidade antes das próximas, preserva status individual, total de imagens e partial quando alguma falha ou excede limite. Contexto v3 fechado sem IDs nativos/bytes/URL; comparação entre observações, não inspeção conjunta dos pixels. Falhas logadas por categoria fixa.
+- Testes de worker, partial/ordem, identidade/privacidade, aggregate cap e ausência de raw no contexto; novo CI precisa incluir Messaging workers. Não há alteração de schema, produção ou monitoramento. Limites de quantidade/tempo e qualidade da redução são experimentais.
+- Pendências abertas: cache/checkpoint visual persistente por turno/revisão/attachment/foco com reautorização e TTL, invalidação/consentimento entre chamadas internas da cascata e teste real, análise conjunta de pixels e foco por imagem, suporte a mais de três com orçamento medido. Não declarar percepção completa nem LIVE_CERTIFIED. Outras pendências permanecem na matriz.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.

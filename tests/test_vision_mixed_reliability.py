@@ -100,3 +100,87 @@ def test_image_http_guard_includes_unchanged_vision_and_cognition_budgets():
         "/v1/messaging/worker/inbound", "POST", worker=False) == 175
     assert http_processing_deadline_seconds(
         "/v1/messaging/worker/inbound", "POST", worker=True) == 175
+
+
+def _batch_message(core, *, channel=ChannelType.DM, remote=True):
+    from amora.messaging.models import InboundMessage
+    raw = _message(core, message_id="mixed-batch", actor_id="111111111111111111",
+                   channel_type=channel, text="Compare a primeira e a terceira imagem.").model_dump()
+    ids = [ATTACHMENT, "987654321098765433", "987654321098765434", "987654321098765435"]
+    raw.update(remote_processing_allowed=remote,
+        attachments=[{"attachment_id":i,"media_type":"image/png"} for i in ids],
+        incoming_images=[
+            {"attachment_id":ids[0],"image":payload().model_dump()},
+            {"attachment_id":ids[1],"ingest_status":"IMAGE_FETCH_FAILED"},
+            {"attachment_id":ids[2],"image":payload().model_copy(update={"attachment_id":ids[2]}).model_dump()},
+        ])
+    return InboundMessage.model_validate(raw)
+
+
+@pytest.mark.asyncio
+async def test_ordered_image_batch_partial_caption_and_no_raw_media_in_context(tmp_path, monkeypatch):
+    from amora.cognition.visual_context import visual_context_for_request
+    from test_discord_incoming_vision_ch2 import observation
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        _bind_bk(core)
+        msg = _batch_message(core)
+        calls = []
+        class Vision:
+            available = True
+            async def analyze(self, image, user_text):
+                calls.append((image.attachment_id,user_text))
+                return {**observation(),"description":f"Observação {len(calls)}"}
+        core.messaging.incoming_vision = Vision()
+        seen = []
+        async def respond(request, *, on_segment=None, fallback_text=None):
+            seen.append(request)
+            return CognitiveResponsePlan(turn_id=request.turn_id, display_text="Comparei as observações disponíveis.",
+                speech_text="Comparei as observações disponíveis.", provider="test", model="test")
+        monkeypatch.setattr(core.cognition,"respond_observed",respond)
+        result = await core.messaging.receive(msg)
+        assert result.outbound and len(seen) == 1
+        assert seen[0].text == msg.text
+        assert calls == [(msg.attachments[0].attachment_id,msg.text),(msg.attachments[2].attachment_id,msg.text)]
+        visual = seen[0].metadata["visual_observation"]
+        assert visual["status"] == "partial" and visual["image_count"] == 4
+        assert [x["image_number"] for x in visual["images"]] == [1,2,3]
+        assert visual["images"][1]["observation"]["failure_reason"] == "download_failed"
+        assert visual["images"][2]["observation"]["description"] == "Observação 2"
+        assert "content_base64" not in str(visual)
+        assert all(a.attachment_id not in str(visual) for a in msg.attachments)
+        assert visual_context_for_request(visual, remote=True, private=True, mode="reply") == visual
+        assert visual_context_for_request(visual, remote=True, private=False, mode="reply") is None
+        assert visual_context_for_request(visual, remote=True, private=True, mode="reflection") is None
+        assert visual_context_for_request({**visual,"status":"analyzed"},remote=True,private=True,mode="reply") is None
+        assert "Compare somente as observações analisadas" in realization_instruction(context(msg.text,visual_observation=visual))
+    finally:
+        core.close()
+
+
+def test_batch_rejects_bad_identity_order_consent_and_aggregate(tmp_path, monkeypatch):
+    from pydantic import ValidationError
+    from amora.messaging.models import InboundMessage
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        good = _batch_message(core)
+        raw = good.model_dump()
+        for changes in [
+            {"remote_processing_allowed":False},
+            {"channel_type":"group"},
+            {"incoming_image":payload().model_dump()},
+            {"incoming_images":list(reversed(raw["incoming_images"]))},
+            {"incoming_images":[raw["incoming_images"][0]]*2},
+        ]:
+            with pytest.raises(ValidationError):
+                InboundMessage.model_validate({**raw,**changes})
+        oversized = good.model_dump()
+        for item in oversized["incoming_images"]:
+            if item["image"]:
+                item["image"]["content_base64"] = "A"*2_000_000
+        with pytest.raises(ValidationError,match="aggregate payload"):
+            InboundMessage.model_validate(oversized)
+    finally:
+        core.close()

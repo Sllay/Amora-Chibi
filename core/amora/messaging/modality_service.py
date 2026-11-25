@@ -192,7 +192,8 @@ class PlatformMessagingService(BasePlatformMessagingService):
             item = supplied.get(ref.attachment_id)
             # Do not turn a cached owner decision into authorization for a
             # subsequent image when a binding has since been revoked.
-            if not is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id):
+            if not (message.remote_processing_allowed and message.privacy_scope == PrivacyScope.PERSONAL
+                    and is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id)):
                 return None
             remaining = deadline - loop.time()
             if item is None:
@@ -281,7 +282,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
         except Exception as exc:
             logging.getLogger("amora.incoming_vision").warning(
                 "incoming_image_analysis_failed code=%s elapsed_ms=%d",
-                str(getattr(exc, "code", type(exc).__name__))[:80],
+                visual_failure_reason(exc),
                 max(0, round((asyncio.get_running_loop().time() - vision_started) * 1000)),
             )
             return unavailable_visual_observation(visual_failure_reason(exc))

@@ -607,10 +607,11 @@ export class DiscordWorker {
         const batch = await collectDiscordIncomingImages(message, {
           onStage: (stage) => safeLog('IMAGE_INGEST_STAGE', stage),
         });
-        for (const item of batch) {
-          const nativeRef = normalized.attachments?.find(a => a.attachment_id === item.attachment_id);
+        for (const candidate of discordImageCandidates(message)) {
+          const item = batch.find(a => a.attachment_id === String(candidate.id));
+          const nativeRef = normalized.attachments?.find(a => a.attachment_id === String(candidate.id));
           if (nativeRef && (!nativeRef.media_type || nativeRef.media_type === 'application/octet-stream')) {
-            nativeRef.media_type = item.image?.content_mime || 'image/unknown';
+            nativeRef.media_type = item?.image?.content_mime || 'image/unknown';
           }
         }
         normalized.incoming_images = batch;
