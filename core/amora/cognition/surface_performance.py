@@ -31,6 +31,7 @@ def detailed_output_requested(context) -> bool:
     """Explicit request, not ordinary chatter, reflection or visual evidence."""
     return bool(context.scene_visibility == "private"
         and context.remote_processing_allowed
+        and context.privacy_scope.value == "PERSONAL"
         and context.speaker_id == "PERSON_BK" and context.target_id == "ENTITY_AMORA"
         and not context.temporal_opportunity and not context.temporal_context
         and not context.visual_observation

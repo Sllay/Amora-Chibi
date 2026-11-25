@@ -29,7 +29,6 @@ from .durable_realization import (durable_realization, DeferredRealization, DURA
 from .provider_resilience import classify_provider_failure, context_rejection
 from .provider_quota import ProviderQuotaDeferred
 from .surface_performance import attempt_window
-from amora.messaging.generation_lifecycle import InboundGenerationLost
 
 
 async def _await_numes_adaptive(
@@ -237,6 +236,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
         on_segment: SegmentSink | None,
         fallback_text: str | None,
     ) -> CognitiveResponsePlan:
+        from amora.messaging.generation_lifecycle import InboundGenerationLost
         started = perf_counter()
         try:
             context = await self._prepare_context_async(request)
@@ -503,7 +503,6 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 revision = request.metadata.get("transport_revision")
                 if session and native_hash and isinstance(revision, int):
                     if await self.store.async_lane.call("source_invalidated", session, native_hash, revision):
-                        from amora.messaging.generation_lifecycle import InboundGenerationLost
                         raise InboundGenerationLost("INBOUND_SOURCE_INVALIDATED")
             begin_attempt = getattr(self, "_begin_structured_attempt", None)
             end_attempt = getattr(self, "_end_structured_attempt", None)
