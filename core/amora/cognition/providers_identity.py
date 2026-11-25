@@ -136,7 +136,7 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
             "max_output_tokens": 900,
             "store": False,
             "text": {"format": {"type": "json_object"}},
-        })
+        }, descriptor=self.descriptor)
         root, response = await self._post_responses(payload, api_key=api_key, error_label="cognitive proposal")
         parsed = _parse_responses_json(root, error_message="Groq returned invalid structured cognitive proposals")
         parsed["_usage"] = _responses_usage(root, response)
@@ -236,7 +236,7 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
             "reasoning": {"effort": "none"},
             # Progressive preview is locally validated before it is committed.
             "text": {"format": {"type": "json_object"}},
-        })
+        }, descriptor=self.descriptor)
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
