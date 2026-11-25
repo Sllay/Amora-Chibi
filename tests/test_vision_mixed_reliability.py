@@ -283,3 +283,49 @@ def test_visual_reference_schema_rejects_recursive_and_unauthorized_history():
     assert visual_context_for_request({**value,"historical":value},remote=True,private=True,mode="reply") is None
     assert visual_context_for_request(value,remote=True,private=True,mode="autonomous_initiation") is None
     assert visual_context_for_request(value,remote=True,private=True,mode="scheduled_reminder") is None
+
+
+def test_stabilization_spatial_sensor_contract_and_focus():
+    import pytest
+    from pydantic import ValidationError
+    from amora.messaging.incoming_vision import observation_from_response
+    from amora.messaging.visual_focus import visual_focus,focus_instruction
+    from amora.cognition.visual_context import visual_context_for_request
+    focus=visual_focus("Observe os olhos e a abertura das pálpebras.")
+    assert focus.mode=="detailed"
+    assert "single_scene" in focus_instruction(focus)
+    def decoded(state):
+        return {"description":"Um avatar em uma única imagem.",
+                "visible_text":[],"uncertainties":[],"confidence":.8,
+                "spatial":{"layout":"single_scene","panel_count":1,"regions":[
+                  {"component":"olho esquerdo da imagem","position":"left",
+                   "visible_state":state,"color":"rubi","shape":"oval","confidence":.8}]}}
+    a=observation_from_response(decoded("aberto"),focus,provider="groq",model="synthetic")
+    b=observation_from_response(decoded("semicerrado"),focus,provider="nvidia",model="synthetic")
+    assert a["spatial"]["regions"][0]["visible_state"]=="aberto"
+    assert b["spatial"]["regions"][0]["visible_state"]=="semicerrado"
+    assert visual_context_for_request(a,remote=True,private=True,mode="reply")==a
+    assert visual_context_for_request(a,remote=True,private=False,mode="reply") is None
+    invalid=decoded("aberto")
+    invalid["spatial"]["panel_count"]=4
+    with pytest.raises(ValidationError):
+        observation_from_response(invalid,focus,provider="groq",model="synthetic")
+    invalid=decoded("aberto")
+    invalid["spatial"]["regions"]*=2
+    with pytest.raises(ValidationError):
+        observation_from_response(invalid,focus,provider="groq",model="synthetic")
+    # A legacy response still parses, but does not pretend to have spatial evidence.
+    legacy=decoded("aberto")
+    legacy.pop("spatial")
+    assert "spatial" not in observation_from_response(legacy,focus,provider="groq",model="synthetic")
+
+
+def test_stabilization_visual_review_intent_explicit_only():
+    from types import SimpleNamespace
+    from amora.messaging.visual_reference import visual_review_intent
+    def intent(text):
+        return visual_review_intent(SimpleNamespace(text=text,reply_to_message_id=None,reply_to_amora=False))
+    assert intent("Reanalise a imagem anterior.")=="review"
+    assert intent("Você errou na análise da imagem anterior.")=="dispute"
+    assert intent("Revise meu código.") is None
+    assert intent("Qual a cor da imagem anterior?") is None

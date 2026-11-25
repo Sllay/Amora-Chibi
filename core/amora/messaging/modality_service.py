@@ -393,6 +393,9 @@ class PlatformMessagingService(BasePlatformMessagingService):
             failure_reason = "unsupported_format"
         else:
             failure_reason = "processing_failed"
+        if (message.incoming_image is None and not ingest_status
+                and (self.incoming_vision is None or not self.incoming_vision.available)):
+            failure_reason = "unconfigured"
         if message.incoming_image is None:
             logging.getLogger("amora.incoming_vision").info(
                 "incoming_image_unavailable reason=%s", failure_reason,

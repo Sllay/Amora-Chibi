@@ -4,7 +4,7 @@ import json
 import re
 
 MAX_FOCUS_CHARS = 12000
-_DETAIL = re.compile(r"\b(?:ocr|transcrev\w*|transcri\w*|leg[ií]vel|ileg[ií]vel|screenshot|print|documento|c[oó]digo|interface|erro|regi[aã]o|detalh\w*|compare|diferen[çc]\w*)\b", re.I)
+_DETAIL = re.compile(r"\b(?:ocr|transcrev\w*|transcri\w*|leg[ií]vel|ileg[ií]vel|screenshot|print|documento|c[oó]digo|interface|erro|regi[aã]o|detalh\w*|compare|diferen[çc]\w*|olhos?|p[aá]lpebras?|c[ií]lios?|contorn\w*|inclina\w*|reanalise|reavalie|revise|olhe novamente|olha de novo|analise de novo)\b", re.I)
 
 
 @dataclass(frozen=True, slots=True)

@@ -1428,3 +1428,55 @@ async def test_stabilization_section_checkpoint_resume_on_reopened_store(lab):
     finally:
         core.cognition.store=store
         reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_stabilization_visual_dispute_is_scoped_and_does_not_fake_reinspection(lab):
+    from amora.messaging.visual_checkpoint import VisualCheckpointStore
+    from amora.messaging.models import AttachmentRef
+    from amora.cognition.visual_context import visual_context_for_request
+    from test_discord_incoming_vision_ch2 import payload,observation
+    core,clock,_=lab
+    _bind_bk(core)
+    service=core.messaging
+    image=payload()
+    decision=AttentionDecision(action=RoutingAction.RESPOND,score=1,
+        speaker_entity_id="PERSON_BK",speaker_actor_ref="synthetic",addressee_id="ENTITY_AMORA")
+    calls=[]
+    class Vision:
+        available=True
+        async def analyze(self,image,user_text):
+            calls.append(user_text)
+            return {**observation(),"description":"Leitura sintética "+str(len(calls))}
+    service.incoming_vision=Vision()
+    def photo(mid,text):
+        msg=_dm(core,mid,text=text)
+        return InboundMessage.model_validate({**msg.model_dump(),
+            "attachments":[AttachmentRef(attachment_id=image.attachment_id,media_type="image/png").model_dump()],
+            "incoming_image":image.model_dump()})
+    first=photo("review-photo","Descreva a imagem.")
+    await service._incoming_visual_observation(first,decision)
+    clock.advance(timedelta(seconds=1))
+    review=_dm(core,"review-only",text="Reanalise a imagem anterior.")
+    r=await service._incoming_visual_observation(review,decision)
+    assert r["review_requested"] is True and "current" not in r and len(calls)==1
+    clock.advance(timedelta(seconds=1))
+    dispute=_dm(core,"review-dispute",text="Você errou na análise da imagem anterior.")
+    denied=dispute.model_copy(update={"remote_processing_allowed":False})
+    assert await service._incoming_visual_observation(denied,decision) is None
+    r=await service._incoming_visual_observation(dispute,decision)
+    assert r["historical_disputed"] is True and r["historical"]["status"]=="unavailable"
+    assert visual_context_for_request(r,remote=True,private=True,mode="reply")["historical_disputed"] is True
+    assert len(calls)==1
+    clock.advance(timedelta(seconds=1))
+    with closing(AmoraDatabase(core.database.path,backend=core.database.backend)) as reopened:
+        service.visual_checkpoints=VisualCheckpointStore(reopened,clock)
+        follow=_dm(core,"review-recall",text="Descreva a imagem anterior.")
+        r=await service._incoming_visual_observation(follow,decision)
+        assert r["historical_disputed"] is True and r["historical"]["description"]==""
+        assert len(calls)==1
+        fresh=photo("review-new-photo","Compare com a imagem anterior. Olhe os olhos.")
+        r=await service._incoming_visual_observation(fresh,decision)
+        assert r["historical_disputed"] is True and r["current"]["description"]=="Leitura sintética 2"
+        assert r["status"]=="partial" and len(calls)==2
+    service.visual_checkpoints=VisualCheckpointStore(core.database,clock)
