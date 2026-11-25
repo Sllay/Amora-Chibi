@@ -155,7 +155,7 @@ class NumesCognitiveProvider:
                              "require_parameters": True},
             }
 
-        _, payload = fit_provider_payload(projected, build, ceiling=12000)
+        _, payload = fit_provider_payload(projected, build, ceiling=12000, descriptor=self.descriptor)
         return await self._complete_stream(payload, key=key, phase="realization")
 
     async def audit_endpoint_catalogue(self) -> dict[str, object]:
