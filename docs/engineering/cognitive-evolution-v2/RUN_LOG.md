@@ -305,6 +305,11 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Projeção deep reduz trechos de todas as fontes antes de omitir fonte inteira, sinaliza redução/omissões ao modelo e não altera pesquisa canônica. Testes de diversidade, retomada após restart, TTL, tópico e isolamento adicionados.
 - Gates: CI do novo HEAD pendente; correções são candidatas, não certificadas. Ainda faltam multi-imagem e checkpoint visual, leitura AMD sob demanda/geração segmentada, quotas/SSRF/prints, replanejamento em voo e entrega por segmento, métricas completas/carga/live. Sem produção ou monitoramento.
 
+### Integração final — correção de contrato de teste (24/11/2026)
+
+- a0d65d7: 10/11 workflows PASS, inclusive PG18 45531616967. Core 45531616760, Python 3.11 job 138928053065: 2183 passed, 156 skipped, 1 failed; 3.12/3.13/3.14 cancelados pelo fail-fast. Falha única: test_run02_groq_413_sends_only_one_smaller_authorized_request. Fixture antiga bindava somente DURABLE_REALIZATION, sem a autorização viva agora obrigatória para retentativa; DeferredRealization correto impediu novo envio.
+- Mantida a proteção de runtime. Teste existente expandido em matriz HTTP413/HTTP400 context_length_exceeded x autorização válida/revogada/ausente. Com autorização válida, exige exatamente duas chamadas, envelope menor e original preservado. Com revogação ou ausência, exige apenas a primeira chamada e erro DURABLE_AUTHORIZATION_LOST; não permite segundo envio. Não suprimir testes/skips. CI novo pendente. Sem deploy, sem monitoramento.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
