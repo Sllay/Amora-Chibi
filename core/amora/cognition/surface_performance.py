@@ -33,9 +33,10 @@ def detailed_output_requested(context) -> bool:
         and context.remote_processing_allowed
         and context.privacy_scope.value == "PERSONAL"
         and context.speaker_id == "PERSON_BK" and context.target_id == "ENTITY_AMORA"
-        and not context.temporal_opportunity and not context.temporal_context
+        # Ordinary clock projection is present on normal Discord turns.
+        and not context.temporal_opportunity
         and not context.visual_observation
-        and "SCHEDULED_REMINDER" not in context.reason_codes
+        and not {"SCHEDULED_REMINDER","COGNITIVE_REFLECTION","AUTONOMOUS_INITIATION"}.intersection(context.reason_codes)
         and _DETAIL_REQUEST.search(context.user_text))
 
 

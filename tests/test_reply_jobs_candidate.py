@@ -1380,6 +1380,8 @@ async def test_stabilization_section_checkpoint_resume_on_reopened_store(lab):
         return authorized
     primary=CountingStructuredProvider(name="section-primary")
     secondary=CountingStructuredProvider(name="section-secondary")
+    core.cognition.register_provider(primary)
+    core.cognition.register_provider(secondary)
     calls=[]
     async def first(c):
         calls.append(c._detail_section["index"])

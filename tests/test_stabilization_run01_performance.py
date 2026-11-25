@@ -104,3 +104,18 @@ def test_lossless_projection_reduces_identical_wire_data_without_changing_contex
     with capsys.disabled():
         print("RUN01_ENVELOPE_JSON="+json.dumps({"before_bytes":len(before.encode()),
              "after_bytes":len(after.encode()),"synthetic_duplicate_fixture":True}),flush=True)
+
+
+def test_normal_clock_projection_does_not_disable_explicit_technical_plan():
+    from amora.cognition.dialogue import DialogueOrchestrator
+    ctx=_context("Crie uma documentação técnica detalhada da arquitetura e do armazenamento. Explique cada sistema com seus algoritmos e restrições. Não resuma.")
+    ctx.temporal_context={"current_time":"2026-11-25T19:00:00+00:00"}
+    assert detailed_output_requested(ctx)
+    plan=DialogueOrchestrator().plan(ctx)
+    assert plan.closing_mode=="statement"
+    assert not plan.ask_followup
+    assert plan.depth.value=="deep"
+    assert "EXPLICIT_TECHNICAL_DETAIL_REQUEST" in plan.reason_codes
+    for code in ("COGNITIVE_REFLECTION","AUTONOMOUS_INITIATION","SCHEDULED_REMINDER"):
+        assert not detailed_output_requested(ctx.model_copy(update={"reason_codes":[code]}))
+    assert not detailed_output_requested(ctx.model_copy(update={"temporal_opportunity":{"kind":"initiative"}}))

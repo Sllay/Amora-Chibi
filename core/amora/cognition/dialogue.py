@@ -375,6 +375,20 @@ class DialogueOrchestrator:
                 reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR", "RELATIONAL_SIGNAL"],
             )
 
+        from .surface_performance import detailed_output_requested
+        if (not reported_scene and not possible_self_choices
+                and detailed_output_requested(context)):
+            return DialoguePlan(
+                act=DialogueAct.SUPPORT_REQUEST,
+                objective="develop the explicitly requested technical material, preserve all stated constraints",
+                depth=DialogueDepth.DEEP,
+                response_moves=["address_request","offer_useful_support"],
+                ask_followup=False,offer_help=True,closing_mode="statement",
+                style_register=style,tone_tags=tone,stance="analytic",
+                relational_attitude=attitude,
+                reason_codes=["LOCAL_DIALOGUE_ORCHESTRATOR","EXPLICIT_TECHNICAL_DETAIL_REQUEST"],
+            )
+
         if self._HELP_RE.search(addressed_text):
             return DialoguePlan(
                 act=DialogueAct.SUPPORT_REQUEST,

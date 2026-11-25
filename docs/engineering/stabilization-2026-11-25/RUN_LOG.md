@@ -29,3 +29,10 @@
 ## RUN01 D — prova de recursos
 
 - Probe offline do Core no Dockerfile de runtime, Docker --network none --cpus=0.2 --memory=512m --memory-swap=512m, verifica limites reais cgroup v2 antes de executar. 14 turnos sintéticos (12 normais, 2 detalhados), 16 chamadas ao provider sintético, recibos simulados, nenhuma pendência. Emite RUN01_RESOURCE_JSON com p50/p95, wall/CPU e RSS/cgroup peak. Workflow Core Python 3.12 na branch de estabilização; não é certificação de latência externa/Aiven ou produção. CI pendente, comparar depois com baseline e medir Northflank real. Sem deploy, main ou monitoramento.
+
+
+### RUN01 D1 — correção do CI 7013806
+
+- 7013806: 7/9 workflows PASS; Core 45671108355 job 139406305250 falhou em test_stabilization_live_dm_section_generation_and_usage (chamadas [0] vs [1,2]) e recuperação SQLite; PG18 45671108285 job 139406312462 falhou na recuperação SQLite/PG18 por KeyError section-primary. Probe de recursos não executado/certificado.
+- Causa identificada em inspeção: ContextCompiler sempre projeta relógio normal em temporal_context, que o detector detalhado excluía indiscriminadamente. Diferenciado temporal_opportunity e modos reflexão/autonomia/reminder; relógio ordinário preservado. DialogueOrchestrator reconhece documentação explícita privada antes do fallback social, depois das rotas de identidade, boundary e sinais relacionais, sem ampliar autorização, sem pergunta compulsória. Proteção de contexto reportado/self choices mantida. Novo teste de relógio e plano técnico; teste real original não relaxado.
+- Fixture de checkpoint registra ambos providers no roteador antes de contabilizar quota/uso; mantém assert de recuperação, expiração e revogação. Sem alterar thresholds, sem merge/deploy/monitoramento. Novo CI pendente.
