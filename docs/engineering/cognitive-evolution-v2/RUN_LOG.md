@@ -317,6 +317,12 @@ Não declarar nenhuma das sete RUNs pronta antes da implementação e testes.
 - Testes de worker, partial/ordem, identidade/privacidade, aggregate cap e ausência de raw no contexto; novo CI precisa incluir Messaging workers. Não há alteração de schema, produção ou monitoramento. Limites de quantidade/tempo e qualidade da redução são experimentais.
 - Pendências abertas: cache/checkpoint visual persistente por turno/revisão/attachment/foco com reautorização e TTL, invalidação/consentimento entre chamadas internas da cascata e teste real, análise conjunta de pixels e foco por imagem, suporte a mais de três com orçamento medido. Não declarar percepção completa nem LIVE_CERTIFIED. Outras pendências permanecem na matriz.
 
+
+### Integração final — sincronização com Visual Engine
+
+- Merge 835d024 incorpora main ac0dedf (3 commits), preservando exatamente os blobs do HTML e README do Visual Engine. Único arquivo compartilhado: tests/test_security_predeploy.py; reunidas as verificações das duas branches. Nenhuma alteração de implementação cognitiva, visual ou política de acesso nesta resolução.
+- Comparação pós-merge: main 0 commits à frente do candidato. Novo CI pendente; a consulta ao SHA anterior 6d5d292 não retornou workflows de PR. Produção e main intactas. Nenhum monitoramento.
+
 ## Modelo obrigatório de registro para cada RUN
 
 Copiar esta estrutura ao iniciar a RUN. Atualizar a tabela de progresso.
