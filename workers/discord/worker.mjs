@@ -995,9 +995,12 @@ export class DiscordWorker {
       }
       if (created?.id && created?.channel_id) this.runtime.rememberBotMessage(created);
       if (!firstMessageId) firstMessageId = created?.id || null;
-      if (index === 0 && screenshot && !imageUploadRejected && !created?.attachments?.some(
-        (entry) => entry?.id && entry?.filename === screenshot.filename
-      )) {
+      const attachmentConfirmed = created?.id && String(created?.channel_id) === String(item.conversation_id)
+        && Array.isArray(created.attachments) && created.attachments.some(
+          (entry) => entry?.id && entry?.filename === screenshot?.filename
+            && (entry.size == null || entry.size === screenshot?.bytes?.byteLength)
+        );
+      if (index === 0 && screenshot && !imageUploadRejected && !attachmentConfirmed) {
         // Accepted text is not proof of an attached image. Never retry the
         // uncertain image request: send a clearly labeled status instead.
         safeLog('WEB_SCREENSHOT_ATTACHMENT_NOT_CONFIRMED');

@@ -512,3 +512,31 @@ test('repeated owner screenshot reuses bounded successful capture without quota 
   assert.equal(await service.capture('https://www.blender.org/'), null);
   assert.equal(service.lastFailureCode, 'daily_limit');
 });
+
+
+test('screenshot receipt with wrong channel or mismatched byte size is not confirmation', async () => {
+  for (const bad of [
+    { channel_id: 'other', size: IMAGE_BYTES.byteLength },
+    { channel_id: 'chan', size: IMAGE_BYTES.byteLength + 1 },
+  ]) {
+    const calls = [];
+    const worker = new DiscordWorker({
+      token: 'test', core: {}, runtime: { rememberBotMessage() {} },
+      rest: { request: async (_, options) => {
+        calls.push(options);
+        return { id: 'sent', channel_id: options.multipart ? bad.channel_id : 'chan',
+          attachments: options.multipart ? [{ id:'image', filename:'amora-web-print.jpg', size:bad.size }] : [] };
+      }},
+    });
+    worker.webScreenshots = { capture: async () => ({
+      bytes: IMAGE_BYTES, mime: 'image/jpeg', filename:'amora-web-print.jpg',
+    }) };
+    await worker.sendOutbound({
+      id:'12345678-abcd-abcd-abcd-1234567890ab', platform:'discord', conversation_id:'chan',
+      text:'Print Godot', metadata:{web_capture_requested:true,web_capture_owner_verified:true,
+        web_capture_source:'https://godotengine.org/'},
+    });
+    assert.equal(calls.length,2);
+    assert.match(calls[1].body.content,/não consegui confirmar o anexo/i);
+  }
+});

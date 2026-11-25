@@ -264,9 +264,12 @@ async def test_run03_empty_research_recovers_topic_without_inventing_sources(not
     other=await restarted.research("continue pesquisando","other-dm")
     assert other["status"]=="failed" and not queries
     resumed=await restarted.research("continue pesquisando","owner-dm")
-    assert resumed["status"]=="opened" and queries[0]=="Godot Engine"
+    assert resumed["status"]=="opened"
     if deep:
         assert resumed["depth"]=="deep"
+        assert set(queries)=={"Godot Engine","Godot Engine documentação","Godot Engine limitações","Godot Engine comparação"}
+    else:
+        assert queries==["Godot Engine"]
 
 
 @pytest.mark.asyncio
@@ -279,3 +282,30 @@ async def test_run03_failure_does_not_reuse_old_links(notebook):
     assert capture["status"]=="failed"
     assert not restarted.current_delivery("owner-dm")["sources"]
     assert not restarted.current_public_references("owner-dm")
+
+
+@pytest.mark.asyncio
+async def test_run03_refinement_uses_previous_subject_and_fresh_discovery(notebook):
+    calls=[]
+    nav=WebNavigator(fetch_page=open_page, search=lambda q: calls.append(q) or [
+        {"url":"https://godotengine.org/releases","title":"Godot Engine Android","snippet":"Godot Engine Android"}
+    ], workspace=notebook)
+    await nav.research("pesquise Godot Engine","owner-dm")
+    result=await nav.research("continue pesquisando com foco em Android","owner-dm")
+    assert result["status"]=="opened"
+    assert calls==["Godot Engine","Godot Engine Android"]
+    assert notebook.recent("owner-dm")[0]["topic"]=="Godot Engine Android"
+    assert (await nav.research("continue pesquisando com foco em Android","other-dm"))["status"]=="failed"
+    assert len(calls)==2
+
+
+@pytest.mark.asyncio
+async def test_run03_expired_failed_search_does_not_restore_or_reuse_prior_topic(notebook, monkeypatch):
+    nav=WebNavigator(fetch_page=open_page,search=lambda _: [],workspace=notebook)
+    await nav.research("pesquise Godot Engine","owner-dm")
+    recent=notebook.recent
+    monkeypatch.setattr(notebook,"recent",lambda *a,**kw:[
+        {**r,"recorded_at":"2000-01-01T00:00:00Z"} for r in recent(*a,**kw)
+    ])
+    restarted=WebNavigator(fetch_page=open_page,search=lambda _: pytest.fail("expired search must not execute"),workspace=notebook)
+    assert (await restarted.research("continue pesquisando","owner-dm"))["reason"]=="WEB_SEARCH_CONTEXT_REQUIRED"

@@ -44,6 +44,13 @@ def _safe_entry(value: Any, *, read: bool) -> dict[str, Any] | None:
             item["retrieval"] = retrieval
     if not read:
         item["snippet"] = _clean(str(value.get("snippet") or ""), 160)
+        if value.get("state") == "failed":
+            item["state"] = "failed"
+            item["failure_reason"] = _clean(str(value.get("failure_reason") or ""), 96)
+        elif value.get("state") == "read":
+            item["state"] = "read"
+        if value.get("cached_excerpt") is True:
+            item["cached_excerpt"] = True
     return item
 
 
@@ -99,6 +106,11 @@ class WebWorkspaceStore:
             # Reconstructing it from [opened, found] shifts link 2 after restart.
             "references": [item for item in refs if item is not None][:12],
             "status": str(result.get("status")),
+            **({"research_progress": {
+                key: value for key, value in result["research_progress"].items()
+                if key in {"search_calls_started", "reads_started", "read_count", "found_count", "cached_excerpt_count", "partial", "stop_reason", "distinct_read_hosts"}
+                and isinstance(value, (int, bool, str))
+            }} if isinstance(result.get("research_progress"), dict) else {}),
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         })
 
@@ -162,7 +174,7 @@ class WebWorkspaceStore:
                 if url and url not in seen:
                     links.append({
                         "url": url, "title": _clean(str(entry.get("title") or ""), 90),
-                        "state": "read" if entry.get("state") == "read" else "found",
+                        "state": entry.get("state") if entry.get("state") in {"read", "failed"} else "found",
                         "excerpt": _clean(str(entry.get("excerpt") or ""), 180),
                     })
                     seen.add(url)

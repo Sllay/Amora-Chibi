@@ -84,7 +84,9 @@ def compose_web_delivery(
     # must not be presented as newly fetched web evidence.
     if intent.action in {"capture", "capture_retry"}:
         return content, None
-    opened = _public_urls(sources or [], max_items=2)
+    source_rows = sources or []
+    opened = _public_urls([s for s in source_rows if not s.get("cached_excerpt")], max_items=5)
+    cached = _public_urls([s for s in source_rows if s.get("cached_excerpt")], max_items=5)
     max_refs = 12 if intent.action in {"saved_links", "web_history"} else 5
     refs = _public_urls(references or session_references or [], max_items=max_refs)
     if intent.action == "search" and not refs and session_references:
@@ -114,6 +116,7 @@ def compose_web_delivery(
             available -= used + 2
 
     append_lines("Fontes consultadas:", [(0, url) for url in opened])
+    append_lines("Fontes recuperadas do histórico (não relidas agora):", [(0, url) for url in cached if url not in opened])
     if refs:
         label = (
             "Links salvos na biblioteca da pesquisa:"

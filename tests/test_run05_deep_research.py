@@ -126,6 +126,8 @@ async def test_resume_fresh_deep_pass_after_restart_only_reads_unfinished(notebo
     nav = WebNavigator(fetch_page=fetch, search=lambda q: searches.append(q) or rows, workspace=notebook)
     first = await nav.research("pesquise a fundo Godot Android", "owner-dm")
     assert len(first["sources"]) == 1
+    assert first["references"][1]["state"] == "failed"
+    assert notebook.recent("owner-dm")[0]["references"][1]["state"] == "failed"
     assert first["research_progress"]["partial"]
     assert len(searches) == 4
     stamp = first["sources"][0]["fetched_at"]
@@ -144,6 +146,9 @@ async def test_resume_fresh_deep_pass_after_restart_only_reads_unfinished(notebo
     assert [r["url"] for r in result["references"]] == [r["url"] for r in first["references"]]
     cached = next(s for s in result["sources"] if s.get("cached_excerpt"))
     assert cached["fetched_at"] == stamp
+    assert result["references"][0]["cached_excerpt"] is True
+    assert result["research_progress"]["distinct_read_hosts"] == 2
+    assert result["research_progress"]["cross_source_claims_verified"] is False
     assert len(result["sources"]) == 2
     assert notebook.recent("other-dm") == []
 

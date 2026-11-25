@@ -194,6 +194,7 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
                             "retrieval": entry.get("retrieval", "workspace_checkpoint"),
                             "discovery_engine": "workspace_checkpoint"})
             references[index]["state"] = "read"
+            references[index]["cached_excerpt"] = True
             cached_count += 1
     selected = [(i, row) for i, row in enumerate(ranked[:MAX_READS])
                 if references[i]["state"] != "read"]
@@ -233,6 +234,8 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
             reference_index = batch[index][0]
             if error:
                 failures.append({"number":reference_index+1,"reason":error})
+                references[reference_index]["state"] = "failed"
+                references[reference_index]["failure_reason"] = error
             elif page:
                 references[reference_index]["state"] = "read"
                 if not any(s["url"] == page["url"] for s in sources):
@@ -254,5 +257,7 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
             "stop_reason":"deadline" if partial else "checkpoint_complete" if resume and not selected else "bounded_pass_complete",
             "search_failures":errors[:MAX_SEARCH_CALLS], "read_failures":failures[:MAX_READS],
             "cross_source_claims_verified":False,
+            "distinct_read_hosts":len({urlsplit(s["url"]).hostname for s in sources}),
+            "comparison_basis":"Compare the actual source excerpts and dates; host diversity does not prove independent reporting or verified agreement.",
         },
     }

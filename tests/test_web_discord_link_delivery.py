@@ -546,3 +546,11 @@ def test_run03_negated_capture_not_requested():
     assert parse_web_intent("não me envie um print") is None
     assert not screenshot_requested("abre https://example.org e não mande print")
     assert parse_web_intent("mim envie a imagem")==WebIntent("capture_retry","previous")
+
+
+def test_run03_cached_source_is_not_labeled_fresh():
+    content,_=compose_web_delivery("Pesquisa retomada",intent=WebIntent("search","Godot"),
+        sources=[{"url":"https://example.org/old","cached_excerpt":True},{"url":"https://example.net/new"}],
+        owner_verified=True)
+    assert "Fontes consultadas:\nhttps://example.net/new" in content
+    assert "Fontes recuperadas do histórico (não relidas agora):\nhttps://example.org/old" in content

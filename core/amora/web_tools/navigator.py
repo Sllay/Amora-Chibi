@@ -354,6 +354,7 @@ class WebIntent:
     action: str
     argument: str
     depth: str = "quick"
+    refinement: str = ""
 
 
 # The search index receives topical keywords, not a raw Discord sentence.
@@ -570,8 +571,14 @@ def parse_web_intent(text: str) -> WebIntent | None:
         return WebIntent("saved_links", "")
     if _WEB_HISTORY_RE.search(raw):
         return WebIntent("web_history", "")
-    if _WEB_CONTINUE_RE.search(raw):
-        return WebIntent("search", "", "deep" if _DEEP_REQUEST_RE.search(raw) else "quick")
+    continuation = _WEB_CONTINUE_RE.search(raw)
+    if continuation:
+        tail = raw[continuation.end():]
+        refinement = re.match(
+            r"\s*[,;:]?\s*(?:com\s+foco\s+em|focando\s+em|sobre)\s+(.+)", tail, re.I,
+        )
+        extra = _clean(refinement.group(1), 120) if refinement else ""
+        return WebIntent("search", "", "deep" if _DEEP_REQUEST_RE.search(raw) else "quick", extra)
     follow = _FOLLOW_RE.search(raw) or _SCREENSHOT_FOLLOW_RE.search(raw)
     if follow:
         return WebIntent("follow", follow.group(1))
@@ -865,7 +872,8 @@ class WebNavigator:
                 "focus": _clean(topic, 240),
                 "depth": result.get("depth","quick"),
                 "sources": [
-                    {"url": str(item.get("url") or ""), "title": str(item.get("title") or "")}
+                    {"url": str(item.get("url") or ""), "title": str(item.get("title") or ""),
+                     **({"cached_excerpt": True} if item.get("cached_excerpt") else {})}
                     for item in (result.get("sources") or [])[:5 if result.get("depth") == "deep" else 2] if isinstance(item, dict)
                     and item.get("status") == "opened"
                 ],
@@ -936,7 +944,7 @@ class WebNavigator:
         if not rows:
             return
         record = rows[0]
-        if record.get("status")=="failed":
+        if record.get("action") == "search":
             from .deep_research import _fresh_timestamp
             if not _fresh_timestamp(record.get("recorded_at"), datetime.now(timezone.utc)):
                 self._save_refs(session_id, [])
@@ -951,7 +959,7 @@ class WebNavigator:
             "depth": record.get("depth","quick"),
             "focus": str(record.get("topic") or "")[:240]
                 or (_page_topic(sources[0]) if sources else ""),
-            "sources": [{"url": e["url"], "title": str(e.get("title") or "")}
+            "sources": [{"url": e["url"], "title": str(e.get("title") or ""), "cached_excerpt": True}
                         for e in sources[:5 if record.get("depth") == "deep" else 2]],
             "references": [{"url": e["url"], "title": str(e.get("title") or "")}
                            for e in refs[:12]],
@@ -1155,8 +1163,12 @@ class WebNavigator:
         if contextual_search:
             previous_search = self.current_delivery(session_id)
             search_topic = previous_search.get("focus", "")
-            if previous_search.get("depth")=="deep":
-                intent=WebIntent("search", "", "deep")
+            if search_topic and intent.refinement:
+                # Explicit refinement requires fresh discovery; never pass off
+                # the old topic's sources as evidence for the narrower one.
+                search_topic = _clean(search_topic + " " + intent.refinement, 240)
+            if previous_search.get("depth") == "deep":
+                intent = WebIntent("search", "", "deep", intent.refinement)
             # Safe diagnostic event only: never log the subject, URL,
             # Discord conversation, user content or session identifier.
             _LOG.info(
@@ -1217,7 +1229,7 @@ class WebNavigator:
                     "WEB_SEARCH_CONTEXT_REQUIRED" if contextual_search
                     else "WEB_SEARCH_QUERY_EMPTY"
                 )
-            if contextual_search and _WEB_CONTINUE_RE.search(text) is not None and self.workspace is not None:
+            if contextual_search and not intent.refinement and _WEB_CONTINUE_RE.search(text) is not None and self.workspace is not None:
                 from .deep_research import deep_search, resumable_checkpoint
                 latest = self.workspace.recent(session_id, 1)
                 checkpoint = latest[0] if latest else None
