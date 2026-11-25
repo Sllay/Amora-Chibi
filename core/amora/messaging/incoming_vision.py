@@ -56,6 +56,29 @@ class VisionResponse(BaseModel):
         return values
 
 
+class DetailedVisionResponse(VisionResponse):
+    description: str = Field(min_length=1, max_length=1200)
+    visible_text: list[str] = Field(max_length=16)
+    uncertainties: list[str] = Field(max_length=8)
+
+    @field_validator("visible_text", "uncertainties")
+    @classmethod
+    def verify_entries(cls, values: list[str]) -> list[str]:
+        if any(not item.strip() or len(item) > 240 for item in values):
+            raise ValueError("invalid detailed observed text")
+        return values
+
+
+def observation_from_response(decoded, focus, *, provider: str, model: str) -> dict:
+    response_type = DetailedVisionResponse if focus.mode == "detailed" else VisionResponse
+    result = response_type.model_validate(decoded)
+    details = ({"perception_mode": "detailed", "observation_version": 2,
+                "provider": provider, "model": model} if focus.mode == "detailed" else {})
+    return IncomingVisualObservation(
+        status="analyzed", source="vision_model", **result.model_dump(), **details
+    ).as_context()
+
+
 def valid_image_bytes(image: InboundImageContent) -> bytes:
     mime = image.content_mime.lower()
     if mime not in {"image/jpeg", "image/png", "image/webp"}:
@@ -243,19 +266,18 @@ class GroqIncomingImageVision:
                 "INCOMING_VISION_JSON_INVALID", "visual provider did not return valid JSON"
             ) from exc
         try:
-            result = VisionResponse.model_validate(decoded)
+            result = observation_from_response(decoded, focus, provider="groq", model=self.model)
         except ValidationError as exc:
             raise GroqVisionError(
                 "INCOMING_VISION_SCHEMA_INVALID", "visual provider did not match observation schema"
             ) from exc
-        return IncomingVisualObservation(
-            status="analyzed", source="vision_model", **result.model_dump()
-        ).as_context()
+        return result
 
 
 def visual_failure_reason(exc: Exception) -> str:
     """Translate known failures into fixed safe causes, never raw exception data."""
     code = getattr(exc, "code", "")
+    code = code if isinstance(code, str) else ""
     status = getattr(exc, "status_code", None)
     if status == 429 or code.endswith("_HTTP_429"):
         return "quota"

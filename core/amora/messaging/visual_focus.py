@@ -36,8 +36,10 @@ def focus_instruction(focus: VisualFocus) -> str:
     if focus.mode == "detailed":
         return ("Priorize regiões e detalhes técnicos relevantes ao pedido, "
                 "transcreva texto legível na ordem espacial, indique áreas ilegíveis "
-                "e não complete caracteres por inferência. ")
+                "e não complete caracteres por inferência. Descrição até 1200 caracteres; "
+                "até 16 trechos legíveis e 8 incertezas, cada item até 240 caracteres. ")
     if focus.mode == "directed":
         return ("Leia a legenda inteira, inclusive perguntas e correções no final; "
-                "priorize evidência visual relevante a elas. ")
+                "priorize evidência visual relevante a elas. Descrição até 650 caracteres; "
+                "até 8 trechos e 6 incertezas, cada item até 120 caracteres. ")
     return "Descreva os elementos visuais principais sem inventar detalhes. "

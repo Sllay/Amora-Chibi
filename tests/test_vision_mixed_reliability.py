@@ -56,7 +56,7 @@ async def test_image_and_caption_stay_in_same_authorized_turn_even_on_visual_fai
         assert result.outbound
         assert seen[0].text == "Essa é a textura nova do coelho?"
         assert seen[0].metadata["visual_observation"]["status"] == "unavailable"
-        assert seen[0].metadata["visual_observation"]["failure_reason"] == "provider_failed"
+        assert seen[0].metadata["visual_observation"]["failure_reason"] == "provider_unavailable"
         compiled = core.cognition.compiler.compile(seen[0])
         instruction = realization_instruction(compiled)
         assert "responda normalmente ao texto" in instruction
