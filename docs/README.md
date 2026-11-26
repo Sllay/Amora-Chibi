@@ -23,3 +23,8 @@ O histórico Git preserva versões anteriores do canon. Features movidas entre v
 Arquivos como `V1.0_A15_CERTIFICATION.md`, `V1.0_COGNITIVE_INTEGRATION.md`, `TERMUX.md` e documentos das versões anteriores permanecem evidência técnica e histórico de implementação.
 
 Quando um checkpoint antigo contradizer o canon, siga o canon e use o checkpoint apenas para entender a origem da decisão.
+
+## Motor visual — Live / PiP
+
+- [Plano Visual Engine V5.0 — RUN 01–04](engineering/visual-engine-v5/PLAN.md)
+- [Diário de checkpoints](engineering/visual-engine-v5/RUN_LOG.md)
