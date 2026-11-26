@@ -1,0 +1,58 @@
+name: Visual Engine V5 RUN 01 — native Cubism
+on:
+  push:
+    branches: [feat/visual-engine-v5-run01]
+    paths: ['tools/visual-engine-v5/**','.github/workflows/visual-engine-v5-run01.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  cubism-development:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Retrieve exact validated Amora V4.5 rig
+        uses: actions/download-artifact@v4
+        with:
+          run-id: '45534504067'
+          artifact-ids: '14986551731'
+          github-token: ${{ github.token }}
+          path: .rig
+      - name: Fetch pinned official Framework and hosted development Core
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .build/vendor evidence
+          git clone --quiet --no-checkout https://github.com/Live2D/CubismWebFramework.git tools/visual-engine-v5/framework
+          git -C tools/visual-engine-v5/framework checkout --quiet --detach 198a3769c26ca3d7b600e932590433badd392edd
+          test "$(git -C tools/visual-engine-v5/framework rev-parse HEAD)" = 198a3769c26ca3d7b600e932590433badd392edd
+          curl --fail --silent --show-error --location --proto '=https' --max-time 90 https://cubism.live2d.com/sdk-web/core/06/live2dcubismcore.min.js -o .build/vendor/live2dcubismcore.min.js
+          test -s .build/vendor/live2dcubismcore.min.js
+          sha256sum .build/vendor/live2dcubismcore.min.js
+          cp -R tools/visual-engine-v5/framework/Shaders/WebGL .build/shaders
+          cp tools/visual-engine-v5/{index.html,lab.css} .build/
+          python tools/visual-engine-v5/prepare.py .rig .build "$GITHUB_SHA"
+          cp .build/identity.json evidence/identity.json
+      - name: Build browser bundle (no server process in production)
+        run: |
+          npx --yes esbuild@0.25.11 tools/visual-engine-v5/app.js --bundle --format=esm --target=es2020 --outfile=.build/app.js
+          npm install --prefix tools/visual-engine-v5 --no-save puppeteer-core@24.24.1
+      - name: Validate real MOC3 in Chromium WebGL2
+        run: |
+          python -m http.server 8766 --bind 127.0.0.1 --directory .build > /tmp/amora-v5-http.log 2>&1 &
+          server=$!
+          trap 'kill "$server" || true' EXIT
+          node tools/visual-engine-v5/validate.cjs
+      - name: Upload evidence only (never proprietary Core)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: amora-v5-run01-evidence
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,6 +1,6 @@
 # Amora Visual Engine V5.0 — PiP / Live Overlay
 
-**Status:** PLANNED — quatro RUNs aprovadas pelo usuário; implementação ainda não iniciada.
+**Status:** PLANNED — quatro RUNs aprovadas pelo usuário; RUN 01 em implementação; gates físicos adiados para RUN 04.
 **Destino canônico:** frente de corpo/avatar V1.1; V5.0 é a versão do motor visual, não uma nova versão do Core.
 **Contexto:** 25/11/2026. Preservar o rig Live2D experimental (#370), artes originais e a V4.5 em produção como fallback. Ler o canon, ADRs relevantes e código vigente antes de implementar. Registrar cada checkpoint em [RUN_LOG.md](RUN_LOG.md).
 
@@ -38,7 +38,7 @@ Limites existentes: **0,2 vCPU e 512 MB RAM**. Metas adicionais (não medidas):
 - C01: inventário do modelo, licença, SDK pinado, build reproduzível em CI, compatibilidade real do MOC3 e referências/atlas; preservar fontes.
 - C02: inicializar Cubism/WebGL no cliente, carregar modelo real; validar malhas, deformadores, máscaras, física, motion e expression. Falha de modelo/Core Web deve ser explícita.
 - C03: controles de parâmetros, respiração/piscadas e expressões do rig, três perfis gráficos; testes determinísticos e screenshots de poses abertas/parciais/fechadas, boca, blush, lágrimas e quatro marcas naturais. Comparar com referência aprovada e evitar regressão V4.4.
-- C04: smoke mobile/Safari quando disponível, métricas de render e servidor, perda de contexto básica, identificação visível de versão/build/hash do modelo. Documentar licenças e limites reais.
+- C04: smoke automatizado com viewport mobile; Safari físico, métricas reais do servidor e dispositivo ficam na RUN 04; métricas de render CI, perda de contexto básica, identificação visível de versão/build/hash do modelo. Documentar licenças e limites reais.
 
 **Gate:** MOC3 realmente decodificado e desenhado pelo Cubism; nenhum fallback falso; testes de parâmetros, máscaras e assets aprovados. Laboratório V5.0 funcional. Se o SDK não puder ser distribuído legalmente, não publique; registrar bloqueio e alternativa. CI não substitui aceite no iPhone.
 
@@ -83,3 +83,5 @@ As quatro RUNs preservam o escopo das sete anteriores. Checkpoints internos não
 - Streamlabs: https://streamlabs.com/
 
 Essas referências são pontos de partida para verificação; nenhum teste de dispositivo, benchmark ou aceite de licença novo foi executado ao redigir o plano.
+
+**Decisão do usuário (25/11/2026):** testes reais de cada RUN (iPhone, PRISM, PiP, servidor e bateria) serão executados após todas as quatro RUNs, na certificação final. Gates automatizados por RUN permanecem obrigatórios; não confundir PASS CI com certificação física.

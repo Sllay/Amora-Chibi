@@ -1,0 +1,24 @@
+{
+  "framework": {
+    "repository": "https://github.com/Live2D/CubismWebFramework.git",
+    "tag": "5-r.5",
+    "commit": "198a3769c26ca3d7b600e932590433badd392edd"
+  },
+  "core": {
+    "family": "06",
+    "url": "https://cubism.live2d.com/sdk-web/core/06/live2dcubismcore.min.js",
+    "sha256": null,
+    "usage": "development-only; measure exact bytes; publication license gate"
+  },
+  "model": {
+    "run": 45534504067,
+    "artifact": 14986551731,
+    "artifactSha256": "c0226852c5dfc4260944b7bcfd8f58b0481297407071f5b3f82dd5f642a0f41c",
+    "source": "333b935d12e7b82397efbc4d797c471e1aec05f1",
+    "file": "AmoraBolinha.model3.json"
+  },
+  "tools": {
+    "esbuild": "0.25.11",
+    "puppeteer": "24.24.1"
+  }
+}

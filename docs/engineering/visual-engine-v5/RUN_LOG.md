@@ -5,7 +5,7 @@ Planejamento aprovado: 4 RUNs (1+2; 3+4; 5+6; 7 expandida). Nenhuma implementaç
 
 | RUN | Estado | Evidência |
 |---|---|---|
-| 01 | PLANNED | Pendente |
+| 01 | IN_PROGRESS | Branch feat/visual-engine-v5-run01 |
 | 02 | PLANNED | Pendente |
 | 03 | PLANNED | Pendente |
 | 04 | PLANNED | Pendente |
@@ -19,3 +19,8 @@ Planejamento aprovado: 4 RUNs (1+2; 3+4; 5+6; 7 expandida). Nenhuma implementaç
 - Gate, rollback e próximo checkpoint.
 
 Não preencher PASS sem evidência. Histórico cumulativo; não apagar falhas anteriores.
+
+## RUN 01 — implementação inicial
+- Framework oficial 5-r.5 fixado no commit 198a3769c26ca3d7b600e932590433badd392edd; Core oficial família 06 apenas em ambiente de desenvolvimento, hash a medir e fixar; licença de publicação ainda não certificada.
+- Modelo exato V4.5: workflow 45534504067, artefato 14986551731, source 333b935d12e7b82397efbc4d797c471e1aec05f1.
+- C01–C04: implementação de laboratório WebGL2, referências do modelo, física, motions, expressões, parâmetros, perfis e recuperação; validação CI pendente. Não houve alteração do servidor. Testes físicos adiados por instrução do usuário para RUN 04.
