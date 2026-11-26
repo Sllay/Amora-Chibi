@@ -4,7 +4,7 @@ import {CubismMatrix44} from './framework/src/math/cubismmatrix44';
 import {CubismShaderManager_WebGL} from './framework/src/rendering/cubismshader_webgl';
 export const PROFILES=Object.freeze({eco:{fps:15,size:256},balanced:{fps:30,size:512},high:{fps:60,size:1024}});
 const required=['ParamEyeLOpen','ParamEyeROpen','ParamEyeBallX','ParamEyeBallY','ParamMouthOpenY','ParamMouthPose','ParamBlush','ParamTearL','ParamTearR','ParamAngleX','ParamAngleY','ParamBreath'];
-const base=new URL('./model/',location.href), shaderPath=new URL('./shaders/',location.href).href;
+const base=new URL('./model/',import.meta.url), shaderPath=new URL('./shaders/',import.meta.url).href;
 function asset(path){if(typeof path!=='string'||!path||path.split('/').some(p=>p==='..'||p==='.')||/[\\:%?#]/.test(path)||path.startsWith('/'))throw Error('Unsafe model reference: '+path);return new URL(path,base);}
 async function bytes(url){const r=await fetch(url,{cache:'no-cache'});if(!r.ok)throw Error('HTTP '+r.status+' '+url);return r.arrayBuffer();}
 async function json(url){return JSON.parse(new TextDecoder().decode(await bytes(url)));}
@@ -60,7 +60,7 @@ export class AmoraModel extends CubismUserModel {
   const renderer=this.getRenderer();renderer.setMvpMatrix(matrix);renderer.setRenderState(null,[0,0,this.canvas.width,this.canvas.height]);renderer.drawModel(shaderPath);
   this.frames++;this.frameTimes.push(performance.now()-start);if(this.frameTimes.length>240)this.frameTimes.shift();return gl;
  }
- start(){if(this.raf)return;this.last=0;const tick=(now)=>{this.raf=requestAnimationFrame(tick);if(document.hidden||!this.ready){this.last=0;return;}const interval=1000/PROFILES[this.profile].fps;if(!this.last||now-this.last>=interval-1){const dt=this.last?(now-this.last)/1000:1/PROFILES[this.profile].fps;this.last=now;this.render(dt);}};this.raf=requestAnimationFrame(tick);}
+ start(){if(this.raf)return;this.last=0;const tick=(now)=>{this.raf=requestAnimationFrame(tick);if((document.hidden&&!this.allowHidden?.())||!this.ready){this.last=0;return;}const interval=1000/PROFILES[this.profile].fps;if(!this.last||now-this.last>=interval-1){const dt=this.last?(now-this.last)/1000:1/PROFILES[this.profile].fps;this.last=now;this.render(dt);}};this.raf=requestAnimationFrame(tick);}
  stop(){cancelAnimationFrame(this.raf);this.raf=0;}
  diagnostics(){const m=this.getModel(),times=[...this.frameTimes].sort((a,b)=>a-b);return {engine:'Cubism Web 5-r.5',build:this.identity.build,mocSha256:this.mocHash,coreVersion:globalThis.Live2DCubismCore.Version.csmGetVersion(),drawables:m.getDrawableCount(),maskedDrawables:Array.from(m.getDrawableMaskCounts()).filter(n=>n>0).length,parameters:this.params.size,textures:this.textures.length,expressions:[...this.expressions.keys()],motions:[...this.motions.keys()],physics:!!this._physics,profile:this.profile,frames:this.frames,renderCpuP95Ms:times[Math.floor((times.length-1)*.95)]??0};}
  readParameters(){return Object.fromEntries([...this.params].map(([name,p])=>[name,this.getModel().getParameterValueByIndex(p.index)]));}
