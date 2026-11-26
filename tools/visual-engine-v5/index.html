@@ -1,0 +1,7 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="data:,"><title>Amora Visual Engine V5.0 — Cubism</title><link rel="stylesheet" href="./lab.css"></head><body>
+<main><h1>Amora Visual Engine V5.0</h1><p id="identity">Inicializando Cubism…</p><p id="status" role="status">Carregando modelo real.</p>
+<canvas id="avatar" width="512" height="512" aria-label="Modelo Live2D Amora"></canvas>
+<section><label>Perfil <select id="profile"><option value="eco">Econômico · 15 FPS</option><option value="balanced" selected>Equilibrado · 30 FPS</option><option value="high">Alto · 60 FPS</option></select></label>
+<label>Expressão <select id="expression"></select></label><button id="idle" type="button">Pausar movimento</button><button id="reset" type="button">Neutro</button><div id="parameters"></div></section>
+<details><summary>Diagnóstico</summary><pre id="metrics"></pre></details><p>Laboratório de desenvolvimento. Modelo MOC3 real; não é o motor Canvas V4.x.</p></main>
+<script src="./vendor/live2dcubismcore.min.js"></script><script type="module" src="./app.js"></script></body></html>
