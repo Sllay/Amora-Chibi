@@ -85,6 +85,12 @@ def causal_partition(request, messages, *, allowed):
             if at is not None and at > stamp:
                 later.append((at, ident, m))
     history = [m for m in messages if str(m.turn_id) not in excluded]
+    # An input with exactly the anchor timestamp has no proven causal order.
+    # Do not skip over it and attach a later correction to the wrong turn.
+    if any(str(m.turn_id) != current_id and m.session_id == request.session_id
+           and m.speaker_id != "ENTITY_AMORA" and observed_timestamp(m)[0] == stamp
+           for m in messages):
+        return history, [], "partitioned"
     followups = []
     remaining = MAX_FOLLOWUP_CHARS
     previous = anchor.raw_text or request.text
@@ -117,3 +123,35 @@ def causal_partition(request, messages, *, allowed):
         if len(followups) >= MAX_FOLLOWUPS:
             break
     return history, followups, "partitioned"
+
+
+# Extract whole bounded clauses, not model-generated summaries. The underlying
+# turn remains the authority; these excerpts only call attention to negation.
+_NEGATIVE_TASK = re.compile(
+    r"\b(?:n[aã]o\s+(?:pode(?:m)?|deve(?:m)?|quero|use|usar|fa[cç]a|fazer|"
+    r"permita|permitir|inclua|incluir|recomende|recomendar|sugira|sugerir)|"
+    r"proibid[oa]s?|exclusiv[oa]s?|exclusivamente|somente|apenas|"
+    r"s[oó]\s+(?:pode(?:m)?|deve(?:m)?|use|usar|fa[cç]a|produz(?:em)?|produzir))\b", re.I)
+
+
+def literal_negative_constraints(text: str, followups=()) -> list[dict[str, str]]:
+    """Bounded task guidance; no authority or semantic enforcement is minted."""
+    rows = [("current", text)]
+    rows.extend((str(item.get("turn_id") or ""), item.get("literal_text", ""))
+                for item in followups if isinstance(item, dict)
+                and item.get("relation_hint") in {"correction", "continuation"})
+    result = []
+    seen = set()
+    for source, literal in rows:
+        if not isinstance(literal, str):
+            continue
+        for clause in re.split(r"(?<=[.!?;])\s+|\n+", literal[:12000]):
+            clause = clause.strip()
+            if (not clause or clause.endswith("?") or len(clause) > 360
+                    or not _NEGATIVE_TASK.search(clause) or clause in seen):
+                continue
+            seen.add(clause)
+            result.append({"source_turn": source, "literal": clause})
+            if len(result) >= 6:
+                return result
+    return result

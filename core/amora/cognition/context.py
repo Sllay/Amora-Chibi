@@ -370,7 +370,8 @@ class ContextCompiler:
                                          recorded_at=recorded_at.isoformat() if recorded_at else None,
                                          source_observed_at=source_at.isoformat() if source_at else None,
                                          score=hit.score, confidence=item.provenance.confidence,
-                                         privacy_scope=item.privacy_scope.value, reason_codes=hit.reason_codes)
+                                         privacy_scope=item.privacy_scope.value, reason_codes=[*hit.reason_codes,
+                                             "MEMORY_PROVENANCE_" + item.provenance.kind.value.upper()])
                 memories.append(selected)
                 if (memory_v2 and topic_match and item.owner_entity_id == request.speaker_id
                         and item.remote_processing_allowed and item.metadata.get("turn_id")):
@@ -409,7 +410,8 @@ class ContextCompiler:
                 continue
             claims.append({"id": str(claim.id), "kind": claim.kind.value, "statement": claim.statement,
                            "subject_id": claim.subject_id, "predicate": claim.predicate, "object": claim.object_value,
-                           "confidence": claim.confidence, "canonical": claim.canonical})
+                           "confidence": claim.confidence, "canonical": claim.canonical,
+                           **({"supersedes_claim_id": str(claim.supersedes_claim_id)} if claim.supersedes_claim_id else {})})
             if len(claims) >= 10:
                 break
 

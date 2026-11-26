@@ -987,7 +987,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 "realization_frame": frame_dump,
                 "realization_validated": True,
                 "web_sources": [
-                    {"url": item.get("url", ""), "title": item.get("title", "")}
+                    {"url": item.get("url", ""), "title": item.get("title", ""),
+                     **({"cached_excerpt": True} if item.get("cached_excerpt") else {})}
                     for item in (context.web_research.get("sources") or [])[:5 if context.web_research.get("depth") == "deep" else 2]
                     if item.get("status") == "opened"
                 ] if context is not None and context.web_research else [],

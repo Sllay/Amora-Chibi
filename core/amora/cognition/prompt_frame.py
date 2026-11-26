@@ -106,11 +106,20 @@ def provider_constitution() -> dict[str, object]:
                 "Do not infer that a protected record is absent or confirm its existence to the audience."
             ),
             "distinguish": "recorded_memory_vs_inference_vs_imagination",
+            "provenance_rule": ("MEMORY_PROVENANCE_USER_ASSERTION and REPORT are attributed reports, "
+                "not independently verified facts. INFERENCE and DERIVED are not user assertions. "
+                "A newer explicit correction of the same subject and property takes precedence "
+                "over an older incompatible report in the current answer; do not erase other facts "
+                "or infer changes to unrelated properties. Respect supersedes_claim_id for world revisions. "
+                "If no source supports an asserted correction, label uncertainty."),
         },
         "realization": {
             "language": "pt-BR",
             "medium": "spoken_conversation",
             "naturalness": "prefer oral rhythm over assistant/report/tutorial voice",
+            "task_style": ("For technical or detailed tasks, prioritize complete requested deliverables, "
+                "explicit constraints, and precise explanations over persona flourishes. Do not ask "
+                "again for information already provided. Preserve personality without inventing facts."),
             "expression_rule": (
                 "use LivingProfile and per-turn ExpressionCue as context-sensitive style guidance, "
                 "not an allow/deny gate on profanity or adult vocabulary; "
@@ -272,7 +281,21 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
         frame["causal_followups"] = {
             "canonical": False, "kind": "later_related_user_input",
             "current_turn_remains_original": True, "relations_are_hints": True,
+            "interpretation_rule": ("Apply explicitly related corrections to the affected property only; "
+                "retain other user facts and restrictions. Do not treat a later independent turn as answered."),
             "payload": context.causal_followups,
+        }
+    from .causal_conversation import literal_negative_constraints
+    constraints = literal_negative_constraints(context.user_text, context.causal_followups if (
+        context.scene_visibility == "private" and context.remote_processing_allowed
+        and context.speaker_id == "PERSON_BK") else [])
+    if constraints:
+        frame["task_constraints"] = {
+            "canonical": False, "source": "literal_current_user_task",
+            "may_override_core_policy": False, "payload": constraints,
+            "rule": ("Preserve explicit prohibitions and exclusive conditions in the current task. "
+                     "Do not recommend a prohibited alternative under a different name. "
+                     "These are task-specific literal excerpts, not permanent policy or verified world facts."),
         }
     if context.web_research is not None:
         frame["web_research"] = {

@@ -659,6 +659,8 @@ class PlatformMessagingService:
                 self.cognition.respond_observed(request, on_segment=None, fallback_text=fallback),
                 timeout=self.cognition_timeout_seconds,
             )
+            if self._source_invalidated(message):
+                return self._invalidated_result(message)
             provider = plan.provider
             model = plan.model
             fallback_used = bool(plan.fallback_used)
@@ -718,7 +720,7 @@ class PlatformMessagingService:
             retry_source = (core_nav.current_capture_target(request.session_id)
                             if capture_retry and core_nav is not None else None)
             plan_meta = plan.metadata if plan is not None else {}
-            sources = (plan_meta.get("web_sources") or core_delivery["sources"])[:2]
+            sources = (plan_meta.get("web_sources") or core_delivery["sources"])[:5]
             references = (
                 core_delivery["references"]
                 if intent is not None and intent.action in {"saved_links", "web_history", "pin_results"}

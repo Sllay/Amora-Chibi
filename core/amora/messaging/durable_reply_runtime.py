@@ -284,7 +284,10 @@ class DurableReplyRuntime:
             await asyncio.sleep(window - age)
             if not await live_guard():
                 raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
+        checked_context = None
         async def causal_check(context):
+            nonlocal checked_context
+            checked_context = context
             engine = self.service.cognition
             options = {"limit":96, "session_id":request.session_id, "exclude_invalidated":True}
             lane = engine.store.async_lane
@@ -327,6 +330,10 @@ class DurableReplyRuntime:
                         self.service.cognition.respond_observed(current,on_segment=None,
                             fallback_text=self.service.conversation.composer.operational_provider_fallback()),
                         timeout=remaining)
+                    if checked_context is not None and not await causal_check(checked_context):
+                        raise CausalReplanRequired()
+                    if not await live_guard():
+                        raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
                 except CausalReplanRequired:
                     if index:
                         raise
