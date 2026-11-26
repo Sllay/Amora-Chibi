@@ -371,7 +371,7 @@ class ContextCompiler:
                                          source_observed_at=source_at.isoformat() if source_at else None,
                                          score=hit.score, confidence=item.provenance.confidence,
                                          privacy_scope=item.privacy_scope.value, reason_codes=[*hit.reason_codes,
-                                             "MEMORY_PROVENANCE_" + item.provenance.kind.value.upper()])
+                                             "MEMORY_PROVENANCE_" + str(getattr(getattr(item.provenance, "kind", None), "value", "unknown")).upper()])
                 memories.append(selected)
                 if (memory_v2 and topic_match and item.owner_entity_id == request.speaker_id
                         and item.remote_processing_allowed and item.metadata.get("turn_id")):

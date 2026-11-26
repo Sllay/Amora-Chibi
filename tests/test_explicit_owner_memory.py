@@ -267,3 +267,37 @@ async def test_explicit_owner_save_ignores_unrelated_legacy_invalid_binding(tmp_
         assert len(core.database.platform_binding_admin_rows_for("PERSON_BK")) == 2
     finally:
         core.close()
+
+
+@pytest.mark.asyncio
+async def test_run04_versioned_owner_fact_restarts_without_resurrecting_old_value(tmp_path, monkeypatch):
+    from datetime import timedelta
+    monkeypatch.setenv("AMORA_HOME",str(tmp_path/".amora"))
+    monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE","1")
+    clock=SimulatedClock()
+    first=AmoraCore.bootstrap(clock=clock)
+    try:
+        _bind_bk(first)
+        async def save(mid,text):
+            out=(await first.messaging.receive(_dm(first,mid,text=text))).outbound[0]
+            assert out.metadata["cognitive_reason_codes"]==["EXPLICIT_MEMORY_STORED"]
+            return out.metadata["explicit_memory_id"]
+        old=await save("vexora-old","Lembre que a cor de Vexora é dourada.")
+        clock.advance(timedelta(seconds=1))
+        paws=await save("vexora-paws","Guarde na memória: fato Vexora.patas = 4")
+        clock.advance(timedelta(seconds=1))
+        new=await save("vexora-new","Lembre que a cor de Vexora é vermelha.")
+        assert first.memory.get(old).archived_at is not None
+        assert first.memory.get(new).metadata["supersedes_memory_id"]==old
+        assert first.memory.get(paws).archived_at is None
+    finally:
+        first.close()
+    second=AmoraCore.bootstrap(clock=clock)
+    try:
+        hits=second.memory.recall(MemoryQuery(text="Vexora",entity_ids={"PERSON_BK"}))
+        ids={str(hit.memory.id) for hit in hits}
+        assert {new,paws}<=ids and old not in ids
+        assert second.memory.get(old).content.endswith("dourada.")
+        assert second.memory.get(new).provenance.kind==ProvenanceKind.USER_ASSERTION
+    finally:
+        second.close()

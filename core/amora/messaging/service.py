@@ -1299,6 +1299,7 @@ class PlatformMessagingService:
     def _explicit_memory_result(self, message, decision, request, intent) -> InboundResult:
         from amora.events import PrivacyScope
         from amora.memory import MemoryCandidate, MemoryKind, MemoryProvenance, ProvenanceKind
+        from amora.memory.versioned_fact import version_metadata, VersionedFactConflict
 
         reason = intent.reason
         memory_id = None
@@ -1343,20 +1344,27 @@ class PlatformMessagingService:
                 remote_processing_allowed=remote_reuse,
                 entity_refs={OWNER_ENTITY_ID: 1.0}, tags={"explicit_owner_memory"},
                 importance=1.0,
-                metadata={"turn_id": str(request.turn_id), "explicit_owner_request": True},
+                metadata={"turn_id": str(request.turn_id), "explicit_owner_request": True,
+                          **version_metadata(intent.content, message.timestamp, self.clock.now())},
             )
             try:
                 stored = self.cognition.compiler.memory.remember(
                     candidate, record_id=uuid5(NAMESPACE_URL, f"amora:explicit-memory:{request.turn_id}"),
                     explicit_owner_request=True, generation_lease=lease,
                 )
+            except VersionedFactConflict:
+                stored = None
+                reason = "EXPLICIT_MEMORY_VERSION_CONFLICT"
+                text = "Não substituí a informação: essa versão é anterior ou ambígua. Envie a correção novamente."
             except RuntimeError as exc:
                 if str(exc) == "INBOUND_GENERATION_LEASE_LOST":
                     raise InboundGenerationLost("INBOUND_GENERATION_LEASE_LOST") from None
                 # No success receipt on a database failure; the inbound retry
                 # can safely recover the deterministic record id.
                 raise
-            if stored.memory is not None:
+            if stored is None:
+                pass  # explicit conflict receipt above
+            elif stored.memory is not None:
                 memory_id = str(stored.memory.id)
                 remote_reuse = stored.memory.remote_processing_allowed
                 reason = "EXPLICIT_MEMORY_STORED"

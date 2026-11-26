@@ -1538,3 +1538,24 @@ async def test_run02_real_raster_review_compare_and_scope(lab):
     result=await service._incoming_visual_observation(
         _dm(core,"pixel-restart",text="Reanalise a imagem anterior."),decision)
     assert "reinspection" not in result and len(calls)==4
+
+
+@pytest.mark.asyncio
+async def test_run04_versioned_fact_atomic_supersession_and_stale_write(lab, monkeypatch):
+    core,clock,_=lab
+    _bind_bk(core)
+    monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE","1")
+    original=_dm(core,"version-old",text="Guarde na memória: fato Vexora.cor = dourada")
+    out=(await core.messaging.receive(original)).outbound[0]
+    old=out.metadata["explicit_memory_id"]
+    clock.advance(timedelta(seconds=2))
+    nextmsg=_dm(core,"version-new",text="Guarde na memória: fato Vexora.cor = vermelha")
+    out=(await core.messaging.receive(nextmsg)).outbound[0]
+    new=out.metadata["explicit_memory_id"]
+    assert new!=old and core.memory.get(old).archived_at is not None
+    assert core.memory.get(new).metadata["supersedes_memory_id"]==old
+    late=_dm(core,"version-stale",text="Guarde na memória: fato Vexora.cor = azul").model_copy(update={"timestamp":original.timestamp})
+    rejected=(await core.messaging.receive(late)).outbound[0]
+    assert rejected.metadata["cognitive_reason_codes"]==["EXPLICIT_MEMORY_VERSION_CONFLICT"]
+    assert core.memory.get(new).archived_at is None
+    assert (await core.messaging.receive(nextmsg)).outbound[0].metadata["explicit_memory_id"]==new

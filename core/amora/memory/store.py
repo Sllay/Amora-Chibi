@@ -98,6 +98,8 @@ class MemoryStore:
         if episode_lease is not None and (not insert_only or reflection_lease is not None
                                           or generation_lease is not None):
             raise ValueError("EPISODE_WRITE_REQUIRES_CREATE_ONLY")
+        from .versioned_fact import checked_version_key, link_version, VersionedFactConflict
+        version_key = checked_version_key(record, generation_lease)
         provenance = record.provenance
         values = (
             str(record.id), record.kind.value, record.content, record.summary,
@@ -156,6 +158,15 @@ class MemoryStore:
                 ).fetchone()
                 if lease is None:
                     raise RuntimeError("REFLECTION_LEASE_LOST")
+            if version_key is not None:
+                predecessor = self._conn.execute(
+                    """SELECT id,metadata_json FROM memory_records
+                    WHERE owner_entity_id=? AND provenance_source='cognition:explicit_owner_request'
+                    AND provenance_kind='user_assertion' AND json_extract(metadata_json,'$.versioned_fact_key')=?
+                    ORDER BY json_extract(metadata_json,'$.versioned_fact_at') DESC,id DESC LIMIT 1""",
+                    (record.owner_entity_id,version_key)).fetchone()
+                link_version(record, predecessor)
+                values = (*values[:-1], json.dumps(record.metadata,ensure_ascii=False,separators=(",",":")))
             statement = """
                 INSERT INTO memory_records(
                     id, kind, content, summary, provenance_kind, provenance_source,
@@ -181,9 +192,17 @@ class MemoryStore:
                     access_count=excluded.access_count, last_accessed_at=excluded.last_accessed_at,
                     archived_at=excluded.archived_at, metadata_json=excluded.metadata_json
                 """
-            if insert_only:
+            if insert_only or version_key is not None:
                 statement = statement.split("ON CONFLICT(id)", 1)[0] + "ON CONFLICT(id) DO NOTHING"
             cursor = self._conn.execute(statement, values)
+            if version_key is not None:
+                if cursor.rowcount != 1:
+                    raise VersionedFactConflict("VERSIONED_FACT_ID_CONFLICT")
+                now = self.clock.now().isoformat()
+                self._conn.execute("""UPDATE memory_records SET archived_at=?,updated_at=?
+                    WHERE owner_entity_id=? AND provenance_source='cognition:explicit_owner_request'
+                    AND provenance_kind='user_assertion' AND json_extract(metadata_json,'$.versioned_fact_key')=?
+                    AND id<>? AND archived_at IS NULL""",(now,now,record.owner_entity_id,version_key,str(record.id)))
             if insert_only and cursor.rowcount != 1:
                 if cursor.rowcount != 0:
                     raise RuntimeError("MEMORY_INSERT_OUTCOME_UNKNOWN")

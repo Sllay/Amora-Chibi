@@ -66,6 +66,8 @@ class PostgresMemoryStore(MemoryStore):
             raise PostgresRuntimeError("PG_MEMORY_INSERT_ONLY_LEASE_UNSUPPORTED")
         if record.provenance.source == "perception:episode:v1" and episode_lease is None:
             raise PostgresRuntimeError("PG_MEMORY_EPISODE_WRITE_REQUIRES_LEASE")
+        from .versioned_fact import checked_version_key, link_version, VersionedFactConflict
+        version_key = checked_version_key(record, generation_lease)
         p = record.provenance
         ident = str(record.id)
         values = (
@@ -111,7 +113,17 @@ class PostgresMemoryStore(MemoryStore):
                 )).fetchone()
                 if lease is None:
                     raise PostgresRuntimeError("REFLECTION_LEASE_LOST")
-            result = self._conn.execute(q.CREATE if insert_only else q.PUT,values)
+            if version_key is not None:
+                self._conn.execute(q.VERSION_LOCK,(record.owner_entity_id+":"+version_key,))
+                predecessor = self._conn.execute(q.VERSION_PREDECESSOR,(record.owner_entity_id,version_key)).fetchone()
+                link_version(record,predecessor)
+                values = (*values[:-1],json.dumps(record.metadata,ensure_ascii=False,separators=(",",":")))
+            result = self._conn.execute(q.CREATE if insert_only or version_key is not None else q.PUT,values)
+            if version_key is not None:
+                if result.rowcount != 1:
+                    raise VersionedFactConflict("VERSIONED_FACT_ID_CONFLICT")
+                now=self.clock.now().isoformat()
+                self._conn.execute(q.VERSION_ARCHIVE,(now,now,record.owner_entity_id,version_key,ident))
             if insert_only and result.rowcount == 0:
                 if episode_lease is not None:
                     from .postgres_episode_fence import complete_pg_episode_write

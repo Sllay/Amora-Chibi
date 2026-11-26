@@ -14,6 +14,9 @@ COUNT = "PG_MEMORY_COUNT"
 GET = "PG_MEMORY_GET"
 PUT = "PG_MEMORY_PUT"
 CREATE = "PG_MEMORY_CREATE"
+VERSION_LOCK = "PG_MEMORY_VERSION_LOCK"
+VERSION_PREDECESSOR = "PG_MEMORY_VERSION_PREDECESSOR"
+VERSION_ARCHIVE = "PG_MEMORY_VERSION_ARCHIVE"
 DEL_ENTITIES = "PG_MEMORY_DELETE_ENTITIES"
 ADD_ENTITIES = "PG_MEMORY_ADD_ENTITIES"
 DEL_TAGS = "PG_MEMORY_DELETE_TAGS"
@@ -91,6 +94,15 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
         "INSERT INTO amora_pg_v18_lab.memory_records ("+cols+") "
         "VALUES ("+",".join(["%s"]*26)+") "
         "ON CONFLICT(id) DO NOTHING",26)
+    add(VERSION_LOCK,"SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",1,1)
+    add(VERSION_PREDECESSOR,"""SELECT id,metadata_json FROM amora_pg_v18_lab.memory_records
+        WHERE owner_entity_id=%s AND provenance_source='cognition:explicit_owner_request'
+          AND provenance_kind='user_assertion' AND metadata_json::jsonb ->> 'versioned_fact_key'=%s
+        ORDER BY metadata_json::jsonb ->> 'versioned_fact_at' DESC,id DESC LIMIT 1""",2,1)
+    add(VERSION_ARCHIVE,"""UPDATE amora_pg_v18_lab.memory_records SET archived_at=%s,updated_at=%s
+        WHERE owner_entity_id=%s AND provenance_source='cognition:explicit_owner_request'
+          AND provenance_kind='user_assertion' AND metadata_json::jsonb ->> 'versioned_fact_key'=%s
+          AND id<>%s AND archived_at IS NULL""",5)
     add(DEL_ENTITIES,"DELETE FROM amora_pg_v18_lab.memory_entities WHERE memory_id=%s",1)
     add(ADD_ENTITIES,"INSERT INTO amora_pg_v18_lab.memory_entities(memory_id,entity_id,confidence) VALUES (%s,%s,%s)",3,batch=True)
     add(DEL_TAGS,"DELETE FROM amora_pg_v18_lab.memory_tags WHERE memory_id=%s",1)
