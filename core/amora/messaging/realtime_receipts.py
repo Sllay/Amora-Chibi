@@ -19,10 +19,11 @@ PG_TABLE = "amora_pg_v18_lab.realtime_receipts"
 _DDL = """
 CREATE TABLE {table} (
     turn_id TEXT NOT NULL,
-    block_index INTEGER NOT NULL CHECK(block_index BETWEEN 0 AND 7),
+    block_index INTEGER NOT NULL CHECK(block_index BETWEEN 0 AND 31),
     binding TEXT NOT NULL,
     confirmed_seq INTEGER NOT NULL DEFAULT 0 CHECK(confirmed_seq>=0),
     message_id TEXT UNIQUE,
+    confirmed_digest TEXT,
     closed INTEGER NOT NULL DEFAULT 0 CHECK(closed IN (0,1)),
     pending_token TEXT,
     pending_seq INTEGER,
@@ -99,18 +100,18 @@ class RealtimeReceiptStore:
 
     def _row(self, turn, index, *, lock=False):
         sql = ("SELECT binding,confirmed_seq,message_id,closed,pending_token,pending_seq,"
-               "pending_digest,pending_terminal FROM {table} WHERE turn_id=? AND block_index=?")
+               "pending_digest,pending_terminal,confirmed_digest FROM {table} WHERE turn_id=? AND block_index=?")
         if lock and self.postgres:
             sql += " FOR UPDATE"
         row = self._execute(sql,(turn,index)).fetchone()
         if row is None:
             return None
         return dict(zip(("binding","confirmed_seq","message_id","closed","pending_token",
-                         "pending_seq","pending_digest","pending_terminal"),row))
+                         "pending_seq","pending_digest","pending_terminal","confirmed_digest"),row))
 
     @staticmethod
     def _key(turn,index):
-        if type(index) is not int or not 0<=index<=7:
+        if type(index) is not int or not 0<=index<=31:
             raise ValueError("REALTIME_BLOCK_INDEX_INVALID")
         return str(UUID(str(turn))),index
 
@@ -156,7 +157,7 @@ class RealtimeReceiptStore:
                     or row["message_id"] not in {None,message_id}):
                 return False
             return self._execute("UPDATE {table} SET message_id=?,confirmed_seq=pending_seq,"
-                                 "closed=pending_terminal,pending_token=NULL,pending_seq=NULL,"
+                                 "closed=pending_terminal,confirmed_digest=pending_digest,pending_token=NULL,pending_seq=NULL,"
                                  "pending_digest=NULL,pending_terminal=NULL "
                                  "WHERE turn_id=? AND block_index=? AND binding=? AND pending_token=?",
                                  (message_id,turn,index,binding,token)).rowcount==1

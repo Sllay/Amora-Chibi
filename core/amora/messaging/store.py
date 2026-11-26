@@ -366,6 +366,27 @@ class MessagingStore:
                                               candidate.conversation_id)).fetchall()
         return expected=={row["turn_id"]:(row["native_id"],int(row["transport_revision"])) for row in rows}
 
+    def realtime_final_item(self, outbound_id, account):
+        """Reauthorize final delivery against the canonical claimed outbox."""
+        with trace_lock(self.database._lock):
+            row=self.database._conn.execute(
+                "SELECT * FROM messaging_outbound_queue WHERE id=?",(str(outbound_id),)).fetchone()
+            if (row is None or row["status"]!="claimed" or not row["claim_expires_at"]
+                    or datetime.fromisoformat(row["claim_expires_at"])<self.clock.now()):
+                return None
+            candidate=self._outbound_from_row(row)
+            if (candidate.platform!=MessagingPlatform.DISCORD or candidate.account_scope!=account
+                    or candidate.target_entity_id!="PERSON_BK" or not candidate.metadata.get("realtime_v1")
+                    or not candidate.metadata.get("durable_native_hash") or CHECKPOINT in candidate.metadata):
+                return None
+            from amora.storage.reply_job_sql import SQLITE_STATEMENTS
+            sql=("PG_REPLY_JOB_DELIVERY_ALLOWED" if self.database.backend.capabilities.name=="postgres-candidate"
+                 else SQLITE_STATEMENTS["DELIVERY_ALLOWED"])
+            if self.database._conn.execute(sql,(str(candidate.id),candidate.account_scope,
+                    candidate.conversation_id,candidate.source_message_id)).fetchone() is None:
+                return None
+            return candidate if self._causal_group_delivery_allowed(candidate) else None
+
     @trace_stage("outbound_claim")
     def claim_outbound(
         self,
@@ -375,6 +396,7 @@ class MessagingStore:
         limit: int = 8,
         lease_seconds: int = 30,
         segmented_delivery: bool = False,
+        realtime_delivery: bool = False,
     ) -> tuple[OutboundMessage, ...]:
         limit = max(1, min(32, int(limit)))
         now = self.clock.now()
@@ -408,6 +430,8 @@ class MessagingStore:
             ).fetchall()
             for row in rows:
                 candidate = self._outbound_from_row(row)
+                if candidate.metadata.get("realtime_v1") and not realtime_delivery:
+                    continue
                 if CHECKPOINT in candidate.metadata and not segmented_delivery:
                     continue
                 if candidate.metadata.get("durable_native_hash"):
@@ -461,7 +485,8 @@ class MessagingStore:
                 )
                 if getattr(cursor, "rowcount", 1) == 0:
                     continue
-                if (segmented_delivery and candidate.platform == MessagingPlatform.DISCORD
+                if (segmented_delivery and not candidate.metadata.get("realtime_v1")
+                        and candidate.platform == MessagingPlatform.DISCORD
                         and candidate.metadata.get("durable_native_hash")
                         and not candidate.metadata.get("transport_expressions")
                         and not candidate.metadata.get("web_capture_requested")

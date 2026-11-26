@@ -136,7 +136,22 @@ export class MessagingCoreClient {
     });
   }
 
-  claimOutbound(limit = 1, leaseSeconds = DEFAULT_OUTBOUND_LEASE_SECONDS, segmentedDelivery = false) {
+  realtimeNext() {
+    return this.request('/v1/messaging/worker/realtime/next?'+new URLSearchParams({account:this.accountScope}));
+  }
+
+  realtimeFinal(id) {
+    return this.request('/v1/messaging/worker/realtime/final/'+encodeURIComponent(id)+'?'+
+      new URLSearchParams({account:this.accountScope}));
+  }
+
+  realtimeOperation(operation) {
+    return this.request('/v1/messaging/worker/realtime/operation',{
+      method:'POST',body:{...operation,account:this.accountScope},
+    });
+  }
+
+  claimOutbound(limit = 1, leaseSeconds = DEFAULT_OUTBOUND_LEASE_SECONDS, segmentedDelivery = false, realtimeDelivery = false) {
     const query = new URLSearchParams({
       platform: this.platform,
       account_scope: this.accountScope,
@@ -144,6 +159,7 @@ export class MessagingCoreClient {
       lease_seconds: String(leaseSeconds),
     });
     if (segmentedDelivery) query.set('segmented_delivery', 'true');
+    if (realtimeDelivery) query.set('realtime_delivery','true');
     return this.request(`/v1/messaging/worker/outbound?${query}`);
   }
 

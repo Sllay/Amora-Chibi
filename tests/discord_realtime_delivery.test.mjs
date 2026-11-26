@@ -85,3 +85,47 @@ test('source revoked after reservation never triggers POST',async()=>{
   assert.equal(await f.make().send(snap(1,'Trecho. ▍')),'revoked');
   assert.equal(f.calls.length,0);
 });
+
+
+test('worker bridge previews and reconciles final into same message',async()=>{
+  const {RealtimeWorkerTransport}=await import('../workers/discord/realtime-worker.mjs');
+  const {createHash}=await import('node:crypto');
+  const digest=x=>createHash('sha256').update(x).digest('hex');
+  const turn=turnId,binding='b'.repeat(64);
+  let final=false,pending=null,confirmed=false,acked=false,receipt=null,seq=0;
+  const calls=[];
+  const envelope={channelId:channel,sourceId:'4'.repeat(18),revision:1,binding,turnId:turn};
+  const draft={...envelope,snapshot:{turnId:turn,index:0,seq:1,status:'writing',text:'Trecho. ▍'}};
+  const last={turnId:turn,index:0,seq:2,status:'final',text:'Resposta completa.'};
+  const core={
+    async realtimeNext(){return {draft:final?null:draft};},
+    async realtimeFinal(){return {...envelope,blocks:confirmed?[{confirmedMessageId:id}]:[{snapshot:last}]};},
+    async realtimeOperation(op){
+      if(op.action==='authorize')return {allowed:true};
+      if(op.action==='prepare'){
+        assert.ok(!pending);pending=op;return {prepared:{token:'token',seq:op.seq,digest:op.digest,
+          operation:receipt?'edit':'create',message_id:receipt}};
+      }
+      if(op.action==='confirm'){
+        assert.equal(op.digest,pending.digest);receipt=op.message_id;seq=pending.seq;
+        confirmed=pending.terminal;pending=null;return {accepted:true};
+      }
+      if(op.action==='ack'){assert.ok(confirmed);acked=true;return {accepted:true};}
+      throw new Error('unexpected');
+    },
+  };
+  const rest={async request(path,opts){
+    calls.push({path,opts});
+    assert.equal(digest(opts.body.content),pending.digest);
+    return {id,channel_id:channel,author:{id:bot},content:opts.body.content};
+  }};
+  const transport=new RealtimeWorkerTransport({core,rest,botUserId:bot,sourceCurrent:()=>true});
+  assert.equal(await transport.poll(),'confirmed');
+  final=true;
+  const item={id:'outbound',conversation_id:channel,source_message_id:envelope.sourceId,
+    metadata:{cognitive_turn_id:turn}};
+  assert.equal(await transport.final(item),'confirmed');
+  assert.ok(acked);assert.equal(seq,2);
+  assert.deepEqual(calls.map(c=>c.opts.method),['POST','PATCH']);
+  assert.equal(calls[1].opts.body.content,'Resposta completa.');
+});

@@ -1698,3 +1698,84 @@ async def test_realtime_opt_in_causal_group_commits_one_outbound(lab,monkeypatch
         assert core.messaging_store.get_outbound(service._outbound_id(third)) is not None
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_realtime_bridge_durable_core_preview_final_same_receipt(lab,tmp_path):
+    from amora.cognition.realtime_candidates import CANDIDATE_SINK,CandidateEvent
+    from amora.messaging.realtime_receipts import RealtimeReceiptStore
+    from amora.messaging.realtime_routes import RealtimeOperation
+    from amora.messaging.realtime_bridge import digest
+    import sqlite3
+    core,clock,_=lab
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    is_pg=core.database.backend.capabilities.name=="postgres-candidate"
+    connection=_raw() if is_pg else sqlite3.connect(tmp_path/"realtime-bridge.sqlite3")
+    journal=RealtimeReceiptStore(connection,postgres=is_pg)
+    journal.install_disposable()
+    async def port(operation,*args,**kwargs):
+        return getattr(journal,operation)(*args,**kwargs)
+    bridge=runtime.configure_realtime(port)
+    arrived=asyncio.Event()
+    resume=asyncio.Event()
+    provider=CountingStructuredProvider(name="realtime-bridge-test")
+    async def realize(context):
+        sink=CANDIDATE_SINK.get()
+        assert sink is not None
+        sink(CandidateEvent("attempt-1",1,"candidate","Vulkan oferece controle."))
+        arrived.set()
+        await resume.wait()
+        sink(CandidateEvent("attempt-1",2,"transport_complete"))
+        return {"moves":[{"kind":context.dialogue_plan["response_moves"][0],
+                          "text":"Vulkan oferece controle. OpenGL simplifica o uso."}],
+                "closing":"statement","_usage":{"input_tokens":12,"output_tokens":8,"status_code":200}}
+    provider.realize=realize
+    core.cognition.register_provider(provider)
+    message=_dm(core,"1"*18,text="Explique Vulkan e OpenGL.").model_copy(update={"conversation_id":"2"*18})
+    turn=service._turn_id(message)
+    task=None
+    try:
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(message)).decision.reason_codes
+        task=asyncio.create_task(runtime.run_once())
+        await asyncio.wait_for(arrived.wait(),timeout=10)
+        assert (await bridge.next("wrong"))["draft"] is None
+        draft=(await bridge.next("primary"))["draft"]
+        assert draft["snapshot"]["text"]=="Vulkan oferece controle. ▍"
+        assert not core.cognition.store.list_segments(turn)
+        base=dict(account="primary",turn_id=turn,binding=draft["binding"],index=0)
+        op=RealtimeOperation(action="prepare",**base,seq=draft["snapshot"]["seq"],digest=digest(draft["snapshot"]["text"]))
+        prepared=(await bridge.operation(op))["prepared"]
+        assert prepared["operation"]=="create"
+        assert (await bridge.operation(RealtimeOperation(action="confirm",**base,
+            token=prepared["token"],digest=prepared["digest"],message_id="3"*18)))["accepted"]
+        resume.set()
+        assert await task
+        assert (await bridge.next("primary"))["draft"] is None
+        oid=service._outbound_id(message)
+        assert not core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,account_scope="primary",limit=1)
+        claimed=core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,account_scope="primary",
+                                                    limit=1,realtime_delivery=True)
+        assert len(claimed)==1 and claimed[0].id==oid and claimed[0].metadata["realtime_v1"] is True
+        plan=await bridge.final(oid,"primary")
+        final=plan["blocks"][0]["snapshot"]
+        assert final["text"]=="Vulkan oferece controle. OpenGL simplifica o uso."
+        op=RealtimeOperation(action="prepare",**base,seq=final["seq"],digest=digest(final["text"]),
+                             terminal=True,outbound_id=oid)
+        edit=(await bridge.operation(op))["prepared"]
+        assert edit["operation"]=="edit" and edit["message_id"]=="3"*18
+        assert not (await bridge.operation(RealtimeOperation(action="ack",**base,
+                                                            outbound_id=oid,message_id="3"*18)))["accepted"]
+        assert (await bridge.operation(RealtimeOperation(action="confirm",**base,
+            token=edit["token"],digest=edit["digest"],message_id="3"*18)))["accepted"]
+        assert (await bridge.final(oid,"primary"))["blocks"]==[{"confirmedMessageId":"3"*18}]
+        assert (await bridge.operation(RealtimeOperation(action="ack",**base,
+                                                        outbound_id=oid,message_id="3"*18)))["accepted"]
+        assert core.messaging_store.get_outbound(oid).status.value=="sent"
+        assert all("▍" not in m.raw_text for m in core.cognition.store.list_messages(turn_id=turn))
+    finally:
+        resume.set()
+        if task is not None:
+            await asyncio.gather(task,return_exceptions=True)
+        await _stop_runtime(core)
+        connection.close()

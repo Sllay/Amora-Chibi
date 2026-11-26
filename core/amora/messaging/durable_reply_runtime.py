@@ -61,6 +61,14 @@ class DurableReplyRuntime:
             return getattr(self.repo.generations, operation)(*args)
         return getattr(self.repo, operation)(*args, **kwargs)
 
+    def configure_realtime(self, receipt_port):
+        """Explicit integration/lab injection; no automatic schema or environment activation."""
+        if not self.active or self.service.realtime_bridge is not None:
+            raise RuntimeError("REALTIME_CONFIGURATION_NOT_ALLOWED")
+        from .realtime_bridge import RealtimeBridge
+        self.service.realtime_bridge=RealtimeBridge(self.service,receipt_port)
+        return self.service.realtime_bridge
+
     async def start(self, *, background=True):
         if self.active:
             return
@@ -308,7 +316,16 @@ class DurableReplyRuntime:
         causal_token = DURABLE_CAUSAL_CHECK.set(causal_check)
         group_token = GROUP_RELATED_TURN.set(claim.turn_id if grouping_enabled() and claim.attempts<=3 else None)
         self.service._active_dm_progress.add(claim.turn_id)
+        from amora.cognition.realtime_candidates import CANDIDATE_SINK
+        bridge=self.service.realtime_bridge
+        draft=None
+        sink_token=None
+        completed=False
         try:
+            if bridge is not None and bridge.binding(message) is not None:
+                draft=await bridge.begin(claim,message,request,live_guard)
+                if draft is not None:
+                    sink_token=CANDIDATE_SINK.set(draft)
             started = monotonic()
             deadline = started + self.service.cognition_timeout_seconds + 120.0
             total_budget = float(request.metadata["provider_total_budget_seconds"])
@@ -338,6 +355,8 @@ class DurableReplyRuntime:
                     if not await live_guard():
                         raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
                 except CausalReplanRequired:
+                    if draft is not None and draft.text:
+                        draft.pause()
                     if index:
                         raise
                     _LOG.info("durable_causal_replan turn_id=%s",claim.turn_id)
@@ -350,8 +369,15 @@ class DurableReplyRuntime:
                                if item.get("independent_reply_still_pending") is False]
                     if members:
                         plan.metadata["causal_group_members"] = members
+                if bridge is not None and bridge.binding(message) is not None:
+                    plan.metadata["realtime_v1"]=True
+                completed=True
                 return plan
         finally:
+            if sink_token is not None:
+                CANDIDATE_SINK.reset(sink_token)
+            if bridge is not None:
+                bridge.end(claim.turn_id,completed=completed)
             self.service._active_dm_progress.discard(claim.turn_id)
             GROUP_RELATED_TURN.reset(group_token)
             DURABLE_CAUSAL_CHECK.reset(causal_token)
@@ -444,7 +470,8 @@ class DurableReplyRuntime:
                               "durable_native_hash": self.service._hash(message.native_source_message_id),
                               "causal_snapshot": plan.metadata.get("causal_snapshot",initial_snapshot),
                               **({"causal_group_members": plan.metadata["causal_group_members"]}
-                                 if plan.metadata.get("causal_group_members") else {})})
+                                 if plan.metadata.get("causal_group_members") else {}),
+                              **({"realtime_v1":True} if plan.metadata.get("realtime_v1") else {})})
                 if not await self.call("stage", claim.turn_id, claim.token, outbound, decision, reasons):
                     raise InboundGenerationLost("DURABLE_REPLY_LEASE_LOST")
             else:

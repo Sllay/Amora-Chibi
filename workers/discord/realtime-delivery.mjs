@@ -27,7 +27,7 @@ export class RealtimeDelivery {
     this.backoffUntil=0;
     this.lastText=new Map();
     this.lastSeq=new Map();
-    this.maxBlocks=8;
+    this.maxBlocks=32;
     this.blocked=false;
   }
 
@@ -35,7 +35,7 @@ export class RealtimeDelivery {
     const {turnId,index,seq,status,text}=snapshot;
     if (typeof turnId!=='string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(turnId)
         || !Number.isSafeInteger(index) || index<0 || index>=this.maxBlocks
-        || !Number.isSafeInteger(seq) || seq<1 || !['writing','final','interrupted'].includes(status)
+        || !Number.isSafeInteger(seq) || seq<1 || !['writing','retrying','final','interrupted'].includes(status)
         || typeof text!=='string' || !text.trim() || text.length>2000
         || (status==='writing' && !text.endsWith(' ▍'))
         || (status!=='writing' && text.endsWith(' ▍'))) throw new Error('REALTIME_SNAPSHOT_INVALID');

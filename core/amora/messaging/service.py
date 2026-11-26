@@ -101,6 +101,7 @@ class PlatformMessagingService:
         self.generations = InboundGeneration(store.database, clock)
         self.storage_lane = None
         self.durable_replies = None
+        self.realtime_bridge = None
 
     def configure_durable_replies(self):
         """Explicit opt-in after candidate schema/registry installation.

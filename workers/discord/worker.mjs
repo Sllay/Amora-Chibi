@@ -19,6 +19,7 @@ import { collectDiscordIncomingImage, collectDiscordIncomingImages, discordImage
 import { transcodeOversizedImage } from './incoming-image-transform.mjs';
 import { WebScreenshotService, screenshotMultipart } from './web-screenshot.mjs';
 import { messagingTurnId, startTypingProgress } from './typing-progress.mjs';
+import { RealtimeWorkerTransport } from './realtime-worker.mjs';
 
 const TRUE = new Set(['1', 'true', 'yes', 'on']);
 const TERMINAL_GATEWAY_CLOSE_CODES = new Set([4004, 4010, 4011, 4013, 4014]);
@@ -109,6 +110,7 @@ export class DiscordWorker {
       + ' enabled=' + this.webScreenshots.enabled
       + ' provider=' + (this.webScreenshots.apiKey ? 'keyed' : 'keyless'));
     this.typingProgress = new Map();
+    this.realtimeTransport = null;
     // Per-DM admission order for the synchronous Core path. No persistent
     // queue activation, no shared global lock, and no coalescing of turns.
     this.dmInboundTails = new Map();
@@ -850,13 +852,31 @@ export class DiscordWorker {
     return true;
   }
 
+  getRealtimeTransport() {
+    if (!enabled('AMORA_DISCORD_REALTIME',false) || !this.botUserId
+        || typeof this.core.realtimeNext!=='function' || typeof this.core.realtimeOperation!=='function')
+      return null;
+    if (!this.realtimeTransport || this.realtimeTransport.botUserId!==this.botUserId) {
+      this.realtimeTransport=new RealtimeWorkerTransport({core:this.core,rest:this.rest,
+        botUserId:this.botUserId,sourceCurrent:e=>this.ready && !this.stopped &&
+          this.runtime.validateOutbound({conversation_id:e.channelId,source_message_id:e.sourceId,
+            metadata:{transport_revision:e.revision}}).ok});
+    }
+    return this.realtimeTransport;
+  }
+
   async flushOutbound() {
     if (this.processingOutbound) return;
     this.processingOutbound = true;
     try {
+      const realtime=this.getRealtimeTransport();
+      if (realtime) {
+        try { await realtime.poll(); } catch(error) { safeLog('REALTIME_POLL_FAILED',errorLabel(error)); }
+      }
       for (let drained = 0; drained < 8; drained += 1) {
         const claimStarted = performance.now();
-        const claimed = await this.core.claimOutbound(1, OUTBOUND_CLAIM_LEASE_SECONDS, true);
+        const claimed = await this.core.claimOutbound(1, OUTBOUND_CLAIM_LEASE_SECONDS, true,
+          ...(realtime?[true]:[]));
         const messages = claimed?.messages || [];
         if (!messages.length) break;
         safeLog('OUTBOUND_CLAIMED', messages.length);
@@ -865,6 +885,19 @@ export class DiscordWorker {
         const validation = this.runtime.validateOutbound(item);
         if (!validation.ok || !this.validateCausalGroup(item)) {
           await this.core.cancelOutbound(item.id, validation.ok ? 'DISCORD_GROUP_SOURCE_STALE' : `DISCORD_${validation.reason}`).catch(() => {});
+          continue;
+        }
+
+        if (item?.metadata?.realtime_v1) {
+          if (!realtime) break;
+          try {
+            const outcome=await realtime.final(item);
+            safeLog('REALTIME_FINAL',outcome);
+            if (outcome!=='confirmed') break;
+          } catch(error) {
+            safeLog('REALTIME_FINAL_PENDING',errorLabel(error));
+            break;
+          }
           continue;
         }
 
