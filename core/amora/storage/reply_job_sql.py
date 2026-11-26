@@ -60,6 +60,25 @@ _OWNED = "turn_id=? AND status='running' AND lease_token=? AND lease_until>?"
 
 
 SQLITE_STATEMENTS = {
+    "CAUSAL_LOCK": "SELECT 1",
+    "CAUSAL_ROWS": ("""SELECT m.id,m.turn_id,m.speaker_id,m.addressee_id,m.raw_text,
+        m.status,m.started_at,m.privacy_scope,m.remote_processing_allowed,
+        json_extract(m.metadata_json,'$.platform_sent_at') AS platform_sent_at,
+        json_extract(m.metadata_json,'$.surface') AS surface,
+        json_extract(m.metadata_json,'$.reply_enqueue_requested') AS reply_requested,
+        json_extract(m.metadata_json,'$.test_mode') AS test_mode,
+        json_extract(m.metadata_json,'$.native_message_id_hash') AS native_hash,
+        json_extract(m.metadata_json,'$.transport_revision') AS revision
+        FROM conversation_messages m WHERE m.session_id=?
+          AND m.dedupe_key='cognitive-input:' || m.turn_id
+          AND NOT EXISTS (SELECT 1 FROM memory_reflection_invalidations x
+            WHERE x.session_id=m.session_id
+            AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash')
+            AND x.invalidated_through>=COALESCE(json_extract(m.metadata_json,'$.transport_revision'),1))
+        ORDER BY m.started_at DESC,m.id DESC LIMIT 96"""),
+    "CAUSAL_CLEAR_PREPARED": ("""UPDATE messaging_inbound_generation
+        SET prepared_outbound_json=NULL,prepared_decision_json=NULL,prepared_reasons_json=NULL
+        WHERE turn_id=? AND lease_token=? AND lease_until>?"""),
     "ENQUEUE": (_INSERT + " AND m.id=? ON CONFLICT(turn_id) DO NOTHING"),
     "RECONCILE": (_INSERT + """
             AND NOT EXISTS (SELECT 1 FROM messaging_reply_jobs j WHERE j.turn_id=m.turn_id)

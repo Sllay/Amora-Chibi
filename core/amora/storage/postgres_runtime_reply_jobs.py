@@ -71,6 +71,26 @@ def reply_job_statements() -> dict[str, ReviewedStatement]:
     return {
         "PG_REPLY_JOB_CLAIM_LOCK": ReviewedStatement(
             "LOCK TABLE amora_pg_v18_lab.messaging_reply_jobs IN SHARE ROW EXCLUSIVE MODE", 0),
+        "PG_REPLY_JOB_CAUSAL_LOCK": ReviewedStatement(
+            "LOCK TABLE amora_pg_v18_lab.conversation_messages, amora_pg_v18_lab.memory_reflection_invalidations IN SHARE ROW EXCLUSIVE MODE",0),
+        "PG_REPLY_JOB_CAUSAL_ROWS": ReviewedStatement("""SELECT m.id,m.turn_id,m.speaker_id,m.addressee_id,m.raw_text,
+            m.status,m.started_at,m.privacy_scope,m.remote_processing_allowed,
+            m.metadata_json::jsonb ->> 'platform_sent_at' AS platform_sent_at,
+            m.metadata_json::jsonb ->> 'surface' AS surface,
+            m.metadata_json::jsonb ->> 'reply_enqueue_requested' AS reply_requested,
+            m.metadata_json::jsonb ->> 'test_mode' AS test_mode,
+            m.metadata_json::jsonb ->> 'native_message_id_hash' AS native_hash,
+            m.metadata_json::jsonb ->> 'transport_revision' AS revision
+            FROM amora_pg_v18_lab.conversation_messages m WHERE m.session_id=%s
+              AND m.dedupe_key='cognitive-input:' || m.turn_id
+              AND NOT EXISTS (SELECT 1 FROM amora_pg_v18_lab.memory_reflection_invalidations x
+                WHERE x.session_id=m.session_id
+                AND x.native_message_hash=m.metadata_json::jsonb ->> 'native_message_id_hash'
+                AND x.invalidated_through>=COALESCE((""" + _REVISION + """),1))
+            ORDER BY m.started_at DESC,m.id DESC LIMIT 96""",1,96),
+        "PG_REPLY_JOB_CAUSAL_CLEAR_PREPARED": ReviewedStatement("""UPDATE amora_pg_v18_lab.messaging_inbound_generation
+            SET prepared_outbound_json=NULL,prepared_decision_json=NULL,prepared_reasons_json=NULL
+            WHERE turn_id=%s AND lease_token=%s AND lease_until>%s""",3),
         "PG_REPLY_JOB_ENQUEUE": ReviewedStatement(
             _INSERT + " AND m.id=%s ON CONFLICT(turn_id) DO NOTHING", 2),
         "PG_REPLY_JOB_RECONCILE": ReviewedStatement(

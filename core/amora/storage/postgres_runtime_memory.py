@@ -15,6 +15,7 @@ GET = "PG_MEMORY_GET"
 PUT = "PG_MEMORY_PUT"
 CREATE = "PG_MEMORY_CREATE"
 VERSION_LOCK = "PG_MEMORY_VERSION_LOCK"
+VERSION_SOURCE_LOCK = "PG_MEMORY_VERSION_SOURCE_LOCK"
 VERSION_PREDECESSOR = "PG_MEMORY_VERSION_PREDECESSOR"
 VERSION_ARCHIVE = "PG_MEMORY_VERSION_ARCHIVE"
 DEL_ENTITIES = "PG_MEMORY_DELETE_ENTITIES"
@@ -94,6 +95,7 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
         "INSERT INTO amora_pg_v18_lab.memory_records ("+cols+") "
         "VALUES ("+",".join(["%s"]*26)+") "
         "ON CONFLICT(id) DO NOTHING",26)
+    add(VERSION_SOURCE_LOCK,"LOCK TABLE amora_pg_v18_lab.memory_reflection_invalidations IN SHARE MODE",0)
     add(VERSION_LOCK,"SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",1,1)
     add(VERSION_PREDECESSOR,"""SELECT id,metadata_json FROM amora_pg_v18_lab.memory_records
         WHERE owner_entity_id=%s AND provenance_source='cognition:explicit_owner_request'

@@ -60,7 +60,7 @@ class MessagingStorageWorker:
             return self.generations.prepared(*args)
         if operation not in {"state", "counts", "verify_schema", "admit", "enqueue_turn", "load", "claim",
                              "renew", "defer", "block", "cancel_invalidated",
-                             "reconcile_missing", "reconcile_outbound"}:
+                             "reconcile_missing", "reconcile_outbound", "causal_snapshot"}:
             raise ValueError("REPLY_JOB_OPERATION_NOT_ALLOWED")
         return getattr(self.reply_jobs, operation)(*args, **kwargs)
 

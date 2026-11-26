@@ -97,6 +97,11 @@ class PostgresMemoryStore(MemoryStore):
                 check_pg_episode_write(
                     self._conn,record,episode_lease,self.clock.now(),
                 )
+            if version_key is not None:
+                # Source invalidation writes the tombstone and archives source
+                # memories in one transaction. Do not race between its check
+                # and the new version's commit.
+                self._conn.execute(q.VERSION_SOURCE_LOCK)
             if generation_lease is not None:
                 turn,token = generation_lease
                 lease = self._conn.execute(q.GENERATION_LEASE,(

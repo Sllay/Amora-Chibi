@@ -8,6 +8,8 @@ Activation requires a separately installed and verified schema.
 """
 from __future__ import annotations
 
+import json
+from hashlib import sha256
 from dataclasses import dataclass
 from datetime import timedelta, timezone
 from enum import StrEnum
@@ -265,20 +267,48 @@ class ReplyJobRepository:
     def reconcile_outbound(self):
         return self._write(self._sql("RECONCILE_OUTBOUND"))
 
+    def _causal_snapshot(self, session_id):
+        rows = self.database._conn.execute(self._sql("CAUSAL_ROWS"), (session_id,)).fetchall()
+        # Never return or persist the input text here; only a deterministic digest.
+        # This hashes canonical received input rows, not assistant output history.
+        fields = ("id","turn_id","speaker_id","addressee_id","raw_text","status",
+                  "started_at","privacy_scope","remote_processing_allowed",
+                  "platform_sent_at","surface","reply_requested","test_mode","native_hash","revision")
+        values = [[str(row[field]) if row[field] is not None else None for field in fields] for row in rows]
+        return sha256(json.dumps(values,ensure_ascii=False,separators=(",",":")).encode()).hexdigest()
+
+    def causal_snapshot(self, session_id):
+        with trace_lock(self.database._lock):
+            return self._causal_snapshot(session_id)
+
     def finalize(self, claim, store, message, decision, outbound, reasons, records, journals):
         """Commit history, original outbox/audit and ready state together.
 
         The caller supplies validated, deterministic history values, never
         SQL. No network await, nested SQLite transaction or provider call.
         Existing prepared checkpoint survives any failed transaction.
+        None means the causal snapshot changed: only the obsolete prepared
+        result was cleared, and the same job must be retried.
         """
         db = self.database
         oid = str(outbound.id)
         try:
             with trace_lock(db._lock), db._conn:
+                if self._postgres:
+                    # Admission takes this lock first. Keep the lock order
+                    # identical and serialize input/invalidation writes during
+                    # the short commit only, never during provider generation.
+                    db._conn.execute("PG_REPLY_JOB_CLAIM_LOCK")
+                    db._conn.execute(self._sql("CAUSAL_LOCK"))
                 if db._conn.execute(self._sql("FINALIZE_LOCK"),
                         (claim.turn_id, claim.token, self._now().isoformat())).fetchone() is None:
                     return False
+                snapshot = outbound.metadata.get("causal_snapshot")
+                if snapshot != self._causal_snapshot(claim.session_id):
+                    if db._conn.execute(self._sql("CAUSAL_CLEAR_PREPARED"),
+                            (claim.turn_id,claim.token,self._now().isoformat())).rowcount != 1:
+                        raise _LeaseConflict()
+                    return None
                 for segment_values, message_values in records:
                     if db._conn.execute(self._sql("SEGMENT_INSERT"), segment_values).rowcount != 1:
                         raise ValueError("DURABLE_REPLY_SEGMENT_CONFLICT")

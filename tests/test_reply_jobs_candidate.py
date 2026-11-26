@@ -1559,3 +1559,49 @@ async def test_run04_versioned_fact_atomic_supersession_and_stale_write(lab, mon
     assert rejected.metadata["cognitive_reason_codes"]==["EXPLICIT_MEMORY_VERSION_CONFLICT"]
     assert core.memory.get(new).archived_at is None
     assert (await core.messaging.receive(nextmsg)).outbound[0].metadata["explicit_memory_id"]==new
+
+
+@pytest.mark.asyncio
+async def test_run04_causal_fence_retries_after_late_correction_before_commit(lab, monkeypatch):
+    core,clock,_=lab
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    provider=CountingStructuredProvider(name="run04-commit-fence")
+    calls=[]
+    async def realize(context):
+        calls.append(list(context.causal_followups))
+        text="Godot para Android." if context.causal_followups else "Godot para PC."
+        return {"moves":[{"kind":context.dialogue_plan["response_moves"][0],"text":text}],
+                "closing":"statement","_usage":{"input_tokens":12,"output_tokens":4,"status_code":200}}
+    provider.realize=realize
+    core.cognition.register_provider(provider)
+    first=_dm(core,"run04-fence-first",text="Explique Godot para PC.")
+    turn=service._turn_id(first)
+    original_call=runtime.call
+    inserted=False
+    second=None
+    async def interpose(operation,*args,**kwargs):
+        nonlocal inserted,second
+        if operation=="finalize" and not inserted:
+            inserted=True
+            clock.advance(timedelta(seconds=1))
+            second=_dm(core,"run04-fence-second",text="Na verdade, Godot para Android.")
+            accepted=await service.receive(second)
+            assert "DURABLE_REPLY_ACCEPTED" in accepted.decision.reason_codes
+        return await original_call(operation,*args,**kwargs)
+    monkeypatch.setattr(runtime,"call",interpose)
+    try:
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(first)).decision.reason_codes
+        assert await runtime.run_once()
+        assert (await runtime.call("state",turn))["status"]=="retry_wait"
+        assert core.messaging_store.get_outbound(service._outbound_id(first)) is None
+        assert not core.cognition.store.list_segments(turn)
+        clock.advance(timedelta(seconds=10))
+        assert await runtime.run_once()
+        assert (await runtime.call("state",turn))["status"]=="ready"
+        outbound=core.messaging_store.get_outbound(service._outbound_id(first))
+        assert outbound.text=="Godot para Android."
+        assert len(calls)==2 and not calls[0] and len(calls[1])==1
+        assert (await runtime.call("state",service._turn_id(second)))["status"]=="pending"
+    finally:
+        await _stop_runtime(core)
