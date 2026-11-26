@@ -7,7 +7,7 @@
   "core": {
     "family": "06",
     "url": "https://cubism.live2d.com/sdk-web/core/06/live2dcubismcore.min.js",
-    "sha256": null,
+    "sha256": "8741f739779b5d5210872bd3d7d99f0f1e56e6c87409e7d26d6bb4b80aa1ef47",
     "usage": "development-only; measure exact bytes; publication license gate"
   },
   "model": {

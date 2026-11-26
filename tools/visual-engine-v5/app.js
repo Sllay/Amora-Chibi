@@ -1,7 +1,7 @@
 import {AmoraModel,initFramework} from './runtime.js';
 const $=id=>document.getElementById(id),canvas=$('avatar');let runtime,identity,restore=null,metricsTimer;
 function status(message,error=false){$('status').textContent=message;$('status').dataset.error=String(error);}
-function fail(error){runtime?.stop();status(String(error.message||error),true);console.error(error);}
+function fail(error){runtime?.stop();status(String(error.message||error),true);console.error(error.stack||String(error));window.amoraBootError={stage:runtime?.stage,stack:error.stack||String(error)};}
 function controls(){
  const select=$('expression');select.replaceChildren(new Option('Escolher expressão',''));for(const name of runtime.expressions.keys())select.add(new Option(name,name));
  const container=$('parameters');container.replaceChildren();for(const [name,p] of runtime.params){const label=document.createElement('label'),value=document.createElement('output'),slider=document.createElement('input');label.append(name,value,slider);slider.type='range';slider.min=p.min;slider.max=p.max;slider.step=(p.max-p.min)/100||.01;slider.value=p.default;value.value=p.default;slider.oninput=()=>{value.value=slider.value;runtime.setParameters({[name]:Number(slider.value)});};container.append(label);}

@@ -33,7 +33,7 @@ jobs:
           test "$(git -C tools/visual-engine-v5/framework rev-parse HEAD)" = 198a3769c26ca3d7b600e932590433badd392edd
           curl --fail --silent --show-error --location --proto '=https' --max-time 90 https://cubism.live2d.com/sdk-web/core/06/live2dcubismcore.min.js -o .build/vendor/live2dcubismcore.min.js
           test -s .build/vendor/live2dcubismcore.min.js
-          sha256sum .build/vendor/live2dcubismcore.min.js
+          echo '8741f739779b5d5210872bd3d7d99f0f1e56e6c87409e7d26d6bb4b80aa1ef47  .build/vendor/live2dcubismcore.min.js' | sha256sum --check
           cp -R tools/visual-engine-v5/framework/Shaders/WebGL .build/shaders
           cp tools/visual-engine-v5/{index.html,lab.css} .build/
           python tools/visual-engine-v5/prepare.py .rig .build "$GITHUB_SHA"

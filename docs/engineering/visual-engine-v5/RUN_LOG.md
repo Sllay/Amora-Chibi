@@ -24,3 +24,5 @@ Não preencher PASS sem evidência. Histórico cumulativo; não apagar falhas an
 - Framework oficial 5-r.5 fixado no commit 198a3769c26ca3d7b600e932590433badd392edd; Core oficial família 06 apenas em ambiente de desenvolvimento, hash a medir e fixar; licença de publicação ainda não certificada.
 - Modelo exato V4.5: workflow 45534504067, artefato 14986551731, source 333b935d12e7b82397efbc4d797c471e1aec05f1.
 - C01–C04: implementação de laboratório WebGL2, referências do modelo, física, motions, expressões, parâmetros, perfis e recuperação; validação CI pendente. Não houve alteração do servidor. Testes físicos adiados por instrução do usuário para RUN 04.
+
+- Primeira CI 45732022065: download exato do modelo e Core, build passaram. Browser falhou ao iniciar com null.length; adicionar stack e fase para identificar causa, sem reduzir gate. Core SHA-256 fixado: 8741f739779b5d5210872bd3d7d99f0f1e56e6c87409e7d26d6bb4b80aa1ef47; MOC3 dd23be7602621ea558b3bca17e2a23ebadb4b5d9b5a08eb73b96169b114e5cc0.

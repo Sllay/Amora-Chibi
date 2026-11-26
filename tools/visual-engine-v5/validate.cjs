@@ -3,7 +3,7 @@ const puppeteer=require('puppeteer-core'),fs=require('node:fs'),assert=require('
  const page=await browser.newPage();await page.setViewport({width:390,height:844,deviceScaleFactor:1});page.on('pageerror',e=>errors.push(e.message));page.on('console',msg=>{if(msg.type()==='error')errors.push(msg.text());});
  await page.goto('http://127.0.0.1:8766/',{waitUntil:'networkidle0',timeout:60000});
  await page.waitForFunction(()=>window.AmoraVisualEngineV5?.ready||document.querySelector('#status').dataset.error==='true',{timeout:60000});
- const status=await page.$eval('#status',el=>el.textContent);assert.equal(status,'Cubism real pronto');
+ const status=await page.$eval('#status',el=>el.textContent);if(status!=='Cubism real pronto')console.log('BOOT_ERROR '+JSON.stringify(await page.evaluate(()=>window.amoraBootError))+' CONSOLE '+JSON.stringify(errors));assert.equal(status,'Cubism real pronto');
  const result=await page.evaluate(()=>{const r=window.AmoraVisualEngineV5;r.stop();r.reset();r.setProfile('balanced');
  function sample(params){r.reset();r.setParameters(params);const gl=r.render(1/30),w=r.canvas.width,h=r.canvas.height,p=new Uint8Array(w*h*4);gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,p);let hash=2166136261,opaque=0,transparent=0;for(let i=0;i<p.length;i++){hash=Math.imul(hash^p[i],16777619);if(i%4===3){if(p[i]>200)opaque++;if(p[i]===0)transparent++;}}return {hash:hash>>>0,opaque,transparent,error:gl.getError(),parameters:r.readParameters()};}
  const poses={neutral:{},half:{ParamEyeLOpen:.5,ParamEyeROpen:.5},closed:{ParamEyeLOpen:0,ParamEyeROpen:0},gaze:{ParamEyeBallX:1,ParamEyeBallY:.5},mouth:{ParamMouthOpenY:.8,ParamMouthPose:2},blush:{ParamBlush:1},tears:{ParamTearL:1,ParamTearR:1},turn:{ParamAngleX:20,ParamAngleY:-10}};

@@ -28,19 +28,19 @@ export class AmoraModel extends CubismUserModel {
   if(!refs?.Moc||!refs?.Physics||!refs?.Textures?.length||!refs?.Expressions?.length||!refs?.Motions?.Idle?.length)throw Error('Incomplete model references');
   const moc=await bytes(asset(refs.Moc));if(new TextDecoder().decode(moc.slice(0,4))!=='MOC3')throw Error('Invalid MOC3 signature');
   this.mocHash=await digest(moc);if(this.mocHash!==this.identity.mocSha256)throw Error('MOC3 hash mismatch');
-  this.loadModel(moc,true);const model=this.getModel();if(!model)throw Error('CUBISM_MOC_REJECTED');
-  for(let i=0;i<model.getParameterCount();i++){const id=idString(model.getParameterId(i));this.params.set(id,{index:i,min:model.getParameterMinimumValue(i),max:model.getParameterMaximumValue(i),default:model.getParameterDefaultValue(i)});}
+  this.stage='moc decode';this.loadModel(moc,true);const model=this.getModel();if(!model)throw Error('CUBISM_MOC_REJECTED');
+  this.stage='parameter inventory';for(let i=0;i<model.getParameterCount();i++){const id=idString(model.getParameterId(i));this.params.set(id,{index:i,min:model.getParameterMinimumValue(i),max:model.getParameterMaximumValue(i),default:model.getParameterDefaultValue(i)});}
   for(const name of required)if(!this.params.has(name))throw Error('Missing rig parameter '+name);
-  const phy=await bytes(asset(refs.Physics));this.loadPhysics(phy,phy.byteLength);if(!this._physics)throw Error('Physics load failed');
+  this.stage='physics';const phy=await bytes(asset(refs.Physics));this.loadPhysics(phy,phy.byteLength);if(!this._physics)throw Error('Physics load failed');
   if(refs.Pose){const p=await bytes(asset(refs.Pose));this.loadPose(p,p.byteLength);}
-  for(const exp of refs.Expressions){const b=await bytes(asset(exp.File));const e=this.loadExpression(b,b.byteLength,exp.Name);if(!e)throw Error('Expression load failed '+exp.Name);this.expressions.set(exp.Name,e);}
-  for(const [group,items] of Object.entries(refs.Motions)){for(const [i,entry] of items.entries()){const b=await bytes(asset(entry.File));const name=group+'/'+i;const m=this.loadMotion(b,b.byteLength,name);if(!m)throw Error('Motion load failed '+name);this.motions.set(name,m);}}
-  this.createRenderer(this.canvas.width,this.canvas.height);const renderer=this.getRenderer();renderer.startUp(gl);renderer.setIsPremultipliedAlpha(true);
+  this.stage='expressions';for(const exp of refs.Expressions){const b=await bytes(asset(exp.File));const e=this.loadExpression(b,b.byteLength,exp.Name);if(!e)throw Error('Expression load failed '+exp.Name);this.expressions.set(exp.Name,e);}
+  this.stage='motions';for(const [group,items] of Object.entries(refs.Motions)){for(const [i,entry] of items.entries()){const b=await bytes(asset(entry.File));const name=group+'/'+i;const m=this.loadMotion(b,b.byteLength,name);if(!m)throw Error('Motion load failed '+name);this.motions.set(name,m);}}
+  this.stage='renderer';this.createRenderer(this.canvas.width,this.canvas.height);const renderer=this.getRenderer();renderer.startUp(gl);renderer.setIsPremultipliedAlpha(true);
   // Serial texture upload keeps decoded image memory bounded on mobile.
-  for(const [i,name] of refs.Textures.entries()){const t=await texture(gl,asset(name));this.textures.push(t);renderer.bindTexture(i,t);}
-  renderer.loadShaders(shaderPath);const deadline=performance.now()+20000;
+  this.stage='textures';for(const [i,name] of refs.Textures.entries()){const t=await texture(gl,asset(name));this.textures.push(t);renderer.bindTexture(i,t);}
+  this.stage='shaders';renderer.loadShaders(shaderPath);const deadline=performance.now()+20000;
   while(!CubismShaderManager_WebGL.getInstance().getShader(gl)._isShaderLoaded){if(performance.now()>deadline)throw Error('CUBISM_SHADER_TIMEOUT');await new Promise(r=>setTimeout(r,40));}
-  this._physics.stabilization(model);this.ready=true;this.reset();this.setIdle(true);this.render(0);return this;
+  this.stage='first frame';this._physics.stabilization(model);this.ready=true;this.reset();this.setIdle(true);this.render(0);return this;
  }
  setProfile(name){const p=PROFILES[name];if(!p)throw Error('Unknown profile');this.profile=name;this.canvas.width=p.size;this.canvas.height=p.size;if(this.ready)this.setRenderTargetSize(p.size,p.size);}
  setParameters(values){for(const [name,value] of Object.entries(values)){const p=this.params.get(name);if(!p||!Number.isFinite(value))throw Error('Invalid parameter '+name);this.overrides.set(name,Math.max(p.min,Math.min(p.max,value)));}}
