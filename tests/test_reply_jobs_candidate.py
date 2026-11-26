@@ -1605,3 +1605,32 @@ async def test_run04_causal_fence_retries_after_late_correction_before_commit(la
         assert (await runtime.call("state",service._turn_id(second)))["status"]=="pending"
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_run04_natural_named_fact_consolidation_and_correction(lab,monkeypatch):
+    core,clock,_=lab
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE","1")
+    from uuid import uuid5,NAMESPACE_URL
+    def memory_id(msg):
+        return uuid5(NAMESPACE_URL,"amora:owner-fact:"+str(service._turn_id(msg)))
+    try:
+        first=_dm(core,"natural-fact-old",text="A cor de Vexora é dourada.")
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(first)).decision.reason_codes
+        assert await service.reflections.process_once()
+        old=core.memory.get(memory_id(first))
+        assert old and old.provenance.kind.value=="user_assertion"
+        clock.advance(timedelta(seconds=2))
+        second=_dm(core,"natural-fact-new",text="Na verdade, a cor de Vexora é vermelha.")
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(second)).decision.reason_codes
+        assert await service.reflections.process_once()
+        new=core.memory.get(memory_id(second))
+        assert new and new.metadata["supersedes_memory_id"]==str(old.id)
+        assert core.memory.get(old.id).archived_at is not None
+        assert new.archived_at is None
+        assert not await service.reflections.process_once()
+        assert "vermelha" in new.content
+    finally:
+        await _stop_runtime(core)

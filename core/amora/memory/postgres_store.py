@@ -67,7 +67,7 @@ class PostgresMemoryStore(MemoryStore):
         if record.provenance.source == "perception:episode:v1" and episode_lease is None:
             raise PostgresRuntimeError("PG_MEMORY_EPISODE_WRITE_REQUIRES_LEASE")
         from .versioned_fact import checked_version_key, link_version, VersionedFactConflict
-        version_key = checked_version_key(record, generation_lease)
+        version_key = checked_version_key(record, generation_lease, reflection_lease)
         p = record.provenance
         ident = str(record.id)
         values = (
@@ -117,6 +117,9 @@ class PostgresMemoryStore(MemoryStore):
                     turn,token,self.clock.now().isoformat(),
                 )).fetchone()
                 if lease is None:
+                    raise PostgresRuntimeError("REFLECTION_LEASE_LOST")
+                if version_key is not None and self._conn.execute(q.VERSION_REFLECTION_LEASE,(
+                    turn,token,self.clock.now().isoformat(),p.session_id)).fetchone() is None:
                     raise PostgresRuntimeError("REFLECTION_LEASE_LOST")
             if version_key is not None:
                 self._conn.execute(q.VERSION_LOCK,(record.owner_entity_id+":"+version_key,))

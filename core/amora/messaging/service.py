@@ -552,6 +552,19 @@ class PlatformMessagingService:
         # Persist the intent with the input. The queue reconciles the crash
         # window between these separate writes, without importing old history.
         request.metadata["reflection_enqueue_requested"] = enqueue_reflection
+        # Only source-grounded named assertions in a verified, consented owner
+        # DM may use the local versioned-memory reflection path. General
+        # narrative, suggestions, and ambiguous pronouns stay on the ordinary
+        # inference path and never supersede a named fact automatically.
+        if (enqueue_reflection and decision.action == RoutingAction.RESPOND
+                and message.platform.value=="discord" and message.channel_type==ChannelType.DM
+                and message.privacy_scope==PrivacyScope.PERSONAL
+                and not message.attachments and not message.incoming_images and not message.incoming_image
+                and not request.metadata.get("test_mode")):
+            from amora.memory.versioned_fact import parse_named_fact
+            if parse_named_fact(message.text) and is_verified_owner(
+                    self.attention.profiles,message,decision.speaker_entity_id):
+                request.metadata["owner_fact_assertion"]=True
         durable = bool(
             self.durable_replies is not None and durable_audit is not None
             and durable_audit.metadata.get("durable_reply_transport")

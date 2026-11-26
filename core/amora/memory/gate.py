@@ -23,7 +23,8 @@ class MemoryWriteGate:
         MemoryKind.RELATIONAL: 0.42,
     }
 
-    def evaluate(self, candidate: MemoryCandidate, *, explicit_owner_request: bool = False) -> MemoryWriteDecision:
+    def evaluate(self, candidate: MemoryCandidate, *, explicit_owner_request: bool = False,
+                 owner_fact_assertion: bool = False) -> MemoryWriteDecision:
         if candidate.privacy_scope == PrivacyScope.AUTH:
             return MemoryWriteDecision(
                 store=False,
@@ -76,6 +77,21 @@ class MemoryWriteGate:
                 reason_codes=[*reasons, "EXPLICIT_OWNER_REQUEST", "WRITE_GATE_ACCEPT"],
                 recommended_kind=candidate.kind)
 
+        if owner_fact_assertion:
+            # The local deterministic parser, persisted owner-source marker
+            # and reflection lease jointly authorize this report, not an
+            # invented importance score or provider-supplied metadata.
+            allowed = (candidate.privacy_scope == PrivacyScope.PERSONAL
+                       and candidate.kind == MemoryKind.SEMANTIC
+                       and candidate.provenance.kind == ProvenanceKind.USER_ASSERTION
+                       and candidate.owner_entity_id == candidate.provenance.actor_id == "PERSON_BK"
+                       and candidate.provenance.source == "cognition:verified_owner_fact"
+                       and not candidate.provenance.derived_from
+                       and candidate.metadata.get("owner_fact_assertion") is True
+                       and bool(candidate.metadata.get("versioned_fact_key")))
+            return MemoryWriteDecision(store=allowed,score=round(score,6),threshold=0.0 if allowed else threshold,
+                reason_codes=[*reasons,"VERIFIED_OWNER_FACT_ASSERTION" if allowed else "OWNER_FACT_AUTHORITY_REJECTED"],
+                recommended_kind=candidate.kind if allowed else None)
         store = score >= threshold
         reasons.append("WRITE_GATE_ACCEPT" if store else "WRITE_GATE_REJECT_LOW_SIGNAL")
         return MemoryWriteDecision(

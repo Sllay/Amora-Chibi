@@ -99,7 +99,7 @@ class MemoryStore:
                                           or generation_lease is not None):
             raise ValueError("EPISODE_WRITE_REQUIRES_CREATE_ONLY")
         from .versioned_fact import checked_version_key, link_version, VersionedFactConflict
-        version_key = checked_version_key(record, generation_lease)
+        version_key = checked_version_key(record, generation_lease, reflection_lease)
         provenance = record.provenance
         values = (
             str(record.id), record.kind.value, record.content, record.summary,
@@ -158,10 +158,29 @@ class MemoryStore:
                 ).fetchone()
                 if lease is None:
                     raise RuntimeError("REFLECTION_LEASE_LOST")
+                if version_key is not None:
+                    source = self._conn.execute("""SELECT 1 FROM memory_reflection_jobs j
+                        JOIN conversation_messages m ON m.id=j.input_id AND m.turn_id=j.turn_id
+                        WHERE j.turn_id=? AND j.lease_token=? AND j.status='claimed' AND j.lease_until>?
+                        AND m.dedupe_key='cognitive-input:'||m.turn_id AND m.speaker_id='PERSON_BK'
+                        AND m.session_id=? AND m.privacy_scope='PERSONAL' AND m.remote_processing_allowed=1
+                        AND json_extract(m.metadata_json,'$.owner_fact_assertion')=1
+                        AND json_extract(m.metadata_json,'$.surface')='platform_messaging'
+                        AND json_extract(m.metadata_json,'$.platform')='discord'
+                        AND json_extract(m.metadata_json,'$.channel_type')='dm'
+                        AND COALESCE(json_extract(m.metadata_json,'$.test_mode'),0)=0
+                        AND COALESCE(json_extract(m.metadata_json,'$.observed_only'),0)=0
+                        AND NOT EXISTS(SELECT 1 FROM memory_reflection_invalidations x
+                          WHERE x.session_id=m.session_id
+                          AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash')
+                          AND x.invalidated_through>=COALESCE(json_extract(m.metadata_json,'$.transport_revision'),1))""",
+                        (turn_id,token,self.clock.now().isoformat(),provenance.session_id)).fetchone()
+                    if source is None:
+                        raise RuntimeError("REFLECTION_LEASE_LOST")
             if version_key is not None:
                 predecessor = self._conn.execute(
                     """SELECT id,metadata_json FROM memory_records
-                    WHERE owner_entity_id=? AND provenance_source='cognition:explicit_owner_request'
+                    WHERE owner_entity_id=? AND provenance_source IN ('cognition:explicit_owner_request','cognition:verified_owner_fact')
                     AND provenance_kind='user_assertion' AND json_extract(metadata_json,'$.versioned_fact_key')=?
                     ORDER BY json_extract(metadata_json,'$.versioned_fact_at') DESC,id DESC LIMIT 1""",
                     (record.owner_entity_id,version_key)).fetchone()
@@ -200,7 +219,7 @@ class MemoryStore:
                     raise VersionedFactConflict("VERSIONED_FACT_ID_CONFLICT")
                 now = self.clock.now().isoformat()
                 self._conn.execute("""UPDATE memory_records SET archived_at=?,updated_at=?
-                    WHERE owner_entity_id=? AND provenance_source='cognition:explicit_owner_request'
+                    WHERE owner_entity_id=? AND provenance_source IN ('cognition:explicit_owner_request','cognition:verified_owner_fact')
                     AND provenance_kind='user_assertion' AND json_extract(metadata_json,'$.versioned_fact_key')=?
                     AND id<>? AND archived_at IS NULL""",(now,now,record.owner_entity_id,version_key,str(record.id)))
             if insert_only and cursor.rowcount != 1:

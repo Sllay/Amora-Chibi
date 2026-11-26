@@ -301,3 +301,17 @@ async def test_run04_versioned_owner_fact_restarts_without_resurrecting_old_valu
         assert second.memory.get(new).provenance.kind==ProvenanceKind.USER_ASSERTION
     finally:
         second.close()
+
+
+@pytest.mark.parametrize("text",[
+    "A cor de Vexora poderia ser dourada.",
+    "A cor de Vexora é talvez vermelha.",
+    "A cor de Vexora é vermelha?",
+    "A cor de Vexora é vermelha. A forma é redonda.",
+    "A cor dela é vermelha.",
+    "A cor do projeto é vermelha.",
+    "Acho que a cor de Vexora é vermelha.",
+])
+def test_run04_suggestions_and_ambiguous_references_are_not_named_fact_versions(text):
+    from amora.memory.versioned_fact import parse_named_fact
+    assert parse_named_fact(text) is None
