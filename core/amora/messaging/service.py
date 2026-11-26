@@ -667,6 +667,14 @@ class PlatformMessagingService:
         )
         retry_token = SYNC_REALIZATION_RETRY.set(
             (str(request.turn_id),retry_guard) if retry_eligible else None)
+        # Observability only: no candidate content crosses the worker boundary.
+        # Keep the verified owner and source lease gates, opt in explicitly.
+        from .realtime_projection import CandidateAudit, shadow_enabled
+        from amora.cognition.realtime_candidates import CANDIDATE_SINK
+        shadow = (CandidateAudit() if shadow_enabled() and retry_eligible
+                  and is_verified_owner(self.attention.profiles,message,decision.speaker_entity_id)
+                  else None)
+        shadow_token = CANDIDATE_SINK.set(shadow) if shadow is not None else None
         try:
             plan = await asyncio.wait_for(
                 self.cognition.respond_observed(request, on_segment=None, fallback_text=fallback),
@@ -713,6 +721,9 @@ class PlatformMessagingService:
             )
         finally:
             SYNC_REALIZATION_RETRY.reset(retry_token)
+            if shadow_token is not None:
+                CANDIDATE_SINK.reset(shadow_token)
+                _LOG.info("realtime_shadow", extra={"turn_id":str(request.turn_id), **shadow.finish()})
 
         # Even a *hard* provider timeout can occur AFTER web results arrived.
         # Compose public links outside the generation try/except so a failed

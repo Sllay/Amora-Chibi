@@ -14,6 +14,7 @@ on:
       - 'tests/discord_sealed_env.test.mjs'
       - 'tests/discord_response_modality.test.mjs'
       - 'tests/discord_web_screenshot.test.mjs'
+      - 'tests/discord_realtime_delivery.test.mjs'
       - 'tests/discord_sticker_media.test.mjs'
       - 'tests/discord_visual_enrichment_worker.test.mjs'
       - 'tests/discord_temporal_sticker_storyboard.test.mjs'
@@ -33,6 +34,7 @@ on:
       - 'tests/discord_sealed_env.test.mjs'
       - 'tests/discord_response_modality.test.mjs'
       - 'tests/discord_web_screenshot.test.mjs'
+      - 'tests/discord_realtime_delivery.test.mjs'
       - 'tests/discord_sticker_media.test.mjs'
       - 'tests/discord_visual_enrichment_worker.test.mjs'
       - 'tests/discord_temporal_sticker_storyboard.test.mjs'
@@ -58,6 +60,7 @@ jobs:
           node --check workers/discord/env-bundle.mjs
           node --check workers/discord/expression-worker.mjs
           node --check workers/discord/http.mjs
+          node --check workers/discord/realtime-delivery.mjs
           node --check workers/discord/web-screenshot.mjs
           node --check workers/discord/incoming-image.mjs
           node --check workers/discord/incoming-image-transform.mjs
@@ -70,7 +73,7 @@ jobs:
           node --check workers/whatsapp/normalize.mjs
           node --check workers/whatsapp/worker.mjs
       - name: Adapter contract tests
-        run: node --test tests/messaging_workers.test.mjs tests/messaging_privacy_scope_contract.test.mjs tests/discord_worker_runtime.test.mjs tests/discord_lifecycle_stability.test.mjs tests/discord_typing_progress.test.mjs tests/discord_entrypoint.test.mjs tests/discord_sealed_env.test.mjs tests/discord_response_modality.test.mjs tests/discord_sticker_media.test.mjs tests/discord_visual_enrichment_worker.test.mjs tests/discord_temporal_sticker_storyboard.test.mjs tests/discord_incoming_image.test.mjs tests/discord_large_image_recovery.test.mjs tests/discord_web_screenshot.test.mjs
+        run: node --test tests/messaging_workers.test.mjs tests/messaging_privacy_scope_contract.test.mjs tests/discord_worker_runtime.test.mjs tests/discord_lifecycle_stability.test.mjs tests/discord_typing_progress.test.mjs tests/discord_entrypoint.test.mjs tests/discord_sealed_env.test.mjs tests/discord_response_modality.test.mjs tests/discord_sticker_media.test.mjs tests/discord_visual_enrichment_worker.test.mjs tests/discord_temporal_sticker_storyboard.test.mjs tests/discord_incoming_image.test.mjs tests/discord_large_image_recovery.test.mjs tests/discord_web_screenshot.test.mjs tests/discord_realtime_delivery.test.mjs
       - name: Build Discord worker container
         run: |
           docker build -f workers/discord/Dockerfile -t amora-discord:test .
