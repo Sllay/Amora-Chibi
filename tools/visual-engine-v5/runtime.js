@@ -50,7 +50,7 @@ export class AmoraModel extends CubismUserModel {
  setExpression(name){const motion=this.expressions.get(name);if(!motion)throw Error('Unknown expression '+name);this._expressionManager.stopAllMotions();this._expressionManager.startMotion(motion,false);this.selected=name;}
  setIdle(enabled){this.idle=!!enabled;this._motionManager.stopAllMotions();if(this.idle){const motion=this.motions.get('Idle/0');if(motion)this._motionManager.startMotionPriority(motion,false,1);}}
  reset(){this.overrides.clear();this._expressionManager.stopAllMotions();this._motionManager.stopAllMotions();this.selected='';const model=this.getModel();for(const p of this.params.values())model.setParameterValueByIndex(p.index,p.default);model.saveParameters();this.setIdle(false);if(this.ready)this._physics.stabilization(model);}
- render(dt){if(!this.ready||this.gl.isContextLost())return null;const start=performance.now(),gl=this.gl,model=this.getModel();dt=Math.max(0,Math.min(.1,dt));this.elapsed+=dt;
+ render(dt){if(!this.ready||this.gl.isContextLost())return null;const start=performance.now(),gl=this.gl,model=this.getModel();dt=Math.max(0,Math.min(.1,dt));this.elapsed+=dt;this.beforeFrame?.();
   model.loadParameters();if(this.idle){if(this._motionManager.isFinished())this._motionManager.startMotionPriority(this.motions.get('Idle/0'),false,1);this._motionManager.updateMotion(model,dt);}
   this._expressionManager.updateMotion(model,dt);
   for(const [name,value] of this.overrides)model.setParameterValueByIndex(this.params.get(name).index,value);
