@@ -110,14 +110,14 @@ class RealtimeBridge:
         draft=self.sessions.get(turn)
         if draft:
             draft.active=False
-            if completed:
-                # Stop preview authorization before the final outbox commit.
-                draft.text=""
-            elif draft.text:
+            # Stop authorizing old text immediately. If the commit fails,
+            # the neutral cleanup remains available for the known receipt.
+            # If the final outbox wins, its terminal receipt closes cleanup.
+            if draft.text:
                 draft.pause()
             draft.touched=monotonic()
 
-    async def _draft_current(self,draft):
+    async def _draft_current(self,draft,*,allow_reserved=False):
         if not draft.text:
             return False
         if draft.active and draft.status=="writing":
@@ -134,8 +134,11 @@ class RealtimeBridge:
         if draft.status=="retrying":
             row=await self.receipts("read",draft.turn,0)
             return bool(row and row["binding"]==draft.binding and row["message_id"]
-                        and not row["pending_token"] and not row["closed"]
-                        and draft.seq>row["confirmed_seq"])
+                        and not row["closed"] and draft.seq>row["confirmed_seq"]
+                        and (not row["pending_token"] or (allow_reserved
+                            and row["pending_seq"]==draft.seq
+                            and row["pending_digest"]==digest(draft.text)
+                            and not row["pending_terminal"])))
         return False
 
     async def next(self,account):
@@ -206,7 +209,7 @@ class RealtimeBridge:
         if (draft is None or draft.account!=op.account or draft.binding!=op.binding
                 or op.index!=0 or op.terminal or op.seq!=draft.seq or digest(draft.text)!=op.digest):
             return False
-        if not await self._draft_current(draft):
+        if not await self._draft_current(draft,allow_reserved=op.action=="authorize"):
             return False
         return (self.sessions.get(draft.turn) is draft and op.seq==draft.seq
                 and digest(draft.text)==op.digest)

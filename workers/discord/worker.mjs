@@ -860,7 +860,10 @@ export class DiscordWorker {
       this.realtimeTransport=new RealtimeWorkerTransport({core:this.core,rest:this.rest,
         botUserId:this.botUserId,sourceCurrent:e=>this.ready && !this.stopped &&
           this.runtime.validateOutbound({conversation_id:e.channelId,source_message_id:e.sourceId,
-            metadata:{transport_revision:e.revision}}).ok});
+            metadata:{transport_revision:e.revision}}).ok &&
+          (!Array.isArray(e.groupSources) || e.groupSources.every(s=>
+            this.runtime.validateOutbound({conversation_id:e.channelId,source_message_id:s.source_message_id,
+              metadata:{transport_revision:s.transport_revision}}).ok))});
     }
     return this.realtimeTransport;
   }

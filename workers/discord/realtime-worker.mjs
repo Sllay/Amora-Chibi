@@ -50,6 +50,8 @@ export class RealtimeWorkerTransport {
     let plan=await this.core.realtimeFinal(item.id);
     if (plan?.blocked==='REALTIME_RECEIPT_UNCERTAIN' && idOk(plan.pending?.messageId)) {
       const p=plan.pending;
+      if (p.channelId!==String(item.conversation_id) || p.turnId!==item.metadata?.cognitive_turn_id)
+        return 'receipt_uncertain';
       const receipt=await this.rest.request('/channels/'+encodeURIComponent(p.channelId)+
         '/messages/'+encodeURIComponent(p.messageId),{method:'GET',maxAttempts:1});
       if (String(receipt?.id)!==p.messageId || String(receipt?.channel_id)!==p.channelId
@@ -64,7 +66,7 @@ export class RealtimeWorkerTransport {
     if (plan.channelId!==String(item.conversation_id) || plan.sourceId!==String(item.source_message_id)
         || plan.turnId!==item.metadata?.cognitive_turn_id || !this.sourceCurrent(plan))
       return 'revoked';
-    const t=this.transport(plan,plan.turnId,item.id);
+    const t=this.transport({...plan,groupSources:item.metadata?.causal_group_sources},plan.turnId,item.id);
     for (const block of plan.blocks) {
       if (block.confirmedMessageId) continue;
       const outcome=await t.send(block.snapshot);

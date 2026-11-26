@@ -1751,7 +1751,17 @@ async def test_realtime_bridge_durable_core_preview_final_same_receipt(lab,tmp_p
             token=prepared["token"],digest=prepared["digest"],message_id="3"*18)))["accepted"]
         resume.set()
         assert await task
-        assert (await bridge.next("primary"))["draft"] is None
+        cleanup=(await bridge.next("primary"))["draft"]
+        assert cleanup["snapshot"]["status"]=="retrying"
+        assert cleanup["snapshot"]["text"]=="Geração interrompida."
+        # A cleanup may be prepared and then reauthorized; the reservation
+        # itself must not cause a false revocation. No extra POST is allowed.
+        clean_op=RealtimeOperation(action="prepare",**base,seq=cleanup["snapshot"]["seq"],
+            digest=digest(cleanup["snapshot"]["text"]))
+        clean=(await bridge.operation(clean_op))["prepared"]
+        assert clean["operation"]=="edit" and clean["message_id"]=="3"*18
+        assert (await bridge.operation(clean_op.model_copy(update={"action":"authorize"})))["allowed"]
+        assert (await bridge.operation(RealtimeOperation(action="reject",**base,token=clean["token"])))["accepted"]
         oid=service._outbound_id(message)
         assert not core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,account_scope="primary",limit=1)
         claimed=core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,account_scope="primary",
