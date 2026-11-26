@@ -28,6 +28,7 @@ from .durable_realization import (durable_realization, DeferredRealization, DURA
     DURABLE_CAUSAL_CHECK, CausalReplanRequired, adaptive_context_allowed)
 from .provider_resilience import classify_provider_failure, context_rejection
 from .provider_quota import ProviderQuotaDeferred
+from .surface_performance import attempt_window, ProviderPerformance, detailed_output_requested
 
 
 async def _await_numes_adaptive(
@@ -138,7 +139,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
         }
         for key in ("status_code", "candidate_index", "candidate_count",
                     "provider_total_budget_seconds", "provider_attempt_budget_seconds",
-                    "remaining_provider_budget_seconds", "memory_candidate_count", "accepted_memory_count"):
+                    "remaining_provider_budget_seconds", "effective_attempt_budget_seconds",
+                    "reserved_failover_seconds", "memory_candidate_count", "accepted_memory_count"):
             value = payload.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 safe[key] = value
@@ -149,8 +151,13 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     safe[key] = payload[key]
         logging.getLogger("amora.cognition.generation").info("generation_stage", extra=safe)
 
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self._surface_performance = ProviderPerformance(self.clock)
+
     def state(self) -> dict[str, object]:
         state = super().state()
+        state["surface_performance"] = self._surface_performance.snapshot()
         from .expressive_profile import configured_profile, profile_state
         state["social_expression_profile"] = profile_state(configured_profile())
         state["last_realization"] = getattr(self, "_last_realization", None)
@@ -234,6 +241,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
         on_segment: SegmentSink | None,
         fallback_text: str | None,
     ) -> CognitiveResponsePlan:
+        from amora.messaging.generation_lifecycle import InboundGenerationLost
         started = perf_counter()
         try:
             context = await self._prepare_context_async(request)
@@ -380,6 +388,11 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 started=started,
             )
 
+        workload = ("visual" if context.visual_observation else "web" if context.web_research
+                    else "detail" if detailed_output_requested(context) else "dialogue")
+        empirical = request.metadata.get("surface") == "platform_messaging" and not adaptive_only
+        if empirical:
+            candidates = self._surface_performance.rank(candidates,workload,quota=self._provider_quota)
         total_budget = _positive_float(request.metadata.get("provider_total_budget_seconds"))
         attempt_budget = _positive_float(request.metadata.get("provider_attempt_budget_seconds"))
         # The caller separately bounds the entire cognitive turn. This budget
@@ -388,18 +401,22 @@ class CognitiveEngine(ProductionCognitiveEngine):
         provider_elapsed = 0.0
 
         is_durable = durable_realization(request)
+        from .detail_sections import create_detail_session
+        detail = create_detail_session(self,request,context,on_segment)
         failures = []
 
-        async def timed_realize(realize, *, charge_cap=None):
+        async def timed_realize(realize):
             nonlocal provider_elapsed
             attempt_started = perf_counter()
             try:
                 async with self._provider_quota.admission(descriptor.name, model=descriptor.model):
                     with span("provider_attempt"):
+                        if detail is not None and not adaptive:
+                            return await detail.run(realize,descriptor)
                         return await realize(context)
             finally:
                 elapsed = max(0.0, perf_counter() - attempt_started)
-                provider_elapsed += min(elapsed, charge_cap) if charge_cap is not None else elapsed
+                provider_elapsed += elapsed
 
         last_failure = "NO_STRUCTURED_REALIZATION_PROVIDER"
         attempts = [(descriptor, adaptive_only) for descriptor in candidates]
@@ -453,6 +470,18 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     )
                     break
 
+            attempt_available = remaining_budget
+            reserved_failover = 0.0
+            if remaining_budget is not None and request.metadata.get("surface") == "platform_messaging":
+                later_available = sum(
+                    1 for later in candidates[provider_index+1:]
+                    if callable(getattr(self._providers.get(later.name), "realize", None))
+                    and self._provider_quota.remaining(later.name, model=later.model) <= 0
+                )
+                attempt_available, reserved_failover = attempt_window(remaining_budget,later_available)
+            timeout = attempt_budget
+            if attempt_available is not None:
+                timeout = min(timeout,attempt_available) if timeout is not None else attempt_available
             await self._journal_async(
                 request,
                 JournalStage.PROVIDER_SELECTED,
@@ -470,6 +499,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     "provider_total_budget_seconds": total_budget,
                     "provider_attempt_budget_seconds": attempt_budget,
                     "remaining_provider_budget_seconds": remaining_budget,
+                    "effective_attempt_budget_seconds": timeout,
+                    "reserved_failover_seconds": reserved_failover,
                 },
             )
             await self._journal_async(
@@ -486,7 +517,6 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 revision = request.metadata.get("transport_revision")
                 if session and native_hash and isinstance(revision, int):
                     if await self.store.async_lane.call("source_invalidated", session, native_hash, revision):
-                        from amora.messaging.generation_lifecycle import InboundGenerationLost
                         raise InboundGenerationLost("INBOUND_SOURCE_INVALIDATED")
             begin_attempt = getattr(self, "_begin_structured_attempt", None)
             end_attempt = getattr(self, "_end_structured_attempt", None)
@@ -496,20 +526,19 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 continue
             provider_started = perf_counter()
             try:
-                timeout = attempt_budget
-                if remaining_budget is not None:
-                    timeout = min(timeout, remaining_budget) if timeout is not None else remaining_budget
                 if timeout is not None:
                     if (descriptor.name == "numes"
                             and request.metadata.get("surface") == "platform_messaging"
                             and remaining_budget is not None):
                         raw_result = await _await_numes_adaptive(
-                            timed_realize(realize, charge_cap=timeout if is_durable else None),
-                            timeout=max(0.05, timeout), available_seconds=remaining_budget,
-                            progress_extension_seconds=120.0 if is_durable else 0.0,
+                            timed_realize(realize),
+                            timeout=max(0.001, timeout), available_seconds=attempt_available,
+                            # Progress grace may use only the assigned window,
+                            # never the fallback reserve or an uncharged extension.
+                            reserve_seconds=0.0,
                         )
                     else:
-                        raw_result = await asyncio.wait_for(timed_realize(realize), timeout=max(0.05, timeout))
+                        raw_result = await asyncio.wait_for(timed_realize(realize), timeout=max(0.001, timeout))
                 else:
                     raw_result = await timed_realize(realize)
                 raw = dict(raw_result)
@@ -518,7 +547,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                     validated = RealizationValidator.parse_and_validate(
                         context, raw, enforce_dialogue_plan=response_semantic_filter_enabled(),
                     )
-            except DeferredRealization:
+            except (DeferredRealization, InboundGenerationLost):
                 raise
             except ProviderQuotaDeferred as exc:
                 last_failure = "PROVIDER_ACCOUNT_BACKOFF"
@@ -547,6 +576,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 self._backoff(descriptor, status_code=None)
                 continue
             except asyncio.TimeoutError:
+                if empirical and not adaptive:
+                    self._surface_performance.observe(descriptor,workload,perf_counter()-provider_started,False)
                 last_failure = "PROVIDER_ATTEMPT_TIMEOUT"
                 failures.append(("temporary", None))
                 self._last_realization_rejection = {
@@ -608,6 +639,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
             except Exception as exc:
                 status = exc.status_code if isinstance(exc, ProviderError) else None
                 failure = classify_provider_failure(exc, now=self.clock.now())
+                if empirical and not adaptive and (status is None or status >= 500) and not context_rejection(exc):
+                    self._surface_performance.observe(descriptor,workload,perf_counter()-provider_started,False)
                 last_failure = failure.code if is_durable else type(exc).__name__
                 category = ("context" if context_rejection(exc) else
                             "configuration" if status in {401, 403, 404} else "temporary")
@@ -639,26 +672,41 @@ class CognitiveEngine(ProductionCognitiveEngine):
             remaining_requests = _optional_int(usage.get("remaining_requests"))
             remaining_tokens = _optional_int(usage.get("remaining_tokens"))
             effective_latency = _optional_float(usage.get("latency_ms")) or (perf_counter() - provider_started) * 1000.0
-            usage_persistence = self._record_usage(
-                provider=descriptor.name,
-                model=descriptor.model or "unknown",
-                task_class=TaskClass.SOCIAL_DIALOGUE.value,
-                success=True,
-                turn_id=request.turn_id,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                latency_ms=effective_latency,
-                status_code=status_code,
-                remaining_requests=remaining_requests,
-                remaining_tokens=remaining_tokens,
-                metadata={"candidate_index": provider_index, "phase": "structured_realization",
-                          **({"amd_blocks": usage.get("amd_blocks"), "amd_calls": usage.get("amd_calls")} if adaptive else {})},
-            )
-            if (remaining_requests is not None and remaining_requests <= 0
-                    or remaining_tokens is not None and remaining_tokens <= 0):
-                self._provider_quota.block_for(descriptor.name, 60, model=descriptor.model)
-            self._provider_succeeded(descriptor, remaining_requests, remaining_tokens)
+            if detail is not None and not adaptive:
+                # Each actual section was accounted against its own provider.
+                # A fully recovered draft does not count as a new successful API call.
+                usage_persistence = ("failed" if "failed" in detail.usage_persistence else
+                    "uncertain" if "uncertain" in detail.usage_persistence else
+                    "persisted" if detail.usage_persistence else "not_recorded")
+                response_provider,response_model = detail.providers[-1]
+            else:
+                response_provider,response_model = descriptor.name,descriptor.model
+                if empirical and not adaptive:
+                    self._surface_performance.observe(descriptor,workload,perf_counter()-provider_started,True)
+                usage_persistence = self._record_usage(
+                    provider=descriptor.name,
+                    model=descriptor.model or "unknown",
+                    task_class=TaskClass.SOCIAL_DIALOGUE.value,
+                    success=True,
+                    turn_id=request.turn_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    latency_ms=effective_latency,
+                    status_code=status_code,
+                    remaining_requests=remaining_requests,
+                    remaining_tokens=remaining_tokens,
+                    metadata={"candidate_index": provider_index, "phase": "structured_realization",
+                              **({"amd_blocks": usage.get("amd_blocks"), "amd_calls": usage.get("amd_calls")} if adaptive else {})},
+                )
+                if (remaining_requests is not None and remaining_requests <= 0
+                        or remaining_tokens is not None and remaining_tokens <= 0):
+                    self._provider_quota.block_for(descriptor.name, 60, model=descriptor.model)
+                self._provider_succeeded(descriptor, remaining_requests, remaining_tokens)
             reasons = [*validated.reason_codes, "REMOTE_PROVIDER_USED", "STRUCTURED_REALIZATION"]
+            if detail is not None and not adaptive:
+                reasons.append("DETAIL_SECTIONS_ASSEMBLED")
+                if len(set(detail.providers))>1:
+                    reasons.append("DETAIL_MIXED_PROVIDER_SECTIONS")
             if adaptive:
                 reasons.append("AMD_GLOBAL_CONSOLIDATION_USED")
             elif provider_index:
@@ -666,8 +714,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
             return await self._plan_from_validated(
                 request,
                 validated,
-                provider=descriptor.name,
-                model=descriptor.model,
+                provider=response_provider,
+                model=response_model,
                 on_segment=on_segment,
                 started=started,
                 reason_codes=reasons,
@@ -680,6 +728,14 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 context=context,
             )
 
+        if detail is not None and not is_durable:
+            partial = detail.partial()
+            if partial is not None:
+                await detail.authorize()
+                provider,model = detail.providers[-1]
+                return await self._plan_from_validated(request,partial,
+                    provider=provider,model=model,on_segment=on_segment,started=started,
+                    reason_codes=list(partial.reason_codes),usage={},context=context)
         if is_durable and failures:
             kinds = {kind for kind, _ in failures}
             # A candidate skipped for cooldown or exhausted total budget may
@@ -931,7 +987,8 @@ class CognitiveEngine(ProductionCognitiveEngine):
                 "realization_frame": frame_dump,
                 "realization_validated": True,
                 "web_sources": [
-                    {"url": item.get("url", ""), "title": item.get("title", "")}
+                    {"url": item.get("url", ""), "title": item.get("title", ""),
+                     **({"cached_excerpt": True} if item.get("cached_excerpt") else {})}
                     for item in (context.web_research.get("sources") or [])[:5 if context.web_research.get("depth") == "deep" else 2]
                     if item.get("status") == "opened"
                 ] if context is not None and context.web_research else [],

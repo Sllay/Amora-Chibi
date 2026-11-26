@@ -9,7 +9,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from datetime import timedelta
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
+import os
 
 from amora.cognition import CognitiveRequest, JournalStage
 from amora.events import PrivacyScope
@@ -420,6 +421,9 @@ class ReflectionQueue:
                           "durable_memory_reflection": True,
                           "reflection_lease_token": lease_token},
             )
+            if item.metadata.get("owner_fact_assertion") is True:
+                if self._store_owner_fact(job,item,request):
+                    return True
             bundle = await asyncio.wait_for(self.cognition.reflect(request), timeout=_TIMEOUT_SECONDS)
             if "REFLECTION_PROVIDERS_IN_BACKOFF" in bundle.reason_codes:
                 self.defer_backoff(job, bundle._reflection_failure.get("retry_after_seconds", 15))
@@ -438,6 +442,46 @@ class ReflectionQueue:
         except Exception as exc:
             self.finish(job, "MEMORY_REFLECTION_FAILED", retry=True)
             _LOG.warning("reflection_job_failed type=%s", type(exc).__name__)
+        return True
+
+    def _store_owner_fact(self,job,item,request):
+        from amora.memory import MemoryCandidate,MemoryKind,MemoryProvenance,ProvenanceKind
+        from amora.memory.versioned_fact import version_metadata,VersionedFactConflict
+        from amora.cognition.temporal import observed_timestamp
+        if (item.speaker_id!="PERSON_BK" or item.privacy_scope!=PrivacyScope.PERSONAL
+                or not item.session_id or item.metadata.get("surface")!="platform_messaging"
+                or item.metadata.get("platform")!="discord" or item.metadata.get("channel_type")!="dm"
+                or item.metadata.get("observed_only") or item.metadata.get("test_mode")
+                or not item.remote_processing_allowed):
+            return False
+        stamp,_=observed_timestamp(item)
+        version=version_metadata(item.raw_text,stamp,self.clock.now())
+        if not version:
+            return False
+        turn_id,_,token,_=job
+        candidate=MemoryCandidate(kind=MemoryKind.SEMANTIC,
+            content="Relato de PERSON_BK: "+item.raw_text.strip(),
+            provenance=MemoryProvenance(kind=ProvenanceKind.USER_ASSERTION,
+                source="cognition:verified_owner_fact",actor_id="PERSON_BK",session_id=item.session_id),
+            privacy_scope=PrivacyScope.PERSONAL,owner_entity_id="PERSON_BK",
+            remote_processing_allowed=os.getenv("AMORA_REFLECTION_REMOTE_REUSE","0")=="1",
+            entity_refs={"PERSON_BK":1.0},tags={"owner_versioned_fact"},
+            metadata={"turn_id":turn_id,"owner_fact_assertion":True,**version})
+        try:
+            result=self.cognition.compiler.memory.remember(candidate,
+                record_id=uuid5(NAMESPACE_URL,"amora:owner-fact:"+turn_id),
+                reflection_lease=(turn_id,token),owner_fact_assertion=True)
+        except VersionedFactConflict:
+            result=None
+        ids=[str(result.memory.id)] if result is not None and result.memory is not None else []
+        # Journal and ACK may be retried; stable memory ID and immutable
+        # predecessor checks prevent duplicate or stale writes after a crash.
+        self.cognition._journal(request,JournalStage.PROPOSALS_GATED,
+            summary="source-grounded owner assertion evaluated",
+            reason_codes=["VERIFIED_OWNER_FACT_ASSERTION"] if ids else ["OWNER_FACT_STALE_OR_REJECTED"],
+            payload={"accepted_memory_ids":ids},
+            dedupe_key=f"journal:owner-fact-gate:{turn_id}")
+        self.finish(job,"MEMORY_REFLECTION_ACCEPTED" if ids else "MEMORY_REFLECTION_NO_ACCEPTED_MEMORY")
         return True
 
     def start(self):

@@ -62,3 +62,27 @@ def test_partition_fails_closed_on_ties_privacy_and_missing_anchor():
     assert [m.turn_id for m in history] == [anchor.turn_id]
     assert not related
     assert causal_partition(req,[private],allowed=lambda m:True) == ([],[],"anchor_missing")
+
+
+def test_run04_literal_negative_constraints_preserve_scope_and_words():
+    from amora.cognition.causal_conversation import literal_negative_constraints
+    original = "Aldeia A só pode produzir madeira. Aldeia B não pode plantar. Transporte por barco."
+    related = [{"turn_id":"correction","relation_hint":"correction","literal_text":"Aldeia C deve usar exclusivamente pedra."},
+               {"turn_id":"unrelated","relation_hint":"independent","literal_text":"Não use barcos."}]
+    constraints = literal_negative_constraints(original, related)
+    assert [c["literal"] for c in constraints] == [
+        "Aldeia A só pode produzir madeira.", "Aldeia B não pode plantar.",
+        "Aldeia C deve usar exclusivamente pedra."]
+    assert constraints[-1]["source_turn"] == "correction"
+    assert not literal_negative_constraints("Não pode plantar?")
+
+
+def test_run04_anchor_timestamp_tie_blocks_followup_attachment():
+    now = datetime(2026,11,24,tzinfo=timezone.utc)
+    req=CognitiveRequest(text="Godot para PC",speaker_id="PERSON_BK",session_id="dm")
+    anchor=_input(req,req.text,now,turn_id=req.turn_id,dedupe_key=f"cognitive-input:{req.turn_id}")
+    tied=_input(req,"Outra pergunta",now)
+    later=_input(req,"Na verdade Godot Android",now+timedelta(seconds=1))
+    history,followups,state=causal_partition(req,[anchor,tied,later],allowed=lambda _:True)
+    assert state=="partitioned" and not followups
+    assert [m.turn_id for m in history]==[anchor.turn_id]

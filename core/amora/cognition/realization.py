@@ -189,7 +189,8 @@ class RealizationValidator:
             raise RealizationError("CLOSING_MODE_VIOLATION", "dialogue plan requires a question closing")
 
         depth = str(plan.get("depth") or "medium")
-        max_chars = {"short": 360, "medium": 900, "deep": 1800}.get(depth, 900)
+        from .surface_performance import detailed_output_requested
+        max_chars = 6000 if detailed_output_requested(context) else {"short": 360, "medium": 900, "deep": 1800}.get(depth, 900)
         if len(combined) > max_chars:
             raise RealizationError(
                 "REALIZATION_TOO_LONG",
@@ -263,7 +264,7 @@ class RealizationValidator:
         )
 
 
-def realization_instruction(context: CognitiveContext) -> str:
+def realization_instruction(context: CognitiveContext, *, compact_support: bool = False) -> str:
     plan = context.dialogue_plan
     allowed = [str(value) for value in plan.get("response_moves") or []]
     self_choice_keys = [
@@ -308,6 +309,9 @@ def realization_instruction(context: CognitiveContext) -> str:
                 "Se faltar historical, diga que a referência não foi recuperada e peça reenvio quando necessário. "
                 "Se a pergunta exige detalhes ausentes, não invente nem alegue reanálise. "
                 "Compare apenas o que está nas observações e reconheça limitações ou falhas individuais. "
+                "historical_disputed significa que a leitura anterior foi contestada e suprimida; "
+                "não repita o erro como fato. A correção do usuário é relato, não nova visão. "
+                "review_requested sem current analisado não é reinspeção: peça o reenvio da imagem para examinar os pixels. "
             )
         elif context.visual_observation.get("observation_version") == 3:
             visual_cue = (
@@ -338,6 +342,12 @@ def realization_instruction(context: CognitiveContext) -> str:
                 "não responda como se a tivesse visto; indique a parte indisponível. "
                 "Use o código de falha como limitação, não como característica dos pixels. "
             )
+    if isinstance(context.visual_observation,dict):
+        visual_cue += (
+            " Se houver spatial, use regiões, posição, estado, cor, forma e confiança como estimativas do sensor. "
+            "Não invente painéis quando layout for incerto; não confunda partes de um rosto com imagens distintas. "
+            "Diferencie explicitamente evidência observada, incerteza e informação fornecida pela legenda. "
+        )
     web_cue = ""
     if context.web_research is not None:
         web_cue = (
@@ -388,16 +398,38 @@ def realization_instruction(context: CognitiveContext) -> str:
     if context.specialist_support:
         specialist = (
             "\nNOTA DE ESPECIALISTA INTERNO — APOIO EFÊMERO, NÃO CANÔNICO:\n"
-            + json.dumps(context.specialist_support, ensure_ascii=False, separators=(",", ":"))
+            + ("Consulte ephemeral_support.payload do TurnFrame, que contém esta mesma nota." if compact_support else
+               json.dumps(context.specialist_support, ensure_ascii=False, separators=(",", ":")))
             + "\nUse essa nota somente como apoio factual/racional. Não mencione o especialista, provider, modelo ou a nota. "
             "Se a nota declarar incerteza, preserve essa incerteza na fala."
         )
 
+    from .surface_performance import detailed_output_requested
+    detailed_cue = (
+        " O pedido atual solicita documentação ou explicação extensa explicitamente. "
+        "Priorize o conteúdo técnico sobre introdução, brincadeiras e perguntas de encerramento. "
+        "Distribua os pontos solicitados em até cinco moves de até 1200 caracteres cada, "
+        "com explicações concretas, algoritmos, restrições e exemplos quando pedidos. "
+        "Não entregue apenas uma lista de nomes ou uma introdução. "
+        "Se não couber tudo, declare quais pontos ainda faltam; não chame a parte entregue de completa. "
+        "Neste caso a preferência por concisão oral não deve suprimir a explicação solicitada. "
+        if detailed_output_requested(context) else ""
+    )
+    section_cue = (
+        " Este é um trecho de uma resposta técnica dividida pelo Core. "
+        "Consulte detail_section.payload: desenvolva a scope atual, respeitando TODAS as restrições "
+        "da mensagem literal completa. previous_scopes identifica temas já cobertos, não repita a introdução. "
+        "Retorne no máximo dois moves autorizados, sem self_choices nem pergunta final. "
+        "Não declare a documentação completa, nem prometa uma entrega futura. "
+        if context._detail_section is not None else ""
+    )
     return (
         "Retorne SOMENTE um objeto JSON válido, sem markdown e sem texto fora do objeto. "
         "Formato: {\"moves\":[{\"kind\":\"...\",\"text\":\"...\"}],\"closing\":\"none|statement|question\"}; "
         "quando autorizado, acrescente \"self_choices\":[{\"key\":\"...\",\"value\":\"...\"}]. "
         + choice_instructions
+        + detailed_cue
+        + section_cue
         + visual_cue
         + causal_cue
         + web_cue

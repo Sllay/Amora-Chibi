@@ -284,7 +284,10 @@ class DurableReplyRuntime:
             await asyncio.sleep(window - age)
             if not await live_guard():
                 raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
+        checked_context = None
         async def causal_check(context):
+            nonlocal checked_context
+            checked_context = context
             engine = self.service.cognition
             options = {"limit":96, "session_id":request.session_id, "exclude_invalidated":True}
             lane = engine.store.async_lane
@@ -327,6 +330,11 @@ class DurableReplyRuntime:
                         self.service.cognition.respond_observed(current,on_segment=None,
                             fallback_text=self.service.conversation.composer.operational_provider_fallback()),
                         timeout=remaining)
+                    snapshot = await self.call("causal_snapshot", claim.session_id)
+                    if checked_context is not None and not await causal_check(checked_context):
+                        raise CausalReplanRequired()
+                    if not await live_guard():
+                        raise DeferredRealization(["DURABLE_AUTHORIZATION_LOST"])
                 except CausalReplanRequired:
                     if index:
                         raise
@@ -334,6 +342,7 @@ class DurableReplyRuntime:
                     continue
                 if index:
                     plan.reason_codes.append("DURABLE_CAUSAL_REPLANNED")
+                plan.metadata["causal_snapshot"] = snapshot
                 return plan
         finally:
             self.service._active_dm_progress.discard(claim.turn_id)
@@ -406,6 +415,7 @@ class DurableReplyRuntime:
                         await appraise(request.text, speaker_id=request.speaker_id,
                             addressee_id="ENTITY_AMORA", source_event_id=request.turn_id,
                             privacy_scope=request.privacy_scope, metadata=request.metadata)
+                initial_snapshot = await self.call("causal_snapshot", claim.session_id)
                 plan = await self._generate(claim, message, request)
                 if (plan.fallback_used or not plan.metadata.get("realization_validated")
                         or not plan.display_text.strip()):
@@ -423,7 +433,8 @@ class DurableReplyRuntime:
                               "cognitive_reason_codes": plan.reason_codes,
                               "remote_processing_allowed": True, "transport_revision": message.transport_revision,
                               "delivery_message_id": message.message_id,
-                              "durable_native_hash": self.service._hash(message.native_source_message_id)})
+                              "durable_native_hash": self.service._hash(message.native_source_message_id),
+                              "causal_snapshot": plan.metadata.get("causal_snapshot",initial_snapshot)})
                 if not await self.call("stage", claim.turn_id, claim.token, outbound, decision, reasons):
                     raise InboundGenerationLost("DURABLE_REPLY_LEASE_LOST")
             else:
@@ -437,7 +448,12 @@ class DurableReplyRuntime:
                 await self.call("block", claim, ReplyReason.AUTHORIZATION_REVOKED)
                 return
             records, journals = self._history_records(request, outbound)
-            if not await self.call("finalize", claim, message, decision, outbound, reasons, records, journals):
+            finalized = await self.call("finalize", claim, message, decision, outbound, reasons, records, journals)
+            if finalized is None:
+                _LOG.info("durable_causal_checkpoint_changed turn_id=%s",claim.turn_id)
+                await self.defer(claim,ReplyReason.STORAGE_TEMPORARY)
+                return
+            if not finalized:
                 raise InboundGenerationLost("DURABLE_REPLY_FINALIZE_LOST")
             _LOG.info("durable_reply_ready turn_id=%s attempts=%d", claim.turn_id, claim.attempts)
         except DeferredRealization as exc:

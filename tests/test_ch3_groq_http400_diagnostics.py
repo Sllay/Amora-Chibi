@@ -296,3 +296,44 @@ async def test_run02_groq_413_sends_only_one_smaller_authorized_request(monkeypa
     assert ctx.recent_messages == history
     # A second rejection is terminal for this candidate; never a third call.
     assert len(sent) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authorization",["valid","revoked","missing","wrong_turn"])
+@pytest.mark.parametrize("status,category",[(413,"request_body_too_large"),(400,"context_length_exceeded")])
+async def test_stabilization_sync_compact_retry_is_guarded_and_bounded(monkeypatch,authorization,status,category):
+    import json
+    from amora.cognition.surface_performance import SYNC_REALIZATION_RETRY
+    from amora.cognition.providers_identity import GroqCognitiveProvider as LiveGroq
+    from amora.cognition.providers import ProviderError
+    from amora.messaging.generation_lifecycle import InboundGenerationLost
+    ctx=_context()
+    ctx.recent_messages=[{"turn_id":str(uuid4()),"speaker_id":"PERSON_BK",
+        "addressee_id":"ENTITY_AMORA","source":"platform_messaging","text":"history "+"a"*400}
+        for _ in range(12)]
+    original=ctx.model_copy(deep=True)
+    sent=[]
+    guard_calls=[]
+    async def guard():
+        guard_calls.append(True)
+        return authorization=="valid"
+    async def post(payload,**kwargs):
+        sent.append(payload)
+        raise ProviderError("synthetic rejection",status_code=status,
+            diagnostics={"provider_error_category":category})
+    provider=LiveGroq(_Secrets())
+    monkeypatch.setattr(provider,"_post_responses",post)
+    token=SYNC_REALIZATION_RETRY.set(None if authorization=="missing" else
+        (str(uuid4()) if authorization=="wrong_turn" else str(ctx.turn_id),guard))
+    try:
+        with pytest.raises(InboundGenerationLost if authorization=="revoked" else ProviderError):
+            await provider._responses_realize(ctx,api_key="TEST_KEY_DO_NOT_LEAK")
+    finally:
+        SYNC_REALIZATION_RETRY.reset(token)
+    assert len(sent)==(2 if authorization=="valid" else 1)
+    assert len(guard_calls)==(1 if authorization in {"valid","revoked"} else 0)
+    if authorization=="valid":
+        assert len(json.dumps(sent[1]).encode())<len(json.dumps(sent[0]).encode())
+        assert all(ctx.user_text in str(x["input"]) for x in sent)
+    assert ctx.recent_messages==original.recent_messages
+    assert ctx.user_text==original.user_text

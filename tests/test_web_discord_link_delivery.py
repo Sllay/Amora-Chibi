@@ -533,3 +533,24 @@ async def test_malicious_opened_page_title_cannot_turn_into_search_instructions(
     assert nav.current_delivery("owner-dm")["focus"] == "evilsite"
     await nav.research("pesquisa de novo", "owner-dm")
     assert queries == ["evilsite"]
+
+
+@pytest.mark.parametrize("text",["envie um print real dela","mim envie o print real","me tire uma captura de tela","mande o screenshot da página"])
+def test_run03_natural_capture_same_parser_and_delivery(text):
+    assert parse_web_intent(text)==WebIntent("capture","current")
+    assert screenshot_requested(text)
+
+
+def test_run03_negated_capture_not_requested():
+    assert not screenshot_requested("não me envie um print")
+    assert parse_web_intent("não me envie um print") is None
+    assert not screenshot_requested("abre https://example.org e não mande print")
+    assert parse_web_intent("mim envie a imagem")==WebIntent("capture_retry","previous")
+
+
+def test_run03_cached_source_is_not_labeled_fresh():
+    content,_=compose_web_delivery("Pesquisa retomada",intent=WebIntent("search","Godot"),
+        sources=[{"url":"https://example.org/old","cached_excerpt":True},{"url":"https://example.net/new"}],
+        owner_verified=True)
+    assert "Fontes consultadas:\nhttps://example.net/new" in content
+    assert "Fontes recuperadas do histórico (não relidas agora):\nhttps://example.org/old" in content

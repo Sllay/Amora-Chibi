@@ -44,6 +44,13 @@ def _safe_entry(value: Any, *, read: bool) -> dict[str, Any] | None:
             item["retrieval"] = retrieval
     if not read:
         item["snippet"] = _clean(str(value.get("snippet") or ""), 160)
+        if value.get("state") == "failed":
+            item["state"] = "failed"
+            item["failure_reason"] = _clean(str(value.get("failure_reason") or ""), 96)
+        elif value.get("state") == "read":
+            item["state"] = "read"
+        if value.get("cached_excerpt") is True:
+            item["cached_excerpt"] = True
     return item
 
 
@@ -69,9 +76,10 @@ class WebWorkspaceStore:
         ))
 
     def record_visit(self, session_id: str, result: dict[str, Any]) -> bool:
-        if result.get("status") not in {"opened", "results_only"}:
-            return False
         action = str(result.get("action") or "")
+        failed_search = action=="search" and result.get("status")=="failed" and bool(result.get("topic"))
+        if result.get("status") not in {"opened", "results_only"} and not failed_search:
+            return False
         if action not in {"open", "open_many", "search", "follow"}:
             return False
         sources = [_safe_entry(x, read=True) for x in (result.get("sources") or [])[:5 if result.get("depth") == "deep" else 3]]
@@ -82,7 +90,7 @@ class WebWorkspaceStore:
                 continue
             seen.add(entry["url"])
             entries.append(entry)
-        if not entries:
+        if not entries and not failed_search:
             return False
         return self._write(session_id, VISIT_EVENT, {
             "action": action,
@@ -91,12 +99,18 @@ class WebWorkspaceStore:
                 "resume_eligible": result.get("resume_eligible") is True
                     and result.get("query") == result.get("topic"),
                 } if result.get("depth") == "deep" else {}),
-            "topic": _clean(str(result.get("topic") or ""), 90),
+            "topic": _clean(str(result.get("topic") or ""), 240),
+            **({"failure_reason": _clean(str(result.get("reason") or ""), 96)} if failed_search else {}),
             "entries": entries[:15],
             # Keep the *actual* numbered reference order separately.
             # Reconstructing it from [opened, found] shifts link 2 after restart.
             "references": [item for item in refs if item is not None][:12],
             "status": str(result.get("status")),
+            **({"research_progress": {
+                key: value for key, value in result["research_progress"].items()
+                if key in {"search_calls_started", "reads_started", "read_count", "found_count", "cached_excerpt_count", "partial", "stop_reason", "distinct_read_hosts"}
+                and isinstance(value, (int, bool, str))
+            }} if isinstance(result.get("research_progress"), dict) else {}),
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         })
 
@@ -107,7 +121,7 @@ class WebWorkspaceStore:
             event_type=kind, session_id=session_id, limit=limit,
         )
         return [r.payload for r in records if r.privacy_scope == PrivacyScope.PERSONAL
-                and r.actor == "PERSON_BK" and isinstance(r.payload, dict)]
+                and r.actor == "PERSON_BK" and r.source == "owner_dm_web_workspace" and isinstance(r.payload, dict)]
 
     def recent(self, session_id: str, limit: int = 12) -> list[dict[str, Any]]:
         return self._read(session_id, VISIT_EVENT, min(max(1, limit), MAX_RECENT_VISITS))
@@ -160,7 +174,7 @@ class WebWorkspaceStore:
                 if url and url not in seen:
                     links.append({
                         "url": url, "title": _clean(str(entry.get("title") or ""), 90),
-                        "state": "read" if entry.get("state") == "read" else "found",
+                        "state": entry.get("state") if entry.get("state") in {"read", "failed"} else "found",
                         "excerpt": _clean(str(entry.get("excerpt") or ""), 180),
                     })
                     seen.add(url)

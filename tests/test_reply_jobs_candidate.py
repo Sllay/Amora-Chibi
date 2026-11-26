@@ -1361,3 +1361,276 @@ async def test_run07_combined_failure_recovery_accounting(lab,monkeypatch,capsys
             },sort_keys=True),flush=True)
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_stabilization_section_checkpoint_resume_on_reopened_store(lab):
+    from amora.cognition.models import CognitiveContext, JournalStage
+    from amora.cognition.detail_sections import DetailSession, section_scopes
+    from amora.cognition.providers import ProviderError
+    core,clock,_=lab
+    request=_request().model_copy(update={"text":"Crie uma documentação técnica detalhada da arquitetura e do armazenamento. Explique cada sistema com seus algoritmos e restrições."})
+    ctx=CognitiveContext(turn_id=request.turn_id,created_at=clock.now(),speaker_id="PERSON_BK",
+        target_id="ENTITY_AMORA",user_text=request.text,privacy_scope=PrivacyScope.PERSONAL,
+        remote_processing_allowed=True,dialogue_plan={"response_moves":["answer_question"],"depth":"deep"})
+    scopes=section_scopes(request.text)
+    assert len(scopes)==2
+    authorized=True
+    async def guard():
+        return authorized
+    primary=CountingStructuredProvider(name="section-primary")
+    secondary=CountingStructuredProvider(name="section-secondary")
+    core.cognition.register_provider(primary)
+    core.cognition.register_provider(secondary)
+    calls=[]
+    async def first(c):
+        calls.append(c._detail_section["index"])
+        assert c.user_text==request.text
+        if c._detail_section["index"]==2:
+            raise ProviderError("temporary",status_code=503)
+        return {"moves":[{"kind":"answer_question","text":"Primeira seção: arquitetura e armazenamento."}],
+                "closing":"statement","_usage":{"input_tokens":20,"output_tokens":10,"status_code":200}}
+    session=DetailSession(core.cognition,request,ctx,scopes,guard,False)
+    with pytest.raises(ProviderError):
+        await session.run(first,primary.descriptor)
+    assert calls==[1,2] and "incompleta" in session.partial().text
+    assert not core.cognition.store.list_segments(request.turn_id)
+    store=core.cognition.store
+    reopened=type(store)(store.database_path,clock,backend=store.backend)
+    try:
+        core.cognition.store=reopened
+        recovered=DetailSession(core.cognition,request,ctx.model_copy(update={"created_at":clock.now()}),scopes,guard,False)
+        async def second(c):
+            calls.append(c._detail_section["index"])
+            return {"moves":[{"kind":"answer_question","text":"Segunda seção: algoritmos e restrições."}],
+                    "closing":"statement","_usage":{"input_tokens":21,"output_tokens":11,"status_code":200}}
+        result=await recovered.run(second,secondary.descriptor)
+        assert calls==[1,2,2]
+        assert len(result["moves"])==2 and recovered.partial() is None
+        assert recovered.providers==[(primary.descriptor.name,primary.descriptor.model),
+            (secondary.descriptor.name,secondary.descriptor.model)]
+        assert len([j for j in reopened.journal_for_turn(request.turn_id)
+            if j.stage==JournalStage.DETAIL_SECTION_CHECKPOINT])==2
+        assert not reopened.list_segments(request.turn_id)
+        authorized=False
+        revoked=DetailSession(core.cognition,request,ctx,scopes,guard,False)
+        with pytest.raises(InboundGenerationLost):
+            await revoked.run(second,secondary.descriptor)
+        authorized=True
+        changed=DetailSession(core.cognition,request.model_copy(update={"metadata":{**request.metadata,"transport_revision":2}}),ctx,scopes,guard,False)
+        await changed.load()
+        assert not changed.frames
+        clock.advance(timedelta(seconds=901))
+        expired=DetailSession(core.cognition,request,ctx,scopes,guard,False)
+        await expired.load()
+        assert not expired.frames
+        assert calls==[1,2,2]
+    finally:
+        core.cognition.store=store
+        reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_stabilization_visual_dispute_is_scoped_and_does_not_fake_reinspection(lab):
+    from amora.messaging.visual_checkpoint import VisualCheckpointStore
+    from amora.messaging.models import AttachmentRef
+    from amora.cognition.visual_context import visual_context_for_request
+    from test_discord_incoming_vision_ch2 import payload,observation
+    core,clock,_=lab
+    _bind_bk(core)
+    service=core.messaging
+    image=payload()
+    decision=AttentionDecision(action=RoutingAction.RESPOND,score=1,
+        speaker_entity_id="PERSON_BK",speaker_actor_ref="synthetic",addressee_id="ENTITY_AMORA")
+    calls=[]
+    class Vision:
+        available=True
+        async def analyze(self,image,user_text):
+            calls.append(user_text)
+            return {**observation(),"description":"Leitura sintética "+str(len(calls))}
+    service.incoming_vision=Vision()
+    def photo(mid,text):
+        msg=_dm(core,mid,text=text)
+        return InboundMessage.model_validate({**msg.model_dump(),
+            "attachments":[AttachmentRef(attachment_id=image.attachment_id,media_type="image/png").model_dump()],
+            "incoming_image":image.model_dump()})
+    first=photo("review-photo","Descreva a imagem.")
+    await service._incoming_visual_observation(first,decision)
+    clock.advance(timedelta(seconds=1))
+    review=_dm(core,"review-only",text="Reanalise a imagem anterior.")
+    r=await service._incoming_visual_observation(review,decision)
+    assert r["review_requested"] is True and "current" not in r and len(calls)==1
+    clock.advance(timedelta(seconds=1))
+    dispute=_dm(core,"review-dispute",text="Você errou na análise da imagem anterior.")
+    denied=dispute.model_copy(update={"remote_processing_allowed":False})
+    assert await service._incoming_visual_observation(denied,decision) is None
+    r=await service._incoming_visual_observation(dispute,decision)
+    assert r["historical_disputed"] is True and r["historical"]["status"]=="unavailable"
+    assert visual_context_for_request(r,remote=True,private=True,mode="reply")["historical_disputed"] is True
+    assert len(calls)==1
+    clock.advance(timedelta(seconds=1))
+    with closing(AmoraDatabase(core.database.path,backend=core.database.backend)) as reopened:
+        service.visual_checkpoints=VisualCheckpointStore(reopened,clock)
+        follow=_dm(core,"review-recall",text="Descreva a imagem anterior.")
+        r=await service._incoming_visual_observation(follow,decision)
+        assert r["historical_disputed"] is True and r["historical"]["description"]==""
+        assert len(calls)==1
+        fresh=photo("review-new-photo","Compare com a imagem anterior. Olhe os olhos.")
+        r=await service._incoming_visual_observation(fresh,decision)
+        assert r["historical_disputed"] is True and r["current"]["description"]=="Leitura sintética 2"
+        assert r["status"]=="partial" and len(calls)==2
+    service.visual_checkpoints=VisualCheckpointStore(core.database,clock)
+
+
+@pytest.mark.asyncio
+async def test_run02_real_raster_review_compare_and_scope(lab):
+    from amora.messaging.models import AttachmentRef
+    from amora.messaging.visual_pixels import VisualPreviewCache
+    from amora.cognition.visual_context import visual_context_for_request
+    from test_run02_visual_pixels import photo
+    from test_discord_incoming_vision_ch2 import observation
+    core,clock,_=lab
+    _bind_bk(core)
+    service=core.messaging
+    calls=[]
+    class Vision:
+        available=True
+        async def analyze(self,image,user_text):
+            calls.append((image.content_base64,user_text))
+            return {**observation(),"description":"Fresh observation "+str(len(calls))}
+    service.incoming_vision=Vision()
+    decision=AttentionDecision(action=RoutingAction.RESPOND,score=1,
+        speaker_entity_id="PERSON_BK",speaker_actor_ref="synthetic",addressee_id="ENTITY_AMORA")
+    a=photo((0,0,0,255)).model_copy(update={"attachment_id":"987654321098765432"})
+    b=photo((255,0,0,255)).model_copy(update={"attachment_id":"987654321098765433"})
+    def inbound(mid,text,image):
+        msg=_dm(core,mid,text=text)
+        return InboundMessage.model_validate({**msg.model_dump(),
+            "attachments":[AttachmentRef(attachment_id=image.attachment_id,media_type="image/png").model_dump()],
+            "incoming_image":image.model_dump()})
+    await service._incoming_visual_observation(inbound("pixel-old","Descreva a imagem.",a),decision)
+    clock.advance(timedelta(seconds=1))
+    review=_dm(core,"pixel-review",text="Reanalise a imagem anterior.")
+    assert await service._incoming_visual_observation(review.model_copy(
+        update={"remote_processing_allowed":False}),decision) is None
+    assert len(calls)==1
+    result=await service._incoming_visual_observation(review,decision)
+    assert result["reinspection"]["description"]=="Fresh observation 2"
+    assert calls[0][0]==calls[1][0]
+    assert visual_context_for_request(result,remote=True,private=True,mode="reply")
+    clock.advance(timedelta(seconds=1))
+    dispute=_dm(core,"pixel-dispute",text="Você errou na análise da imagem anterior.")
+    result=await service._incoming_visual_observation(dispute,decision)
+    assert result["historical_disputed"] and result["historical"]["status"]=="unavailable"
+    assert result["reinspection"]["description"]=="Fresh observation 3"
+    assert result["status"]=="partial"
+    assert visual_context_for_request(result,remote=True,private=True,mode="reply")
+    clock.advance(timedelta(seconds=1))
+    result=await service._incoming_visual_observation(
+        inbound("pixel-current","Compare com a imagem anterior.",b),decision)
+    assert result["historical_current_pixels"]["changed_fraction"]==1
+    assert result["historical_disputed"]
+    assert visual_context_for_request(result,remote=True,private=True,mode="reply")
+    assert len(calls)==4
+    clock.advance(timedelta(seconds=1))
+    # Restart loses bytes, not historical textual evidence.
+    service.visual_previews=VisualPreviewCache(clock)
+    result=await service._incoming_visual_observation(
+        _dm(core,"pixel-restart",text="Reanalise a imagem anterior."),decision)
+    assert "reinspection" not in result and len(calls)==4
+
+
+@pytest.mark.asyncio
+async def test_run04_versioned_fact_atomic_supersession_and_stale_write(lab, monkeypatch):
+    core,clock,_=lab
+    _bind_bk(core)
+    monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE","1")
+    original=_dm(core,"version-old",text="Guarde na memória: fato Vexora.cor = dourada")
+    out=(await core.messaging.receive(original)).outbound[0]
+    old=out.metadata["explicit_memory_id"]
+    clock.advance(timedelta(seconds=2))
+    nextmsg=_dm(core,"version-new",text="Guarde na memória: fato Vexora.cor = vermelha")
+    out=(await core.messaging.receive(nextmsg)).outbound[0]
+    new=out.metadata["explicit_memory_id"]
+    assert new!=old and core.memory.get(old).archived_at is not None
+    assert core.memory.get(new).metadata["supersedes_memory_id"]==old
+    late=_dm(core,"version-stale",text="Guarde na memória: fato Vexora.cor = azul").model_copy(update={"timestamp":original.timestamp})
+    rejected=(await core.messaging.receive(late)).outbound[0]
+    assert rejected.metadata["cognitive_reason_codes"]==["EXPLICIT_MEMORY_VERSION_CONFLICT"]
+    assert core.memory.get(new).archived_at is None
+    assert (await core.messaging.receive(nextmsg)).outbound[0].metadata["explicit_memory_id"]==new
+
+
+@pytest.mark.asyncio
+async def test_run04_causal_fence_retries_after_late_correction_before_commit(lab, monkeypatch):
+    core,clock,_=lab
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    provider=CountingStructuredProvider(name="run04-commit-fence")
+    calls=[]
+    async def realize(context):
+        calls.append(list(context.causal_followups))
+        text="Godot para Android." if context.causal_followups else "Godot para PC."
+        return {"moves":[{"kind":context.dialogue_plan["response_moves"][0],"text":text}],
+                "closing":"statement","_usage":{"input_tokens":12,"output_tokens":4,"status_code":200}}
+    provider.realize=realize
+    core.cognition.register_provider(provider)
+    first=_dm(core,"run04-fence-first",text="Explique Godot para PC.")
+    turn=service._turn_id(first)
+    original_call=runtime.call
+    inserted=False
+    second=None
+    async def interpose(operation,*args,**kwargs):
+        nonlocal inserted,second
+        if operation=="finalize" and not inserted:
+            inserted=True
+            clock.advance(timedelta(seconds=1))
+            second=_dm(core,"run04-fence-second",text="Na verdade, Godot para Android.")
+            accepted=await service.receive(second)
+            assert "DURABLE_REPLY_ACCEPTED" in accepted.decision.reason_codes
+        return await original_call(operation,*args,**kwargs)
+    monkeypatch.setattr(runtime,"call",interpose)
+    try:
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(first)).decision.reason_codes
+        assert await runtime.run_once()
+        assert (await runtime.call("state",turn))["status"]=="retry_wait"
+        assert core.messaging_store.get_outbound(service._outbound_id(first)) is None
+        assert not core.cognition.store.list_segments(turn)
+        clock.advance(timedelta(seconds=10))
+        assert await runtime.run_once()
+        assert (await runtime.call("state",turn))["status"]=="ready"
+        outbound=core.messaging_store.get_outbound(service._outbound_id(first))
+        assert outbound.text=="Godot para Android."
+        assert len(calls)==2 and not calls[0] and len(calls[1])==1
+        assert (await runtime.call("state",service._turn_id(second)))["status"]=="pending"
+    finally:
+        await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_run04_natural_named_fact_consolidation_and_correction(lab,monkeypatch):
+    core,clock,_=lab
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE","1")
+    from uuid import uuid5,NAMESPACE_URL
+    def memory_id(msg):
+        return uuid5(NAMESPACE_URL,"amora:owner-fact:"+str(service._turn_id(msg)))
+    try:
+        first=_dm(core,"natural-fact-old",text="A cor de Vexora é dourada.")
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(first)).decision.reason_codes
+        assert await service.reflections.process_once()
+        old=core.memory.get(memory_id(first))
+        assert old and old.provenance.kind.value=="user_assertion"
+        clock.advance(timedelta(seconds=2))
+        second=_dm(core,"natural-fact-new",text="Na verdade, a cor de Vexora é vermelha.")
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(second)).decision.reason_codes
+        assert await service.reflections.process_once()
+        new=core.memory.get(memory_id(second))
+        assert new and new.metadata["supersedes_memory_id"]==str(old.id)
+        assert core.memory.get(old.id).archived_at is not None
+        assert new.archived_at is None
+        assert not await service.reflections.process_once()
+        assert "vermelha" in new.content
+    finally:
+        await _stop_runtime(core)

@@ -14,6 +14,11 @@ COUNT = "PG_MEMORY_COUNT"
 GET = "PG_MEMORY_GET"
 PUT = "PG_MEMORY_PUT"
 CREATE = "PG_MEMORY_CREATE"
+VERSION_LOCK = "PG_MEMORY_VERSION_LOCK"
+VERSION_SOURCE_LOCK = "PG_MEMORY_VERSION_SOURCE_LOCK"
+VERSION_REFLECTION_LEASE = "PG_MEMORY_VERSION_REFLECTION_LEASE"
+VERSION_PREDECESSOR = "PG_MEMORY_VERSION_PREDECESSOR"
+VERSION_ARCHIVE = "PG_MEMORY_VERSION_ARCHIVE"
 DEL_ENTITIES = "PG_MEMORY_DELETE_ENTITIES"
 ADD_ENTITIES = "PG_MEMORY_ADD_ENTITIES"
 DEL_TAGS = "PG_MEMORY_DELETE_TAGS"
@@ -91,6 +96,34 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
         "INSERT INTO amora_pg_v18_lab.memory_records ("+cols+") "
         "VALUES ("+",".join(["%s"]*26)+") "
         "ON CONFLICT(id) DO NOTHING",26)
+    add(VERSION_REFLECTION_LEASE,"""SELECT m.raw_text FROM amora_pg_v18_lab.memory_reflection_jobs j
+        JOIN amora_pg_v18_lab.conversation_messages m ON m.id=j.input_id AND m.turn_id=j.turn_id
+        WHERE j.turn_id=%s AND j.lease_token=%s AND j.status='claimed' AND j.lease_until>%s
+        AND m.dedupe_key='cognitive-input:'||m.turn_id AND m.speaker_id='PERSON_BK'
+        AND m.addressee_id='ENTITY_AMORA' AND m.status='received'
+        AND m.session_id=%s AND m.privacy_scope='PERSONAL' AND m.remote_processing_allowed=1
+        AND m.metadata_json::jsonb ->> 'owner_fact_assertion' IN ('true','1')
+        AND m.metadata_json::jsonb ->> 'surface'='platform_messaging'
+        AND m.metadata_json::jsonb ->> 'platform'='discord'
+        AND m.metadata_json::jsonb ->> 'channel_type'='dm'
+        AND COALESCE(m.metadata_json::jsonb ->> 'test_mode','false') IN ('false','0')
+        AND COALESCE(m.metadata_json::jsonb ->> 'observed_only','false') IN ('false','0')
+        AND NOT EXISTS(SELECT 1 FROM amora_pg_v18_lab.memory_reflection_invalidations x
+          WHERE x.session_id=m.session_id
+          AND x.native_message_hash=m.metadata_json::jsonb ->> 'native_message_id_hash'
+          AND x.invalidated_through>=CASE WHEN (m.metadata_json::jsonb ->> 'transport_revision')
+              ~ '^[1-9][0-9]{0,17}$' THEN (m.metadata_json::jsonb ->> 'transport_revision')::BIGINT ELSE 1 END)
+        """,4,1)
+    add(VERSION_SOURCE_LOCK,"LOCK TABLE amora_pg_v18_lab.memory_reflection_invalidations IN SHARE MODE",0)
+    add(VERSION_LOCK,"SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",1,1)
+    add(VERSION_PREDECESSOR,"""SELECT id,metadata_json FROM amora_pg_v18_lab.memory_records
+        WHERE owner_entity_id=%s AND provenance_source IN ('cognition:explicit_owner_request','cognition:verified_owner_fact')
+          AND provenance_kind='user_assertion' AND metadata_json::jsonb ->> 'versioned_fact_key'=%s
+        ORDER BY metadata_json::jsonb ->> 'versioned_fact_at' DESC,id DESC LIMIT 1""",2,1)
+    add(VERSION_ARCHIVE,"""UPDATE amora_pg_v18_lab.memory_records SET archived_at=%s,updated_at=%s
+        WHERE owner_entity_id=%s AND provenance_source IN ('cognition:explicit_owner_request','cognition:verified_owner_fact')
+          AND provenance_kind='user_assertion' AND metadata_json::jsonb ->> 'versioned_fact_key'=%s
+          AND id<>%s AND archived_at IS NULL""",5)
     add(DEL_ENTITIES,"DELETE FROM amora_pg_v18_lab.memory_entities WHERE memory_id=%s",1)
     add(ADD_ENTITIES,"INSERT INTO amora_pg_v18_lab.memory_entities(memory_id,entity_id,confidence) VALUES (%s,%s,%s)",3,batch=True)
     add(DEL_TAGS,"DELETE FROM amora_pg_v18_lab.memory_tags WHERE memory_id=%s",1)

@@ -26,7 +26,7 @@ def checkpoint_key(session, turn, native_hash, revision, image, text):
     # Length-delimited fields avoid ambiguous concatenation. Include the exact
     # signed URL fingerprint when a provider might have read the original.
     digest = hashlib.sha256()
-    for value in (EVENT_TYPE, session, str(turn), native_hash, str(revision),
+    for value in (EVENT_TYPE, "spatial-contract-v1", session, str(turn), native_hash, str(revision),
                   image.attachment_id, image.content_mime.lower(),
                   image.content_base64, image.source_url or "", text):
         data = value.encode("utf-8")
@@ -122,6 +122,25 @@ class VisualCheckpointStore:
             payload=payload,
         ))
 
+    def mark_reference_disputed(self, session, native_hash, revision, sent_at):
+        """Suppress a disputed sensor assertion, never replace it with user text."""
+        if not self.source_current(session,native_hash,revision):
+            return False
+        now=self.clock.now()
+        if not timedelta(0)<=now-sent_at<=timedelta(seconds=HISTORY_TTL_SECONDS):
+            return False
+        from .incoming_vision import unavailable_visual_observation
+        key=hashlib.sha256(json.dumps([session,native_hash,revision,sent_at.isoformat()],
+            separators=(",",":")).encode()).hexdigest()
+        return self.database.append_event(AmoraEvent(
+            event_type=HISTORY_EVENT,timestamp=now,source=SOURCE,
+            actor="PERSON_BK",privacy_scope=PrivacyScope.PERSONAL,
+            priority=EventPriority.BACKGROUND,importance=0.0,session_id=session,
+            dedupe_key="visual-dispute:v1:"+key,
+            payload={"native_hash":native_hash,"revision":revision,"sent_at":sent_at.isoformat(),
+                     "disputed":True,"observation":unavailable_visual_observation("invalid_observation")},
+        ))
+
     def load_reference(self, session, before, target_hash=None, exclude_hash=None):
         """Select the latest registered image message or exact native reply.
 
@@ -165,8 +184,12 @@ class VisualCheckpointStore:
         tied = [item for item in candidates if item[0] == latest]
         if len({item[3] for item in tied}) != 1:
             return None
-        chosen = max(tied,key=lambda item:(item[1],item[2]))
-        if any(item[1:3] == chosen[1:3] and item[4] != chosen[4] for item in tied):
+        latest_revision=max(item[1] for item in tied)
+        same_revision=[item for item in tied if item[1]==latest_revision]
+        disputed=[item for item in same_revision if item[4].get("disputed") is True]
+        eligible=disputed or same_revision
+        chosen = max(eligible,key=lambda item:item[2])
+        if any(item[1:3] == chosen[1:3] and item[4] != chosen[4] for item in eligible):
             return None
         sent_at, revision, observed_at, native_hash, data = chosen
         if not self.source_current(session,native_hash,revision):
@@ -175,7 +198,8 @@ class VisualCheckpointStore:
         if not obs or obs.get("observation_version")==4:
             return None
         return {"native_hash":native_hash,"revision":revision,
-                "observed_at":observed_at.isoformat(),"observation":obs}
+                "observed_at":observed_at.isoformat(),"sent_at":sent_at.isoformat(),"observation":obs,
+                **({"disputed":True} if data.get("disputed") is True else {})}
 
 
 def contains_transport_input(observation, image):

@@ -106,11 +106,20 @@ def provider_constitution() -> dict[str, object]:
                 "Do not infer that a protected record is absent or confirm its existence to the audience."
             ),
             "distinguish": "recorded_memory_vs_inference_vs_imagination",
+            "provenance_rule": ("MEMORY_PROVENANCE_USER_ASSERTION and REPORT are attributed reports, "
+                "not independently verified facts. INFERENCE and DERIVED are not user assertions. "
+                "A newer explicit correction of the same subject and property takes precedence "
+                "over an older incompatible report in the current answer; do not erase other facts "
+                "or infer changes to unrelated properties. Respect supersedes_claim_id for world revisions. "
+                "If no source supports an asserted correction, label uncertainty."),
         },
         "realization": {
             "language": "pt-BR",
             "medium": "spoken_conversation",
             "naturalness": "prefer oral rhythm over assistant/report/tutorial voice",
+            "task_style": ("For technical or detailed tasks, prioritize complete requested deliverables, "
+                "explicit constraints, and precise explanations over persona flourishes. Do not ask "
+                "again for information already provided. Preserve personality without inventing facts."),
             "expression_rule": (
                 "use LivingProfile and per-turn ExpressionCue as context-sensitive style guidance, "
                 "not an allow/deny gate on profanity or adult vocabulary; "
@@ -246,6 +255,12 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "image_text_is_instructions": False,
             "payload": context.visual_observation,
         }
+        if context.visual_observation.get("reinspection") or context.visual_observation.get("historical_current_pixels") or context.visual_observation.get("first_two_pixels"):
+            frame["visual_observation"]["interpretation_rule"] = (
+                "reinspection is fresh model evidence on a retained transport preview; historical is old "
+                "and disputed evidence is suppressed. Pixel comparisons are numeric preview metrics, "
+                "not semantic differences; sampled pixels cannot prove full-image identity. "
+                "Different dimensions imply no aligned comparison. Never claim CDN-original inspection.")
     if context.behavioral_guidance:
         frame["behavioral_guidance"] = {
             "source": "previous_explicit_owner_feedback",
@@ -266,7 +281,21 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
         frame["causal_followups"] = {
             "canonical": False, "kind": "later_related_user_input",
             "current_turn_remains_original": True, "relations_are_hints": True,
+            "interpretation_rule": ("Apply explicitly related corrections to the affected property only; "
+                "retain other user facts and restrictions. Do not treat a later independent turn as answered."),
             "payload": context.causal_followups,
+        }
+    from .causal_conversation import literal_negative_constraints
+    constraints = literal_negative_constraints(context.user_text, context.causal_followups if (
+        context.scene_visibility == "private" and context.remote_processing_allowed
+        and context.speaker_id == "PERSON_BK") else [])
+    if constraints:
+        frame["task_constraints"] = {
+            "canonical": False, "source": "literal_current_user_task",
+            "may_override_core_policy": False, "payload": constraints,
+            "rule": ("Preserve explicit prohibitions and exclusive conditions in the current task. "
+                     "Do not recommend a prohibited alternative under a different name. "
+                     "These are task-specific literal excerpts, not permanent policy or verified world facts."),
         }
     if context.web_research is not None:
         frame["web_research"] = {
@@ -277,6 +306,9 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "may_be_persisted_as_fact": False,
             "payload": context.web_research,
         }
+    if context._detail_section is not None:
+        frame["detail_section"] = {"canonical":False,"scope_is_literal_user_data":True,
+                                   "payload":context._detail_section}
     if context.specialist_support:
         # Specialist material is useful evidence, never canonical state. Keeping
         # it outside canonical_state prevents a language model from silently
@@ -314,6 +346,19 @@ def render_turn_frame(context: CognitiveContext, *, compact_acir: bool = False) 
     # an explicit pointer to the same authoritative per-turn interpretation.
     plan = frame["dialogue_plan"]
     acir = frame["current_turn"]["acir"]
+    if compact_acir:
+        # Deduplicate identical projection records, never distinct provenance,
+        # literal conversation turns, correction evidence or canonical storage.
+        state = frame["canonical_state"]
+        for field in ("memories","world_claims","reason_codes"):
+            seen = set()
+            unique = []
+            for item in state[field]:
+                key = json.dumps(item,ensure_ascii=False,sort_keys=True,separators=(",",":"))
+                if key not in seen:
+                    unique.append(item)
+                    seen.add(key)
+            state[field] = unique
     if compact_acir and acir is not None and plan.get("input_acir") == acir:
         reference = {"same_as": "current_turn.acir"}
         if len(json.dumps(acir, ensure_ascii=False)) > len(json.dumps(reference)):

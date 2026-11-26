@@ -552,6 +552,19 @@ class PlatformMessagingService:
         # Persist the intent with the input. The queue reconciles the crash
         # window between these separate writes, without importing old history.
         request.metadata["reflection_enqueue_requested"] = enqueue_reflection
+        # Only source-grounded named assertions in a verified, consented owner
+        # DM may use the local versioned-memory reflection path. General
+        # narrative, suggestions, and ambiguous pronouns stay on the ordinary
+        # inference path and never supersede a named fact automatically.
+        if (enqueue_reflection and decision.action == RoutingAction.RESPOND
+                and message.platform.value=="discord" and message.channel_type==ChannelType.DM
+                and message.privacy_scope==PrivacyScope.PERSONAL
+                and not message.attachments and not message.incoming_images and not message.incoming_image
+                and not request.metadata.get("test_mode")):
+            from amora.memory.versioned_fact import parse_named_fact
+            if parse_named_fact(message.text) and is_verified_owner(
+                    self.attention.profiles,message,decision.speaker_entity_id):
+                request.metadata["owner_fact_assertion"]=True
         durable = bool(
             self.durable_replies is not None and durable_audit is not None
             and durable_audit.metadata.get("durable_reply_transport")
@@ -632,11 +645,35 @@ class PlatformMessagingService:
         set_ms("messaging_pre_cognition_ms", elapsed_ms(ingress_started))
         set_value("_critical_phase", "cognition")
         cognition_started = perf_counter()
+        from amora.cognition.surface_performance import SYNC_REALIZATION_RETRY
+        lease = _GENERATION_LEASE.get()
+        # Allow one smaller request only in the verified private owner route.
+        # No additional identity or storage call unless a provider rejects size.
+        async def retry_guard():
+            if (lease is None or not message.remote_processing_allowed
+                    or message.privacy_scope != PrivacyScope.PERSONAL
+                    or not is_verified_owner(self.attention.profiles,message,decision.speaker_entity_id)):
+                return False
+            if self._source_invalidated(message):
+                return False
+            return bool(await self._generation_call(message,"renew",*lease))
+        retry_eligible = (
+            lease is not None and message.platform.value == "discord"
+            and message.channel_type == ChannelType.DM
+            and message.privacy_scope == PrivacyScope.PERSONAL
+            and message.remote_processing_allowed
+            and decision.speaker_entity_id == "PERSON_BK"
+            and visual_observation is None and not message.attachments
+        )
+        retry_token = SYNC_REALIZATION_RETRY.set(
+            (str(request.turn_id),retry_guard) if retry_eligible else None)
         try:
             plan = await asyncio.wait_for(
                 self.cognition.respond_observed(request, on_segment=None, fallback_text=fallback),
                 timeout=self.cognition_timeout_seconds,
             )
+            if self._source_invalidated(message):
+                return self._invalidated_result(message)
             provider = plan.provider
             model = plan.model
             fallback_used = bool(plan.fallback_used)
@@ -674,6 +711,8 @@ class PlatformMessagingService:
                 self.cognition_timeout_seconds,
                 message.remote_processing_allowed,
             )
+        finally:
+            SYNC_REALIZATION_RETRY.reset(retry_token)
 
         # Even a *hard* provider timeout can occur AFTER web results arrived.
         # Compose public links outside the generation try/except so a failed
@@ -694,7 +733,7 @@ class PlatformMessagingService:
             retry_source = (core_nav.current_capture_target(request.session_id)
                             if capture_retry and core_nav is not None else None)
             plan_meta = plan.metadata if plan is not None else {}
-            sources = (plan_meta.get("web_sources") or core_delivery["sources"])[:2]
+            sources = (plan_meta.get("web_sources") or core_delivery["sources"])[:5]
             references = (
                 core_delivery["references"]
                 if intent is not None and intent.action in {"saved_links", "web_history", "pin_results"}
@@ -1273,6 +1312,7 @@ class PlatformMessagingService:
     def _explicit_memory_result(self, message, decision, request, intent) -> InboundResult:
         from amora.events import PrivacyScope
         from amora.memory import MemoryCandidate, MemoryKind, MemoryProvenance, ProvenanceKind
+        from amora.memory.versioned_fact import version_metadata, VersionedFactConflict
 
         reason = intent.reason
         memory_id = None
@@ -1317,20 +1357,27 @@ class PlatformMessagingService:
                 remote_processing_allowed=remote_reuse,
                 entity_refs={OWNER_ENTITY_ID: 1.0}, tags={"explicit_owner_memory"},
                 importance=1.0,
-                metadata={"turn_id": str(request.turn_id), "explicit_owner_request": True},
+                metadata={"turn_id": str(request.turn_id), "explicit_owner_request": True,
+                          **version_metadata(intent.content, message.timestamp, self.clock.now())},
             )
             try:
                 stored = self.cognition.compiler.memory.remember(
                     candidate, record_id=uuid5(NAMESPACE_URL, f"amora:explicit-memory:{request.turn_id}"),
                     explicit_owner_request=True, generation_lease=lease,
                 )
+            except VersionedFactConflict:
+                stored = None
+                reason = "EXPLICIT_MEMORY_VERSION_CONFLICT"
+                text = "Não substituí a informação: essa versão é anterior ou ambígua. Envie a correção novamente."
             except RuntimeError as exc:
                 if str(exc) == "INBOUND_GENERATION_LEASE_LOST":
                     raise InboundGenerationLost("INBOUND_GENERATION_LEASE_LOST") from None
                 # No success receipt on a database failure; the inbound retry
                 # can safely recover the deterministic record id.
                 raise
-            if stored.memory is not None:
+            if stored is None:
+                pass  # explicit conflict receipt above
+            elif stored.memory is not None:
                 memory_id = str(stored.memory.id)
                 remote_reuse = stored.memory.remote_processing_allowed
                 reason = "EXPLICIT_MEMORY_STORED"

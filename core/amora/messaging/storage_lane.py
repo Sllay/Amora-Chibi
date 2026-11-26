@@ -28,6 +28,9 @@ class MessagingStorageWorker:
     def claim(self, *args):
         return self.generations.claim(*args)
 
+    def renew(self, *args, **kwargs):
+        return self.generations.renew(*args, **kwargs)
+
     def release(self, *args, **kwargs):
         return self.generations.release(*args, **kwargs)
 
@@ -41,7 +44,7 @@ class MessagingStorageWorker:
         return self.store.append_audit(audit)
 
     def visual_checkpoint(self, operation, *args):
-        if operation not in {"load", "save", "source_current", "save_reference", "load_reference"}:
+        if operation not in {"load", "save", "source_current", "save_reference", "load_reference", "mark_reference_disputed"}:
             raise ValueError("VISUAL_CHECKPOINT_OPERATION_NOT_ALLOWED")
         return getattr(self.visual_checkpoints, operation)(*args)
 
@@ -57,7 +60,7 @@ class MessagingStorageWorker:
             return self.generations.prepared(*args)
         if operation not in {"state", "counts", "verify_schema", "admit", "enqueue_turn", "load", "claim",
                              "renew", "defer", "block", "cancel_invalidated",
-                             "reconcile_missing", "reconcile_outbound"}:
+                             "reconcile_missing", "reconcile_outbound", "causal_snapshot"}:
             raise ValueError("REPLY_JOB_OPERATION_NOT_ALLOWED")
         return getattr(self.reply_jobs, operation)(*args, **kwargs)
 
@@ -72,7 +75,7 @@ class MessagingStorageWorker:
 
 class MessagingStorageLane(OwnedStorageLane):
     trace_name = "messaging_db_lane"
-    allowed = frozenset({"claim", "release", "prepared", "get_audit", "append_audit", "persist_reply", "reply_job", "visual_checkpoint"})
+    allowed = frozenset({"claim", "renew", "release", "prepared", "get_audit", "append_audit", "persist_reply", "reply_job", "visual_checkpoint"})
 
     def __init__(self, database, clock):
         super().__init__(thread_name="amora-messaging-db")

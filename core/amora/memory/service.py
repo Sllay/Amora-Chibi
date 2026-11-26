@@ -27,6 +27,7 @@ class MemoryService:
     def remember(self, candidate: MemoryCandidate, *, record_id: UUID | None = None,
                  reflection_lease: tuple[str, str] | None = None,
                  explicit_owner_request: bool = False,
+                 owner_fact_assertion: bool = False,
                  generation_lease: tuple[str, str] | None = None,
                  insert_only: bool = False,
                  episode_lease: EpisodeWriteLease | None = None) -> RememberResult:
@@ -45,6 +46,10 @@ class MemoryService:
             raise ValueError("EXPLICIT_MEMORY_REQUIRES_GENERATION_LEASE")
         if generation_lease is not None and not explicit_owner_request:
             raise ValueError("GENERATION_LEASE_REQUIRES_EXPLICIT_MEMORY")
+        if owner_fact_assertion and (not reflection_lease or generation_lease is not None
+                or explicit_owner_request or insert_only or record_id is None
+                or candidate.metadata.get("turn_id")!=reflection_lease[0]):
+            raise ValueError("OWNER_FACT_REQUIRES_REFLECTION_LEASE")
         # A derived record cannot widen the disclosure permissions of its sources.
         # Missing provenance is not evidence of public authorization.
         if candidate.provenance.derived_from:
@@ -85,18 +90,20 @@ class MemoryService:
                     all(parent.remote_processing_allowed for parent in parents),
             })
         decision = (self.gate.evaluate(candidate, explicit_owner_request=True)
-                    if explicit_owner_request else self.gate.evaluate(candidate))
+                    if explicit_owner_request else
+                    self.gate.evaluate(candidate, owner_fact_assertion=True)
+                    if owner_fact_assertion else self.gate.evaluate(candidate))
         if not decision.store or decision.recommended_kind is None:
             return RememberResult(decision=decision, memory=None)
 
         if record_id is not None and not insert_only:
             existing = self.get(record_id)
             if existing is not None:
-                if explicit_owner_request and (
+                if (explicit_owner_request or owner_fact_assertion) and (
                     existing.archived_at is not None
                     or existing.owner_entity_id != candidate.owner_entity_id
                     or existing.provenance.source != candidate.provenance.source
-                    or existing.metadata.get("turn_id") != generation_lease[0]
+                    or existing.metadata.get("turn_id") != (generation_lease or reflection_lease)[0]
                     or existing.content != candidate.content.strip()
                 ):
                     return RememberResult(decision=MemoryWriteDecision(
