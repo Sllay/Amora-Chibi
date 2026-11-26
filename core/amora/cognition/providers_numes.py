@@ -159,6 +159,10 @@ class NumesCognitiveProvider:
             }
 
         _, payload = fit_provider_payload(projected, build, ceiling=12000, descriptor=self.descriptor)
+        # Keep the original transport call contract when no Realtime sink is
+        # explicitly bound. Legacy callers and payload probes need no new argument.
+        if CANDIDATE_SINK.get() is None:
+            return await self._complete_stream(payload, key=key, phase="realization")
         return await self._complete_stream(payload, key=key, phase="realization",
             candidate_moves=projected.dialogue_plan.get("response_moves") or ())
 

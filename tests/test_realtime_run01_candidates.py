@@ -118,3 +118,52 @@ async def test_numes_sse_candidate_channel_is_separate_from_reasoning(monkeypatc
     assert [e.seq for e in seen]==[1,2,3]
     assert len({e.attempt_id for e in seen})==1
     assert "PRIVATE_REASONING" not in repr(seen)
+
+
+@pytest.mark.asyncio
+async def test_realize_preserves_legacy_transport_and_opt_in_candidate_path(tmp_path, monkeypatch):
+    from amora.app import AmoraCore
+    from amora.cognition import CognitiveRequest
+    from amora.time import SimulatedClock
+    from test_numes_groq_memory import configure, sse_reply
+
+    configure(monkeypatch, tmp_path)
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        ctx = core.cognition.compiler.compile(CognitiveRequest(
+            text="Explique Vulkan.", speaker_id="PERSON_BK",
+            remote_processing_allowed=True, session_id="realtime-compat"))
+        ctx = ctx.model_copy(update={
+            "dialogue_plan": {**ctx.dialogue_plan, "response_moves": ["answer"]},
+        })
+        provider = NumesCognitiveProvider(core.secrets)
+        payloads = []
+        async def legacy_transport(payload, *, key, phase):
+            assert phase == "realization"
+            assert key == "synthetic-numes-key"
+            payloads.append(payload)
+            return {"moves": [{"kind": "answer", "text": "Vulkan."}]}
+
+        with monkeypatch.context() as patch:
+            patch.setattr(provider, "_complete_stream", legacy_transport)
+            assert (await provider.realize(ctx))["moves"][0]["text"] == "Vulkan."
+        assert len(payloads) == 1
+        seen = []
+        def handler(req):
+            payload = json.loads(req.content)
+            assert payload == payloads[0]
+            assert "candidate_moves" not in payload
+            return sse_reply({"moves": [{"kind": "answer", "text": "Vulkan."}],
+                              "closing": "statement"})
+        fake_http(monkeypatch, handler)
+        marker = CANDIDATE_SINK.set(seen.append)
+        try:
+            result = await provider.realize(ctx)
+        finally:
+            CANDIDATE_SINK.reset(marker)
+        assert result["moves"][0]["text"] == "Vulkan."
+        assert [(e.status, e.text) for e in seen] == [
+            ("candidate", "Vulkan."), ("transport_complete", "")]
+        assert CANDIDATE_SINK.get() is None
+    finally:
+        core.close()
