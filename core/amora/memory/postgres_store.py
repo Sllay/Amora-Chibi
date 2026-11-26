@@ -118,9 +118,12 @@ class PostgresMemoryStore(MemoryStore):
                 )).fetchone()
                 if lease is None:
                     raise PostgresRuntimeError("REFLECTION_LEASE_LOST")
-                if version_key is not None and self._conn.execute(q.VERSION_REFLECTION_LEASE,(
-                    turn,token,self.clock.now().isoformat(),p.session_id)).fetchone() is None:
-                    raise PostgresRuntimeError("REFLECTION_LEASE_LOST")
+                if version_key is not None:
+                    source=self._conn.execute(q.VERSION_REFLECTION_LEASE,(
+                        turn,token,self.clock.now().isoformat(),p.session_id)).fetchone()
+                    if (source is None or not isinstance(source[0],str)
+                            or record.content!="Relato de PERSON_BK: "+source[0].strip()):
+                        raise PostgresRuntimeError("REFLECTION_LEASE_LOST")
             if version_key is not None:
                 self._conn.execute(q.VERSION_LOCK,(record.owner_entity_id+":"+version_key,))
                 predecessor = self._conn.execute(q.VERSION_PREDECESSOR,(record.owner_entity_id,version_key)).fetchone()

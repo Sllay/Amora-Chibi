@@ -96,10 +96,11 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
         "INSERT INTO amora_pg_v18_lab.memory_records ("+cols+") "
         "VALUES ("+",".join(["%s"]*26)+") "
         "ON CONFLICT(id) DO NOTHING",26)
-    add(VERSION_REFLECTION_LEASE,"""SELECT 1 FROM amora_pg_v18_lab.memory_reflection_jobs j
+    add(VERSION_REFLECTION_LEASE,"""SELECT m.raw_text FROM amora_pg_v18_lab.memory_reflection_jobs j
         JOIN amora_pg_v18_lab.conversation_messages m ON m.id=j.input_id AND m.turn_id=j.turn_id
         WHERE j.turn_id=%s AND j.lease_token=%s AND j.status='claimed' AND j.lease_until>%s
         AND m.dedupe_key='cognitive-input:'||m.turn_id AND m.speaker_id='PERSON_BK'
+        AND m.addressee_id='ENTITY_AMORA' AND m.status='received'
         AND m.session_id=%s AND m.privacy_scope='PERSONAL' AND m.remote_processing_allowed=1
         AND m.metadata_json::jsonb ->> 'owner_fact_assertion' IN ('true','1')
         AND m.metadata_json::jsonb ->> 'surface'='platform_messaging'
@@ -111,7 +112,9 @@ def memory_statements(*, schema: str = SCHEMA) -> dict[str, ReviewedStatement]:
           WHERE x.session_id=m.session_id
           AND x.native_message_hash=m.metadata_json::jsonb ->> 'native_message_id_hash'
           AND x.invalidated_through>=CASE WHEN (m.metadata_json::jsonb ->> 'transport_revision')
-              ~ '^[1-9][0-9]{0,17}
+              ~ '^[1-9][0-9]{0,17}$' THEN (m.metadata_json::jsonb ->> 'transport_revision')::BIGINT ELSE 1 END)
+        """,4,1)
+    add(VERSION_SOURCE_LOCK,"LOCK TABLE amora_pg_v18_lab.memory_reflection_invalidations IN SHARE MODE",0)
     add(VERSION_LOCK,"SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",1,1)
     add(VERSION_PREDECESSOR,"""SELECT id,metadata_json FROM amora_pg_v18_lab.memory_records
         WHERE owner_entity_id=%s AND provenance_source IN ('cognition:explicit_owner_request','cognition:verified_owner_fact')

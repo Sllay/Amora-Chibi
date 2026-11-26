@@ -40,7 +40,7 @@ def parse_named_fact(content):
         if not subject[:1].isupper():
             return None
     # Multiple clauses and quoted/reported speech stay in ordinary reflection.
-    if re.search(r"[;\"“”]|\.(?:\s|$)|,\s",value):
+    if re.search(r"[;\"“”]|\.(?:\s|$)|,\s|\b(?:mas|por[eé]m|entretanto|e|ou)\b",value,re.I):
         return None
     subject,prop=_normalize(subject),_normalize(prop)
     if not subject or not prop or subject in _RELATIVE or prop in _RELATIVE or not value.strip():

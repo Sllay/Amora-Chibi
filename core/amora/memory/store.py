@@ -159,10 +159,11 @@ class MemoryStore:
                 if lease is None:
                     raise RuntimeError("REFLECTION_LEASE_LOST")
                 if version_key is not None:
-                    source = self._conn.execute("""SELECT 1 FROM memory_reflection_jobs j
+                    source = self._conn.execute("""SELECT m.raw_text FROM memory_reflection_jobs j
                         JOIN conversation_messages m ON m.id=j.input_id AND m.turn_id=j.turn_id
                         WHERE j.turn_id=? AND j.lease_token=? AND j.status='claimed' AND j.lease_until>?
                         AND m.dedupe_key='cognitive-input:'||m.turn_id AND m.speaker_id='PERSON_BK'
+                        AND m.addressee_id='ENTITY_AMORA' AND m.status='received'
                         AND m.session_id=? AND m.privacy_scope='PERSONAL' AND m.remote_processing_allowed=1
                         AND json_extract(m.metadata_json,'$.owner_fact_assertion')=1
                         AND json_extract(m.metadata_json,'$.surface')='platform_messaging'
@@ -175,7 +176,8 @@ class MemoryStore:
                           AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash')
                           AND x.invalidated_through>=COALESCE(json_extract(m.metadata_json,'$.transport_revision'),1))""",
                         (turn_id,token,self.clock.now().isoformat(),provenance.session_id)).fetchone()
-                    if source is None:
+                    if (source is None or not isinstance(source[0],str)
+                            or record.content!="Relato de PERSON_BK: "+source[0].strip()):
                         raise RuntimeError("REFLECTION_LEASE_LOST")
             if version_key is not None:
                 predecessor = self._conn.execute(
