@@ -50,7 +50,7 @@ class SessionCreateRequest(BaseModel):
 
 class PairingRedeemRequest(BaseModel):
     code: str = Field(pattern=r"^[0-9]{6}$")
-    client: Literal["web", "avatar", "operator"] = "web"
+    client: Literal["web", "avatar", "operator", "visual"] = "web"
 
 
 class AddresseeInferRequest(BaseModel):
@@ -291,7 +291,7 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
         else:
             if not core.pairing.redeem(request.code):
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired pairing code")
-            token = issue_browser_token(expected_token(), core.clock, request.client) if settings.cloud or request.client == "web" else expected_token()
+            token = issue_browser_token(expected_token(), core.clock, request.client) if settings.cloud or request.client in {"web", "visual"} else expected_token()
         return {"token": token, "token_type": "Bearer"}
 
     @app.get("/v1/state", dependencies=[Depends(require_auth)])
@@ -565,6 +565,8 @@ def create_api(core: AmoraCore, *, own_core: bool = False, voice=None) -> FastAP
             if path == "/v1/operations/state":
                 return method == "GET"
             return path.startswith("/v1/operator/") and method in {"GET", "POST", "PUT", "DELETE"}
+        if role == "visual":
+            return False
         if role == "avatar":
             fixed = {
                 "/v1/avatar/state": {"GET"},
