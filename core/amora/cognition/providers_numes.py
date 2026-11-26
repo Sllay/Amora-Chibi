@@ -28,6 +28,7 @@ from .providers import ProviderError
 from .providers_identity import _identity_history
 from .prompt_frame import render_current_turn, render_trusted_protocol
 from .realization import realization_instruction
+from .realtime_candidates import CANDIDATE_SINK, CandidateEmitter
 
 _NUMES_ERROR_TYPES = frozenset({
     "provider_unavailable", "provider_overloaded", "rate_limited",
@@ -158,7 +159,8 @@ class NumesCognitiveProvider:
             }
 
         _, payload = fit_provider_payload(projected, build, ceiling=12000, descriptor=self.descriptor)
-        return await self._complete_stream(payload, key=key, phase="realization")
+        return await self._complete_stream(payload, key=key, phase="realization",
+            candidate_moves=projected.dialogue_plan.get("response_moves") or ())
 
     async def audit_endpoint_catalogue(self) -> dict[str, object]:
         """Read-only account-scoped endpoints; no prompts or private memories.
@@ -231,13 +233,16 @@ class NumesCognitiveProvider:
         return {"success": str(result.get("answer", "")).strip() in {"4", "four"},
                 **result["_usage"]}
 
-    async def _complete_stream(self, payload, *, key, phase):
+    async def _complete_stream(self, payload, *, key, phase, candidate_moves=()):
         log_payload_metrics("numes", self.API_URL, payload, phase=phase)
         started = perf_counter()
         diagnostics = NumesStreamDiagnostics()
         liveness = ACTIVE_NUMES_LIVENESS.get()
         parsed = None
         request_id = str(uuid4())
+        sink = CANDIDATE_SINK.get()
+        candidates = (CandidateEmitter(sink, request_id, candidate_moves)
+                      if sink is not None and phase == "realization" and candidate_moves else None)
         if liveness is not None:
             liveness.request_id = request_id
         metrics = {"request_id": request_id, "phase": phase, "provider": "numes",
@@ -358,6 +363,8 @@ class NumesCognitiveProvider:
                                 if content_chars > 65536:
                                     raise ProviderError("Numes stream output exceeds local bound")
                                 pieces.append(content)
+                                if candidates is not None:
+                                    candidates.feed(content)
                             if choice.get("finish_reason") is not None:
                                 diagnostics.finish()
                                 finish = choice["finish_reason"]
@@ -375,6 +382,8 @@ class NumesCognitiveProvider:
                                             status_code=response.status_code) from None
                     metrics["outcome"] = "completed"
                     metrics["stage"] = "completed"
+                    if candidates is not None:
+                        candidates.complete(parsed)
         except asyncio.CancelledError:
             metrics["outcome"] = "cancelled_by_caller"
             raise
@@ -385,6 +394,8 @@ class NumesCognitiveProvider:
             metrics["outcome"] = "failed"
             raise
         finally:
+            if candidates is not None:
+                candidates.close(False)
             metrics["elapsed_ms"] = elapsed()
             increment("numes_stream_attempts")
             for name in ("headers_ms", "first_event_ms", "first_reasoning_ms", "first_content_ms", "elapsed_ms"):
