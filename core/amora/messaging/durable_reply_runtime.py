@@ -277,7 +277,8 @@ class DurableReplyRuntime:
         async def live_guard():
             return (self.authorize(message, request) is not None
                     and await self.call("renew", claim))
-        from amora.cognition.causal_conversation import composition_window, causal_partition
+        from amora.cognition.causal_conversation import (composition_window, causal_partition,
+            GROUP_RELATED_TURN, grouping_enabled)
         window = composition_window(request.text)
         age = max(0.0, (self.service.clock.now() - message.timestamp).total_seconds())
         if claim.attempts == 1 and window > age:
@@ -305,6 +306,7 @@ class DurableReplyRuntime:
         token = DURABLE_REALIZATION.set(claim.turn_id)
         guard_token = DURABLE_AUTHORIZATION.set(live_guard)
         causal_token = DURABLE_CAUSAL_CHECK.set(causal_check)
+        group_token = GROUP_RELATED_TURN.set(claim.turn_id if grouping_enabled() and claim.attempts<=3 else None)
         self.service._active_dm_progress.add(claim.turn_id)
         try:
             started = monotonic()
@@ -343,9 +345,15 @@ class DurableReplyRuntime:
                 if index:
                     plan.reason_codes.append("DURABLE_CAUSAL_REPLANNED")
                 plan.metadata["causal_snapshot"] = snapshot
+                if GROUP_RELATED_TURN.get() == claim.turn_id and checked_context is not None:
+                    members = [item["turn_id"] for item in checked_context.causal_followups
+                               if item.get("independent_reply_still_pending") is False]
+                    if members:
+                        plan.metadata["causal_group_members"] = members
                 return plan
         finally:
             self.service._active_dm_progress.discard(claim.turn_id)
+            GROUP_RELATED_TURN.reset(group_token)
             DURABLE_CAUSAL_CHECK.reset(causal_token)
             DURABLE_AUTHORIZATION.reset(guard_token)
             DURABLE_REALIZATION.reset(token)
@@ -434,7 +442,9 @@ class DurableReplyRuntime:
                               "remote_processing_allowed": True, "transport_revision": message.transport_revision,
                               "delivery_message_id": message.message_id,
                               "durable_native_hash": self.service._hash(message.native_source_message_id),
-                              "causal_snapshot": plan.metadata.get("causal_snapshot",initial_snapshot)})
+                              "causal_snapshot": plan.metadata.get("causal_snapshot",initial_snapshot),
+                              **({"causal_group_members": plan.metadata["causal_group_members"]}
+                                 if plan.metadata.get("causal_group_members") else {})})
                 if not await self.call("stage", claim.turn_id, claim.token, outbound, decision, reasons):
                     raise InboundGenerationLost("DURABLE_REPLY_LEASE_LOST")
             else:

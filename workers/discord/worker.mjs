@@ -830,6 +830,26 @@ export class DiscordWorker {
     this.runtime.recordReaction(event, added);
   }
 
+  validateCausalGroup(item) {
+    const members=item?.metadata?.causal_group_members;
+    const sources=item?.metadata?.causal_group_sources;
+    if (members===undefined && sources===undefined) return true;
+    if (!Array.isArray(members) || members.length<1 || members.length>3
+        || !Array.isArray(sources) || sources.length!==members.length
+        || new Set(members).size!==members.length) return false;
+    const seen=new Set();
+    for (const source of sources) {
+      if (!source || !members.includes(source.turn_id) || seen.has(source.turn_id)
+          || typeof source.source_message_id!=='string' || !source.source_message_id
+          || !Number.isInteger(source.transport_revision) || source.transport_revision<1) return false;
+      seen.add(source.turn_id);
+      if (!this.runtime.validateOutbound({conversation_id:item.conversation_id,
+          source_message_id:source.source_message_id,
+          metadata:{transport_revision:source.transport_revision}}).ok) return false;
+    }
+    return true;
+  }
+
   async flushOutbound() {
     if (this.processingOutbound) return;
     this.processingOutbound = true;
@@ -843,8 +863,8 @@ export class DiscordWorker {
         const item = messages[0];
         traceDelivery('claim', item, { claim_ms: performance.now() - claimStarted });
         const validation = this.runtime.validateOutbound(item);
-        if (!validation.ok) {
-          await this.core.cancelOutbound(item.id, `DISCORD_${validation.reason}`).catch(() => {});
+        if (!validation.ok || !this.validateCausalGroup(item)) {
+          await this.core.cancelOutbound(item.id, validation.ok ? 'DISCORD_GROUP_SOURCE_STALE' : `DISCORD_${validation.reason}`).catch(() => {});
           continue;
         }
 
@@ -909,6 +929,10 @@ export class DiscordWorker {
     }
     const path = `/channels/${encodeURIComponent(item.conversation_id)}/messages`;
     for (let index = receipts.length; index < chunks.length; index++) {
+      if (!this.validateCausalGroup(item)) {
+        await this.core.cancelOutbound(item.id,'DISCORD_GROUP_SOURCE_STALE');
+        return;
+      }
       const segment = {lease, index, phase:'prepare'};
       await this.core.ackOutbound(item.id,{sent:false,segment});
       let created;
@@ -983,6 +1007,7 @@ export class DiscordWorker {
     }
     let firstMessageId = null;
     for (let index = 0; index < chunks.length; index += 1) {
+      if (!this.validateCausalGroup(item)) throw new Error('DISCORD_GROUP_SOURCE_STALE');
       const payload = discordReplyPayload(chunks[index], {
         replyToMessageId: item.reply_to_message_id,
         firstChunk: index === 0,

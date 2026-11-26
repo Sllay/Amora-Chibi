@@ -282,7 +282,9 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
             "canonical": False, "kind": "later_related_user_input",
             "current_turn_remains_original": True, "relations_are_hints": True,
             "interpretation_rule": ("Apply explicitly related corrections to the affected property only; "
-                "retain other user facts and restrictions. Do not treat a later independent turn as answered."),
+                "retain other user facts and restrictions. Address entries with independent_reply_still_pending=false "
+                "together with the original in one coherent response. Entries with independent_reply_still_pending=true "
+                "retain separate replies. Do not treat a later independent turn as answered."),
             "payload": context.causal_followups,
         }
     from .causal_conversation import literal_negative_constraints

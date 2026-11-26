@@ -1634,3 +1634,67 @@ async def test_run04_natural_named_fact_consolidation_and_correction(lab,monkeyp
         assert "vermelha" in new.content
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalidate_member",[False,True])
+async def test_realtime_opt_in_causal_group_commits_one_outbound(lab,monkeypatch,invalidate_member):
+    core,clock,_=lab
+    monkeypatch.setenv("AMORA_REALTIME_CAUSAL_GROUPING_ENABLED","1")
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    provider=CountingStructuredProvider(name="realtime-group-test")
+    observed=[]
+    async def realize(context):
+        observed.append(context.causal_followups)
+        text="A Vexora continua quadrúpede e agora é vermelha." if context.causal_followups else "Vulkan é uma API gráfica."
+        return {"moves":[{"kind":context.dialogue_plan["response_moves"][0],"text":text}],
+                "closing":"statement","_usage":{"input_tokens":12,"output_tokens":4,"status_code":200}}
+    provider.realize=realize
+    core.cognition.register_provider(provider)
+    first=_dm(core,"realtime-group-first",text="A criatura Vexora é quadrúpede e dourada.")
+    try:
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(first)).decision.reason_codes
+        clock.advance(timedelta(seconds=1))
+        second=_dm(core,"realtime-group-second",text="Na verdade, a cor de Vexora é vermelha.")
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(second)).decision.reason_codes
+        clock.advance(timedelta(seconds=1))
+        third=_dm(core,"realtime-group-third",text="Outra coisa, qual é a diferença entre Vulkan e OpenGL?")
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(third)).decision.reason_codes
+        assert await runtime.run_once()
+        a,b,c=[str(service._turn_id(m)) for m in (first,second,third)]
+        assert len(observed)==1 and [x["turn_id"] for x in observed[0]]==[b]
+        assert observed[0][0]["independent_reply_still_pending"] is False
+        assert (await runtime.call("state",a))["status"]=="ready"
+        assert (await runtime.call("state",b))["status"]=="ready"
+        assert (await runtime.call("state",c))["status"]=="pending"
+        outbound=core.messaging_store.get_outbound(service._outbound_id(first))
+        assert outbound.metadata["causal_group_members"]==[b]
+        assert outbound.metadata["causal_group_sources"]==[{"turn_id":b,
+            "source_message_id":second.native_source_message_id,"transport_revision":1}]
+        assert core.messaging_store.get_outbound(service._outbound_id(second)) is None
+        for msg in (first,second,third):
+            turn=service._turn_id(msg)
+            assert core.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn}").raw_text==msg.text
+        if invalidate_member:
+            service.invalidate_transport(TransportInvalidation(platform=MessagingPlatform.DISCORD,
+                account_scope=second.account_scope,conversation_id=second.conversation_id,
+                native_message_id=second.native_source_message_id,reason="DISCORD_MESSAGE_DELETED",
+                transport_revision=1))
+        claimed=core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,
+            account_scope="primary",limit=1)
+        if invalidate_member:
+            assert not claimed
+            assert core.messaging_store.get_outbound(outbound.id).status.value=="cancelled"
+            return
+        assert len(claimed)==1 and claimed[0].id==outbound.id
+        assert core.messaging_store.ack_outbound(outbound.id,sent=True,external_message_id="1"*18)
+        await runtime.call("reconcile_outbound")
+        assert (await runtime.call("state",a))["status"]=="sent"
+        assert (await runtime.call("state",b))["status"]=="sent"
+        assert await runtime.run_once()
+        assert (await runtime.call("state",c))["status"]=="ready"
+        assert len(observed)==2
+        assert core.messaging_store.get_outbound(service._outbound_id(third)) is not None
+    finally:
+        await _stop_runtime(core)
