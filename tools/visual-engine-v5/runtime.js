@@ -34,7 +34,10 @@ export class AmoraModel extends CubismUserModel {
   this.stage='physics';const phy=await bytes(asset(refs.Physics));this.loadPhysics(phy,phy.byteLength);if(!this._physics)throw Error('Physics load failed');
   if(refs.Pose){const p=await bytes(asset(refs.Pose));this.loadPose(p,p.byteLength);}
   this.stage='expressions';for(const exp of refs.Expressions){const b=await bytes(asset(exp.File));const e=this.loadExpression(b,b.byteLength,exp.Name);if(!e)throw Error('Expression load failed '+exp.Name);this.expressions.set(exp.Name,e);}
-  this.stage='motions';for(const [group,items] of Object.entries(refs.Motions)){for(const [i,entry] of items.entries()){const b=await bytes(asset(entry.File));const name=group+'/'+i;const m=this.loadMotion(b,b.byteLength,name);if(!m)throw Error('Motion load failed '+name);this.motions.set(name,m);}}
+  // CubismMotion starts with null effect arrays; initialize from the model's declared groups before scheduling any motion.
+  const effectIds=name=>(settings.Groups??[]).filter(g=>g.Target==='Parameter'&&g.Name===name).flatMap(g=>g.Ids??[]).map(id=>{if(!this.params.has(id))throw Error('Unknown motion effect parameter '+id);return CubismFramework.getIdManager().getId(id);});
+  const eyeBlinkIds=effectIds('EyeBlink'),lipSyncIds=effectIds('LipSync');
+  this.stage='motions';for(const [group,items] of Object.entries(refs.Motions)){for(const [i,entry] of items.entries()){const b=await bytes(asset(entry.File));const name=group+'/'+i;const m=this.loadMotion(b,b.byteLength,name);if(!m)throw Error('Motion load failed '+name);m.setEffectIds(eyeBlinkIds,lipSyncIds);this.motions.set(name,m);}}
   this.stage='renderer';this.createRenderer(this.canvas.width,this.canvas.height);const renderer=this.getRenderer();renderer.startUp(gl);renderer.setIsPremultipliedAlpha(true);
   // Serial texture upload keeps decoded image memory bounded on mobile.
   this.stage='textures';for(const [i,name] of refs.Textures.entries()){const t=await texture(gl,asset(name));this.textures.push(t);renderer.bindTexture(i,t);}
