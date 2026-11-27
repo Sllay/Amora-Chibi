@@ -1,0 +1,549 @@
+{
+	"Version": 3,
+	"Meta": {
+		"PhysicsSettingCount": 7,
+		"TotalInputCount": 7,
+		"TotalOutputCount": 7,
+		"VertexCount": 21,
+		"Fps": 60,
+		"EffectiveForces": {
+			"Gravity": {
+				"X": 0,
+				"Y": -1
+			},
+			"Wind": {
+				"X": 0,
+				"Y": 0
+			}
+		},
+		"PhysicsDictionary": [
+			{
+				"Id": "IrisInertiaX",
+				"Name": "IrisInertiaX"
+			},
+			{
+				"Id": "IrisInertiaY",
+				"Name": "IrisInertiaY"
+			},
+			{
+				"Id": "AmoraBodySquash",
+				"Name": "AmoraBodySquash"
+			},
+			{
+				"Id": "AmoraBodyYawFollow",
+				"Name": "AmoraBodyYawFollow"
+			},
+			{
+				"Id": "AmoraBodyPitchFollow",
+				"Name": "AmoraBodyPitchFollow"
+			},
+			{
+				"Id": "AmoraBlinkRecoilLeft",
+				"Name": "AmoraBlinkRecoilLeft"
+			},
+			{
+				"Id": "AmoraBlinkRecoilRight",
+				"Name": "AmoraBlinkRecoilRight"
+			}
+		]
+	},
+	"PhysicsSettings": [
+		{
+			"Id": "IrisInertiaX",
+			"Input": [
+				{
+					"Source": {
+						"Target": "Parameter",
+						"Id": "ParamEyeBallX"
+					},
+					"Weight": 100,
+					"Type": "X",
+					"Reflect": false
+				}
+			],
+			"Output": [
+				{
+					"Destination": {
+						"Target": "Parameter",
+						"Id": "ParamIrisBounceX"
+					},
+					"VertexIndex": 2,
+					"Scale": 0.550000011920929,
+					"Weight": 100,
+					"Type": "X",
+					"Reflect": false
+				}
+			],
+			"Vertices": [
+				{
+					"Position": {
+						"X": 0,
+						"Y": 0
+					},
+					"Mobility": 0.949999988079071,
+					"Delay": 1,
+					"Acceleration": 1,
+					"Radius": 0
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1
+					},
+					"Mobility": 0.8399999737739563,
+					"Delay": 1.25,
+					"Acceleration": 0.75,
+					"Radius": 1
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1.75
+					},
+					"Mobility": 0.8899999856948853,
+					"Delay": 1.5,
+					"Acceleration": 0.75,
+					"Radius": 0.75
+				}
+			],
+			"Normalization": {
+				"Position": {
+					"Minimum": -1,
+					"Default": 0,
+					"Maximum": 1
+				},
+				"Angle": {
+					"Minimum": -30,
+					"Default": 0,
+					"Maximum": 30
+				}
+			}
+		},
+		{
+			"Id": "IrisInertiaY",
+			"Input": [
+				{
+					"Source": {
+						"Target": "Parameter",
+						"Id": "ParamEyeBallY"
+					},
+					"Weight": 100,
+					"Type": "Y",
+					"Reflect": false
+				}
+			],
+			"Output": [
+				{
+					"Destination": {
+						"Target": "Parameter",
+						"Id": "ParamIrisBounceY"
+					},
+					"VertexIndex": 2,
+					"Scale": 0.5199999809265137,
+					"Weight": 100,
+					"Type": "Y",
+					"Reflect": false
+				}
+			],
+			"Vertices": [
+				{
+					"Position": {
+						"X": 0,
+						"Y": 0
+					},
+					"Mobility": 0.949999988079071,
+					"Delay": 1,
+					"Acceleration": 1,
+					"Radius": 0
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1
+					},
+					"Mobility": 0.8399999737739563,
+					"Delay": 1.25,
+					"Acceleration": 0.75,
+					"Radius": 1
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1.75
+					},
+					"Mobility": 0.8899999856948853,
+					"Delay": 1.5,
+					"Acceleration": 0.75,
+					"Radius": 0.75
+				}
+			],
+			"Normalization": {
+				"Position": {
+					"Minimum": -1,
+					"Default": 0,
+					"Maximum": 1
+				},
+				"Angle": {
+					"Minimum": -30,
+					"Default": 0,
+					"Maximum": 30
+				}
+			}
+		},
+		{
+			"Id": "AmoraBodySquash",
+			"Input": [
+				{
+					"Source": {
+						"Target": "Parameter",
+						"Id": "ParamBodyAngleZ"
+					},
+					"Weight": 100,
+					"Type": "Angle",
+					"Reflect": false
+				}
+			],
+			"Output": [
+				{
+					"Destination": {
+						"Target": "Parameter",
+						"Id": "ParamBodySquash"
+					},
+					"VertexIndex": 2,
+					"Scale": 0.3499999940395355,
+					"Weight": 100,
+					"Type": "Angle",
+					"Reflect": false
+				}
+			],
+			"Vertices": [
+				{
+					"Position": {
+						"X": 0,
+						"Y": 0
+					},
+					"Mobility": 0.949999988079071,
+					"Delay": 1,
+					"Acceleration": 1,
+					"Radius": 0
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1
+					},
+					"Mobility": 0.8399999737739563,
+					"Delay": 1.25,
+					"Acceleration": 0.75,
+					"Radius": 1
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1.75
+					},
+					"Mobility": 0.8899999856948853,
+					"Delay": 1.5,
+					"Acceleration": 0.75,
+					"Radius": 0.75
+				}
+			],
+			"Normalization": {
+				"Position": {
+					"Minimum": -1,
+					"Default": 0,
+					"Maximum": 1
+				},
+				"Angle": {
+					"Minimum": -30,
+					"Default": 0,
+					"Maximum": 30
+				}
+			}
+		},
+		{
+			"Id": "AmoraBodyYawFollow",
+			"Input": [
+				{
+					"Source": {
+						"Target": "Parameter",
+						"Id": "ParamAngleX"
+					},
+					"Weight": 100,
+					"Type": "Angle",
+					"Reflect": false
+				}
+			],
+			"Output": [
+				{
+					"Destination": {
+						"Target": "Parameter",
+						"Id": "ParamBodyAngleX"
+					},
+					"VertexIndex": 2,
+					"Scale": 0.23000000417232513,
+					"Weight": 100,
+					"Type": "Angle",
+					"Reflect": false
+				}
+			],
+			"Vertices": [
+				{
+					"Position": {
+						"X": 0,
+						"Y": 0
+					},
+					"Mobility": 0.949999988079071,
+					"Delay": 1,
+					"Acceleration": 1,
+					"Radius": 0
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1
+					},
+					"Mobility": 0.8399999737739563,
+					"Delay": 1.25,
+					"Acceleration": 0.75,
+					"Radius": 1
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1.75
+					},
+					"Mobility": 0.8899999856948853,
+					"Delay": 1.5,
+					"Acceleration": 0.75,
+					"Radius": 0.75
+				}
+			],
+			"Normalization": {
+				"Position": {
+					"Minimum": -1,
+					"Default": 0,
+					"Maximum": 1
+				},
+				"Angle": {
+					"Minimum": -30,
+					"Default": 0,
+					"Maximum": 30
+				}
+			}
+		},
+		{
+			"Id": "AmoraBodyPitchFollow",
+			"Input": [
+				{
+					"Source": {
+						"Target": "Parameter",
+						"Id": "ParamAngleY"
+					},
+					"Weight": 100,
+					"Type": "Angle",
+					"Reflect": false
+				}
+			],
+			"Output": [
+				{
+					"Destination": {
+						"Target": "Parameter",
+						"Id": "ParamBodyAngleY"
+					},
+					"VertexIndex": 2,
+					"Scale": 0.23000000417232513,
+					"Weight": 100,
+					"Type": "Angle",
+					"Reflect": false
+				}
+			],
+			"Vertices": [
+				{
+					"Position": {
+						"X": 0,
+						"Y": 0
+					},
+					"Mobility": 0.949999988079071,
+					"Delay": 1,
+					"Acceleration": 1,
+					"Radius": 0
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1
+					},
+					"Mobility": 0.8399999737739563,
+					"Delay": 1.25,
+					"Acceleration": 0.75,
+					"Radius": 1
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1.75
+					},
+					"Mobility": 0.8899999856948853,
+					"Delay": 1.5,
+					"Acceleration": 0.75,
+					"Radius": 0.75
+				}
+			],
+			"Normalization": {
+				"Position": {
+					"Minimum": -1,
+					"Default": 0,
+					"Maximum": 1
+				},
+				"Angle": {
+					"Minimum": -30,
+					"Default": 0,
+					"Maximum": 30
+				}
+			}
+		},
+		{
+			"Id": "AmoraBlinkRecoilLeft",
+			"Input": [
+				{
+					"Source": {
+						"Target": "Parameter",
+						"Id": "ParamEyeLOpen"
+					},
+					"Weight": 100,
+					"Type": "X",
+					"Reflect": false
+				}
+			],
+			"Output": [
+				{
+					"Destination": {
+						"Target": "Parameter",
+						"Id": "ParamIrisRecoilL"
+					},
+					"VertexIndex": 2,
+					"Scale": 0.47999998927116394,
+					"Weight": 100,
+					"Type": "X",
+					"Reflect": false
+				}
+			],
+			"Vertices": [
+				{
+					"Position": {
+						"X": 0,
+						"Y": 0
+					},
+					"Mobility": 0.949999988079071,
+					"Delay": 1,
+					"Acceleration": 1,
+					"Radius": 0
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1
+					},
+					"Mobility": 0.8399999737739563,
+					"Delay": 1.25,
+					"Acceleration": 0.75,
+					"Radius": 1
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1.75
+					},
+					"Mobility": 0.8899999856948853,
+					"Delay": 1.5,
+					"Acceleration": 0.75,
+					"Radius": 0.75
+				}
+			],
+			"Normalization": {
+				"Position": {
+					"Minimum": -1,
+					"Default": 0,
+					"Maximum": 1
+				},
+				"Angle": {
+					"Minimum": -30,
+					"Default": 0,
+					"Maximum": 30
+				}
+			}
+		},
+		{
+			"Id": "AmoraBlinkRecoilRight",
+			"Input": [
+				{
+					"Source": {
+						"Target": "Parameter",
+						"Id": "ParamEyeROpen"
+					},
+					"Weight": 100,
+					"Type": "X",
+					"Reflect": false
+				}
+			],
+			"Output": [
+				{
+					"Destination": {
+						"Target": "Parameter",
+						"Id": "ParamIrisRecoilR"
+					},
+					"VertexIndex": 2,
+					"Scale": 0.47999998927116394,
+					"Weight": 100,
+					"Type": "X",
+					"Reflect": false
+				}
+			],
+			"Vertices": [
+				{
+					"Position": {
+						"X": 0,
+						"Y": 0
+					},
+					"Mobility": 0.949999988079071,
+					"Delay": 1,
+					"Acceleration": 1,
+					"Radius": 0
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1
+					},
+					"Mobility": 0.8399999737739563,
+					"Delay": 1.25,
+					"Acceleration": 0.75,
+					"Radius": 1
+				},
+				{
+					"Position": {
+						"X": 0,
+						"Y": 1.75
+					},
+					"Mobility": 0.8899999856948853,
+					"Delay": 1.5,
+					"Acceleration": 0.75,
+					"Radius": 0.75
+				}
+			],
+			"Normalization": {
+				"Position": {
+					"Minimum": -1,
+					"Default": 0,
+					"Maximum": 1
+				},
+				"Angle": {
+					"Minimum": -30,
+					"Default": 0,
+					"Maximum": 30
+				}
+			}
+		}
+	]
+}

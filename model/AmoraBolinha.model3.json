@@ -1,0 +1,132 @@
+{
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "AmoraBolinha.moc3",
+    "Textures": [
+      "AmoraBolinha.textures/texture_00.png",
+      "AmoraBolinha.textures/texture_01.png",
+      "AmoraBolinha.textures/texture_02.png",
+      "AmoraBolinha.textures/texture_03.png",
+      "AmoraBolinha.textures/texture_04.png",
+      "AmoraBolinha.textures/texture_05.png",
+      "AmoraBolinha.textures/texture_06.png",
+      "AmoraBolinha.textures/texture_07.png",
+      "AmoraBolinha.textures/texture_08.png",
+      "AmoraBolinha.textures/texture_09.png",
+      "AmoraBolinha.textures/texture_10.png",
+      "AmoraBolinha.textures/texture_11.png",
+      "AmoraBolinha.textures/texture_12.png",
+      "AmoraBolinha.textures/texture_13.png",
+      "AmoraBolinha.textures/texture_14.png",
+      "AmoraBolinha.textures/texture_15.png",
+      "AmoraBolinha.textures/texture_16.png",
+      "AmoraBolinha.textures/texture_17.png",
+      "AmoraBolinha.textures/texture_18.png",
+      "AmoraBolinha.textures/texture_19.png",
+      "AmoraBolinha.textures/texture_20.png",
+      "AmoraBolinha.textures/texture_21.png"
+    ],
+    "DisplayInfo": "AmoraBolinha.cdi3.json",
+    "Expressions": [
+      {
+        "Name": "Neutral",
+        "File": "expressions/AmoraBolinha_Neutral.exp3.json"
+      },
+      {
+        "Name": "Blushing",
+        "File": "expressions/AmoraBolinha_Blushing.exp3.json"
+      },
+      {
+        "Name": "Happy",
+        "File": "expressions/AmoraBolinha_Happy.exp3.json"
+      },
+      {
+        "Name": "Surprised",
+        "File": "expressions/AmoraBolinha_Surprised.exp3.json"
+      },
+      {
+        "Name": "Sleepy",
+        "File": "expressions/AmoraBolinha_Sleepy.exp3.json"
+      },
+      {
+        "Name": "Annoyed",
+        "File": "expressions/AmoraBolinha_Annoyed.exp3.json"
+      },
+      {
+        "Name": "WinkLeft",
+        "File": "expressions/AmoraBolinha_WinkLeft.exp3.json"
+      },
+      {
+        "Name": "WinkRight",
+        "File": "expressions/AmoraBolinha_WinkRight.exp3.json"
+      },
+      {
+        "Name": "Shy",
+        "File": "expressions/AmoraBolinha_Shy.exp3.json"
+      },
+      {
+        "Name": "Curious",
+        "File": "expressions/AmoraBolinha_Curious.exp3.json"
+      },
+      {
+        "Name": "Sad",
+        "File": "expressions/AmoraBolinha_Sad.exp3.json"
+      },
+      {
+        "Name": "Crying",
+        "File": "expressions/AmoraBolinha_Crying.exp3.json"
+      },
+      {
+        "Name": "Sobbing",
+        "File": "expressions/AmoraBolinha_Sobbing.exp3.json"
+      },
+      {
+        "Name": "LaughingTears",
+        "File": "expressions/AmoraBolinha_LaughingTears.exp3.json"
+      },
+      {
+        "Name": "Deadpan",
+        "File": "expressions/AmoraBolinha_Deadpan.exp3.json"
+      },
+      {
+        "Name": "Enchanted",
+        "File": "expressions/AmoraBolinha_Enchanted.exp3.json"
+      },
+      {
+        "Name": "Angry",
+        "File": "expressions/AmoraBolinha_Angry.exp3.json"
+      },
+      {
+        "Name": "Shouting",
+        "File": "expressions/AmoraBolinha_Shouting.exp3.json"
+      }
+    ],
+    "Physics": "AmoraBolinha.physics3.json",
+    "Motions": {
+      "Idle": [
+        {
+          "File": "motions/AmoraBolinha_IdleTest.motion3.json",
+          "FadeInTime": 0.3,
+          "FadeOutTime": 0.3
+        }
+      ]
+    }
+  },
+  "Groups": [
+    {
+      "Target": "Parameter",
+      "Name": "EyeBlink",
+      "Ids": [
+        "ParamEyeLOpen",
+        "ParamEyeROpen"
+      ]
+    },
+    {
+      "Target": "Parameter",
+      "Name": "LipSync",
+      "Ids": [
+        "ParamMouthOpenY"
+      ]
+    }
+  ]
+}

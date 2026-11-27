@@ -1,0 +1,135 @@
+{
+  "Version": 3,
+  "Parameters": [
+    {
+      "Id": "ParamEyeLOpen",
+      "GroupId": "",
+      "Name": "ParamEyeLOpen"
+    },
+    {
+      "Id": "ParamEyeROpen",
+      "GroupId": "",
+      "Name": "ParamEyeROpen"
+    },
+    {
+      "Id": "ParamEyeBallX",
+      "GroupId": "",
+      "Name": "ParamEyeBallX"
+    },
+    {
+      "Id": "ParamEyeBallY",
+      "GroupId": "",
+      "Name": "ParamEyeBallY"
+    },
+    {
+      "Id": "ParamIrisRecoilL",
+      "GroupId": "",
+      "Name": "ParamIrisRecoilL"
+    },
+    {
+      "Id": "ParamIrisRecoilR",
+      "GroupId": "",
+      "Name": "ParamIrisRecoilR"
+    },
+    {
+      "Id": "ParamIrisBounceX",
+      "GroupId": "",
+      "Name": "ParamIrisBounceX"
+    },
+    {
+      "Id": "ParamIrisBounceY",
+      "GroupId": "",
+      "Name": "ParamIrisBounceY"
+    },
+    {
+      "Id": "ParamMouthOpenY",
+      "GroupId": "",
+      "Name": "ParamMouthOpenY"
+    },
+    {
+      "Id": "ParamMouthForm",
+      "GroupId": "",
+      "Name": "ParamMouthForm"
+    },
+    {
+      "Id": "ParamMouthPose",
+      "GroupId": "",
+      "Name": "ParamMouthPose"
+    },
+    {
+      "Id": "ParamBlush",
+      "GroupId": "",
+      "Name": "ParamBlush"
+    },
+    {
+      "Id": "ParamTearL",
+      "GroupId": "",
+      "Name": "ParamTearL"
+    },
+    {
+      "Id": "ParamTearR",
+      "GroupId": "",
+      "Name": "ParamTearR"
+    },
+    {
+      "Id": "ParamAngleZ",
+      "GroupId": "",
+      "Name": "ParamAngleZ"
+    },
+    {
+      "Id": "ParamAngleX",
+      "GroupId": "",
+      "Name": "ParamAngleX"
+    },
+    {
+      "Id": "ParamAngleY",
+      "GroupId": "",
+      "Name": "ParamAngleY"
+    },
+    {
+      "Id": "ParamBodyAngleX",
+      "GroupId": "",
+      "Name": "ParamBodyAngleX"
+    },
+    {
+      "Id": "ParamBodyAngleY",
+      "GroupId": "",
+      "Name": "ParamBodyAngleY"
+    },
+    {
+      "Id": "ParamBodyAngleZ",
+      "GroupId": "",
+      "Name": "ParamBodyAngleZ"
+    },
+    {
+      "Id": "ParamBreath",
+      "GroupId": "",
+      "Name": "ParamBreath"
+    },
+    {
+      "Id": "ParamBodySquash",
+      "GroupId": "",
+      "Name": "ParamBodySquash"
+    }
+  ],
+  "ParameterGroups": [],
+  "Parts": [
+    {
+      "Id": "Part0",
+      "Name": "Body"
+    },
+    {
+      "Id": "Part1",
+      "Name": "Face"
+    },
+    {
+      "Id": "Part2",
+      "Name": "Eyes"
+    },
+    {
+      "Id": "Part3",
+      "Name": "Mouth"
+    }
+  ],
+  "CombinedParameters": []
+}

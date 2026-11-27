@@ -1,0 +1,52 @@
+{
+  "Type": "Live2D Expression",
+  "FadeInTime": 0.25,
+  "FadeOutTime": 0.25,
+  "Parameters": [
+    {
+      "Id": "ParamEyeLOpen",
+      "Value": 0.36000001430511475,
+      "Blend": "Overwrite"
+    },
+    {
+      "Id": "ParamEyeROpen",
+      "Value": 0.36000001430511475,
+      "Blend": "Overwrite"
+    },
+    {
+      "Id": "ParamMouthPose",
+      "Value": 3.0,
+      "Blend": "Overwrite"
+    },
+    {
+      "Id": "ParamMouthOpenY",
+      "Value": 0.0,
+      "Blend": "Overwrite"
+    },
+    {
+      "Id": "ParamMouthForm",
+      "Value": -1.0,
+      "Blend": "Overwrite"
+    },
+    {
+      "Id": "ParamAngleY",
+      "Value": 8.0,
+      "Blend": "Overwrite"
+    },
+    {
+      "Id": "ParamBlush",
+      "Value": 0.23000000417232513,
+      "Blend": "Overwrite"
+    },
+    {
+      "Id": "ParamTearL",
+      "Value": 1.0,
+      "Blend": "Overwrite"
+    },
+    {
+      "Id": "ParamTearR",
+      "Value": 1.0,
+      "Blend": "Overwrite"
+    }
+  ]
+}
