@@ -325,7 +325,12 @@ class SecurityMiddleware:
         # A development SDK bundle is private even though the legacy avatar is public.
         if not websocket and (path == "/avatar/v5" or path.startswith("/avatar/v5/")):
             password = os.getenv("AMORA_VISUAL_V5_PREVIEW_PASSWORD", "")
-            if self.worker or not os.getenv("AMORA_VISUAL_V5_STAGING_ROOT"):
+            if self.worker:
+                return await respond(404, "preview not enabled")
+            preview_status = getattr(getattr(scope.get("app"), "state", None), "visual_preview_status", "disabled")
+            if preview_status == "unavailable":
+                return await respond(503, "preview unavailable; Core remains online")
+            if preview_status != "ready":
                 return await respond(404, "preview not enabled")
             if scope["method"] not in {"GET", "HEAD"}:
                 return await respond(403, "preview is read only")

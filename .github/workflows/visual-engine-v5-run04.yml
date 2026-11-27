@@ -1,8 +1,8 @@
 name: Visual Engine V5 RUN 04 — native Cubism
 on:
   push:
-    branches: [feat/visual-engine-v5-run04, feat/visual-engine-v5-staging]
-    paths: ['tools/visual-engine-v5/**','core/amora/**','web/**','tests/test_visual_stream_v5.py','.github/workflows/visual-engine-v5-run04.yml']
+    branches: [feat/visual-engine-v5-run04, feat/visual-engine-v5-staging, fix/visual-v5-optional-startup]
+    paths: ['tools/visual-engine-v5/**','core/amora/**','web/**','tests/test_visual_stream_v5.py','tests/test_visual_preview_v5.py','.github/workflows/visual-engine-v5-run04.yml']
   workflow_dispatch:
 permissions:
   contents: read

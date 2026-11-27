@@ -27,3 +27,47 @@ def test_preview_rejects_missing_manifest_and_tampering(tmp_path,monkeypatch):
     (tmp_path/"app.js").write_text("changed")
     with pytest.raises(RuntimeError):
         v.verify_preview(tmp_path)
+
+
+@pytest.mark.parametrize("failure", ["disabled", "manifest_missing", "password_invalid", "manifest_corrupt"])
+def test_optional_preview_failure_keeps_core_online_and_blocks_files(tmp_path, monkeypatch, caplog, failure):
+    import base64
+    from amora.app import AmoraCore
+    from amora.api import create_api
+    from fastapi.testclient import TestClient
+    from amora.time import SimulatedClock
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / "home"))
+    root = tmp_path / "preview"
+    root.mkdir()
+    (root / "index.html").write_text("must-not-be-served")
+    password = "x" * 40
+    monkeypatch.setenv("AMORA_VISUAL_V5_PREVIEW_PASSWORD", password)
+    if failure == "disabled":
+        monkeypatch.delenv("AMORA_VISUAL_V5_STAGING_ROOT", raising=False)
+    else:
+        monkeypatch.setenv("AMORA_VISUAL_V5_STAGING_ROOT", str(root))
+    if failure == "password_invalid":
+        monkeypatch.setenv("AMORA_VISUAL_V5_PREVIEW_PASSWORD", "short")
+    elif failure == "manifest_corrupt":
+        (root / "manifest.json").write_text("{invalid")
+    core = AmoraCore.bootstrap(clock=SimulatedClock())
+    try:
+        app = create_api(core)
+        assert app.state.visual_preview_status == ("disabled" if failure == "disabled" else "unavailable")
+        with TestClient(app) as client:
+            assert client.get("/health").status_code == 200
+            assert client.get("/visual-engine/").status_code == 200
+            assert client.get("/avatar/").status_code == 200
+            admin = {"Authorization": "Bearer " + core.secrets.get("LOCAL_API_TOKEN")}
+            assert client.get("/v1/avatar/project", headers=admin).status_code == 200
+            basic = {"Authorization": "Basic " + base64.b64encode(("preview:"+password).encode()).decode()}
+            for path in ("/avatar/v5", "/avatar/v5/", "/avatar/v5/index.html", "/avatar/v5/vendor/live2dcubismcore.min.js"):
+                for headers in ({}, basic):
+                    response = client.get(path, headers=headers)
+                    assert response.status_code == (404 if failure == "disabled" else 503)
+                    assert "must-not-be-served" not in response.text
+        if failure != "disabled":
+            assert "VISUAL_V5_PREVIEW_DISABLED" in caplog.text
+        assert password not in caplog.text
+    finally:
+        core.close()
