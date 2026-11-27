@@ -554,3 +554,49 @@ def test_run03_cached_source_is_not_labeled_fresh():
         owner_verified=True)
     assert "Fontes consultadas:\nhttps://example.net/new" in content
     assert "Fontes recuperadas do histórico (não relidas agora):\nhttps://example.org/old" in content
+
+@pytest.mark.asyncio
+async def test_run04_natural_refinement_fresh_discovery_and_failed_ordinal_retry():
+    from amora.web_tools.navigator import WebFetchError
+    queries, visits = [], []
+    root = "https://godotengine.org/releases"
+    topic = "https://forum.example.org/godot-rendering"
+    retry = "https://docs.example.org/godot-rendering"
+    def lookup(q):
+        queries.append(q)
+        if "renderiza" in q.lower():
+            return [{"url":topic,"title":"Godot Android renderização","snippet":"Godot Android renderização"},
+                    {"url":retry,"title":"Godot Android renderização documentação","snippet":"Godot Android renderização"}]
+        return [{"url":root,"title":"Godot Android releases","snippet":"Godot Android releases"}]
+    fail = set()
+    def read(url):
+        visits.append(url)
+        if url in fail:
+            raise WebFetchError("WEB_HTTP_ERROR")
+        return {"status":"opened","url":url,"title":"Godot Android renderização",
+                "text":"Godot Android renderização technical evidence from this page.",
+                "fetched_at":"2026-11-27T12:00:00+00:00","links":[]}
+    nav = WebNavigator(fetch_page=read, search=lookup)
+    await nav.research("pesquise Godot Android", "owner")
+    result = await nav.research("continue a pesquisa, mas agora com foco em renderização", "owner")
+    assert "renderização" in queries[-1]
+    assert root not in [r["url"] for r in result["references"]]
+    assert all(r["state"] == "read" for r in result["references"])
+    wanted = result["references"][1]["url"]
+    fail.add(wanted)
+    failed = await nav.research("abre o link 2", "owner")
+    assert failed["status"] == "failed"
+    assert not failed["sources"]
+    assert not nav.current_delivery("owner")["sources"]
+    fail.clear()
+    restored = await nav.research("tenta abrir de novo", "owner")
+    assert restored["sources"][0]["url"] == wanted
+    assert visits[-1] == wanted
+    assert (await nav.research("tenta abrir de novo", "stranger"))["reason"] == "WEB_REFERENCE_NOT_FOUND"
+
+
+def test_run04_failed_ordinal_capture_does_not_substitute_another_link():
+    from amora.messaging.web_delivery import requested_screenshot_source
+    assert requested_screenshot_source("tira print do link 2", WebIntent("follow", "2"),
+        sources=[], references=[{"url":"https://example.org/wrong"}], owner_verified=True) is None
+

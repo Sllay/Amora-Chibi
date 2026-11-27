@@ -72,6 +72,11 @@ jobs:
           node --check workers/discord/worker.mjs
           node --check workers/whatsapp/normalize.mjs
           node --check workers/whatsapp/worker.mjs
+      - name: Ensure native raster decoder is available
+        run: |
+          if ! command -v ffmpeg || ! command -v ffprobe; then
+            sudo apt-get update && sudo apt-get install -y ffmpeg
+          fi
       - name: Adapter contract tests
         run: node --test tests/messaging_workers.test.mjs tests/messaging_privacy_scope_contract.test.mjs tests/discord_worker_runtime.test.mjs tests/discord_lifecycle_stability.test.mjs tests/discord_typing_progress.test.mjs tests/discord_entrypoint.test.mjs tests/discord_sealed_env.test.mjs tests/discord_response_modality.test.mjs tests/discord_sticker_media.test.mjs tests/discord_visual_enrichment_worker.test.mjs tests/discord_temporal_sticker_storyboard.test.mjs tests/discord_incoming_image.test.mjs tests/discord_large_image_recovery.test.mjs tests/discord_web_screenshot.test.mjs tests/discord_realtime_delivery.test.mjs
       - name: Build Discord worker container
@@ -81,6 +86,9 @@ jobs:
       - name: Smoke test real raster transcode in non-root Discord container
         run: |
           docker run --rm --entrypoint sh amora-discord:test -c 'vips black /tmp/source.png 64 64 && node --input-type=module -e "import {readFile} from \"node:fs/promises\"; import {transcodeOversizedImage} from \"./workers/discord/incoming-image-transform.mjs\"; const input=await readFile(\"/tmp/source.png\"); const result=await transcodeOversizedImage(input,\"image/png\"); if(result.mime!==\"image/webp\" || result.bytes.length<12 || result.bytes.length>4*1024*1024) process.exit(1); console.log(\"vision-native-transcode-ok\")"'
+      - name: Certify screenshot decode and multipart contracts in non-root worker container
+        run: |
+          docker run --rm --volume "$PWD/tests:/opt/amora/tests:ro" --entrypoint sh amora-discord:test -c 'test "$(id -u)" = "10001" && node --test tests/discord_web_screenshot.test.mjs'
       - name: Certify actual GIF and APNG temporal rendering in non-root worker container
         run: |
           # The hosted runner may lack FFmpeg. Run the real decoder against the

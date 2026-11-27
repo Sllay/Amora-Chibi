@@ -313,3 +313,25 @@ async def test_core_preserves_http_error_if_browser_fails():
     assert result["status"] == "failed"
     assert result["reason"] == "WEB_HTTP_403"
     assert result["sources"] == []
+
+@pytest.mark.asyncio
+async def test_run04_capture_route_auth_and_gate(monkeypatch):
+    import httpx
+    class Renderer:
+        async def render(self, url, *, capture=False):
+            assert capture
+            return b"\x89PNG\r\n\x1a\n" + b"fixture"
+    monkeypatch.setattr(app.state, "secret", "s"*32, raising=False)
+    monkeypatch.setattr(app.state, "renderer", Renderer(), raising=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        body = {"url":"https://example.org/"}
+        assert (await client.post("/capture", json=body)).status_code == 403
+        headers = {"X-Amora-Browser-Token":"s"*32}
+        monkeypatch.setenv("AMORA_WEB_BROWSER_CAPTURE_ENABLED","0")
+        assert (await client.post("/capture", json=body, headers=headers)).status_code == 503
+        monkeypatch.setenv("AMORA_WEB_BROWSER_CAPTURE_ENABLED","1")
+        response = await client.post("/capture", json=body, headers=headers)
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+        assert response.headers["cache-control"] == "no-store"
+

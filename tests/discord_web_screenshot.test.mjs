@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  publicScreenshotTarget, WebScreenshotService, screenshotMultipart,
+  publicScreenshotTarget, WebScreenshotService, screenshotMultipart, verifyScreenshotRaster,
 } from '../workers/discord/web-screenshot.mjs';
 import { DiscordRestClient } from '../workers/discord/http.mjs';
 import { DiscordWorker } from '../workers/discord/worker.mjs';
 
 const IMAGE_URL = 'https://cdn.microlink.io/amora-screenshot.jpg';
-const IMAGE_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0, 1, 2, 3, 4, 5]);
+// Actual 8x8 JPEG; a magic-byte stub is not proof of a decodable image.
+const IMAGE_BYTES = new Uint8Array(Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJCIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDlqKKK8g/Xj//Z', 'base64'));
 
 function apiResponse() {
   const doc = {
@@ -143,7 +144,7 @@ test('Discord worker attaches screenshot ONLY for verified Core owner metadata',
         calls.push(options);
         return { id: 'sent', channel_id: 'chan',
           attachments: options.multipart
-            ? [{ id: 'screenshot-id', filename: 'amora-web-print.jpg' }]
+            ? [{ id: 'screenshot-id', filename: 'amora-web-print.jpg', size: IMAGE_BYTES.byteLength }]
             : [] };
       },
     },
@@ -361,7 +362,7 @@ test('verified screenshot source from previous Core remains supported during rol
         sent.push(options);
         return { id: 'sent', channel_id: 'chan',
           attachments: options.multipart
-            ? [{ id: 'image', filename: 'amora-web-print.jpg' }] : [] };
+            ? [{ id: 'image', filename: 'amora-web-print.jpg', size: IMAGE_BYTES.byteLength }] : [] };
       },
     },
     runtime: { rememberBotMessage() {} },
@@ -540,3 +541,40 @@ test('screenshot receipt with wrong channel or mismatched byte size is not confi
     assert.match(calls[1].body.content,/não consegui confirmar o anexo/i);
   }
 });
+
+test('decoder rejects truncated raster and provides real dimensions and digest', async () => {
+  const actual = await verifyScreenshotRaster(IMAGE_BYTES, 'image/jpeg');
+  assert.equal(actual?.width, 8);
+  assert.equal(actual?.height, 8);
+  assert.match(actual.checksum, /^[a-f0-9]{64}$/);
+  assert.equal(await verifyScreenshotRaster(IMAGE_BYTES.slice(0, 10), 'image/jpeg'), null);
+  assert.equal(await verifyScreenshotRaster(IMAGE_BYTES, 'image/png'), null);
+});
+
+test('expired screenshot claim cannot issue a new multipart or capture', async () => {
+  let calls = 0;
+  const worker = new DiscordWorker({ token: 'test', core: {},
+    rest: { request: async () => { calls++; throw new Error('unexpected'); } },
+    runtime: { rememberBotMessage() {} } });
+  worker.webScreenshots = { capture: async () => { calls++; } };
+  await assert.rejects(worker.sendOutbound({ id:'12345678-abcd-abcd-abcd-1234567890ab',
+    platform:'discord', conversation_id:'chan', text:'print',
+    metadata:{web_capture_requested:true, web_capture_reclaim:true} }), /RECEIPT_UNCERTAIN/);
+  assert.equal(calls, 0);
+});
+
+test('explicit browser backend does not fall through to Microlink or leak token', async () => {
+  const requests = [];
+  const token = 'x'.repeat(32);
+  const service = new WebScreenshotService({backend:'browser', browserUrl:'https://browser.example.org',
+    browserToken:token, fetchImpl: async (url, opts) => {
+      requests.push({url, opts}); return new Response('', {status: 422});
+    }});
+  assert.equal(await service.capture('https://godotengine.org/'), null);
+  assert.equal(service.lastFailureCode, 'navigation_failed');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'https://browser.example.org/capture');
+  assert.deepEqual(JSON.parse(requests[0].opts.body), {url:'https://godotengine.org/'});
+  assert.equal(requests[0].opts.headers['X-Amora-Browser-Token'], token);
+});
+

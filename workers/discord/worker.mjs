@@ -56,6 +56,21 @@ function traceDelivery(stage, item, metrics) {
   safeLog('PERFORMANCE_TRACE', `stage=${stage} outbound_id=${traceUuid(item?.id)} ${values}`);
 }
 
+function screenshotTrace(item, stage, extra = {}) {
+  const meta = item?.metadata || {};
+  if (!meta.web_capture_requested && !meta.web_capture_source &&
+      stage !== 'metadata_missing') return;
+  const target = typeof meta.web_capture_source === 'string' ? meta.web_capture_source : '';
+  const sha = [process.env.AMORA_BUILD_SHA, process.env.NORTHFLANK_GIT_SHA, process.env.GIT_SHA]
+    .find(value => /^[a-f0-9]{7,64}$/i.test(value || '')) || 'unknown';
+  const captureId = createHash('sha256').update(String(item?.id || '')).digest('hex').slice(0,24);
+  const record = { stage, capture_id: captureId, outbound_id: traceUuid(item?.id),
+    turn_id: traceUuid(meta.web_capture_turn_id || meta.cognitive_turn_id), sha,
+    target_hash: target ? createHash('sha256').update(target).digest('hex').slice(0,24) : '-',
+    ...extra };
+  process.stderr.write('[amora-discord] WEB_CAPTURE_TRACE ' + JSON.stringify(record) + '\n');
+}
+
 function errorLabel(error) {
   if (error?.code) return String(error.code);
   if (error?.status) return `HTTP_${error.status}`;
@@ -106,8 +121,12 @@ export class DiscordWorker {
       enabled: enabled('AMORA_WEB_SCREENSHOTS_ENABLED', true),
       apiKey: process.env.AMORA_WEB_SCREENSHOT_MICROLINK_API_KEY || '',
       dailyLimit: Number(process.env.AMORA_WEB_SCREENSHOT_DAILY_LIMIT || 4),
+      backend: process.env.AMORA_WEB_SCREENSHOT_BACKEND || 'microlink',
+      browserUrl: process.env.AMORA_WEB_SCREENSHOT_BROWSER_URL || '',
+      browserToken: process.env.AMORA_WEB_SCREENSHOT_BROWSER_TOKEN || '',
+      privateHttp: enabled('AMORA_WEB_SCREENSHOT_BROWSER_PRIVATE_HTTP', false),
     });
-    safeLog('WEB_SCREENSHOT_PIPELINE_READY', 'version=20261120-r2'
+    safeLog('WEB_SCREENSHOT_PIPELINE_READY', 'version=20261127-r4 backend=' + this.webScreenshots.backend
       + ' enabled=' + this.webScreenshots.enabled
       + ' provider=' + (this.webScreenshots.apiKey ? 'keyed' : 'keyless'));
     this.typingProgress = new Map();
@@ -963,11 +982,13 @@ export class DiscordWorker {
           const ackStarted = performance.now();
           await this.core.ackOutbound(item.id, { sent: true, externalMessageId });
           traceDelivery('ack', item, { ack_ms: performance.now() - ackStarted });
+          screenshotTrace(item, 'outbound_ack');
           safeLog('OUTBOUND_SENT');
         } catch (error) {
           // Discord already accepted the message. Never convert an ACK transport
           // failure into sent=false. Leave it claimed and recover by nonce after
           // lease expiry if necessary.
+          screenshotTrace(item, 'ack_uncertain');
           safeLog('OUTBOUND_ACK_FAILED', errorLabel(error));
           break;
         }
@@ -1020,6 +1041,15 @@ export class DiscordWorker {
   async sendOutbound(item) {
     const chunks = splitDiscordText(item.text, 2000);
     if (!chunks.length) throw new Error('EMPTY_OUTBOUND');
+    if (item.metadata?.web_capture_reclaim) {
+      // A previous lease may have sent the image. Never replay an expired
+      // capture from an unknown state. The user may issue a fresh retry.
+      screenshotTrace(item, 'receipt_uncertain');
+      const error = new Error('WEB_SCREENSHOT_RECEIPT_UNCERTAIN');
+      error.code = 'WEB_SCREENSHOT_RECEIPT_UNCERTAIN';
+      error.retryable = false;
+      throw error;
+    }
     // The Core minted this flag after verified owner DM consent. A user/LLM
     // cannot smuggle screenshot destinations into the worker's text path.
     // Backward-compatible with a previous Core during independent deploys:
@@ -1035,14 +1065,18 @@ export class DiscordWorker {
       // A Core capture-status message with no transport metadata must not
       // silently masquerade as a screenshot attempt. Never infer a URL from text.
       safeLog('WEB_SCREENSHOT_METADATA_MISSING');
+      screenshotTrace(item, 'metadata_missing');
       const note = '\n\n(O pedido de print chegou sem autorização de anexo. Nada foi enviado.)';
       if (chunks[0].length + note.length <= 2000) chunks[0] += note;
       else chunks.push(note.trim());
     }
     safeLog('WEB_SCREENSHOT_DISPATCH', 'requested=' + screenshotRequested
       + ' authorized=' + authorizedScreenshot);
+    const trace = (stage, extra) => screenshotTrace(item, stage, extra);
+    trace(authorizedScreenshot ? 'authorized' : 'denied_or_no_target');
     const screenshot = authorizedScreenshot
-      ? await this.webScreenshots.capture(item.metadata.web_capture_source)
+      ? await this.webScreenshots.capture(item.metadata.web_capture_source, {
+          captureId: createHash('sha256').update(String(item.id)).digest('hex').slice(0,24), trace })
       : null;
     if (screenshotRequested && !screenshot) {
       const knownFailures = new Set([
@@ -1051,13 +1085,17 @@ export class DiscordWorker {
         'provider_http_error', 'provider_response_invalid', 'provider_refused',
         'provider_image_url_invalid', 'image_cdn_http_error',
         'image_mime_invalid', 'image_bytes_invalid', 'provider_timeout',
-        'provider_network_error', 'provider_unknown',
+        'provider_network_error', 'provider_unknown', 'backend_unavailable', 'navigation_failed',
       ]);
       const rawCode = authorizedScreenshot ? this.webScreenshots.lastFailureCode : null;
       const reason = authorizedScreenshot
         ? (knownFailures.has(rawCode) ? rawCode : 'provider_unknown')
         : 'no_authorized_public_page';
       safeLog('WEB_SCREENSHOT_UNAVAILABLE', 'reason=' + reason);
+      const state = !authorizedScreenshot ? 'no_target' : reason === 'navigation_failed' ? 'nav_failed'
+        : ['image_mime_invalid', 'image_bytes_invalid'].includes(reason) ? 'invalid_raster'
+        : ['image_cdn_http_error', 'provider_network_error'].includes(reason) ? 'transfer_failed' : 'capture_failed';
+      trace(state, { reason });
       const note = authorizedScreenshot
         ? '\n\n(Não consegui capturar o print. Código: ' + reason
           + '. Nenhum anexo foi enviado.)'
@@ -1077,10 +1115,12 @@ export class DiscordWorker {
       let created;
       let imageUploadRejected = false;
       try {
+        if (index === 0 && screenshot) trace('multipart_request', {
+          bytes: screenshot.bytes.length, mime: screenshot.mime, filename: screenshot.filename });
         created = await this.rest.request(messagePath, {
           method: 'POST',
           ...(index === 0 && screenshot
-            ? { multipart: screenshotMultipart(payload, screenshot) }
+            ? { multipart: screenshotMultipart(payload, screenshot), maxAttempts: 1 }
             : { body: payload }),
         });
       } catch (error) {
@@ -1089,9 +1129,14 @@ export class DiscordWorker {
         // the reply. For uncertain network/5xx outcomes, do NOT duplicate
         // the message: let the existing nonce/ack recovery own retry.
         if (!(index === 0 && screenshot && error?.retryable === false
-            && [400, 413, 415, 422].includes(Number(error?.status)))) throw error;
+            && [400, 413, 415, 422].includes(Number(error?.status)))) {
+          if (index === 0 && screenshot) trace(error?.status === 429 ? 'rate_limited' : 'receipt_uncertain', {
+            status: Number(error?.status) || null });
+          throw error;
+        }
         imageUploadRejected = true;
         safeLog('WEB_SCREENSHOT_UPLOAD_REJECTED', 'status=' + error.status);
+        trace('upload_rejected', { status: Number(error.status) });
         // The raster was fetched successfully, but Discord rejected the
         // multipart. Surface a *verified* Microlink CDN URL when present so
         // the owner can still open the actual screenshot. A link is not an
@@ -1113,14 +1158,15 @@ export class DiscordWorker {
       if (created?.id && created?.channel_id) this.runtime.rememberBotMessage(created);
       if (!firstMessageId) firstMessageId = created?.id || null;
       const attachmentConfirmed = created?.id && String(created?.channel_id) === String(item.conversation_id)
-        && Array.isArray(created.attachments) && created.attachments.some(
+        && Array.isArray(created.attachments) && created.attachments.find(
           (entry) => entry?.id && entry?.filename === screenshot?.filename
-            && (entry.size == null || entry.size === screenshot?.bytes?.byteLength)
+            && entry.size === screenshot?.bytes?.byteLength
         );
       if (index === 0 && screenshot && !imageUploadRejected && !attachmentConfirmed) {
         // Accepted text is not proof of an attached image. Never retry the
         // uncertain image request: send a clearly labeled status instead.
         safeLog('WEB_SCREENSHOT_ATTACHMENT_NOT_CONFIRMED');
+        trace('receipt_uncertain');
         const correction = discordReplyPayload(
           'Não consegui confirmar o anexo do print na resposta do Discord. ' +
           (typeof screenshot.imageUrl === 'string' &&
@@ -1139,6 +1185,9 @@ export class DiscordWorker {
         }
       } else if (index === 0 && screenshot && !imageUploadRejected) {
         safeLog('WEB_SCREENSHOT_ATTACHMENT_CONFIRMED');
+        trace('attachment_confirmed', { message_id: /^[0-9]{17,20}$/.test(String(created.id)) ? String(created.id) : '-',
+          attachment_id: /^[0-9]{17,20}$/.test(String(attachmentConfirmed.id)) ? String(attachmentConfirmed.id) : '-',
+          filename: screenshot.filename, size: attachmentConfirmed.size });
       }
     }
     return firstMessageId;

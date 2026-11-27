@@ -12,6 +12,8 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import hmac
+import hashlib
+import logging
 import ipaddress
 import os
 import re
@@ -28,6 +30,8 @@ MAX_LINKS = 12
 MAX_URL = 2048
 MAX_PAGE_SECONDS = 10.0
 MAX_RESPONSE_BODY = 2600
+MAX_CAPTURE_BYTES = 2_500_000
+_LOG = logging.getLogger("amora.browser")
 
 
 class RenderRequest(BaseModel):
@@ -78,14 +82,17 @@ EXTRACT_JS = r"""() => {
 }"""
 
 
-async def _guard_http(route) -> None:
+async def _guard_http(route, *, capture: bool = False) -> None:
     request = route.request
     try:
         checked_web_url(request.url)
         if request.method.upper() not in {"GET", "HEAD"}:
             await route.abort()
             return
-        if request.resource_type in {"image", "media", "font", "manifest", "beacon"}:
+        blocked = {"media", "font", "manifest", "beacon"}
+        if not capture:
+            blocked.add("image")
+        if request.resource_type in blocked:
             await route.abort()
             return
     except (ProxyDenied, ValueError):
@@ -105,7 +112,7 @@ class BrowserRenderer:
         self.proxy_url = proxy_url
         self._render_lock = asyncio.Lock()
 
-    async def render(self, url: str) -> dict[str, Any]:
+    async def render(self, url: str, *, capture: bool = False) -> dict[str, Any] | bytes:
         checked = checked_web_url(url)
         # Fail fast on contention: the worker has precisely one Chromium slot.
         try:
@@ -124,7 +131,12 @@ class BrowserRenderer:
                 permissions=[],
                 viewport={"width": 900, "height": 700},
             )
-            await context.route("**/*", _guard_http)
+            if capture:
+                async def guard(route):
+                    await _guard_http(route, capture=True)
+                await context.route("**/*", guard)
+            else:
+                await context.route("**/*", _guard_http)
             await context.route_web_socket("**/*", _block_socket)
             page = await context.new_page()
             page.set_default_timeout(3500)
@@ -160,6 +172,12 @@ class BrowserRenderer:
                 "enable cookies", "captcha", "verifique que você é humano",
             )):
                 raise ProxyDenied("BROWSER_ACCESS_CHALLENGE")
+            if capture:
+                data = await page.screenshot(type="png", full_page=False,
+                                             animations="disabled", timeout=2500)
+                if not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > MAX_CAPTURE_BYTES:
+                    raise ProxyDenied("BROWSER_CAPTURE_INVALID")
+                return data
             return {
                 "status": "opened" if text.strip() else "empty",
                 "url": final_url,
@@ -171,9 +189,11 @@ class BrowserRenderer:
                 "render_mode": "chromium_js_v1",
             }
         finally:
-            if context is not None:
-                await context.close()
-            self._render_lock.release()
+            try:
+                if context is not None:
+                    await context.close()
+            finally:
+                self._render_lock.release()
 
 
 @asynccontextmanager
@@ -216,7 +236,7 @@ app = FastAPI(
 
 @app.middleware("http")
 async def reject_unauthorized_render_before_parsing_body(request: Request, call_next):
-    if request.url.path == "/render":
+    if request.url.path in {"/render", "/capture"}:
         token = request.headers.get("x-amora-browser-token", "")
         secret = getattr(app.state, "secret", "")
         if not secret or not token or not hmac.compare_digest(token, secret):
@@ -231,7 +251,8 @@ async def reject_unauthorized_render_before_parsing_body(request: Request, call_
 
 @app.get("/health")
 async def health():
-    return {"status": "ready" if hasattr(app.state, "renderer") else "unavailable"}
+    return {"status": "ready" if hasattr(app.state, "renderer") else "unavailable",
+            "render": True, "capture": os.getenv("AMORA_WEB_BROWSER_CAPTURE_ENABLED") == "1"}
 
 
 @app.post("/render")
@@ -252,3 +273,32 @@ async def render(body: RenderRequest, x_amora_browser_token: str | None = Header
     except Exception as exc:
         # Never leak page URL, browser internals, cookies or HTML in diagnostics.
         raise HTTPException(status_code=502, detail="BROWSER_RENDER_FAILED") from exc
+
+@app.post("/capture")
+async def capture_page(body: RenderRequest, x_amora_browser_token: str | None = Header(default=None),
+                       x_amora_capture_id: str | None = Header(default=None)):
+    secret = getattr(app.state, "secret", "")
+    if not secret or not x_amora_browser_token or not hmac.compare_digest(x_amora_browser_token, secret):
+        raise HTTPException(status_code=403, detail="BROWSER_AUTH_DENIED")
+    if os.getenv("AMORA_WEB_BROWSER_CAPTURE_ENABLED") != "1":
+        raise HTTPException(status_code=503, detail="BROWSER_CAPTURE_DISABLED")
+    correlation = x_amora_capture_id if re.fullmatch(r"[a-f0-9]{24}", x_amora_capture_id or "") else "-"
+    target_hash = hashlib.sha256(body.url.encode()).hexdigest()[:24]
+    started = asyncio.get_running_loop().time()
+    try:
+        # Same sandbox, pinned DNS proxy, one slot and ephemeral context as /render.
+        data = await asyncio.wait_for(app.state.renderer.render(body.url, capture=True), timeout=12)
+        if not isinstance(data, bytes) or not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > MAX_CAPTURE_BYTES:
+            raise ProxyDenied("BROWSER_CAPTURE_INVALID")
+        _LOG.info("capture_id=%s target_hash=%s stage=capture_ready bytes=%d ms=%d",
+                  correlation, target_hash, len(data), round((asyncio.get_running_loop().time()-started)*1000))
+        return Response(content=data, media_type="image/png", headers={"Cache-Control": "no-store"})
+    except ProxyDenied as exc:
+        _LOG.info("capture_id=%s target_hash=%s stage=nav_or_capture_failed code=%s",
+                  correlation, target_hash, exc.code)
+        raise HTTPException(status_code=422, detail=exc.code) from exc
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="BROWSER_TIMEOUT") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="BROWSER_CAPTURE_FAILED") from exc
+

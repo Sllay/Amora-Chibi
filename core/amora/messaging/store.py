@@ -521,15 +521,21 @@ class MessagingStore:
                             "receipts":checkpoint.receipts}
                         claimed.append(candidate)
                         continue
-                claimed.append(
-                    self._outbound_from_row(
-                        dict(row) | {
-                            "status": OutboundStatus.CLAIMED.value,
-                            "claimed_at": now.isoformat(),
-                            "claim_expires_at": expires.isoformat(),
-                        }
-                    )
+                claimed_candidate = self._outbound_from_row(
+                    dict(row) | {
+                        "status": OutboundStatus.CLAIMED.value,
+                        "claimed_at": now.isoformat(),
+                        "claim_expires_at": expires.isoformat(),
+                    }
                 )
+                # A screenshot POST is an external side effect. An expired
+                # lease cannot prove that it was never sent. Signal recovery
+                # instead of authorizing blind replay after worker restart.
+                if (row["status"] == "claimed" and candidate.platform == MessagingPlatform.DISCORD
+                        and (candidate.metadata.get("web_capture_requested")
+                             or candidate.metadata.get("web_capture_source"))):
+                    claimed_candidate.metadata["web_capture_reclaim"] = True
+                claimed.append(claimed_candidate)
         return tuple(claimed)
 
     @trace_stage("outbound_ack")

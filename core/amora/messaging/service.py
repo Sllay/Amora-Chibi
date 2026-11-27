@@ -643,6 +643,7 @@ class PlatformMessagingService:
         generation_started = self.clock.monotonic()
         web_capture_source: str | None = None
         web_capture_requested = False
+        web_capture_id = hashlib.sha256(str(self._outbound_id(message)).encode()).hexdigest()[:24]
         plan = None
         set_ms("messaging_pre_cognition_ms", elapsed_ms(ingress_started))
         set_value("_critical_phase", "cognition")
@@ -778,7 +779,9 @@ class PlatformMessagingService:
                 # model-made link or arbitrary unrelated image from chat.
                 core_nav.remember_capture_request(request.session_id, web_capture_source)
             _LOG.info(
-                "web_capture_request kind=%s requested=%s authorized=%s",
+                "web_capture_request capture_id=%s turn_id=%s outbound_id=%s target_hash=%s kind=%s requested=%s authorized=%s",
+                web_capture_id, request.turn_id, self._outbound_id(message),
+                hashlib.sha256(web_capture_source.encode()).hexdigest()[:24] if web_capture_source else "-",
                 intent.action if intent is not None else "none",
                 web_capture_requested, bool(web_capture_source),
             )
@@ -876,7 +879,8 @@ class PlatformMessagingService:
                 "attention_score": decision.score,
                 "transport_revision": message.transport_revision,
                 "delivery_message_id": message.message_id,
-                **({"web_capture_requested": True} if web_capture_requested else {}),
+                **({"web_capture_requested": True, "web_capture_id": web_capture_id,
+                    "web_capture_turn_id": str(request.turn_id)} if web_capture_requested else {}),
                 **({"web_capture_source": web_capture_source,
                     "web_capture_owner_verified": True} if web_capture_source and web_owner_verified else {}),
             },

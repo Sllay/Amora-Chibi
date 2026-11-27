@@ -92,7 +92,7 @@ async def _collect(coros, *, deadline):
 
 
 async def deep_search(nav, topic: str, text: str, session_id: str, *,
-                      seconds: float = DEEP_SECONDS, resume=None) -> dict:
+                      seconds: float = DEEP_SECONDS, resume=None, refinement: str = "") -> dict:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + seconds
     discovery_deadline = min(deadline, loop.time() + min(DISCOVERY_SECONDS, seconds * .4))
@@ -136,7 +136,7 @@ async def deep_search(nav, topic: str, text: str, session_id: str, *,
             return engine, [], exc.code
         except TimeoutError:
             return engine, [], "WEB_SEARCH_TIMEOUT"
-        ranked = _rank_search_results(result or [], topic)
+        ranked = _rank_search_results(result or [], topic, refinement=refinement)
         safe = []
         for row in ranked:
             try:

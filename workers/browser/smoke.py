@@ -82,6 +82,13 @@ async def main():
                 assert "Dynamically rendered public article" in result["text"], result
                 assert any(link["url"].endswith("/next") for link in result["links"]), result
                 print("CHROMIUM_PROXY_DOM_SMOKE_PASS")
+                raster = await BrowserRenderer(browser, proxy.url).render(
+                    "http://example.org:8080/article", capture=True
+                )
+                assert raster.startswith(b"\x89PNG\r\n\x1a\n") and len(raster) < 2_500_000
+                assert int.from_bytes(raster[16:20], "big") == 900
+                assert int.from_bytes(raster[20:24], "big") == 700
+                print("CHROMIUM_PROXY_CAPTURE_SMOKE_PASS")
             finally:
                 await browser.close()
     finally:
