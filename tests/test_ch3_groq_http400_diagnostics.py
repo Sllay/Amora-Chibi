@@ -337,3 +337,37 @@ async def test_stabilization_sync_compact_retry_is_guarded_and_bounded(monkeypat
         assert all(ctx.user_text in str(x["input"]) for x in sent)
     assert ctx.recent_messages==original.recent_messages
     assert ctx.user_text==original.user_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed",[True,False])
+async def test_run02_b_irreducible_rejection_checks_guard_without_second_request(monkeypatch,allowed):
+    from amora.cognition.durable_realization import (
+        DURABLE_REALIZATION,DURABLE_AUTHORIZATION,DeferredRealization,
+    )
+    from amora.cognition.providers_identity import GroqCognitiveProvider as LiveGroq
+    from amora.cognition.providers import ProviderError
+    ctx=_context()
+    # No optional history, and the evidence is required. Neither the
+    # original user text nor the protected evidence may be sacrificed.
+    ctx.web_research={"status":"read","sources":[{"url":"https://example.invalid","text":"Fonte original."}]}
+    sent=[]
+    checks=[]
+    async def post(payload,**kwargs):
+        sent.append(payload)
+        raise ProviderError("synthetic rejection",status_code=413)
+    async def guard():
+        checks.append(True)
+        return allowed
+    provider=LiveGroq(_Secrets())
+    monkeypatch.setattr(provider,"_post_responses",post)
+    marker=DURABLE_REALIZATION.set(str(ctx.turn_id))
+    auth=DURABLE_AUTHORIZATION.set(guard)
+    try:
+        with pytest.raises(ProviderError if allowed else DeferredRealization):
+            await provider._responses_realize(ctx,api_key="TEST_KEY_DO_NOT_LEAK")
+        assert len(sent)==1 and len(checks)==1
+        assert "Fonte original." in sent[0]["instructions"]
+    finally:
+        DURABLE_AUTHORIZATION.reset(auth)
+        DURABLE_REALIZATION.reset(marker)

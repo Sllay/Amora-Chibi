@@ -268,8 +268,9 @@ def trace_messaging_turn(fn):
                 sampler.cancel()
                 # Cancelled sampler owns no resources and never writes after cancellation.
                 outbound = result.outbound[0] if result is not None and result.outbound else None
-                log_trace("turn_resources",resource_delta(resources,resource_sample()),
-                          turn_id=self._turn_id(message),outcome=outcome)
+                # Keep one canonical record per owned turn and retain the
+                # numeric resource metrics without duplicating trace events.
+                trace.update(resource_delta(resources,resource_sample()))
                 log_trace("messaging", trace, turn_id=self._turn_id(message),
                           outbound_id=outbound.id if outbound is not None else None, outcome=outcome)
                 # Short independent record for log viewers that truncate the

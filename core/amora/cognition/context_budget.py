@@ -34,7 +34,7 @@ class EnvelopeBudget:
                 and (self.body_limit_bytes is None or self.body_bytes <= self.body_limit_bytes))
 
 
-def measure_envelope(context, payload, *, descriptor=None, ceiling=None):
+def measure_envelope(context, payload, *, descriptor=None, ceiling=None, body_ceiling=None):
     """Measure actual JSON bytes, reserve requested output and honor known limits.
 
     Local token budgets are input-only; provider context windows include output.
@@ -53,6 +53,10 @@ def measure_envelope(context, payload, *, descriptor=None, ceiling=None):
         limit = min(limit, window - reserve)
     metadata = getattr(descriptor, "metadata", {}) or {}
     byte_limit = _positive_int(metadata.get("max_request_bytes"))
+    if body_ceiling is not None:
+        if type(body_ceiling) is not int or body_ceiling<1:
+            raise ValueError("INVALID_BODY_CEILING")
+        byte_limit = min(byte_limit,body_ceiling) if byte_limit is not None else body_ceiling
     body_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"),
                                 allow_nan=False).encode("utf-8"))
     return EnvelopeBudget(estimate_payload(payload), reserve, body_bytes, max(0, limit), byte_limit)
@@ -86,7 +90,7 @@ GROQ_V3_SOFT_CEILING_TOKENS = 12_288
 
 
 def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEILING_TOKENS,
-                         strict=False, descriptor=None, preserve_evidence=False):
+                         strict=False, descriptor=None, preserve_evidence=False, body_ceiling=None):
     """Return a copy with optional context projected to a provider-specific cap.
 
     The original Core context and DialoguePlan remain authoritative and intact.
@@ -104,7 +108,7 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
     projected = context.model_copy(deep=True)
     while True:
         payload = make_payload(projected)
-        budget = measure_envelope(projected, payload, descriptor=descriptor, ceiling=target)
+        budget = measure_envelope(projected, payload, descriptor=descriptor, ceiling=target,body_ceiling=body_ceiling)
         estimate = budget.estimated_input_tokens
         if budget.fits:
             return projected, payload
@@ -128,7 +132,7 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
                 hard_ceiling=(GROQ_PAYLOAD_HARD_CEILING_TOKENS if full_v3
                               else GROQ_BASELINE_HARD_CEILING_TOKENS)
                 hard=target if strict else min(int(context.token_budget),hard_ceiling)
-                hard_budget=measure_envelope(projected,payload,descriptor=descriptor,ceiling=hard)
+                hard_budget=measure_envelope(projected,payload,descriptor=descriptor,ceiling=hard,body_ceiling=body_ceiling)
                 if hard_budget.fits:
                     return projected,payload
                 raise ContextBudgetExceeded(estimate,hard_budget.input_limit_tokens)
@@ -198,7 +202,7 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
             hard_ceiling = (GROQ_PAYLOAD_HARD_CEILING_TOKENS if full_v3
                             else GROQ_BASELINE_HARD_CEILING_TOKENS)
             hard = target if strict else min(int(context.token_budget), hard_ceiling)
-            hard_budget = measure_envelope(projected, payload, descriptor=descriptor, ceiling=hard)
+            hard_budget = measure_envelope(projected, payload, descriptor=descriptor, ceiling=hard,body_ceiling=body_ceiling)
             if hard_budget.fits:
                 return projected, payload
             raise ContextBudgetExceeded(estimate, hard_budget.input_limit_tokens)
@@ -228,7 +232,9 @@ def compact_rejected_payload(context, make_payload, rejected_payload, *, descrip
             continue
         try:
             _, payload = fit_provider_payload(context, make_payload, ceiling=target, strict=True,
-                                             descriptor=descriptor,preserve_evidence=preserve_evidence)
+                                             descriptor=descriptor,preserve_evidence=preserve_evidence,
+                                             body_ceiling=max(1, min(size(rejected_payload)-1,
+                                                 int(size(rejected_payload)*(1-min_reduction)))))
         except ContextBudgetExceeded:
             continue
         if (estimate_payload(payload) < previous and size(payload) < size(rejected_payload)

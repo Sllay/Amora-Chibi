@@ -88,18 +88,29 @@ def task_guidance(context):
 
 def removable_history_turn(context):
     # Only optional old exchanges with no lexical subject overlap. Preserve
-    # latest four rows, every correction/restriction, and user-origin history
+    # latest two complete logical turns, every correction/restriction, and user-origin history
     # on explicit carryover tasks (even if some constraints weren't parsed).
     if detailed_output_requested(context) or _CARRY.search(fold(context.user_text)):
         return None
     rows=context.recent_messages
-    if len(rows)<=4:
+    # A logical turn can contain one input and several response segments.
+    # Protect all rows of the two newest distinct turns, not a fixed count of
+    # rows that may cut through an exchange. Missing IDs are never removed.
+    if len(rows)<=2:
         return None
-    protected={str(row.get("turn_id") or "") for row in rows[-4:]}
+    protected=set()
+    for row in reversed(rows):
+        turn=str(row.get("turn_id") or "")
+        if turn:
+            protected.add(turn)
+        if len(protected)==2:
+            break
+    if len(protected)<2:
+        return None
     terms=subject_terms(context.user_text)
     if not terms:
         return None
-    for row in rows[:-4]:
+    for row in rows:
         turn=str(row.get("turn_id") or "")
         if not turn or turn in protected:
             continue

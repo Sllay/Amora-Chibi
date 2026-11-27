@@ -220,3 +220,26 @@ def test_run02_b_measured_reserve_remains_bounded():
     assert perf.fallback_reserve(provider,"dialogue")==6
     assert attempt_window(90,1,measured_reserves=[6])==(84,6)
     assert attempt_window(30,2,measured_reserves=[18,18])==(19.5,10.5)
+
+
+def test_run02_b_byte_ceiling_and_complete_turns_are_preserved():
+    from amora.cognition.context_budget import fit_provider_payload,measure_envelope
+    ctx=_context("Explique renderização Vulkan.")
+    # The newest exchange spans several rows; a fixed last-N row count
+    # could discard the corresponding original user utterance.
+    ctx.recent_messages=[
+        {"turn_id":"old","speaker_id":"PERSON_BK","text":"Culinária "+"a"*1000},
+        {"turn_id":"old","speaker_id":"ENTITY_AMORA","text":"Receita "+"é"*1000},
+        {"turn_id":"new","speaker_id":"PERSON_BK","text":"História original."},
+        *[{"turn_id":"new","speaker_id":"ENTITY_AMORA","text":"Resposta "+str(i)} for i in range(5)],
+        {"turn_id":"latest","speaker_id":"PERSON_BK","text":"Pedido mais recente."},
+    ]
+    def build(c):
+        return {"text":c.user_text,"history":c.recent_messages}
+    original=build(ctx)
+    old_size=measure_envelope(ctx,original).body_bytes
+    projected,payload=fit_provider_payload(ctx,build,ceiling=ctx.token_budget,
+        preserve_evidence=True,strict=True,body_ceiling=old_size-1500)
+    assert measure_envelope(projected,payload).body_bytes<=old_size-1500
+    assert projected.recent_messages==ctx.recent_messages[2:]
+    assert build(ctx)==original
