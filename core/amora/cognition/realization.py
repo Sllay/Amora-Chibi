@@ -418,11 +418,14 @@ def realization_instruction(context: CognitiveContext, *, compact_support: bool 
     section_cue = (
         " Este é um trecho de uma resposta técnica dividida pelo Core. "
         "Consulte detail_section.payload: desenvolva a scope atual, respeitando TODAS as restrições "
-        "da mensagem literal completa. previous_scopes identifica temas já cobertos, não repita a introdução. "
+        "da mensagem literal completa. previous_scopes identifica os temas atribuídos às seções anteriores, "
+        "não é prova de cobertura semântica. Não repita a introdução. "
         "Retorne no máximo dois moves autorizados, sem self_choices nem pergunta final. "
         "Não declare a documentação completa, nem prometa uma entrega futura. "
         if context._detail_section is not None else ""
     )
+    from .task_contract import task_guidance
+    task_cue=task_guidance(context)
     return (
         "Retorne SOMENTE um objeto JSON válido, sem markdown e sem texto fora do objeto. "
         "Formato: {\"moves\":[{\"kind\":\"...\",\"text\":\"...\"}],\"closing\":\"none|statement|question\"}; "
@@ -430,6 +433,7 @@ def realization_instruction(context: CognitiveContext, *, compact_support: bool 
         + choice_instructions
         + detailed_cue
         + section_cue
+        + ((" "+task_cue+" ") if task_cue else "")
         + visual_cue
         + causal_cue
         + web_cue

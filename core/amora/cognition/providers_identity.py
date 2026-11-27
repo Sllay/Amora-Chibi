@@ -313,7 +313,8 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
                     }
                 },
             }
-        _, payload = fit_provider_payload(context, build, descriptor=self.descriptor)
+        projected, payload = fit_provider_payload(context, build, descriptor=self.descriptor,
+                                                   preserve_evidence=True)
         started = perf_counter()
         try:
             root, response = await self._post_responses(payload, api_key=api_key, error_label="structured realization")
@@ -335,9 +336,19 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
                 and not (context.web_research or {}).get("sources"))
             if not durable and not sync_allowed:
                 raise
-            reduced = compact_rejected_payload(context, build, payload, descriptor=self.descriptor)
+            # Derive from the actual rejected projection, not a rebuilt larger
+            # original. A nearly identical envelope is not a useful retry.
+            from amora.latency_trace import increment
+            reduced = compact_rejected_payload(projected, build, payload, descriptor=self.descriptor,
+                                               min_reduction=0.20,preserve_evidence=True)
             if reduced is None:
+                increment("provider_rebudget_skipped")
                 raise
+            increment("provider_rebudget_attempts")
+            set_value("provider_rebudget_before_bytes",len(json.dumps(payload,ensure_ascii=False,
+                separators=(",",":")).encode("utf-8")))
+            set_value("provider_rebudget_after_bytes",len(json.dumps(reduced,ensure_ascii=False,
+                separators=(",",":")).encode("utf-8")))
             guard = DURABLE_AUTHORIZATION.get() if durable else sync[1]
             if guard is None or not await guard():
                 if durable:
@@ -501,12 +512,15 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
             phase="memory_extraction" if error_label == "memory extraction" else "realization"
             if error_label.startswith("structured realization") else "proposal")
         timeout = httpx.Timeout(self.timeout_seconds, connect=10.0)
+        http_started=perf_counter()
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             response = await client.post(
                 _GROQ_RESPONSES_URL,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json=payload,
             )
+        # Nonstream HTTP completion is not TTFT; don't invent first-token data.
+        set_ms("provider_nonstream_http_ms",(perf_counter()-http_started)*1000)
         if response.status_code >= 400:
             raise ProviderError(
                 f"Groq Responses {error_label} failed (HTTP {response.status_code})",

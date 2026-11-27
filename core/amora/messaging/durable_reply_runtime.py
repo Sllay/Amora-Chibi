@@ -546,6 +546,17 @@ class DurableReplyRuntime:
                 await self.defer(claim, ReplyReason.STORAGE_TEMPORARY)
 
     async def _execute_observed(self, claim):
+        from amora.resource_metrics import resource_sample,resource_delta
+        from amora.latency_trace import bind_latency_trace,log_trace
+        with bind_latency_trace() as trace:
+            before=resource_sample()
+            try:
+                await self._execute_observed_inner(claim)
+            finally:
+                log_trace("durable_reply_resources",resource_delta(before,resource_sample()),turn_id=claim.turn_id)
+                log_trace("durable_reply",trace,turn_id=claim.turn_id)
+
+    async def _execute_observed_inner(self,claim):
         started = monotonic()
         outcome, reason = "unknown", None
         try:

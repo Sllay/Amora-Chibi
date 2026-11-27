@@ -85,7 +85,8 @@ GROQ_BASELINE_HARD_CEILING_TOKENS = 7_200
 GROQ_V3_SOFT_CEILING_TOKENS = 12_288
 
 
-def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEILING_TOKENS, strict=False, descriptor=None):
+def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEILING_TOKENS,
+                         strict=False, descriptor=None, preserve_evidence=False):
     """Return a copy with optional context projected to a provider-specific cap.
 
     The original Core context and DialoguePlan remain authoritative and intact.
@@ -112,6 +113,25 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
         # user utterance, plan, speaker/addressee, canonical identity or V3.
         if projected.specialist_support is not None:
             projected.specialist_support = None
+        elif preserve_evidence:
+            # A rejected request must not be made to fit by dropping a source,
+            # current fact, tool affordance or user constraint. Retain all
+            # user turns and their associated historical replies for technical
+            # continuation; otherwise only prune unambiguously unrelated
+            # complete old exchanges. Never slice an utterance.
+            from .task_contract import removable_history_turn
+            removable=removable_history_turn(projected)
+            if removable is not None:
+                projected.recent_messages=[row for row in projected.recent_messages
+                                           if str(row.get("turn_id") or "")!=removable]
+            else:
+                hard_ceiling=(GROQ_PAYLOAD_HARD_CEILING_TOKENS if full_v3
+                              else GROQ_BASELINE_HARD_CEILING_TOKENS)
+                hard=target if strict else min(int(context.token_budget),hard_ceiling)
+                hard_budget=measure_envelope(projected,payload,descriptor=descriptor,ceiling=hard)
+                if hard_budget.fits:
+                    return projected,payload
+                raise ContextBudgetExceeded(estimate,hard_budget.input_limit_tokens)
         elif projected.web_research and projected.web_research.get("research_notebook"):
             notebook = projected.web_research["research_notebook"]
             recent = notebook.get("recent_pages") or []
@@ -184,7 +204,8 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
             raise ContextBudgetExceeded(estimate, hard_budget.input_limit_tokens)
 
 
-def compact_rejected_payload(context, make_payload, rejected_payload, *, descriptor=None):
+def compact_rejected_payload(context, make_payload, rejected_payload, *, descriptor=None,
+                             min_reduction=0.0, preserve_evidence=False):
     """One corrective projection for a rejected request, never the same bytes.
 
     Keep the original immutable turn, identity, plan and safety instructions.
@@ -199,13 +220,18 @@ def compact_rejected_payload(context, make_payload, rejected_payload, *, descrip
     # First seek the preferred reduction. If the irreducible causal exchange
     # prevents it, a strictly smaller projection is still useful. Neither
     # path may resend the rejected envelope or cut the protected context.
-    for target in dict.fromkeys((ceiling, previous - 1)):
+    if not 0<=min_reduction<1:
+        raise ValueError("INVALID_REBUDGET_REDUCTION")
+    targets=(min(ceiling,int(previous*(1-min_reduction))),) if min_reduction else (ceiling,previous-1)
+    for target in dict.fromkeys(targets):
         if target < 1:
             continue
         try:
-            _, payload = fit_provider_payload(context, make_payload, ceiling=target, strict=True, descriptor=descriptor)
+            _, payload = fit_provider_payload(context, make_payload, ceiling=target, strict=True,
+                                             descriptor=descriptor,preserve_evidence=preserve_evidence)
         except ContextBudgetExceeded:
             continue
-        if estimate_payload(payload) < previous and size(payload) < size(rejected_payload):
+        if (estimate_payload(payload) < previous and size(payload) < size(rejected_payload)
+                and size(payload)<=size(rejected_payload)*(1-min_reduction)):
             return payload
     return None

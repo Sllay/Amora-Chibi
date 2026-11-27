@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import re
 from threading import Lock, RLock, get_ident
 from typing import Any, Callable
+from amora.latency_trace import trace_stage
 
 
 class PostgresRuntimeError(RuntimeError):
@@ -254,6 +255,7 @@ class PostgresRuntimeConnection:
             raise PostgresRuntimeError("PG_RUNTIME_RESULT_LIMIT_EXCEEDED")
         return PostgresResult(columns, rows, count)
 
+    @trace_stage("pg_sql")
     def execute(self, sql: str, parameters: Iterable[Any] = ()) -> PostgresResult:
         with self._state_lock:
             self._ensure_ready()
@@ -263,6 +265,7 @@ class PostgresRuntimeConnection:
                 cursor.execute(statement.postgres_sql, params)
                 return self._materialize(cursor, statement.max_result_rows)
 
+    @trace_stage("pg_sql_batch")
     def executemany(
         self, sql: str, values: Iterable[Iterable[Any]],
     ) -> int:

@@ -10,13 +10,20 @@ SYNC_REALIZATION_RETRY: ContextVar[tuple[str, Callable[[], Awaitable[bool]]] | N
     "amora_sync_realization_retry", default=None)
 
 
-def attempt_window(remaining: float, later_available: int) -> tuple[float, float]:
+INTERACTIVE_PROVIDER_ATTEMPT: ContextVar[bool] = ContextVar(
+    "amora_interactive_provider_attempt",default=False)
+
+
+def attempt_window(remaining: float, later_available: int, *, measured_reserves=None) -> tuple[float, float]:
     """Allocate bounded fallback opportunity, not a claim about upstream speed.
 
     Leave up to 12s per available later candidate, at most 30s and 35%
     of the remaining execution budget. Recompute for each attempt.
     """
-    reserve = min(30.0, remaining * 0.35, 12.0 * max(0, later_available))
+    desired=12.0*max(0,later_available)
+    if measured_reserves is not None and len(measured_reserves)==later_available:
+        desired=sum(max(6.0,min(18.0,float(value))) for value in measured_reserves)
+    reserve = min(30.0, remaining * 0.35, desired)
     return max(0.0, remaining - reserve), reserve
 
 
@@ -75,6 +82,17 @@ class ProviderPerformance:
         # Penalize observed failed attempts, not guessed upstream rate limits.
         return (median(successes or [row[1] for row in rows])
                 + 45 * (1-len(successes)/len(rows)), len(rows))
+
+    def fallback_reserve(self,descriptor,workload):
+        from datetime import timedelta
+        from statistics import median
+        now=self.clock.now()
+        rows=[elapsed for at,elapsed,ok in self.samples.get(
+            (descriptor.name,descriptor.model,workload),())
+              if ok and timedelta(0)<=now-at<=timedelta(minutes=30)]
+        # Only observed successful latencies from this model/task. The
+        # reserve is an opportunity, not a prediction or guarantee.
+        return max(6.0,min(18.0,median(rows)+2)) if len(rows)>=3 else 12.0
 
     def rank(self, candidates, workload, *, quota):
         # Compare evidence only within a preference tier. Unobserved candidates

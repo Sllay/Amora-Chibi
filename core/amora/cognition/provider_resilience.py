@@ -179,7 +179,13 @@ class ResilientProviderProxy:
                 raise
             except Exception as exc:
                 failure = classify_provider_failure(exc)
-                if (DURABLE_REALIZATION.get() is not None or not failure.retryable
+                from .surface_performance import INTERACTIVE_PROVIDER_ATTEMPT
+                # Interactive 429/503 goes to the outer account/circuit
+                # controller immediately; standalone proxy callers retain
+                # their existing bounded transport-only contract.
+                if (DURABLE_REALIZATION.get() is not None
+                        or (INTERACTIVE_PROVIDER_ATTEMPT.get() and failure.status_code in {429,503})
+                        or not failure.retryable
                         or transport_attempt >= self.max_retries):
                     raise
                 transport_attempt += 1

@@ -153,6 +153,7 @@ def causal_partition(request, messages, *, allowed):
 _NEGATIVE_TASK = re.compile(
     r"\b(?:n[aã]o\s+(?:pode(?:m)?|deve(?:m)?|quero|use|usar|fa[cç]a|fazer|"
     r"permita|permitir|inclua|incluir|recomende|recomendar|sugira|sugerir)|"
+    r"nenhum[ae]s?(?:\s+d[ae]l[ae]s)?\s+(?:pode(?:m)?|deve(?:m)?)|"
     r"proibid[oa]s?|exclusiv[oa]s?|exclusivamente|somente|apenas|"
     r"s[oó]\s+(?:pode(?:m)?|deve(?:m)?|use|usar|fa[cç]a|produz(?:em)?|produzir))\b", re.I)
 

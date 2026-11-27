@@ -28,7 +28,7 @@ from .durable_realization import (durable_realization, DeferredRealization, DURA
     DURABLE_CAUSAL_CHECK, CausalReplanRequired, adaptive_context_allowed)
 from .provider_resilience import classify_provider_failure, context_rejection
 from .provider_quota import ProviderQuotaDeferred
-from .surface_performance import attempt_window, ProviderPerformance, detailed_output_requested
+from .surface_performance import attempt_window, ProviderPerformance, detailed_output_requested, INTERACTIVE_PROVIDER_ATTEMPT
 
 
 async def _await_numes_adaptive(
@@ -408,6 +408,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
         async def timed_realize(realize):
             nonlocal provider_elapsed
             attempt_started = perf_counter()
+            surface_token=INTERACTIVE_PROVIDER_ATTEMPT.set(empirical)
             try:
                 async with self._provider_quota.admission(descriptor.name, model=descriptor.model):
                     with span("provider_attempt"):
@@ -415,6 +416,7 @@ class CognitiveEngine(ProductionCognitiveEngine):
                             return await detail.run(realize,descriptor)
                         return await realize(context)
             finally:
+                INTERACTIVE_PROVIDER_ATTEMPT.reset(surface_token)
                 elapsed = max(0.0, perf_counter() - attempt_started)
                 provider_elapsed += elapsed
 
@@ -473,12 +475,15 @@ class CognitiveEngine(ProductionCognitiveEngine):
             attempt_available = remaining_budget
             reserved_failover = 0.0
             if remaining_budget is not None and request.metadata.get("surface") == "platform_messaging":
-                later_available = sum(
-                    1 for later in candidates[provider_index+1:]
+                later_available = [
+                    later for later in candidates[provider_index+1:]
                     if callable(getattr(self._providers.get(later.name), "realize", None))
                     and self._provider_quota.remaining(later.name, model=later.model) <= 0
-                )
-                attempt_available, reserved_failover = attempt_window(remaining_budget,later_available)
+                    and later.name not in self._cooldown_names()
+                ]
+                reserves=[self._surface_performance.fallback_reserve(d,workload) for d in later_available]
+                attempt_available, reserved_failover = attempt_window(remaining_budget,len(later_available),
+                                                                       measured_reserves=reserves)
             timeout = attempt_budget
             if attempt_available is not None:
                 timeout = min(timeout,attempt_available) if timeout is not None else attempt_available
@@ -702,7 +707,9 @@ class CognitiveEngine(ProductionCognitiveEngine):
                         or remaining_tokens is not None and remaining_tokens <= 0):
                     self._provider_quota.block_for(descriptor.name, 60, model=descriptor.model)
                 self._provider_succeeded(descriptor, remaining_requests, remaining_tokens)
-            reasons = [*validated.reason_codes, "REMOTE_PROVIDER_USED", "STRUCTURED_REALIZATION"]
+            from .task_contract import quality_reasons
+            quality=quality_reasons(context,validated.text)
+            reasons = [*validated.reason_codes, "REMOTE_PROVIDER_USED", "STRUCTURED_REALIZATION",*quality]
             if detail is not None and not adaptive:
                 reasons.append("DETAIL_SECTIONS_ASSEMBLED")
                 if len(set(detail.providers))>1:

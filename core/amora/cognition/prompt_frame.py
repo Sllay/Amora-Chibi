@@ -291,9 +291,15 @@ def turn_frame(context: CognitiveContext) -> dict[str, object]:
     constraints = literal_negative_constraints(context.user_text, context.causal_followups if (
         context.scene_visibility == "private" and context.remote_processing_allowed
         and context.speaker_id == "PERSON_BK") else [])
+    from .task_contract import carried_constraints
+    inherited=carried_constraints(context)
+    if inherited:
+        seen={item["literal"] for item in constraints}
+        constraints=[*constraints,*[item for item in inherited if item["literal"] not in seen]]
     if constraints:
         frame["task_constraints"] = {
             "canonical": False, "source": "literal_current_user_task",
+            **({"prior_task_constraints_requested":True} if inherited else {}),
             "may_override_core_policy": False, "payload": constraints,
             "rule": ("Preserve explicit prohibitions and exclusive conditions in the current task. "
                      "Do not recommend a prohibited alternative under a different name. "

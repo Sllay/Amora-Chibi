@@ -232,7 +232,9 @@ def trace_messaging_turn(fn):
         if message.privacy_scope.value in {"AUTH", "SECRET"}:
             return await fn(self, message)
         install_remote_storage_probe()
+        from amora.resource_metrics import resource_sample,resource_delta
         with bind_latency_trace() as trace:
+            resources=resource_sample()
             started = perf_counter()
             interval = 0.1
             loop = asyncio.get_running_loop()
@@ -266,6 +268,8 @@ def trace_messaging_turn(fn):
                 sampler.cancel()
                 # Cancelled sampler owns no resources and never writes after cancellation.
                 outbound = result.outbound[0] if result is not None and result.outbound else None
+                log_trace("turn_resources",resource_delta(resources,resource_sample()),
+                          turn_id=self._turn_id(message),outcome=outcome)
                 log_trace("messaging", trace, turn_id=self._turn_id(message),
                           outbound_id=outbound.id if outbound is not None else None, outcome=outcome)
                 # Short independent record for log viewers that truncate the
