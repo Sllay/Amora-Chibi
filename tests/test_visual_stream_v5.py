@@ -18,15 +18,23 @@ def test_visual_scoped_snapshot_and_reconnect(tmp_path, monkeypatch):
         headers = {"origin":"http://testserver"}
         path = "/v1/avatar/visual-stream"
         protocols = ["amora.visual.v1", "auth."+token]
+        # Starlette TestClient mutates the supplied headers via setdefault;
+        # a fresh dictionary for each handshake prevents a rejected protocol
+        # from contaminating subsequent valid and invalid test cases.
         for bad in ([], ["amora.visual.v1", "auth."+issue_browser_token(secret,core.clock,"avatar")], ["amora.visual.v1","auth."+secret]):
             with pytest.raises(WebSocketDisconnect):
-                with client.websocket_connect(path,headers=headers,subprotocols=bad):
+                with client.websocket_connect(path,headers=dict(headers),subprotocols=bad):
                     pass
         with pytest.raises(WebSocketDisconnect):
             with client.websocket_connect(path+"?token=x",headers={**headers,"sec-websocket-protocol":", ".join(protocols)}):
                 pass
+        for invalid_origin in ({}, {"origin":"http://other.example"}):
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect(path,headers=dict(invalid_origin),subprotocols=protocols):
+                    pass
         assert client.get("/v1/avatar/project",headers={"Authorization":"Bearer "+token}).status_code==403
-        with client.websocket_connect(path,headers=headers,subprotocols=protocols) as ws:
+        assert "sec-websocket-protocol" not in headers
+        with client.websocket_connect(path,headers=dict(headers),subprotocols=protocols) as ws:
             a=ws.receive_json()
             assert a["kind"]=="snapshot" and a["sequence"]==1 and a["version"]==1
             assert set(a["state"])=={"expression","emotion","intensity","gesture","speaking","blink_allowed","blush","arousal","valence"}
@@ -34,7 +42,7 @@ def test_visual_scoped_snapshot_and_reconnect(tmp_path, monkeypatch):
             ws.send_text("forbidden")
             with pytest.raises(WebSocketDisconnect):
                 ws.receive_json()
-        with client.websocket_connect(path,headers=headers,subprotocols=protocols) as ws:
+        with client.websocket_connect(path,headers=dict(headers),subprotocols=protocols) as ws:
             b=ws.receive_json()
             assert b["session"]!=a["session"] and b["sequence"]==1
     finally:
