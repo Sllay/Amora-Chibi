@@ -3,6 +3,7 @@ import asyncio
 from uuid import uuid4
 from fastapi import WebSocket, WebSocketDisconnect
 from starlette.concurrency import run_in_threadpool
+from amora.security import token_role
 
 def visual_projection(state):
     return {key: getattr(state, key) for key in (
@@ -16,6 +17,13 @@ def register_visual_stream(app, core):
         if getattr(ws.state, "security_role", None) != "visual":
             await ws.close(code=4403)
             return
+        offered = ws.headers.get("sec-websocket-protocol", "").split(",")
+        credential = offered[1].strip()[5:] if len(offered) == 2 else ""
+        def valid():
+            return token_role(credential, core.secrets.get("LOCAL_API_TOKEN"), core.clock) == "visual"
+        if not valid():
+            await ws.close(code=4401)
+            return
         await ws.accept(subprotocol="amora.visual.v1")
         session = uuid4().hex
         sequence = 0
@@ -28,6 +36,10 @@ def register_visual_stream(app, core):
         waiter = None
         try:
             while True:
+                if not valid():
+                    await ws.close(code=4401)
+                    break
+                wake.clear()
                 state = await run_in_threadpool(core.avatar.semantic_state)
                 projection = visual_projection(state)
                 sequence += 1
@@ -38,7 +50,6 @@ def register_visual_stream(app, core):
                     **({"state": projection} if kind != "heartbeat" else {})
                 }), timeout=5)
                 previous = projection
-                wake.clear()
                 waiter = asyncio.create_task(wake.wait())
                 done, _ = await asyncio.wait({receiver, waiter}, timeout=3, return_when=asyncio.FIRST_COMPLETED)
                 if receiver in done:
