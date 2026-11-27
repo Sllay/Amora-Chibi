@@ -108,8 +108,8 @@ def register_avatar_routes(app: FastAPI, core: object, require_auth: Callable[..
         if len(os.environ.get("AMORA_VISUAL_V5_PREVIEW_PASSWORD", "").encode("utf-8")) < 32:
             raise RuntimeError("V5 staging requires a separate preview password of at least 32 bytes")
         root = Path(v5_root).resolve()
-        if not (root / "identity.json").is_file() or not (root / "vendor/live2dcubismcore.min.js").is_file():
-            raise RuntimeError("V5 staging bundle is incomplete")
+        from .visual_preview import verify_preview
+        verify_preview(root)
         app.mount("/avatar/v5", StaticFiles(directory=str(root), html=True), name="visual-v5-staging")
     if web_root.is_dir():
         app.mount("/avatar", StaticFiles(directory=str(web_root), html=True), name="avatar")

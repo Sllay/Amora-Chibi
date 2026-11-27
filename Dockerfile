@@ -20,19 +20,19 @@ RUN --mount=type=secret,id=proxy_ca \
 COPY tools/visual-engine-v5 ./tools/visual-engine-v5
 ARG AMORA_VISUAL_V5_BUILD=0
 ARG NF_GIT_SHA
-RUN --mount=type=secret,id=amora_visual_v5_core,required=false \\
-    --mount=type=secret,id=amora_visual_v5_github,required=false \\
-    set -eu; mkdir -p /build/visual-preview; \\
-    if [ "$AMORA_VISUAL_V5_BUILD" = "1" ]; then \\
-      test -s /run/secrets/amora_visual_v5_core; \\
-      test -s /run/secrets/amora_visual_v5_github; \\
-      apk add --no-cache git nodejs npm; \\
-      scratch="$(mktemp -d)"; \\
-      trap 'rm -rf "$scratch"' EXIT; \\
-      python tools/visual-engine-v5/fetch-rig.py download /run/secrets/amora_visual_v5_github "$scratch/rig.zip"; \\
-      sh tools/visual-engine-v5/build-preview.sh "$scratch/rig" /run/secrets/amora_visual_v5_core /build/visual-preview "$NF_GIT_SHA"; \\
-    else \\
-      test "$AMORA_VISUAL_V5_BUILD" = "0"; \\
+RUN --mount=type=secret,id=amora_visual_v5_core,required=false \
+    --mount=type=secret,id=amora_visual_v5_github,required=false \
+    set -eu; mkdir -p /build/visual-preview; \
+    if [ "$AMORA_VISUAL_V5_BUILD" = "1" ]; then \
+      test -s /run/secrets/amora_visual_v5_core; \
+      test -s /run/secrets/amora_visual_v5_github; \
+      apk add --no-cache git nodejs npm; \
+      scratch="$(mktemp -d)"; \
+      trap 'rm -rf "$scratch"' EXIT; \
+      python tools/visual-engine-v5/fetch-rig.py download /run/secrets/amora_visual_v5_github "$scratch/rig.zip"; \
+      sh tools/visual-engine-v5/build-preview.sh "$scratch/rig" /run/secrets/amora_visual_v5_core /build/visual-preview "$NF_GIT_SHA"; \
+    else \
+      test "$AMORA_VISUAL_V5_BUILD" = "0"; \
     fi
 
 FROM ${PYTHON_BASE} AS runtime

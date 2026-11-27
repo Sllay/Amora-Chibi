@@ -4,7 +4,7 @@ set -eu
 [ "$#" = 4 ] || { echo 'usage: build-preview.sh RIG_DIR CORE_JS OUT BUILD_SHA'; exit 2; }
 rig="$(realpath "$1")"
 core="$(realpath "$2")"
-out="$(realpath -m "$3")"
+out="$(python -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$3")"
 build="$4"
 case "$build" in *[!0-9a-f]*|'') exit 2;; esac
 [ "${#build}" = 40 ] || exit 2
