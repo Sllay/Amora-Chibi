@@ -68,3 +68,5 @@ CI 45829940603, e65030a: PASS, 22 drawables, 2 máscaras, 22 parâmetros/textura
 
 ## Staging integration
 Main 02ce0565 and validated V5 bdcb05d diverged (23 commits behind). Reapply only V5 deltas onto current main; preserve all main changes, merge only additive wsproto changes into overlapping lock and pyproject. New staging candidate must pass full RUN04 again. No deployment, no proprietary vendor bytes in Git. Northflank backup credential is read-only; do not repurpose. Private development preview needs a write-capable authorized deployment path, license-compliant SDK and access control; never expose the current public staging mount to the internet without it.
+
+- Staging CI 46042277927 / 7b4abcc: PASS; Core, Avatar, segurança, containers e Aiven aplicáveis verdes. Preparação de merge: build opcional privado com secrets de SDK e leitura de artefato, verificação do ZIP e manifest, compartilhado com CI; padrão desativado. A licença e a configuração de secrets do host ainda dependem do proprietário. Main pode receber apenas código inativo após novos gates verdes; isso não certifica publicação ou dispositivo.

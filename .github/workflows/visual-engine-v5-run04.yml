@@ -22,35 +22,23 @@ jobs:
           pytest tests/test_visual_stream_v5.py tests/test_avatar_v09.py tests/test_avatar_bundle.py tests/test_avatar_rig_v2.py tests/test_emotion_v05.py tests/test_emotion_recovery_v05.py tests/test_security_predeploy.py
           node --experimental-default-type=module --test tools/visual-engine-v5/body-controller.test.mjs
           node --test tests/*.test.mjs
-      - name: Retrieve exact validated Amora V4.5 rig
-        uses: actions/download-artifact@v4
-        with:
-          run-id: '45534504067'
-          artifact-ids: '14986551731'
-          github-token: ${{ github.token }}
-          path: .rig
-      - name: Fetch pinned official Framework and hosted development Core
+      - name: Build private-preview-equivalent bundle with pinned inputs (CI only)
         shell: bash
+        env:
+          RIG_DOWNLOAD_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p .build/vendor evidence
-          git clone --quiet --no-checkout https://github.com/Live2D/CubismWebFramework.git tools/visual-engine-v5/framework
-          git -C tools/visual-engine-v5/framework checkout --quiet --detach 198a3769c26ca3d7b600e932590433badd392edd
-          test "$(git -C tools/visual-engine-v5/framework rev-parse HEAD)" = 198a3769c26ca3d7b600e932590433badd392edd
-          curl --fail --silent --show-error --location --proto '=https' --max-time 90 https://cubism.live2d.com/sdk-web/core/06/live2dcubismcore.min.js -o .build/vendor/live2dcubismcore.min.js
-          test -s .build/vendor/live2dcubismcore.min.js
-          echo '8741f739779b5d5210872bd3d7d99f0f1e56e6c87409e7d26d6bb4b80aa1ef47  .build/vendor/live2dcubismcore.min.js' | sha256sum --check
-          cp -R tools/visual-engine-v5/framework/Shaders/WebGL .build/shaders
-          cp tools/visual-engine-v5/{index.html,lab.css,presentation.css} .build/
-          mkdir -p .build/live-overlay .build/companion
-          cp tools/visual-engine-v5/live-overlay.html .build/live-overlay/index.html
-          cp tools/visual-engine-v5/companion.html .build/companion/index.html
-          python tools/visual-engine-v5/prepare.py .rig .build "$GITHUB_SHA"
+          umask 077
+          mkdir -p evidence
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          printf '%s' "$RIG_DOWNLOAD_TOKEN" > "$scratch/token"
+          unset RIG_DOWNLOAD_TOKEN
+          python tools/visual-engine-v5/fetch-rig.py download "$scratch/token" "$scratch/rig.zip"
+          curl --fail --silent --show-error --location --proto '=https' --max-time 90 https://cubism.live2d.com/sdk-web/core/06/live2dcubismcore.min.js -o "$scratch/core.js"
+          sh tools/visual-engine-v5/build-preview.sh "$scratch/rig" "$scratch/core.js" .build "$GITHUB_SHA"
           cp .build/identity.json evidence/identity.json
-      - name: Build browser bundle (no server process in production)
-        run: |
-          npx --yes esbuild@0.25.11 tools/visual-engine-v5/app.js --bundle --format=esm --target=es2020 --outfile=.build/app.js
-          npx --yes esbuild@0.25.11 tools/visual-engine-v5/presentation.js --bundle --format=esm --target=es2020 --outfile=.build/presentation.js
+          cp .build/manifest.json evidence/manifest.json
           npm install --prefix tools/visual-engine-v5 --no-save puppeteer-core@24.24.1
       - name: Validate overlay and Companion using real MOC3
         run: |
