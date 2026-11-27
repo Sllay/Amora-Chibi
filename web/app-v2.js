@@ -65,10 +65,8 @@ const state = {
 };
 let visualTap=null;
 const voicePlayer = new WavPlayer(getPlaybackContext, context=>visualTap?.node??context.destination);
-const visualAudioToggle=document.createElement('button');visualAudioToggle.type='button';visualAudioToggle.textContent='Sincronização visual: desligada';visualAudioToggle.setAttribute('aria-pressed','false');
-$('muteVoice')?.after(visualAudioToggle);
+const visualAudioToggle=$('visualAudioToggle');
 visualAudioToggle.onclick=()=>{try{getPlaybackContext();if(!visualTap)throw Error('Web Audio indisponível');if(visualTap.channel)visualTap.disable();else visualTap.enable();visualAudioToggle.textContent='Sincronização visual: '+(visualTap.channel?'ligada':'desligada');visualAudioToggle.setAttribute('aria-pressed',String(!!visualTap.channel));}catch(_){visualAudioToggle.textContent='Sincronização visual indisponível';}};
-window.addEventListener('pagehide',()=>visualTap?.disable());
 
 const pairPanel = $("pairPanel");
 const appPanel = $("appPanel");
@@ -1071,6 +1069,9 @@ $("micButton").addEventListener("click", async () => {
 });
 
 window.addEventListener("pagehide", () => {
+  visualTap?.disable();
+  visualAudioToggle.textContent="Sincronização visual: desligada";
+  visualAudioToggle.setAttribute("aria-pressed","false");
   interruptVoice("web_pagehide", null, true);
   disableMicrophone();
 });

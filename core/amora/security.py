@@ -352,7 +352,10 @@ class SecurityMiddleware:
                 role = self.authenticate(authorization[7:])
             visual_socket = websocket and path == "/v1/avatar/visual-stream"
             if visual_socket:
-                protocols = scope.get("subprotocols", [])
+                # Parse the actual handshake header; ASGI adapters may normalize
+                # the subprotocol list differently. Never echo the auth protocol.
+                values = [v for k, v in raw if k.lower() == b"sec-websocket-protocol"]
+                protocols = [p.strip() for p in values[0].decode("ascii", "replace").split(",")] if len(values) == 1 else []
                 if (len(protocols) == 2 and protocols[0] == "amora.visual.v1"
                         and protocols[1].startswith("auth.") and len(protocols[1]) <= 512
                         and supplied_origin and not scope.get("query_string") and not authorization):
