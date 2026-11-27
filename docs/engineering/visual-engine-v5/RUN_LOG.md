@@ -7,8 +7,8 @@ Planejamento aprovado: 4 RUNs (1+2; 3+4; 5+6; 7 expandida). Nenhuma implementaç
 |---|---|---|
 | 01 | PASS (CI de desenvolvimento) | 45829940603 / e65030a |
 | 02 | PASS (CI de desenvolvimento) | 45880113324 / 2224aee |
-| 03 | IN_PROGRESS | feat/visual-engine-v5-run03 |
-| 04 | PLANNED | Pendente |
+| 03 | PASS (CI de desenvolvimento; voz local) | 46027054526 / ec6572a |
+| 04 | IN_PROGRESS | feat/visual-engine-v5-run04 |
 
 ## Formato de checkpoint
 - RUN / Cxx / data / estado (PLANNED, IN_PROGRESS, BLOCKED, PASS, FAIL).
@@ -50,3 +50,11 @@ CI 45829940603, e65030a: PASS, 22 drawables, 2 máscaras, 22 parâmetros/textura
 - CI 45881626235: 4 testes avatar legados passaram, handshake visual legítimo negado 4401. CI Avatar tests 45881638609: inicialização Web falhou porque inserção dinâmica usou Element.after ausente no harness. Correção candidata: parse estrito do header de subprotocol real e teste de assinatura; botão declarativo no HTML e cleanup unificado no lifecycle existente. Reexecutar gates sem suprimir testes.
 
 - CI 46025921193: assinatura visual validada, handshake ainda 4401; Avatar Tests (push/PR), segurança e contratos de container passaram. Causa identificada no harness: TestClient.websocket_connect muta o dicionário de headers via setdefault; o primeiro caso negativo grava subprotocol vazio e contamina as tentativas seguintes. Corrigir isolamento dos headers em todas as conexões, adicionar negativos de origem ausente/externa e verificar que o fixture não foi mutado. Não alterar política de autenticação para satisfazer teste. Revalidação pendente.
+
+## RUN 03 — fechamento CI
+46027054526 PASS: 5 Python, controlador corporal, 15 voz Web, overlay e vídeo real, zero erro WebGL. Evidência 15211919662. Limitações de áudio remoto e fonte isolada ainda abertas.
+
+## RUN 04 — certificação inicial
+- Base ec6572a; adiciona wsproto 1.3.2 ao lock e projeto (Uvicorn bare não inclui backend WS); mount isolado /avatar/v5/ somente com AMORA_VISUAL_V5_STAGING_ROOT, preservando V4.5 e avatar legado. Não ativa deploy.
+- Revalidação de credencial durante a conexão; configuração explícita ?setup=1 da fonte de live, sem credencial em URL, com pareamento no próprio perfil quando o browser permite interação. Teste real Core/Uvicorn/Chromium, áudio WebAudio de fixture (não TTS real), regressão dos gates anteriores e 15s por perfil, métricas CI. Não equivale a iPhone ou Northflank.
+- Bloqueios: Discord worker não tem player de voz identificado; áudio entre dispositivos ainda não implementado; PRISM precisa provar interação e suporte; SDK publicação exige classificação/aceite, não distribuir Core. Nenhuma publicação até aprovação.
