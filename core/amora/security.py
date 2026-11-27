@@ -125,10 +125,10 @@ def issue_browser_token(secret: str, clock, role="web") -> str:
     if role == "web":
         version = "v2"
         payload = f"web:{secrets.token_hex(16)}"
-    elif role == "avatar":
+    elif role in {"avatar", "visual"}:
         version = "v1"
         payload = (
-            f"avatar:{int(clock.now().timestamp()) + 43200}:{secrets.token_hex(16)}"
+            f"{role}:{int(clock.now().timestamp()) + (3600 if role == 'visual' else 43200)}:{secrets.token_hex(16)}"
         )
     else:
         raise ValueError("unsupported browser role")
@@ -170,7 +170,7 @@ def token_role(token: str, secret: str, clock) -> str | None:
                 return None
         else:
             role, expiry, nonce = fields
-            if role not in {"web", "avatar"} or int(expiry) <= clock.now().timestamp():
+            if role not in {"web", "avatar", "visual"} or int(expiry) <= clock.now().timestamp():
                 return None
         if not re.fullmatch("[a-f0-9]{32}", nonce):
             return None
@@ -322,6 +322,24 @@ class SecurityMiddleware:
             return await respond(400, "invalid host or origin")
         if not self.limits.allow("requests", peer, 600):
             return await respond(429, "request limit reached")
+        # A development SDK bundle is private even though the legacy avatar is public.
+        if not websocket and (path == "/avatar/v5" or path.startswith("/avatar/v5/")):
+            password = os.getenv("AMORA_VISUAL_V5_PREVIEW_PASSWORD", "")
+            if self.worker or not os.getenv("AMORA_VISUAL_V5_STAGING_ROOT"):
+                return await respond(404, "preview not enabled")
+            if scope["method"] not in {"GET", "HEAD"}:
+                return await respond(403, "preview is read only")
+            supplied = headers.get(b"authorization", b"")
+            expected = b"Basic " + base64.b64encode(("preview:" + password).encode("utf-8"))
+            if len(password.encode("utf-8")) < 32 or not hmac.compare_digest(supplied, expected):
+                if not self.limits.allow("auth_fail", peer, 20):
+                    return await respond(429, "authentication limit reached")
+                return await JSONResponse(
+                    {"detail": "private development preview"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Amora V5 preview", charset="UTF-8"'},
+                )(scope, receive, secured_send)
+            return await self.app(scope, receive, secured_send)
         public = (
             path in {"/health", "/ready", "/live", "/v1/pairing/redeem"}
             and not self.worker
@@ -350,12 +368,39 @@ class SecurityMiddleware:
             )
             if len(authorization) <= 4096 and authorization.startswith("Bearer "):
                 role = self.authenticate(authorization[7:])
+            visual_socket = websocket and path == "/v1/avatar/visual-stream"
+            audio_socket = websocket and path == "/v1/avatar/visual-audio"
+            if visual_socket or audio_socket:
+                required_protocol = "amora.visual.v1" if visual_socket else "amora.visual.audio.v1"
+                required_role = "visual" if visual_socket else "web"
+                # Parse the actual handshake header; ASGI adapters may normalize
+                # the subprotocol list differently. Never echo the auth protocol.
+                values = [v for k, v in raw if k.lower() == b"sec-websocket-protocol"]
+                # wsproto exposes negotiated offers in ASGI scope, not extra_headers.
+                # Where the original header is present, reject ambiguity rather than
+                # accepting a conflicting normalized representation.
+                parsed_offers = [p.strip() for item in scope.get("subprotocols", []) for p in item.split(",")]
+                protocols = parsed_offers if not values else (
+                    [p.strip() for p in values[0].decode("ascii", "replace").split(",")] if len(values) == 1 else []
+                )
+                if values and parsed_offers and protocols != parsed_offers:
+                    protocols = []
+                if (len(protocols) == 2 and protocols[0] == required_protocol
+                        and protocols[1].startswith("auth.") and len(protocols[1]) <= 512
+                        and supplied_origin and not scope.get("query_string") and not authorization):
+                    role = self.authenticate(protocols[1][5:])
+                else:
+                    role = None
+                if role != required_role:
+                    role = None
+                else:
+                    scope.setdefault("state", {})["visual_credential"] = protocols[1][5:]
             if role is None:
                 if not self.limits.allow("auth_fail", peer, 20):
                     return await respond(429, "authentication limit reached")
                 return await respond(401, "authentication required")
             if role not in {"admin", "service"} and (
-                websocket or not self.web_access or not self.web_access(role, scope)
+                (websocket and not ((visual_socket and role == "visual") or (audio_socket and role == "web"))) or (not websocket and (not self.web_access or not self.web_access(role, scope)))
             ):
                 return await respond(403, "credential scope denied")
         scope.setdefault("state", {})["security_role"] = role

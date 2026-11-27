@@ -18,6 +18,10 @@ O trabalho começa por RUN 01 (fila cognitiva durável); cada RUN tem gate
 próprio e status comprovado no diário. Atualizar este roadmap se uma entrega
 efetiva mudar o escopo/versionamento canônico.
 
+## Programa transversal — Visual Engine V5.0 (25/11/2026)
+
+Status: PLANNED. Frente visual vinculada ao destino V1.1, não nova versão do Core. As sete RUNs visuais foram consolidadas em quatro, sem descarte de escopo. Live overlay e Companion/PiP compartilharão o MOC3 e Cubism Web se compatibilidade/licenciamento forem aprovados. V4.5 permanece fallback. Fonte: [plano RUN 01–04](../engineering/visual-engine-v5/PLAN.md) e [diário](../engineering/visual-engine-v5/RUN_LOG.md). Não confundir planejamento com entrega.
+
 ## 1. Semântica de status
 
 | Status | Significado |
