@@ -604,7 +604,7 @@ def parse_web_intent(text: str) -> WebIntent | None:
         tail = raw[search.end():]
         retry_refinement = re.match(
             r"\s*(?:de\s+novo|novamente|outra\s+vez)\s*[,;:]?\s*(?:mas\s+)?"
-            r"(?:agora\s+)?(?:com\s+foco\s+em|focando\s+em|sobre)\s+(.+)",
+            r"(?:agora\s+)?(?:com\s+foco\s+em|focando\s+em)\s+(.+)",
             tail, re.I,
         )
         if retry_refinement:
