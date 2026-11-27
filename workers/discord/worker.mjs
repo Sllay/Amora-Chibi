@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { MessagingCoreClient, workerConfig } from '../common/core-client.mjs';
 import {
   discordAmoraCommandDefinition,
@@ -646,6 +647,20 @@ export class DiscordWorker {
           ? error.code : 'IMAGE_FETCH_FAILED';
         safeLog('IMAGE_INGEST_SKIPPED', normalized.incoming_image_status);
       }
+    }
+    if (normalized.incoming_image || normalized.incoming_images?.length) {
+      const short = value => createHash('sha256').update(String(value),'utf8').digest('hex').slice(0,20);
+      const images=normalized.incoming_images || [];
+      const supplied=normalized.incoming_image ? [{attachment_id:normalized.incoming_image.attachment_id,image:normalized.incoming_image}] : images;
+      const ordered=(normalized.attachments||[]).filter(a=>supplied.some(x=>x.attachment_id===a.attachment_id) ||
+        String(a.media_type||'').toLowerCase().startsWith('image/'));
+      ordered.forEach((a,index)=>{
+        const image=supplied.find(x=>x.attachment_id===a.attachment_id)?.image;
+        const bytes=image ? Buffer.from(image.content_base64,'base64') : null;
+        const digest=bytes ? createHash('sha256').update(bytes).digest('hex').slice(0,20) : '-';
+        const mime=image && ['image/png','image/jpeg','image/webp'].includes(image.content_mime) ? image.content_mime : '-';
+        safeLog('VISUAL_TRACE', `stage=worker_preview msg_hash=${short(normalized.native_message_id||normalized.message_id)} revision=${normalized.transport_revision} number=${index+1} attachment_hash=${short(a.attachment_id)} preview_hash=${digest} bytes=${bytes?.length||0} mime=${mime}`);
+      });
     }
     const normalizationMs = performance.now() - normalizedStarted;
     const inboundStarted = performance.now();

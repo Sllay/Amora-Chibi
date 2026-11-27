@@ -684,6 +684,17 @@ class PlatformMessagingService:
             )
             if self._source_invalidated(message):
                 return self._invalidated_result(message)
+            if isinstance(visual_observation,dict) and visual_observation.get("observation_version")==4:
+                for field in ("historical_manifest","latest_manifest"):
+                    source=visual_observation.get(field)
+                    if source is not None:
+                        try:
+                            still_current=await self._visual_checkpoint_call(message,"source_current",
+                                request.session_id,source["message_hash"],source["revision"])
+                        except Exception:
+                            still_current=False
+                        if not still_current or not is_verified_owner(self.attention.profiles,message,decision.speaker_entity_id):
+                            return self._invalidated_result(message)
             provider = plan.provider
             model = plan.model
             fallback_used = bool(plan.fallback_used)
@@ -1510,6 +1521,9 @@ class PlatformMessagingService:
             session_id, self._hash(invalidation.native_message_id), through_revision=through,
         )
         self.generations.invalidate_prepared(session_id, self._hash(invalidation.native_message_id), through)
+        previews=getattr(self,"visual_previews",None)
+        if previews is not None:
+            previews.discard_source(session_id,self._hash(invalidation.native_message_id),through)
         cancelled = self.store.cancel_outbound_by_source(
             platform=invalidation.platform, account_scope=invalidation.account_scope,
             conversation_id=invalidation.conversation_id, source_message_id=invalidation.native_message_id,

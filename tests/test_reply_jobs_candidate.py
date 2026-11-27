@@ -1995,3 +1995,146 @@ async def test_run02_episode_without_memory_local_only(lab):
     out=(await core.messaging.receive(_dm(core,"run02-zafir-recall",text="Você lembra de Zafir?"))).outbound[0]
     assert out.metadata["cognitive_reason_codes"]==["MEMORY_RECALL_EPISODIC_FOUND"]
     assert "mapa de gelo" in out.text and out.metadata["memory_recall_episode_count"]==1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse",[False,True])
+async def test_run03_directed_raster_identity_review_and_history(lab,reverse):
+    from PIL import Image,ImageDraw
+    from io import BytesIO
+    import base64
+    from amora.messaging.models import AttachmentRef,InboundImageContent
+    from amora.messaging.visual_pixels import VisualPreviewCache,raster
+    from amora.cognition.visual_context import visual_context_for_request
+    from amora.cognition.visual_comparison import directed_comparison
+    from amora.cognition.models import CognitiveContext
+    from test_discord_incoming_vision_ch2 import observation
+    core,clock,_=lab
+    _bind_bk(core)
+    service=core.messaging
+    decision=AttentionDecision(action=RoutingAction.RESPOND,score=1,
+        speaker_entity_id="PERSON_BK",speaker_actor_ref="synthetic",addressee_id="ENTITY_AMORA")
+    def eye(opened,ident):
+        im=Image.new("RGB",(48,32),"white")
+        d=ImageDraw.Draw(im)
+        if opened:
+            d.ellipse((12,7,36,25),fill="red")
+        else:
+            d.line((12,16,36,16),fill="black",width=3)
+        buf=BytesIO()
+        im.save(buf,format="PNG")
+        return InboundImageContent(attachment_id=ident,content_mime="image/png",
+            content_base64=base64.b64encode(buf.getvalue()).decode())
+    calls=[]
+    class RasterOracle:
+        available=True
+        async def analyze(self,image,user_text):
+            _,decoded=raster(image)
+            opened=decoded.getpixel((24,16))[:3]==(255,0,0)
+            calls.append((image.attachment_id,opened))
+            return {**observation(),"description":"Olho aberto vermelho." if opened else "Olho fechado."}
+    service.incoming_vision=RasterOracle()
+    a=eye(not reverse,"987654321098765432")
+    b=eye(reverse,"987654321098765433")
+    def inbound(mid,text,image):
+        msg=_dm(core,mid,text=text)
+        return InboundMessage.model_validate({**msg.model_dump(),
+            "attachments":[AttachmentRef(attachment_id=image.attachment_id,media_type="image/png").model_dump()],
+            "incoming_image":image.model_dump()})
+    first=inbound("r03-a","Descreva a imagem.",a)
+    prior=await service._incoming_visual_observation(first,decision)
+    clock.advance(timedelta(seconds=2))
+    second=inbound("r03-b","Compare com a imagem anterior.",b)
+    result=await service._incoming_visual_observation(second,decision)
+    assert result["historical"]==prior and result["current"]!=prior
+    assert result["historical_manifest"]["images"][0]["preview_hash"]!=result["current_manifest"]["images"][0]["preview_hash"]
+    assert result["historical_current_pixels"]["changed_fraction"]>0
+    ctx=CognitiveContext(turn_id=uuid4(),created_at=clock.now(),speaker_id="PERSON_BK",
+        target_id="ENTITY_AMORA",user_text=second.text,privacy_scope=PrivacyScope.PERSONAL,
+        remote_processing_allowed=True,visual_observation=result)
+    answer=directed_comparison(ctx)
+    assert answer.index(prior["description"])<answer.index(result["current"]["description"])
+    forged={**result,"historical_manifest":result["current_manifest"]}
+    assert visual_context_for_request(forged,remote=True,private=True,mode="reply") is None
+    clock.advance(timedelta(seconds=2))
+    both=_dm(core,"r03-both",text="Compare a primeira imagem com a última imagem.")
+    pair=await service._incoming_visual_observation(both,decision)
+    assert pair["reference_kind"]=="first_latest" and pair["historical"]==prior
+    assert pair["comparison_latest"]==result["current"] and "current" not in pair
+    assert visual_context_for_request(pair,remote=True,private=True,mode="reply")
+    assert directed_comparison(ctx.model_copy(update={"user_text":both.text,"visual_observation":pair}))
+    review=_dm(core,"r03-review",text="Reanalise a primeira imagem.")
+    fresh=await service._incoming_visual_observation(review,decision)
+    assert fresh["review_availability"]=="fresh" and fresh["reinspection"]==prior
+    assert calls[-1][0]==a.attachment_id
+    clock.advance(timedelta(seconds=901))
+    expired=await service._incoming_visual_observation(review.model_copy(update={"timestamp":clock.now()}),decision)
+    assert expired["review_availability"]=="preview_missing" and "reinspection" not in expired
+    service.visual_previews=VisualPreviewCache(clock)
+    assert (await service._incoming_visual_observation(review.model_copy(update={"timestamp":clock.now()}),decision))["historical"]==prior
+    assert len(calls)==3
+    assert await service._incoming_visual_observation(review.model_copy(update={"remote_processing_allowed":False}),decision) is None
+
+
+@pytest.mark.asyncio
+async def test_run03_pending_native_order_revision_and_batch_review(lab):
+    from amora.messaging.models import AttachmentRef,InboundImageItem
+    from amora.messaging.visual_evidence import manifest_for
+    from amora.cognition.visual_context import visual_context_for_request
+    from test_run02_visual_pixels import photo
+    from test_discord_incoming_vision_ch2 import observation
+    core,clock,_=lab
+    _bind_bk(core)
+    service=core.messaging
+    decision=AttentionDecision(action=RoutingAction.RESPOND,score=1,
+        speaker_entity_id="PERSON_BK",speaker_actor_ref="synthetic",addressee_id="ENTITY_AMORA")
+    a=photo((0,0,0,255)).model_copy(update={"attachment_id":"987654321098765432"})
+    b=photo((255,0,0,255)).model_copy(update={"attachment_id":"987654321098765433"})
+    calls=[]
+    started=asyncio.Event()
+    finish=asyncio.Event()
+    class Vision:
+        available=True
+        async def analyze(self,image,user_text):
+            calls.append(image.attachment_id)
+            if user_text=="Primeira imagem lenta.":
+                started.set()
+                await finish.wait()
+            return {**observation(),"description":"Rastro "+("A" if image.attachment_id==a.attachment_id else "B")}
+    service.incoming_vision=Vision()
+    def inbound(mid,text,image):
+        msg=_dm(core,mid,text=text)
+        return InboundMessage.model_validate({**msg.model_dump(),
+            "attachments":[AttachmentRef(attachment_id=image.attachment_id,media_type="image/png").model_dump()],
+            "incoming_image":image.model_dump()})
+    first=inbound("r03-slow","Primeira imagem lenta.",a)
+    work=asyncio.create_task(service._incoming_visual_observation(first,decision))
+    try:
+        await asyncio.wait_for(started.wait(),3)
+        clock.advance(timedelta(seconds=1))
+        pending=await service._incoming_visual_observation(_dm(core,"r03-pending",text="Qual a cor da imagem anterior?"),decision)
+        assert pending["historical"]["status"]=="unavailable"
+        second=inbound("r03-fast","Segunda imagem.",b)
+        await service._incoming_visual_observation(second,decision)
+    finally:
+        finish.set()
+        await work
+    clock.advance(timedelta(seconds=1))
+    latest=await service._incoming_visual_observation(_dm(core,"r03-latest",text="Qual a cor da última imagem?"),decision)
+    assert latest["historical"]["description"]=="Rastro B"
+    assert latest["historical_manifest"]["message_hash"]==manifest_for(second)["message_hash"]
+    # Original attachment order survives review, with independent byte keys.
+    msg=_dm(core,"r03-batch",text="Descreva estas imagens.")
+    batch=InboundMessage.model_validate({**msg.model_dump(),
+        "attachments":[AttachmentRef(attachment_id=x.attachment_id,media_type="image/png").model_dump() for x in (a,b)],
+        "incoming_images":[InboundImageItem(attachment_id=x.attachment_id,image=x).model_dump() for x in (a,b)]})
+    result=await service._incoming_visual_observation(batch,decision)
+    assert [r["observation"]["description"] for r in result["images"]]==["Rastro A","Rastro B"]
+    clock.advance(timedelta(seconds=1))
+    reviewed=await service._incoming_visual_observation(_dm(core,"r03-batch-review",text="Reanalise a imagem anterior."),decision)
+    assert reviewed["review_availability"]=="fresh"
+    assert [r["observation"]["description"] for r in reviewed["reinspection"]["images"]]==["Rastro A","Rastro B"]
+    assert visual_context_for_request(reviewed,remote=True,private=True,mode="reply")
+    session=service._session_ref(batch)
+    service.visual_previews.discard_source(session,service._hash(batch.native_source_message_id),1)
+    assert not any(k[:2]==(session,service._hash(batch.native_source_message_id)) for k in service.visual_previews._entries)

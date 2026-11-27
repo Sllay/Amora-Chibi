@@ -22,6 +22,7 @@ from .visual_checkpoint import VisualCheckpointStore, checkpoint_key, contains_t
 from .visual_authorization import VISUAL_AUTHORIZATION, require_visual_authorization
 from .visual_reference import visual_reference_intent, visual_review_intent
 from .visual_pixels import VisualPreviewCache, compare_pixels
+from .visual_evidence import manifest_for,validated_manifest,cache_key,trace,reference_trace,short_hash
 
 
 _CURRENT_MESSAGE: ContextVar[InboundMessage | None] = ContextVar(
@@ -211,16 +212,34 @@ class PlatformMessagingService(BasePlatformMessagingService):
                 return None
             current = None
             historical = None
+            latest = None
+            manifest=validated_manifest(manifest_for(message)) if has_visual else None
             session = self._session_ref(message)
             native_hash = self._hash(message.native_source_message_id)
             if reference and reference != "unsupported":
                 target = self._hash(message.reply_to_message_id) if reference == "reply" else None
                 try:
                     historical = await self._visual_checkpoint_call(message,"load_reference",
-                        session,message.timestamp,target,native_hash)
+                        session,message.timestamp,target,native_hash,
+                        "first" if reference in {"first","first_latest"} else "latest")
+                    if reference=="first_latest":
+                        latest=await self._visual_checkpoint_call(message,"load_reference",
+                            session,message.timestamp,None,native_hash,"latest")
+                        if historical and latest and historical["native_hash"]==latest["native_hash"]:
+                            latest=None
                 except Exception:
-                    historical = None
+                    historical=latest=None
             if has_visual:
+                if manifest:
+                    try:
+                        await self._visual_checkpoint_call(message,"save_reference",session,
+                            native_hash,message.transport_revision,message.timestamp,
+                            unavailable_visual_observation("processing_failed"),manifest,True)
+                    except Exception:
+                        logging.getLogger("amora.incoming_vision").warning("visual_reference_pending_write_failed")
+                    for entry in manifest["images"]:
+                        trace("ingest",manifest,entry["number"],
+                              "received" if entry.get("preview_hash") else "unavailable")
                 if message.incoming_images:
                     current = await self._visual_batch(message, decision)
                 else:
@@ -228,14 +247,20 @@ class PlatformMessagingService(BasePlatformMessagingService):
                 if current is not None and await guard():
                     try:
                         await self._visual_checkpoint_call(message,"save_reference",session,
-                            native_hash,message.transport_revision,message.timestamp,current)
+                            native_hash,message.transport_revision,message.timestamp,current,manifest)
                     except Exception:
                         logging.getLogger("amora.incoming_vision").warning("visual_reference_write_failed")
             async def remember_current_preview():
-                if (message.incoming_image is not None and current is not None
-                        and current.get("status")=="analyzed" and await guard()):
-                    self.visual_previews.put((session,native_hash,message.transport_revision),
-                                             message.incoming_image)
+                if not manifest or current is None or not await guard():
+                    return
+                supplied={i.attachment_id:i.image for i in message.incoming_images}
+                if message.incoming_image is not None:
+                    supplied[message.incoming_image.attachment_id]=message.incoming_image
+                for attachment in manifest["images"][:3]:
+                    key=cache_key(session,manifest,attachment["number"])
+                    image=next((v for k,v in supplied.items() if short_hash(k)==attachment["attachment_hash"]),None)
+                    if key and image is not None and await guard():
+                        self.visual_previews.put(key,image)
             if not await guard():
                 return None
             if reference is None:
@@ -260,17 +285,18 @@ class PlatformMessagingService(BasePlatformMessagingService):
                         from datetime import datetime
                         await self._visual_checkpoint_call(message,"mark_reference_disputed",
                             session,historical["native_hash"],historical["revision"],
-                            datetime.fromisoformat(historical["sent_at"]))
+                            datetime.fromisoformat(historical["sent_at"]),historical.get("manifest"))
                     except Exception:
                         logging.getLogger("amora.incoming_vision").warning("visual_dispute_write_failed")
                 historical={**historical,"disputed":True,
                             "observation":unavailable_visual_observation("invalid_observation")}
             if not await guard():
                 return None
-            reinspection = None
-            pixel_pair = None
+            reinspection=None
+            pixel_pair=None
+            availability="not_attempted" if review else None
             if historical is not None and (review or message.incoming_image is not None):
-                old_key = (session,historical["native_hash"],historical["revision"])
+                old_key=(session,historical["native_hash"],historical["revision"])
                 async def historical_guard():
                     if not await guard():
                         return False
@@ -279,34 +305,30 @@ class PlatformMessagingService(BasePlatformMessagingService):
                     except Exception:
                         return False
                 if await historical_guard():
-                    preview = self.visual_previews.get(old_key)
-                    if preview is not None:
-                        if message.incoming_image is not None:
-                            pixel_pair = compare_pixels(preview,message.incoming_image)
-                        elif review and self.incoming_vision is not None and self.incoming_vision.available:
-                            # Fresh inference, not the checkpoint cache or old description.
-                            old_token=VISUAL_AUTHORIZATION.set(historical_guard)
-                            try:
-                                import os
-                                from amora.cognition.visual_context import visual_context_for_request
-                                if os.getenv("AMORA_DISCORD_IMAGE_VISION","1").strip().lower() not in {"0","false","off","no"}:
-                                    result=await asyncio.wait_for(
-                                        self.incoming_vision.analyze(preview,message.text),timeout=27)
-                                    if not contains_transport_input(result,preview):
-                                        reinspection=visual_context_for_request(result,remote=True,private=True,mode="reply")
-                                        if reinspection and reinspection.get("source")!="vision_model":
-                                            reinspection=None
-                            except Exception:
-                                logging.getLogger("amora.incoming_vision").warning("visual_reinspection_failed")
-                            finally:
-                                VISUAL_AUTHORIZATION.reset(old_token)
+                    old_manifest=historical.get("manifest")
+                    key=cache_key(session,old_manifest,1)
+                    preview=self.visual_previews.get(key) if key else None
+                    if (preview is not None and message.incoming_image is not None
+                            and len(old_manifest["images"])==1):
+                        pixel_pair=compare_pixels(preview,message.incoming_image)
+                    if review and not has_visual:
+                        old_token=VISUAL_AUTHORIZATION.set(historical_guard)
+                        try:
+                            reinspection,availability=await self._fresh_visual_review(
+                                message,session,old_manifest,historical_guard)
+                        finally:
+                            VISUAL_AUTHORIZATION.reset(old_token)
                     if not await historical_guard():
-                        self.visual_previews.discard(old_key)
+                        self.visual_previews.discard_source(*old_key)
                         reinspection=pixel_pair=None
                         historical=None
+                        availability="preview_missing" if review else None
                 else:
-                    self.visual_previews.discard(old_key)
+                    self.visual_previews.discard_source(*old_key)
                     historical=None
+                    availability="preview_missing" if review else None
+            elif review:
+                availability="preview_missing"
             if not await guard():
                 return None
             # Compare with the previous preview before insertion can evict it.
@@ -323,14 +345,39 @@ class PlatformMessagingService(BasePlatformMessagingService):
                     historical=reinspection=pixel_pair=None
             if not await guard():
                 return None
+            if latest is not None:
+                try:
+                    valid=await self._visual_checkpoint_call(message,"source_current",session,
+                        latest["native_hash"],latest["revision"])
+                except Exception:
+                    valid=False
+                if not valid:
+                    latest=None
+            if not await guard():
+                return None
             prior = historical["observation"] if historical else None
-            states = [o["status"] for o in (current,prior,reinspection) if o is not None]
+            latest_obs=latest["observation"] if latest else None
+            states = [o["status"] for o in (current,prior,reinspection,latest_obs) if o is not None]
             status = ("analyzed" if prior is not None and states and all(x=="analyzed" for x in states)
                       else "partial" if any(x in {"analyzed","partial"} for x in states)
                       else "unavailable")
+            if reference=="first_latest" and latest_obs is None:
+                status="partial" if any(s in {"analyzed","partial"} for s in states) else "unavailable"
+            if review and reinspection is None and availability in {"fresh","partial"}:
+                availability="preview_missing"
+            if historical:
+                reference_trace("project_historical",session,historical["native_hash"],historical["revision"],prior["status"])
+            if latest:
+                reference_trace("project_latest",session,latest["native_hash"],latest["revision"],latest_obs["status"])
+            if manifest and current is not None:
+                reference_trace("project_current",session,native_hash,message.transport_revision,current["status"])
             return {"observation_version":4,"source":"visual_reference",
                     "status":status,"reference_kind":reference,
-                    **({"review_requested":True} if review else {}),
+                    **({"review_requested":True,"review_availability":availability} if review else {}),
+                    **({"historical_manifest":historical["manifest"]} if historical and historical.get("manifest") else {}),
+                    **({"current_manifest":manifest} if current is not None and manifest else {}),
+                    **({"comparison_latest":latest_obs,"latest_observed_at":latest["observed_at"]} if latest_obs is not None else {}),
+                    **({"latest_manifest":latest["manifest"]} if latest and latest.get("manifest") else {}),
                     **({"historical_disputed":True} if historical and historical.get("disputed") else {}),
                     **({"historical":prior,"observed_at":historical["observed_at"]} if historical else {}),
                     **({"current":current} if current is not None else {}),
@@ -338,6 +385,49 @@ class PlatformMessagingService(BasePlatformMessagingService):
                     **({"historical_current_pixels":pixel_pair} if pixel_pair is not None else {})}
         finally:
             VISUAL_AUTHORIZATION.reset(token)
+
+    async def _fresh_visual_review(self,message,session,manifest,guard):
+        import os
+        from amora.cognition.visual_context import visual_context_for_request
+        if (manifest is None or self.incoming_vision is None or not self.incoming_vision.available
+                or os.getenv("AMORA_DISCORD_IMAGE_VISION","1").strip().lower() in {"0","false","off","no"}):
+            return None,"preview_missing" if manifest is None else "not_attempted"
+        loop=asyncio.get_running_loop()
+        deadline=loop.time()+27
+        count=len(manifest["images"])
+        rows=[]
+        attempted=False
+        for entry in manifest["images"][:3]:
+            number=entry["number"]
+            key=cache_key(session,manifest,number)
+            image=self.visual_previews.get(key) if key else None
+            remaining=deadline-loop.time()
+            result=unavailable_visual_observation("expired")
+            if image is not None and remaining>0 and await guard():
+                attempted=True
+                try:
+                    reference_trace("reinspection_sensor",session,manifest["message_hash"],manifest["revision"],"started")
+                    raw=await asyncio.wait_for(self.incoming_vision.analyze(image,message.text),
+                        timeout=remaining/(min(count,3)-number+1))
+                    if not contains_transport_input(raw,image):
+                        valid=visual_context_for_request(raw,remote=True,private=True,mode="reply")
+                        if valid and valid.get("source")=="vision_model":
+                            result=valid
+                        else:
+                            result=unavailable_visual_observation("invalid_observation")
+                except Exception:
+                    result=unavailable_visual_observation("provider_failed")
+            if not await guard():
+                return None,"preview_missing"
+            rows.append({"image_number":number,"observation":result})
+        analyzed=sum(row["observation"]["status"]=="analyzed" for row in rows)
+        if not analyzed:
+            return None,"sensor_failed" if attempted else "preview_missing"
+        if count==1:
+            return rows[0]["observation"],"fresh"
+        state="analyzed" if analyzed==count else "partial"
+        return {"observation_version":3,"source":"vision_batch","image_count":count,
+                "images":rows,"status":state},"fresh" if state=="analyzed" else "partial"
 
     async def _visual_checkpoint_call(self, message, operation, *args):
         if self._use_storage_lane(message):
@@ -367,16 +457,23 @@ class PlatformMessagingService(BasePlatformMessagingService):
         except Exception:
             cached = None
         await require_visual_authorization()
+        image_manifest=validated_manifest(manifest_for(message))
         if cached is not None and not contains_transport_input(cached, image):
+            if image_manifest:
+                trace("checkpoint_hit",image_manifest,1,"analyzed")
             logging.getLogger("amora.incoming_vision").info("visual_checkpoint_hit")
             return cached
         if self.incoming_vision is None or not self.incoming_vision.available:
             return unavailable_visual_observation("unconfigured")
+        if image_manifest:
+            trace("sensor_start",image_manifest,1,"started")
         result = await self.incoming_vision.analyze(image, message.text)
         await require_visual_authorization()
         validated = visual_context_for_request(result, remote=True, private=True, mode="reply")
         if validated is None or contains_transport_input(validated, image):
             return unavailable_visual_observation("invalid_observation")
+        if image_manifest:
+            trace("sensor_result",image_manifest,1,validated["status"])
         if validated["status"] == "analyzed":
             try:
                 await self._visual_checkpoint_call(message, "save", *args, validated)
@@ -399,6 +496,7 @@ class PlatformMessagingService(BasePlatformMessagingService):
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 27
         observations = []
+        manifest=validated_manifest(manifest_for(message))
         for index, ref in enumerate(refs[:3], 1):
             item = supplied.get(ref.attachment_id)
             # Do not turn a cached owner decision into authorization for a
@@ -424,6 +522,8 @@ class PlatformMessagingService(BasePlatformMessagingService):
                 if result is None:
                     result = unavailable_visual_observation('invalid_observation')
             observations.append({'image_number': index, 'observation': result})
+            if manifest:
+                trace("batch_sensor_result",manifest,index,result["status"])
         if not is_verified_owner(self.attention.profiles, message, decision.speaker_entity_id):
             return None
         pair=None

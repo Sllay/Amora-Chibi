@@ -12,6 +12,10 @@ _IMAGE_WORD = re.compile(r"\b" + _IMAGE + r"\b")
 _OLDER = re.compile(r"\b(?:penultima|antepenultima|duas anteriores|primeira de ontem|de ontem|semana passada)\b")
 
 
+_FIRST = re.compile(r"\b(?:primeir[ao]\s+" + _IMAGE + r"|" + _IMAGE + r"\s+primeir[ao])\b")
+_LAST = re.compile(r"\b(?:ultim[ao]\s+" + _IMAGE + r"|" + _IMAGE + r"\s+ultim[ao])\b")
+
+
 def visual_reference_intent(message):
     """A local routing hint, not permission to disclose or infer image content."""
     text = "".join(c for c in unicodedata.normalize("NFKD", message.text.casefold())
@@ -22,6 +26,8 @@ def visual_reference_intent(message):
         return "reply"
     if _OLDER.search(text):
         return "unsupported"
+    if _FIRST.search(text):
+        return "first_latest" if _LAST.search(text) else "first"
     if _REFERENCE.search(text):
         return "latest"
     return None
@@ -32,7 +38,7 @@ _DISPUTE = re.compile(r"\b(?:voce (?:errou|se enganou|descreveu errado)|a (?:des
 
 def visual_review_intent(message):
     """Explicit review/dispute of a registered image, not an implicit guess."""
-    if visual_reference_intent(message) not in {"latest","reply"}:
+    if visual_reference_intent(message) not in {"latest","reply","first"}:
         return None
     text = "".join(c for c in unicodedata.normalize("NFKD",message.text.casefold())
                    if not unicodedata.combining(c))
