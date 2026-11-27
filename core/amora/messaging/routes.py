@@ -127,10 +127,11 @@ def register_messaging_routes(app, core, require_auth) -> None:
 
     @app.post("/v1/messaging/worker/outbound/{message_id}/ack", dependencies=[Depends(require_auth)])
     def messaging_outbound_ack(message_id: UUID, payload: OutboundAckRequest):
-        if core.messaging.realtime_bridge is not None:
-            item=core.messaging_store.get_outbound(message_id)
-            if item is not None and item.metadata.get("realtime_v1"):
-                raise HTTPException(status_code=409,detail="REALTIME_RECEIPTS_REQUIRED")
+        # A disabled bridge or rolling back the worker must not allow an
+        # ordinary ACK to bypass the Realtime receipt protocol.
+        item=core.messaging_store.get_outbound(message_id)
+        if item is not None and item.metadata.get("realtime_v1"):
+            raise HTTPException(status_code=409,detail="REALTIME_RECEIPTS_REQUIRED")
         with bind_latency_trace() as trace:
             started = perf_counter()
             if payload.segment is not None:

@@ -90,6 +90,12 @@ def lab(request, tmp_path, monkeypatch):
             candidate = reply_job_statements()
             assert not (registry.keys() & candidate.keys())
             registry.update(candidate)
+            # Disposable candidate registry must be assembled BEFORE bootstrap.
+            # The production default registry remains unchanged.
+            from amora.storage.postgres_runtime_realtime import realtime_statements
+            extra=realtime_statements()
+            assert not (registry.keys() & extra.keys())
+            registry.update(extra)
             backend = PostgresBackendCandidate(_raw, registry,
                 target=PostgresTargetPolicy(), max_connections=16)
             core = AmoraCore.bootstrap(clock=clock, storage=backend)
@@ -1822,9 +1828,8 @@ async def test_realtime_operational_receipts_startup_and_restart(lab,monkeypatch
     from hashlib import sha256
     core,clock,_=lab
     is_pg=core.database.backend.capabilities.name=="postgres-candidate"
-    # Test fixture registry is explicitly scoped to the disposable backend.
+    # The fixture supplies reviewed receipt SQL at backend construction.
     if is_pg:
-        core.database.backend._statements.update(realtime_statements())
         with closing(_raw()) as raw:
             with pytest.raises(ValueError,match="OPERATOR_APPROVAL"):
                 prepare_realtime_schema(raw,PostgresTargetPolicy(),approval="no")
@@ -1844,16 +1849,19 @@ async def test_realtime_operational_receipts_startup_and_restart(lab,monkeypatch
         binding=binding_digest("primary","1"*18,"2"*18,1)
         digest=sha256(b"synthetic").hexdigest()
         call=runtime._operational_receipt
-        first=await call("prepare",turn,0,binding=binding,seq=1,digest=digest)
+        destination={"account":"primary","channel":"1"*18}
+        first=await call("prepare",turn,0,binding=binding,seq=1,digest=digest,**destination)
         assert first.operation=="create"
-        assert await call("prepare",turn,0,binding=binding,seq=2,digest=digest) is None
+        assert await call("prepare",turn,0,binding=binding,seq=2,digest=digest,**destination) is None
         await runtime.stop()
         await core.messaging.stop_storage_lane()
         await runtime.start(background=False)
         assert core.messaging.realtime_bridge is not None
         assert (await call("read",turn,0))["pending_token"]==first.token
+        # Recover through the reviewed registry using independent nonce evidence.
+        assert await call("observe_create",nonce=first.nonce,message_id="3"*18,digest=digest,**destination)
         assert await call("confirm",turn,0,binding=binding,token=first.token,message_id="3"*18,digest=digest)
-        second=await call("prepare",turn,0,binding=binding,seq=2,digest=digest,terminal=True)
+        second=await call("prepare",turn,0,binding=binding,seq=2,digest=digest,terminal=True,**destination)
         assert second.operation=="edit" and second.message_id=="3"*18
         assert await call("confirm",turn,0,binding=binding,token=second.token,message_id="3"*18,digest=digest)
         assert (await call("read",turn,0))["confirmed_digest"]==digest
