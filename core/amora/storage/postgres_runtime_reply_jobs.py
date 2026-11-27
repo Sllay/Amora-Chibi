@@ -223,6 +223,46 @@ def reply_job_statements() -> dict[str, ReviewedStatement]:
                 WHERE j.status='ready' AND o.status IN ('sent','failed','cancelled')
                 ORDER BY j.created_at,j.job_seq LIMIT 128
             )""", 0),
+        "PG_REPLY_JOB_GROUP_PENDING": ReviewedStatement("""SELECT a.message_id,
+            COALESCE(a.metadata_json::jsonb -> 'durable_reply_transport' ->> 'native_message_id',a.message_id) AS native_id,
+            messaging_reply_jobs.transport_revision
+            FROM amora_pg_v18_lab.messaging_reply_jobs
+            JOIN amora_pg_v18_lab.conversation_messages m ON m.id=messaging_reply_jobs.input_id
+            JOIN amora_pg_v18_lab.messaging_audit a ON a.id=m.metadata_json::jsonb ->> 'reply_audit_id'
+            WHERE messaging_reply_jobs.turn_id=%s AND messaging_reply_jobs.session_id=%s
+              AND messaging_reply_jobs.status='pending' AND messaging_reply_jobs.attempts=0
+              AND a.platform='discord' AND a.channel_type='dm' AND a.direction='inbound'
+              AND a.account_scope=%s AND a.conversation_id=%s AND a.sender_external_id=%s
+              AND a.speaker_entity_id='PERSON_BK' AND m.speaker_id='PERSON_BK'
+              AND NOT EXISTS (SELECT 1 FROM amora_pg_v18_lab.messaging_inbound_generation g
+                  WHERE g.turn_id=messaging_reply_jobs.turn_id AND g.lease_token IS NOT NULL)
+              AND """ + _VALID_SOURCE + " LIMIT 1 FOR UPDATE OF messaging_reply_jobs",5,1),
+        "PG_REPLY_JOB_GROUP_MARK_READY": ReviewedStatement("""UPDATE amora_pg_v18_lab.messaging_reply_jobs
+            SET status='ready',outbound_id=%s,last_reason=NULL,lease_token=NULL,lease_until=NULL
+            WHERE turn_id=%s AND session_id=%s AND status='pending' AND attempts=0
+            AND """ + _VALID_SOURCE,3),
+        "PG_REPLY_JOB_GROUP_DELIVERY_ROWS": ReviewedStatement("""SELECT messaging_reply_jobs.turn_id,
+            COALESCE(a.metadata_json::jsonb -> 'durable_reply_transport' ->> 'native_message_id',a.message_id) AS native_id,
+            messaging_reply_jobs.transport_revision
+            FROM amora_pg_v18_lab.messaging_reply_jobs
+            JOIN amora_pg_v18_lab.conversation_messages m ON m.id=messaging_reply_jobs.input_id
+            JOIN amora_pg_v18_lab.messaging_audit a ON a.id=m.metadata_json::jsonb ->> 'reply_audit_id'
+            WHERE messaging_reply_jobs.outbound_id=%s AND messaging_reply_jobs.status='ready'
+              AND a.platform='discord' AND a.channel_type='dm' AND a.direction='inbound'
+              AND a.account_scope=%s AND a.conversation_id=%s
+              AND a.speaker_entity_id='PERSON_BK' AND m.speaker_id='PERSON_BK'
+              AND EXISTS (SELECT 1 FROM amora_pg_v18_lab.platform_identity_bindings b
+                  WHERE b.platform='discord' AND b.account_scope=a.account_scope
+                    AND b.external_actor_id=a.sender_external_id
+                    AND b.identifier_type IN ('user_id','discord_user_id')
+                    AND b.enabled=1 AND b.entity_id='PERSON_BK'
+                    AND b.trust IN ('operator_verified','platform_authenticated'))
+              AND NOT EXISTS (SELECT 1 FROM amora_pg_v18_lab.platform_identity_bindings b
+                  WHERE b.platform='discord' AND b.account_scope=a.account_scope
+                    AND b.external_actor_id=a.sender_external_id
+                    AND b.identifier_type IN ('user_id','discord_user_id')
+                    AND b.enabled=1 AND b.entity_id<>'PERSON_BK')
+              AND """ + _VALID_SOURCE + " LIMIT 5",3,5),
         "PG_REPLY_JOB_COUNTS": ReviewedStatement("SELECT status,COUNT(*) AS count FROM amora_pg_v18_lab.messaging_reply_jobs GROUP BY status", 0, 7),
         "PG_REPLY_JOB_DELIVERY_ALLOWED": ReviewedStatement("""SELECT 1 FROM amora_pg_v18_lab.messaging_reply_jobs
             JOIN amora_pg_v18_lab.conversation_messages m ON m.id=messaging_reply_jobs.input_id

@@ -100,7 +100,8 @@ class VisualCheckpointStore:
         ))
 
 
-    def save_reference(self, session, native_hash, revision, sent_at, observation):
+    def save_reference(self, session, native_hash, revision, sent_at, observation,
+                       manifest=None,pending=False):
         """Save one completed image-message snapshot, including negative results."""
         if not self.source_current(session, native_hash, revision):
             return False
@@ -110,8 +111,16 @@ class VisualCheckpointStore:
         now = self.clock.now()
         if not timedelta(0) <= now - sent_at <= timedelta(seconds=HISTORY_TTL_SECONDS):
             return False
+        from .visual_evidence import validated_manifest
+        if manifest is not None:
+            manifest=validated_manifest(manifest)
+            if (not manifest or manifest["message_hash"]!=native_hash or manifest["revision"]!=revision
+                    or datetime.fromisoformat(manifest["sent_at"])!=sent_at):
+                return False
         payload = {"native_hash":native_hash,"revision":revision,
-                   "sent_at":sent_at.isoformat(),"observation":obs}
+                   "sent_at":sent_at.isoformat(),"observation":obs,
+                   **({"manifest":manifest} if manifest is not None else {}),
+                   **({"pending":True} if pending else {})}
         key = hashlib.sha256(json.dumps([session,payload],sort_keys=True,
                     ensure_ascii=False,separators=(",",":")).encode()).hexdigest()
         return self.database.append_event(AmoraEvent(
@@ -122,7 +131,7 @@ class VisualCheckpointStore:
             payload=payload,
         ))
 
-    def mark_reference_disputed(self, session, native_hash, revision, sent_at):
+    def mark_reference_disputed(self, session, native_hash, revision, sent_at,manifest=None):
         """Suppress a disputed sensor assertion, never replace it with user text."""
         if not self.source_current(session,native_hash,revision):
             return False
@@ -138,10 +147,11 @@ class VisualCheckpointStore:
             priority=EventPriority.BACKGROUND,importance=0.0,session_id=session,
             dedupe_key="visual-dispute:v1:"+key,
             payload={"native_hash":native_hash,"revision":revision,"sent_at":sent_at.isoformat(),
-                     "disputed":True,"observation":unavailable_visual_observation("invalid_observation")},
+                     "disputed":True,"observation":unavailable_visual_observation("invalid_observation"),
+                     **({"manifest":manifest} if manifest is not None else {})},
         ))
 
-    def load_reference(self, session, before, target_hash=None, exclude_hash=None):
+    def load_reference(self, session, before, target_hash=None, exclude_hash=None, selection="latest"):
         """Select the latest registered image message or exact native reply.
 
         Never fall through from an invalidated/failed latest image to an older
@@ -176,18 +186,23 @@ class VisualCheckpointStore:
                 candidates.append((sent_at, revision, event.timestamp, native_hash, data))
             except (ValueError, TypeError, KeyError, OverflowError):
                 continue
-        if not candidates:
+        if not candidates or selection not in {"latest","first"}:
             return None
-        # Same-time independent messages are ambiguous; UUID ordering would
-        # fabricate chronology. Within one source use the highest revision.
-        latest = max(item[0] for item in candidates)
-        tied = [item for item in candidates if item[0] == latest]
+        # Earliest in the bounded retained history, not "first ever".
+        if selection=="first" and len(rows)>=HISTORY_MAX_RECORDS:
+            return None
+        revisions={}
+        for item in candidates:
+            revisions[item[3]]=max(revisions.get(item[3],0),item[1])
+        candidates=[item for item in candidates if item[1]==revisions[item[3]]]
+        selected=(min if selection=="first" else max)(item[0] for item in candidates)
+        tied = [item for item in candidates if item[0] == selected]
         if len({item[3] for item in tied}) != 1:
             return None
         latest_revision=max(item[1] for item in tied)
         same_revision=[item for item in tied if item[1]==latest_revision]
         disputed=[item for item in same_revision if item[4].get("disputed") is True]
-        eligible=disputed or same_revision
+        eligible=disputed or [item for item in same_revision if not item[4].get("pending")] or same_revision
         chosen = max(eligible,key=lambda item:item[2])
         if any(item[1:3] == chosen[1:3] and item[4] != chosen[4] for item in eligible):
             return None
@@ -197,14 +212,27 @@ class VisualCheckpointStore:
         obs = visual_context_for_request(data.get("observation"),remote=True,private=True,mode="reply")
         if not obs or obs.get("observation_version")==4:
             return None
+        from .visual_evidence import validated_manifest,reference_trace
+        manifest=validated_manifest(data.get("manifest"))
+        if data.get("manifest") is not None and (not manifest or manifest["message_hash"]!=native_hash
+                or manifest["revision"]!=revision or datetime.fromisoformat(manifest["sent_at"])!=sent_at):
+            return None
+        reference_trace("selected",session,native_hash,revision,
+                        "pending" if data.get("pending") else "disputed" if data.get("disputed") else obs["status"])
         return {"native_hash":native_hash,"revision":revision,
                 "observed_at":observed_at.isoformat(),"sent_at":sent_at.isoformat(),"observation":obs,
+                **({"manifest":manifest} if manifest else {}),
+                **({"pending":True} if data.get("pending") else {}),
                 **({"disputed":True} if data.get("disputed") is True else {})}
 
 
 def contains_transport_input(observation, image):
     # Defense against a malformed provider echo. Ordinary OCR remains data.
+    import re
     serialized = json.dumps(observation, ensure_ascii=False)
-    return ("data:image/" in serialized.lower()
+    lowered=serialized.lower()
+    return ("data:image/" in lowered
             or image.content_base64 in serialized
-            or bool(image.source_url and image.source_url in serialized))
+            or bool(image.source_url and image.source_url in serialized)
+            or bool(re.search(r"https?://(?:cdn\.discordapp\.com|media\.discordapp\.net)/attachments/",lowered))
+            or bool(re.search(r"[A-Za-z0-9+/]{256,}={0,2}",serialized)))

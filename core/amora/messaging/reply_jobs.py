@@ -309,6 +309,31 @@ class ReplyJobRepository:
                             (claim.turn_id,claim.token,self._now().isoformat())).rowcount != 1:
                         raise _LeaseConflict()
                     return None
+                members = outbound.metadata.get("causal_group_members", [])
+                member_rows = []
+                if members:
+                    if (not isinstance(members,list) or not 1<=len(members)<=3
+                            or any(not isinstance(x,str) for x in members)
+                            or len(set(members))!=len(members) or claim.turn_id in members
+                            or decision.speaker_entity_id!="PERSON_BK"
+                            or len(message.sender_identifiers)!=1):
+                        raise ValueError("REALTIME_GROUP_INVALID")
+                    for member in members:
+                        if str(UUID(member))!=member:
+                            raise ValueError("REALTIME_GROUP_INVALID")
+                        row = db._conn.execute(self._sql("GROUP_PENDING"),
+                            (member,claim.session_id,message.account_scope,message.conversation_id,
+                             message.sender_identifiers[0].external_actor_id)).fetchone()
+                        if row is None:
+                            if db._conn.execute(self._sql("CAUSAL_CLEAR_PREPARED"),
+                                (claim.turn_id,claim.token,self._now().isoformat())).rowcount!=1:
+                                raise _LeaseConflict()
+                            return None
+                        member_rows.append((member,row))
+                    outbound.metadata["causal_group_sources"] = [
+                        {"turn_id":member,"source_message_id":row["native_id"],
+                         "transport_revision":int(row["transport_revision"])}
+                        for member,row in member_rows]
                 for segment_values, message_values in records:
                     if db._conn.execute(self._sql("SEGMENT_INSERT"), segment_values).rowcount != 1:
                         raise ValueError("DURABLE_REPLY_SEGMENT_CONFLICT")
@@ -323,11 +348,20 @@ class ReplyJobRepository:
                 )
                 if (persisted.id != outbound.id or persisted.text != outbound.text
                         or persisted.source_message_id != outbound.source_message_id
-                        or persisted.conversation_id != outbound.conversation_id):
+                        or persisted.conversation_id != outbound.conversation_id
+                        or persisted.metadata.get("causal_group_sources") != outbound.metadata.get("causal_group_sources")
+                        or persisted.metadata.get("causal_group_members") != outbound.metadata.get("causal_group_members")):
                     raise ValueError("DURABLE_REPLY_OUTBOUND_CONFLICT")
                 if db._conn.execute(self._sql("MARK_READY"),
                         (oid, claim.turn_id, claim.token, self._now().isoformat(), oid)).rowcount != 1:
                     raise _LeaseConflict()
+                for member,row in member_rows:
+                    if db._conn.execute(self._sql("GROUP_MARK_READY"),
+                            (oid,member,claim.session_id)).rowcount!=1:
+                        raise _LeaseConflict()
+                    store.mark_inbound_responded(platform=message.platform,
+                        account_scope=message.account_scope,conversation_id=message.conversation_id,
+                        message_id=row["message_id"])
                 if not self.generations.release(claim.turn_id, claim.token, completed=True):
                     raise _LeaseConflict()
                 return True

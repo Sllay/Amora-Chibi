@@ -34,7 +34,7 @@ class EnvelopeBudget:
                 and (self.body_limit_bytes is None or self.body_bytes <= self.body_limit_bytes))
 
 
-def measure_envelope(context, payload, *, descriptor=None, ceiling=None):
+def measure_envelope(context, payload, *, descriptor=None, ceiling=None, body_ceiling=None):
     """Measure actual JSON bytes, reserve requested output and honor known limits.
 
     Local token budgets are input-only; provider context windows include output.
@@ -53,6 +53,10 @@ def measure_envelope(context, payload, *, descriptor=None, ceiling=None):
         limit = min(limit, window - reserve)
     metadata = getattr(descriptor, "metadata", {}) or {}
     byte_limit = _positive_int(metadata.get("max_request_bytes"))
+    if body_ceiling is not None:
+        if type(body_ceiling) is not int or body_ceiling<1:
+            raise ValueError("INVALID_BODY_CEILING")
+        byte_limit = min(byte_limit,body_ceiling) if byte_limit is not None else body_ceiling
     body_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"),
                                 allow_nan=False).encode("utf-8"))
     return EnvelopeBudget(estimate_payload(payload), reserve, body_bytes, max(0, limit), byte_limit)
@@ -85,7 +89,8 @@ GROQ_BASELINE_HARD_CEILING_TOKENS = 7_200
 GROQ_V3_SOFT_CEILING_TOKENS = 12_288
 
 
-def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEILING_TOKENS, strict=False, descriptor=None):
+def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEILING_TOKENS,
+                         strict=False, descriptor=None, preserve_evidence=False, body_ceiling=None):
     """Return a copy with optional context projected to a provider-specific cap.
 
     The original Core context and DialoguePlan remain authoritative and intact.
@@ -103,7 +108,7 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
     projected = context.model_copy(deep=True)
     while True:
         payload = make_payload(projected)
-        budget = measure_envelope(projected, payload, descriptor=descriptor, ceiling=target)
+        budget = measure_envelope(projected, payload, descriptor=descriptor, ceiling=target,body_ceiling=body_ceiling)
         estimate = budget.estimated_input_tokens
         if budget.fits:
             return projected, payload
@@ -112,6 +117,25 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
         # user utterance, plan, speaker/addressee, canonical identity or V3.
         if projected.specialist_support is not None:
             projected.specialist_support = None
+        elif preserve_evidence:
+            # A rejected request must not be made to fit by dropping a source,
+            # current fact, tool affordance or user constraint. Retain all
+            # user turns and their associated historical replies for technical
+            # continuation; otherwise only prune unambiguously unrelated
+            # complete old exchanges. Never slice an utterance.
+            from .task_contract import removable_history_turn
+            removable=removable_history_turn(projected)
+            if removable is not None:
+                projected.recent_messages=[row for row in projected.recent_messages
+                                           if str(row.get("turn_id") or "")!=removable]
+            else:
+                hard_ceiling=(GROQ_PAYLOAD_HARD_CEILING_TOKENS if full_v3
+                              else GROQ_BASELINE_HARD_CEILING_TOKENS)
+                hard=target if strict else min(int(context.token_budget),hard_ceiling)
+                hard_budget=measure_envelope(projected,payload,descriptor=descriptor,ceiling=hard,body_ceiling=body_ceiling)
+                if hard_budget.fits:
+                    return projected,payload
+                raise ContextBudgetExceeded(estimate,hard_budget.input_limit_tokens)
         elif projected.web_research and projected.web_research.get("research_notebook"):
             notebook = projected.web_research["research_notebook"]
             recent = notebook.get("recent_pages") or []
@@ -178,34 +202,68 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
             hard_ceiling = (GROQ_PAYLOAD_HARD_CEILING_TOKENS if full_v3
                             else GROQ_BASELINE_HARD_CEILING_TOKENS)
             hard = target if strict else min(int(context.token_budget), hard_ceiling)
-            hard_budget = measure_envelope(projected, payload, descriptor=descriptor, ceiling=hard)
+            hard_budget = measure_envelope(projected, payload, descriptor=descriptor, ceiling=hard,body_ceiling=body_ceiling)
             if hard_budget.fits:
                 return projected, payload
             raise ContextBudgetExceeded(estimate, hard_budget.input_limit_tokens)
 
 
-def compact_rejected_payload(context, make_payload, rejected_payload, *, descriptor=None):
-    """One corrective projection for a rejected request, never the same bytes.
+def compact_rejected_payload(context, make_payload, rejected_payload, *, descriptor=None,
+                             min_reduction=0.0, preserve_evidence=False, min_saved_bytes=1):
+    """Find one safe corrective projection, preferring a 20% reduction.
 
-    Keep the original immutable turn, identity, plan and safety instructions.
-    The 20% reduction target is a provisional policy, not a claimed provider
-    limit. If essential context cannot fit, let the orchestrator try a different
-    compatible route. No truncation of the literal user input.
+    A caller's minimum is a hard lower bound, not the preferred target.
+    The optional absolute byte floor rejects tiny savings even on small
+    requests. Both the estimated input and serialized bytes must decrease.
+    No provider limit is inferred from these local policy thresholds.
+    The original literal, identity, plan and safety contract remain intact.
     """
-    previous = estimate_payload(rejected_payload)
-    ceiling = max(1, int(previous * 0.8))
+    if not 0<=min_reduction<1 or type(min_saved_bytes) is not int or min_saved_bytes<1:
+        raise ValueError("INVALID_REBUDGET_REDUCTION")
+
+    previous=estimate_payload(rejected_payload)
     def size(item):
-        return len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-    # First seek the preferred reduction. If the irreducible causal exchange
-    # prevents it, a strictly smaller projection is still useful. Neither
-    # path may resend the rejected envelope or cut the protected context.
-    for target in dict.fromkeys((ceiling, previous - 1)):
-        if target < 1:
+        return len(json.dumps(item,ensure_ascii=False,separators=(",",":"),
+                              allow_nan=False).encode("utf-8"))
+
+    before=size(rejected_payload)
+    # ceil for savings (round down the allowed total) so that the measured
+    # reduction can never be smaller than the advertised policy.
+    minimum_saved=max(min_saved_bytes,math.ceil(before*min_reduction))
+    maximum_bytes=before-minimum_saved
+    minimum_tokens=previous-max(1,math.ceil(previous*min_reduction))
+    if maximum_bytes<1 or minimum_tokens<1:
+        return None
+    # Two bounded local projections, but at most ONE corrective HTTP call.
+    # If the preferred target cannot be met without cutting protected data,
+    # the configured meaningful-saving floor may still permit a retry.
+    preferred_bytes=min(maximum_bytes,before-math.ceil(before*.20))
+    preferred_tokens=min(minimum_tokens,previous-max(1,math.ceil(previous*.20)))
+    targets=((preferred_tokens,preferred_bytes),(minimum_tokens,maximum_bytes))
+    for target,body_target in dict.fromkeys(targets):
+        if target<1 or body_target<1:
             continue
         try:
-            _, payload = fit_provider_payload(context, make_payload, ceiling=target, strict=True, descriptor=descriptor)
+            _,payload=fit_provider_payload(context,make_payload,ceiling=target,
+                strict=True,descriptor=descriptor,preserve_evidence=preserve_evidence,
+                body_ceiling=body_target)
         except ContextBudgetExceeded:
             continue
-        if estimate_payload(payload) < previous and size(payload) < size(rejected_payload):
+        if estimate_payload(payload)<=minimum_tokens and size(payload)<=maximum_bytes:
             return payload
     return None
+
+
+# Local recovery policy, not Groq's documented context window or rate limit.
+# Prefer 20%; on an otherwise irreducible envelope, accept only a meaningful
+# saving in BOTH relative and absolute terms. The field incident (about
+# 46 KB -> 45.7 KB) cannot qualify. A second rejection goes to failover.
+GROQ_REBUDGET_MIN_REDUCTION=0.05
+GROQ_REBUDGET_MIN_SAVED_BYTES=1024
+
+
+def compact_groq_rejected_payload(context,make_payload,rejected_payload,*,descriptor=None):
+    return compact_rejected_payload(context,make_payload,rejected_payload,
+        descriptor=descriptor,preserve_evidence=True,
+        min_reduction=GROQ_REBUDGET_MIN_REDUCTION,
+        min_saved_bytes=GROQ_REBUDGET_MIN_SAVED_BYTES)

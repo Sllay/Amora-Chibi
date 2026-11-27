@@ -14,6 +14,7 @@ class MessagingStorageWorker:
         self.database = AmoraDatabase(database.path, backend=database.backend)
         self.generations = InboundGeneration(self.database, clock)
         self.reply_jobs = None
+        self.realtime_receipts = None
         self.visual_checkpoints = VisualCheckpointStore(self.database, clock)
         self.clock = clock
         if database.backend.capabilities.name == "postgres-candidate":
@@ -48,6 +49,21 @@ class MessagingStorageWorker:
             raise ValueError("VISUAL_CHECKPOINT_OPERATION_NOT_ALLOWED")
         return getattr(self.visual_checkpoints, operation)(*args)
 
+    def realtime_receipt(self,operation,*args,**kwargs):
+        from .realtime_receipts import RealtimeReceiptStore
+        from amora.storage.realtime_receipt_migration import verify_sqlite_receipts
+        from amora.latency_trace import trace_lock
+        with trace_lock(self.database._lock):
+            pg=self.database.backend.capabilities.name=="postgres-candidate"
+            if operation=="verify":
+                return (self.database._conn.verify_realtime_component() if pg
+                        else verify_sqlite_receipts(self.database._conn))
+            if operation not in {"read","prepare","confirm","reject_definitive","observe_create","orphan_candidates","orphan_read"}:
+                raise ValueError("REALTIME_RECEIPT_OPERATION_NOT_ALLOWED")
+            if self.realtime_receipts is None:
+                self.realtime_receipts=RealtimeReceiptStore(self.database._conn,postgres=pg,reviewed=True)
+            return getattr(self.realtime_receipts,operation)(*args,**kwargs)
+
     def reply_job(self, operation, *args, **kwargs):
         if self.reply_jobs is None:
             self.reply_jobs = ReplyJobRepository(self.database, self.clock)
@@ -75,7 +91,7 @@ class MessagingStorageWorker:
 
 class MessagingStorageLane(OwnedStorageLane):
     trace_name = "messaging_db_lane"
-    allowed = frozenset({"claim", "renew", "release", "prepared", "get_audit", "append_audit", "persist_reply", "reply_job", "visual_checkpoint"})
+    allowed = frozenset({"claim", "renew", "release", "prepared", "get_audit", "append_audit", "persist_reply", "reply_job", "visual_checkpoint", "realtime_receipt"})
 
     def __init__(self, database, clock):
         super().__init__(thread_name="amora-messaging-db")

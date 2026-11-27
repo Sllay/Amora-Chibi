@@ -55,6 +55,9 @@ on:
       - 'core/amora/storage/postgres_runtime_reply_jobs.py'
       - 'core/amora/storage/postgres_reply_job_lab_schema.py'
       - 'tests/test_reply_jobs_candidate.py'
+      - 'tests/test_realtime_run01_delivery.py'
+      - 'core/amora/messaging/realtime_receipts.py'
+      - 'core/amora/messaging/realtime_projection.py'
       - 'core/amora/storage/postgres_runtime_reflections.py'
       - 'core/amora/storage/postgres_runtime_agenda.py'
       - 'core/amora/storage/postgres_runtime_temporal.py'
@@ -226,6 +229,7 @@ jobs:
             tests/test_postgres_run2_usage_boundary.py \
             tests/test_postgres_run2_messaging_queue.py \
             tests/test_reply_jobs_candidate.py \
+            tests/test_realtime_run01_delivery.py \
             tests/test_postgres_run2_cognition_v1.py \
             tests/test_postgres_run2_rank_parity.py \
             tests/test_postgres_run2_atomic_decay.py \

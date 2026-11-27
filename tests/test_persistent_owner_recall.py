@@ -186,3 +186,23 @@ def test_remote_hrana_owner_recall_is_read_only_and_bounded(tmp_path, monkeypatc
         assert core.memory.get(saved.id).access_count == 0
     finally:
         core.close()
+
+
+@pytest.mark.parametrize("text",[
+    "Talvez a criatura Vexora seja quadrúpede e dourada.",
+    "A criatura Vexora é quadrúpede e dourada?",
+    "Ela é quadrúpede e dourada.",
+    "A cor de Vexora é vermelha; a cor de Vexora é azul",
+    "A cor de Vexora é vermelha; talvez a altura de Vexora seja alta",
+    "A cor de Vexora é vermelha. Agora pesquise algo.",
+])
+def test_run02_reject_ambiguous_or_hypothetical_fact_units(text):
+    from amora.memory.versioned_fact import owner_fact_units
+    assert owner_fact_units(text)==()
+
+
+def test_run02_multi_explicit_clauses_have_distinct_keys():
+    from amora.memory.versioned_fact import owner_fact_units,parse_named_fact
+    units=owner_fact_units("A cor de Vexora é vermelha; A altura de Vexora é 3 metros")
+    assert len(units)==2 and len({k for k,_,_ in units})==2
+    assert all(projected and parse_named_fact(projection)==k for k,projection,projected in units)

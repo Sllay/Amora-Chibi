@@ -158,7 +158,7 @@ def requested_screenshot_source(
         if not screenshot_requested(request_text):
             return None
         candidates = _public_urls(sources or [], max_items=2)
-    if not candidates and not retry and intent.action in {"search", "follow", "capture"}:
+    if not candidates and not retry and intent.action in {"search", "capture"}:
         candidates = _public_urls(
             references or session_references or [], max_items=1
         )

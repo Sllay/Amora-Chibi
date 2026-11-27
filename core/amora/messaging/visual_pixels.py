@@ -79,6 +79,8 @@ class VisualPreviewCache:
             return False
         # Never keep signed CDN URLs beyond the original transport turn.
         preview = image.model_copy(update={"source_url":None})
+        if not self._matches(key,preview):
+            return False
         self._entries.pop(key, None)
         self._entries[key] = (self.clock.now(), preview)
         while (len(self._entries)>CACHE_RECORDS or
@@ -91,8 +93,28 @@ class VisualPreviewCache:
         row = self._entries.get(key)
         if row is None:
             return None
+        if not self._matches(key,row[1]):
+            self._entries.pop(key,None)
+            return None
         self._entries.move_to_end(key)
         return row[1]
 
+    @staticmethod
+    def _matches(key,image):
+        if not isinstance(key,tuple) or len(key)!=5:
+            return True
+        from .visual_evidence import short_hash
+        from hashlib import sha256
+        try:
+            return (short_hash(image.attachment_id)==key[3] and
+                    sha256(valid_image_bytes(image)).hexdigest()==key[4])
+        except Exception:
+            return False
+
     def discard(self, key):
         self._entries.pop(key, None)
+
+    def discard_source(self,session,native_hash,through):
+        for key in list(self._entries):
+            if isinstance(key,tuple) and len(key)>=3 and key[:2]==(session,native_hash) and key[2]<=through:
+                self._entries.pop(key,None)

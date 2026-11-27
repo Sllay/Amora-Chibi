@@ -119,3 +119,175 @@ def test_normal_clock_projection_does_not_disable_explicit_technical_plan():
     for code in ("COGNITIVE_REFLECTION","AUTONOMOUS_INITIATION","SCHEDULED_REMINDER"):
         assert not detailed_output_requested(ctx.model_copy(update={"reason_codes":[code]}))
     assert not detailed_output_requested(ctx.model_copy(update={"temporal_opportunity":{"kind":"initiative"}}))
+
+
+def test_run02_b_rebudget_requires_material_reduction_and_preserves_evidence():
+    from amora.cognition.context_budget import compact_rejected_payload
+    from amora.cognition.models import ContextMemory
+    ctx=_context("Explique o mecanismo e não remova as restrições.")
+    ctx.specialist_support={"note":"x"*8000}
+    ctx.web_research={"sources":[{"url":"https://example.invalid","text":"evidência "*120}]}
+    ctx.memories=[ContextMemory(id="m",kind="semantic",content="relato original",score=1,
+                               confidence=1,privacy_scope="PERSONAL")]
+    def build(c):
+        return {"user":c.user_text,"plan":c.dialogue_plan,"sources":c.web_research,
+                "memories":[m.model_dump(mode="json") for m in c.memories],"support":c.specialist_support}
+    original=build(ctx)
+    reduced=compact_rejected_payload(ctx,build,original,min_reduction=.2,preserve_evidence=True)
+    assert reduced is not None and reduced["support"] is None
+    assert all(reduced[k]==original[k] for k in ("user","plan","sources","memories"))
+    assert ctx.specialist_support is not None
+    assert compact_rejected_payload(ctx,build,reduced,min_reduction=.2,preserve_evidence=True) is None
+    ctx.specialist_support={"note":"x"*50}
+    assert compact_rejected_payload(ctx,build,build(ctx),min_reduction=.2,preserve_evidence=True) is None
+
+
+def test_run02_b_economic_continuity_and_explicit_coverage():
+    from amora.cognition.task_contract import carried_constraints,task_guidance,quality_reasons,requested_topics
+    from amora.cognition.prompt_frame import turn_frame
+    from amora.cognition.detail_sections import section_scopes
+    ctx=_context("Gostei, mas agora a aldeia B ficará impossibilitada de produzir por 30 dias. O comércio continua funcionando. Como resolvemos isso mantendo todas as regras que estabeleci anteriormente?")
+    original=("A aldeia A só pode produzir madeira. A aldeia B só pode produzir pedra. "
+              "A aldeia C só pode produzir alimentos. Nenhuma delas pode produzir recursos fora da sua especialidade, mesmo durante crises.")
+    ctx.recent_messages=[{"speaker_id":"PERSON_BK","addressee_id":"ENTITY_AMORA","status":"received",
+                          "turn_id":"prior","text":original}]
+    assert len(carried_constraints(ctx))==4
+    frame=turn_frame(ctx)["task_constraints"]
+    assert len(frame["payload"])==4 and frame["prior_task_constraints_requested"]
+    cue=task_guidance(ctx)
+    assert "estoque final" in cue and "demanda acumulada" in cue and "transferências internas" in cue
+    assert "TASK_ECONOMIC_VIABILITY_UNVERIFIED" in quality_reasons(ctx,"Reserve 30% de tudo.")
+    assert "TASK_ECONOMIC_VIABILITY_TERMS_PRESENT" in quality_reasons(ctx,"Compare estoque e demanda durante 30 dias.")
+    assert "TASK_SEMANTIC_COVERAGE_NOT_PROVEN" in quality_reasons(ctx,"Compare estoque e demanda durante 30 dias.")
+    assert not carried_constraints(ctx.model_copy(update={"scene_visibility":"group"}))
+    unrelated=ctx.model_copy(update={"recent_messages":[{"speaker_id":"PERSON_BK","addressee_id":"ENTITY_AMORA",
+          "status":"received","turn_id":"other","text":"Não use Vulkan."}]})
+    assert not carried_constraints(unrelated)
+    text="Quero uma documentação técnica completa. Inclua arquitetura, algoritmos, alimentação, reprodução, migração, predadores, otimização, persistência e tratamento de falhas."
+    topics=requested_topics(text)
+    assert len(topics)==9
+    scopes=section_scopes(text)
+    assert len(scopes)==2 and all(any(topic in scope for scope in scopes) for topic in topics)
+    doc=_context(text)
+    assert "TASK_COVERAGE_LEXICAL_GAPS" in quality_reasons(doc,"Arquitetura do jogo.")
+
+
+def test_run02_b_repeat_and_resource_delta():
+    from amora.cognition.task_contract import repeated_passage
+    from amora.resource_metrics import resource_delta
+    sentence="A simulação mantém um estado determinístico separado do renderizador e executa os cálculos de cada região dentro de um orçamento explícito."
+    assert repeated_passage("Nova seção. "+sentence,["Introdução. "+sentence])
+    assert not repeated_passage("Nova seção de simulação.",["Introdução de simulação."])
+    assert resource_delta({"process_cpu_ns":1000,"cgroup_throttled_usec":1200},
+                          {"process_cpu_ns":1001000,"cgroup_throttled_usec":3200,
+                           "cgroup_memory_bytes":512})=={
+        "process_cpu_ms":1.0,"cgroup_throttled_ms":2.0,"cgroup_memory_end_bytes":512}
+    assert resource_delta({"cgroup_nr_throttled":10},{"cgroup_nr_throttled":2})=={}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status",[429,503])
+async def test_run02_b_interactive_rate_or_overload_goes_to_outer_controller(status):
+    from types import SimpleNamespace
+    from amora.cognition.surface_performance import INTERACTIVE_PROVIDER_ATTEMPT
+    from amora.cognition.provider_resilience import ResilientProviderProxy
+    from amora.cognition.providers import ProviderError
+    calls=[]
+    class Provider:
+        descriptor=SimpleNamespace(name="fixture")
+        async def realize(self,context):
+            calls.append(context)
+            raise ProviderError("synthetic",status_code=status,retry_after="1")
+    context=_context("Pergunta direta.")
+    token=INTERACTIVE_PROVIDER_ATTEMPT.set(True)
+    try:
+        with pytest.raises(ProviderError) as caught:
+            await ResilientProviderProxy(Provider(),max_retries=3).realize(context)
+        assert caught.value.status_code==status and calls==[context]
+    finally:
+        INTERACTIVE_PROVIDER_ATTEMPT.reset(token)
+
+
+def test_run02_b_measured_reserve_remains_bounded():
+    from types import SimpleNamespace
+    from amora.time import SimulatedClock
+    from amora.cognition.surface_performance import ProviderPerformance
+    perf=ProviderPerformance(SimulatedClock())
+    provider=SimpleNamespace(name="fixture",model="model")
+    assert perf.fallback_reserve(provider,"dialogue")==12
+    for _ in range(3):
+        perf.observe(provider,"dialogue",3,True)
+    assert perf.fallback_reserve(provider,"dialogue")==6
+    assert attempt_window(90,1,measured_reserves=[6])==(84,6)
+    assert attempt_window(30,2,measured_reserves=[18,18])==(19.5,10.5)
+
+
+def test_run02_b_byte_ceiling_and_complete_turns_are_preserved():
+    from amora.cognition.context_budget import fit_provider_payload,measure_envelope
+    ctx=_context("Explique renderização Vulkan.")
+    # The newest exchange spans several rows; a fixed last-N row count
+    # could discard the corresponding original user utterance.
+    ctx.recent_messages=[
+        {"turn_id":"old","speaker_id":"PERSON_BK","text":"Culinária "+"a"*1000},
+        {"turn_id":"old","speaker_id":"ENTITY_AMORA","text":"Receita "+"é"*1000},
+        {"turn_id":"new","speaker_id":"PERSON_BK","text":"História original."},
+        *[{"turn_id":"new","speaker_id":"ENTITY_AMORA","text":"Resposta "+str(i)} for i in range(5)],
+        {"turn_id":"latest","speaker_id":"PERSON_BK","text":"Pedido mais recente."},
+    ]
+    def build(c):
+        return {"text":c.user_text,"history":c.recent_messages}
+    original=build(ctx)
+    old_size=measure_envelope(ctx,original).body_bytes
+    projected,payload=fit_provider_payload(ctx,build,ceiling=ctx.token_budget,
+        preserve_evidence=True,strict=True,body_ceiling=old_size-1500)
+    assert measure_envelope(projected,payload).body_bytes<=old_size-1500
+    assert projected.recent_messages==ctx.recent_messages[2:]
+    assert build(ctx)==original
+
+
+def test_run02_b_groq_rebudget_prefers_twenty_percent_but_accepts_material_safe_floor():
+    from amora.cognition.context_budget import (
+        compact_groq_rejected_payload,compact_rejected_payload,measure_envelope,
+        GROQ_REBUDGET_MIN_REDUCTION,GROQ_REBUDGET_MIN_SAVED_BYTES,
+    )
+    ctx=_context("Explique o sistema Vulkan.")
+    # A required 16 KiB envelope with only 1600 removable bytes cannot lose
+    # 20%; it can still reduce both the estimated input and actual body size
+    # materially. The strict helper remains strict for explicit 20% callers.
+    def build(c):
+        return {"text":c.user_text,"required":"é"*8000,
+                "support":c.specialist_support}
+    ctx.specialist_support={"note":"x"*1600}
+    original=build(ctx)
+    assert compact_rejected_payload(ctx,build,original,min_reduction=.2,
+                                    preserve_evidence=True) is None
+    reduced=compact_groq_rejected_payload(ctx,build,original)
+    assert reduced is not None and reduced["support"] is None
+    assert reduced["required"]==original["required"] and reduced["text"]==original["text"]
+    before=measure_envelope(ctx,original).body_bytes
+    after=measure_envelope(ctx,reduced).body_bytes
+    assert before-after>=GROQ_REBUDGET_MIN_SAVED_BYTES
+    assert before-after>=before*GROQ_REBUDGET_MIN_REDUCTION
+    assert before-after<before*.20
+    assert ctx.specialist_support is not None
+    assert compact_groq_rejected_payload(ctx,build,reduced) is None
+    # A genuinely large reduction continues to prefer 20%.
+    ctx.specialist_support={"note":"x"*8000}
+    original=build(ctx)
+    reduced=compact_groq_rejected_payload(ctx,build,original)
+    assert reduced is not None
+    before=measure_envelope(ctx,original).body_bytes
+    after=measure_envelope(ctx,reduced).body_bytes
+    assert after<=before*.8
+    # Reproduce the field incident: even with removable content, a saving
+    # of hundreds of bytes on a large request is not worth another call.
+    ctx.specialist_support={"note":"x"*460}
+    def field(c):
+        return {"text":c.user_text,"required":"z"*45000,"support":c.specialist_support}
+    assert compact_groq_rejected_payload(ctx,field,field(ctx)) is None
+    # Absolute floor also applies on a small envelope even if the
+    # percentage reduction alone would be high.
+    ctx.specialist_support={"note":"x"*500}
+    def small(c):
+        return {"text":c.user_text,"required":"z"*600,"support":c.specialist_support}
+    assert compact_groq_rejected_payload(ctx,small,small(ctx)) is None

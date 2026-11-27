@@ -17,10 +17,15 @@ from .surface_performance import detailed_output_requested, SYNC_REALIZATION_RET
 from .durable_realization import DURABLE_REALIZATION, DURABLE_AUTHORIZATION, DeferredRealization
 
 TTL = 900
-VERSION = 1
+VERSION = 2
 
 
 def section_scopes(text):
+    from .task_contract import requested_topics
+    topics=requested_topics(text)
+    if topics:
+        middle=(len(topics)+1)//2
+        return ("; ".join(topics[:middle]),"; ".join(topics[middle:]))
     # Keep exact request clauses; full literal remains in every provider input.
     clauses = [p.strip() for p in re.split(r"(?<=[.!?;])\s+|\n+",text) if p.strip()]
     substantive = [p for p in clauses if len(p)>=32]
@@ -118,11 +123,19 @@ class DetailSession:
             if index not in valid:
                 break
             frame,provider,model=valid[index]
-            if frame in self.frames:
+            if self.repeated(frame):
                 break
             self.frames.append(frame)
             self.providers.append((provider,model))
         self.loaded=True
+
+    def repeated(self,frame):
+        from .task_contract import repeated_passage
+        if frame in self.frames or any(m.text.strip()==old.text.strip()
+                for m in frame.moves for prev in self.frames for old in prev.moves):
+            return True
+        return repeated_passage(" ".join(m.text for m in frame.moves),
+            [" ".join(m.text for m in prev.moves) for prev in self.frames])
 
     async def run(self,realize,descriptor):
         await self.load()
@@ -137,8 +150,7 @@ class DetailSession:
             result=dict(await realize(ctx))
             usage=result.pop("_usage",{})
             frame=self.validate(result)
-            if frame in self.frames or any(m.text.strip()==old.text.strip()
-                    for m in frame.moves for prev in self.frames for old in prev.moves):
+            if self.repeated(frame):
                 raise RealizationError("DETAIL_SECTION_REPEATED","repeated section")
             await self.authorize()
             bucket=int(self.engine.clock.now().timestamp())//TTL

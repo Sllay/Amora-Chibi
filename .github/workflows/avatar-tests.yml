@@ -45,5 +45,10 @@ jobs:
           node --check web/operator-panel.js
       - name: Test Avatar Engine
         run: npm --prefix avatar test
+      - name: Ensure native raster decoder is available
+        run: |
+          if ! command -v ffmpeg || ! command -v ffprobe; then
+            sudo apt-get update && sudo apt-get install -y ffmpeg
+          fi
       - name: Test browser, shell and messaging JavaScript contracts
         run: node --test tests/*.test.mjs

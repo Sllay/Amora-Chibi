@@ -2,11 +2,13 @@ const API = 'https://discord.com/api/v10';
 const sleepDefault = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function parseRetryMs(response, payload) {
-  const bodySeconds = Number(payload?.retry_after);
+  const bodySeconds = payload?.retry_after == null ? NaN : Number(payload.retry_after);
   if (Number.isFinite(bodySeconds) && bodySeconds >= 0) return bodySeconds * 1000;
-  const retryAfter = Number(response.headers.get('retry-after'));
+  const retryHeader = response.headers.get('retry-after');
+  const retryAfter = retryHeader == null ? NaN : Number(retryHeader);
   if (Number.isFinite(retryAfter) && retryAfter >= 0) return retryAfter * 1000;
-  const resetAfter = Number(response.headers.get('x-ratelimit-reset-after'));
+  const resetHeader = response.headers.get('x-ratelimit-reset-after');
+  const resetAfter = resetHeader == null ? NaN : Number(resetHeader);
   if (Number.isFinite(resetAfter) && resetAfter >= 0) return resetAfter * 1000;
   return null;
 }
@@ -81,6 +83,7 @@ export class DiscordRestClient {
             code: 'RATE_LIMITED',
             retryable: true,
           });
+          lastError.retryAfterMs = base;
           if (attempt < attempts) {
             await this.sleep(waitMs);
             continue;

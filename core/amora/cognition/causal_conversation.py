@@ -8,8 +8,16 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from contextvars import ContextVar
 
 from .temporal import aware_time, observed_timestamp
+
+# Bound only by the authorized durable dispatcher, never by user metadata.
+GROUP_RELATED_TURN: ContextVar[str | None] = ContextVar("amora_group_related_turn", default=None)
+
+def grouping_enabled():
+    import os
+    return os.getenv("AMORA_REALTIME_CAUSAL_GROUPING_ENABLED","0").strip().lower() in {"1","true","yes","on"}
 
 MAX_FOLLOWUP_SECONDS = 8.0
 MAX_FOLLOWUPS = 3
@@ -19,7 +27,7 @@ WINDOW_SECONDS = .65
 _CORRECTION = re.compile(r"^(?:amora[, ]+)?(?:corrigindo|correcao|na verdade|quer dizer|quis dizer|digo|retificando)\b")
 _CONTINUATION = re.compile(r"^(?:amora[, ]+)?(?:e tambem|alem disso|complementando|continuando|e mais uma coisa|esqueci de dizer)\b")
 _INTERRUPTION = re.compile(r"^(?:amora[, ]+)?(?:espera|pera(?:i)?|calma|nao responde ainda|para|pare|cancela)\b")
-_TOPIC_CHANGE = re.compile(r"^(?:amora[, ]+)?(?:mudando de assunto|outro assunto|agora outra coisa|outra pergunta)\b")
+_TOPIC_CHANGE = re.compile(r"^(?:amora[, ]+)?(?:mudando de assunto|outro assunto|agora outra coisa|outra coisa|outra pergunta)\b")
 _OPEN_END = re.compile(r"(?:\.\.\.|…|[,;:]|\b(?:e|mas|porque|tipo|seguinte))\s*$", re.I)
 _STOP = frozenset("amora quero queria voce isso isto essa esse agora tambem verdade dizer coisa uma para com por que nao dos das mais sobre como qual quais entao".split())
 
@@ -46,6 +54,19 @@ def followup_kind(previous: str, current: str) -> str:
     if _CONTINUATION.search(value):
         return "continuation" if overlap else "uncertain_continuation"
     return "new_question" if "?" in value else "independent"
+
+
+_SEPARATE_REQUEST = re.compile(
+    r"\b(?:explique|explica|pesquise|pesquisa|mostre|mostra|envie|manda|envia|"
+    r"faca|crie|gere|lembre|lembra|salve|guarde|agenda|agende|cancela|cancele|"
+    r"responda|analise|compare|abre|abra|acesse|acessa|quero saber|como funciona|"
+    r"qual|quais|quanto|quando|onde|por que|porque)\b")
+def groupable_statement(text: str) -> bool:
+    value = _fold(text)
+    return bool(value and len(value)<=600 and "?" not in value and "\n" not in value
+                and not _SEPARATE_REQUEST.search(value)
+                and not re.search(r"[;.!]\s+\S", value)
+                and not re.search(r"\b(?:outra coisa|outro assunto|mudando de assunto)\b",value))
 
 
 def composition_window(text: str) -> float:
@@ -92,6 +113,7 @@ def causal_partition(request, messages, *, allowed):
            for m in messages):
         return history, [], "partitioned"
     followups = []
+    group_prefix = GROUP_RELATED_TURN.get() == current_id
     remaining = MAX_FOLLOWUP_CHARS
     previous = anchor.raw_text or request.text
     seen = set()
@@ -115,9 +137,10 @@ def causal_partition(request, messages, *, allowed):
         kind = followup_kind(previous, literal)
         if kind not in {"correction", "continuation"} or not literal or len(literal) > remaining:
             break
+        group_prefix = group_prefix and groupable_statement(literal)
         followups.append({"turn_id": ident, "observed_at": at.isoformat(),
                           "relation_hint": kind, "literal_text": literal,
-                          "independent_reply_still_pending": True})
+                          "independent_reply_still_pending": not group_prefix})
         remaining -= len(literal)
         previous = literal
         if len(followups) >= MAX_FOLLOWUPS:
@@ -130,6 +153,7 @@ def causal_partition(request, messages, *, allowed):
 _NEGATIVE_TASK = re.compile(
     r"\b(?:n[aã]o\s+(?:pode(?:m)?|deve(?:m)?|quero|use|usar|fa[cç]a|fazer|"
     r"permita|permitir|inclua|incluir|recomende|recomendar|sugira|sugerir)|"
+    r"nenhum[ae]s?(?:\s+d[ae]l[ae]s)?\s+(?:pode(?:m)?|deve(?:m)?)|"
     r"proibid[oa]s?|exclusiv[oa]s?|exclusivamente|somente|apenas|"
     r"s[oó]\s+(?:pode(?:m)?|deve(?:m)?|use|usar|fa[cç]a|produz(?:em)?|produzir))\b", re.I)
 
