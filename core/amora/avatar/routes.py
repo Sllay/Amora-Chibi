@@ -123,6 +123,9 @@ def register_avatar_routes(app: FastAPI, core: object, require_auth: Callable[..
             app.state.visual_preview_status = "unavailable"
             logging.getLogger(__name__).error("VISUAL_V5_PREVIEW_DISABLED reason=%s; Core and legacy avatar remain available", reason)
         else:
+            from amora.security import issue_browser_token
+            app.state.visual_preview_root = root
+            app.state.visual_preview_issue = lambda ttl: issue_browser_token(core.secrets.get("LOCAL_API_TOKEN"), core.clock, "visual", visual_ttl=ttl)
             app.state.visual_preview_status = "ready"
             logging.getLogger(__name__).info("VISUAL_V5_PREVIEW_READY")
     if web_root.is_dir():

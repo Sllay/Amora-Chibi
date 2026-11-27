@@ -71,3 +71,55 @@ def test_optional_preview_failure_keeps_core_online_and_blocks_files(tmp_path, m
         assert password not in caplog.text
     finally:
         core.close()
+
+def test_prism_link_scope_and_both_passwords(tmp_path, monkeypatch):
+    import base64
+    from amora.app import AmoraCore
+    from amora.api import create_api
+    from amora.time import SimulatedClock
+    from amora.security import token_role
+    from fastapi.testclient import TestClient
+    from amora.avatar import prism_link
+    password="p"*40
+    master="d"*40
+    monkeypatch.setenv("AMORA_HOME",str(tmp_path/"home"))
+    monkeypatch.setenv("AMORA_DEV_MASTER_KEY",master)
+    monkeypatch.setenv("AMORA_VISUAL_V5_PREVIEW_PASSWORD",password)
+    root=tmp_path/"preview";root.mkdir()
+    monkeypatch.setenv("AMORA_VISUAL_V5_STAGING_ROOT",str(root))
+    monkeypatch.setattr(v,"verify_preview",lambda path:None)
+    for name in ("index.html","app.js","live-overlay/index.html","presentation.js","identity.json","model/test.png","vendor/live2dcubismcore.min.js","companion/index.html"):
+        p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text("fixture "+name)
+    clock=SimulatedClock()
+    core=AmoraCore.bootstrap(clock=clock)
+    def basic(user,secret):
+        return {"Authorization":"Basic "+base64.b64encode((user+":"+secret).encode()).decode()}
+    try:
+        with TestClient(create_api(core)) as client:
+            for secret in (password,master):
+                assert client.get("/avatar/v5/",headers=basic("bkxd",secret)).status_code==200
+            assert client.get("/avatar/v5/",headers=basic("preview",password)).status_code==401
+            assert client.get("/avatar/v5/",headers=basic("bkxd","wrong")).status_code==401
+            h=basic("bkxd",master)
+            assert client.post("/avatar/v5/prism-link",headers=h).status_code==403
+            assert client.post("/avatar/v5/prism-link",headers={"X-Amora-Prism":"1","Origin":"http://testserver"}).status_code==401
+            response=client.post("/avatar/v5/prism-link",headers={**h,"Origin":"http://testserver","X-Amora-Prism":"1"})
+            assert response.status_code==200
+            link=response.json()["path"];assert password not in link and master not in link
+            prefix=link.removesuffix("live-overlay/")
+            for name in ("live-overlay/","presentation.js","identity.json","model/test.png","vendor/live2dcubismcore.min.js"):
+                assert client.get(prefix+name).status_code==200
+            for name in ("index.html","app.js","companion/index.html","manifest.json","prism-link"):
+                assert client.get(prefix+name).status_code==404
+            assert client.post(link).status_code==403
+            assert client.get(link.replace(prefix.split("/")[-2], "invalid")).status_code==401
+            credential=client.get(prefix+"session").json()["token"]
+            primary=core.secrets.get("LOCAL_API_TOKEN")
+            assert token_role(credential,primary,clock)=="visual"
+            assert client.get("/v1/avatar/project",headers={"Authorization":"Bearer "+credential}).status_code==403
+            assert client.get("/v1/avatar/project",headers={"Authorization":"Bearer "+master}).status_code==401
+            token=prefix.split("/")[-2]
+            assert prism_link.remaining(token,password,clock.now().timestamp()+prism_link.TTL)==0
+            assert prism_link.remaining(token,"q"*40,clock.now().timestamp())==0
+    finally:
+        core.close()

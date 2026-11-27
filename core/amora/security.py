@@ -16,7 +16,7 @@ import re
 import secrets
 from urllib.parse import urlsplit
 
-from starlette.responses import JSONResponse
+from starlette.responses import FileResponse, JSONResponse
 
 from amora.dev_auth import signing_secrets, validate_dev_master_key
 
@@ -121,14 +121,16 @@ def token_equal(first: str, second: str) -> bool:
     return hmac.compare_digest(first.encode("utf-8"), second.encode("utf-8"))
 
 
-def issue_browser_token(secret: str, clock, role="web") -> str:
+def issue_browser_token(secret: str, clock, role="web", *, visual_ttl=3600) -> str:
+    if not isinstance(visual_ttl, int) or not 1 <= visual_ttl <= 3600:
+        raise ValueError("invalid visual credential lifetime")
     if role == "web":
         version = "v2"
         payload = f"web:{secrets.token_hex(16)}"
     elif role in {"avatar", "visual"}:
         version = "v1"
         payload = (
-            f"{role}:{int(clock.now().timestamp()) + (3600 if role == 'visual' else 43200)}:{secrets.token_hex(16)}"
+            f"{role}:{int(clock.now().timestamp()) + (visual_ttl if role == 'visual' else 43200)}:{secrets.token_hex(16)}"
         )
     else:
         raise ValueError("unsupported browser role")
@@ -332,11 +334,36 @@ class SecurityMiddleware:
                 return await respond(503, "preview unavailable; Core remains online")
             if preview_status != "ready":
                 return await respond(404, "preview not enabled")
-            if scope["method"] not in {"GET", "HEAD"}:
+            from amora.avatar import prism_link
+            method = scope["method"]
+            if len(path) > 4096 or len(scope.get("query_string", b"")) > 2048:
+                return await respond(414, "request target too long")
+            # Every resource URL remains under the same scoped capability prefix.
+            # No cookies, Basic challenge, cross-origin access or API bearer reuse.
+            if path.startswith(prism_link.PREFIX):
+                if method not in {"GET", "HEAD"}:
+                    return await respond(403, "overlay is read only")
+                token, sep, name = path[len(prism_link.PREFIX):].partition("/")
+                left = prism_link.remaining(token, password, self.clock.now().timestamp()) if len(password.encode("utf-8")) >= 32 else 0
+                if not sep or not left:
+                    if not self.limits.allow("auth_fail", peer, 20):
+                        return await respond(429, "authentication limit reached")
+                    return await respond(401, "overlay link invalid or expired")
+                state = scope["app"].state
+                if name == "session" and method == "GET":
+                    if not self.limits.allow("prism_session", peer, 12):
+                        return await respond(429, "session limit reached")
+                    credential = state.visual_preview_issue(min(left, 3600))
+                    return await JSONResponse({"token": credential, "expires_in": min(left, 3600)})(scope, receive, secured_send)
+                file = prism_link.asset(state.visual_preview_root, name)
+                if file is None:
+                    return await respond(404, "overlay resource not found")
+                return await FileResponse(file, headers={"Cache-Control":"private, no-store"})(scope, receive, secured_send)
+            is_issue = path == "/avatar/v5/prism-link" and method == "POST"
+            if method not in {"GET", "HEAD"} and not is_issue:
                 return await respond(403, "preview is read only")
             supplied = headers.get(b"authorization", b"")
-            expected = b"Basic " + base64.b64encode(("preview:" + password).encode("utf-8"))
-            if len(password.encode("utf-8")) < 32 or not hmac.compare_digest(supplied, expected):
+            if not prism_link.basic_ok(supplied, password):
                 if not self.limits.allow("auth_fail", peer, 20):
                     return await respond(429, "authentication limit reached")
                 return await JSONResponse(
@@ -344,6 +371,15 @@ class SecurityMiddleware:
                     status_code=401,
                     headers={"WWW-Authenticate": 'Basic realm="Amora V5 preview", charset="UTF-8"'},
                 )(scope, receive, secured_send)
+            if is_issue:
+                if (headers.get(b"x-amora-prism") != b"1" or not supplied_origin
+                        or headers.get(b"content-length", b"0") != b"0"
+                        or b"transfer-encoding" in headers or scope.get("query_string")):
+                    return await respond(403, "invalid link request")
+                if not self.limits.allow("prism_issue", peer, 6):
+                    return await respond(429, "link generation limit reached")
+                token = prism_link.issue(password, self.clock.now().timestamp())
+                return await JSONResponse({"path": prism_link.PREFIX+token+"/live-overlay/", "expires_in": prism_link.TTL})(scope, receive, secured_send)
             return await self.app(scope, receive, secured_send)
         public = (
             path in {"/health", "/ready", "/live", "/v1/pairing/redeem"}

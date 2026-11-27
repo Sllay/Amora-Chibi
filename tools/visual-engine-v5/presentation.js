@@ -14,12 +14,20 @@ if(mode==='companion'){
  document.querySelector('#stop-pip').onclick=async()=>{await video.exit();video.stop();};
 }
 // Opt-in setup inside an isolated browser-source profile; no credential in URL.
-if(mode==='overlay'&&new URLSearchParams(location.search).get('setup')==='1'){
+if(mode==='overlay'&&!location.pathname.startsWith('/avatar/v5/prism/')&&new URLSearchParams(location.search).get('setup')==='1'){
  const panel=document.createElement('section');panel.id='visual-pair';panel.dataset.overlaySetup='true';
  panel.innerHTML='<h2>Parear fonte de live</h2><form><label>Código <input inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="off"></label><label><input type="checkbox" data-remember checked required> Salvar credencial visual por 1 hora</label><button type="submit">Parear</button></form><button type="button" data-unpair>Desparear</button><p data-visual-status role="status">Desconectado</p>';
  document.body.append(panel);
 }
-const visual=attachVisual(()=>runtime,{panel:document.querySelector('#visual-pair')});
+const prism=mode==='overlay'&&location.pathname.startsWith('/avatar/v5/prism/');
+const visual=attachVisual(()=>runtime,{panel:prism?null:document.querySelector('#visual-pair'),isolated:prism});
+let prismTimer,prismStopped=false;
+async function refreshPrism(){if(prismStopped)return;try{
+ const response=await fetch(new URL('./session',import.meta.url),{cache:'no-store',credentials:'omit'});if(!response.ok){visual.conn.stop();document.body.dataset.coreStatus='Link expirado ou indisponível';if(response.status>=500)prismTimer=setTimeout(refreshPrism,30000);return;}
+ const data=await response.json();if(prismStopped)return;visual.conn.connect(data.token);prismTimer=setTimeout(refreshPrism,Math.max(1000,(data.expires_in>120?data.expires_in-60:data.expires_in)*1000));
+ }catch(_){if(!prismStopped)prismTimer=setTimeout(refreshPrism,30000);}}
+if(prism){refreshPrism();window.addEventListener('pagehide',e=>{if(!e.persisted){prismStopped=true;clearTimeout(prismTimer);}});}
+
 async function boot(){if(booting||disposed)return;booting=true;try{
  setStatus('Carregando Cubism','loading');if(!config){config=readConfig(location.search);applyLayout(canvas,config);}
  if(!identity){const r=await fetch(new URL('./identity.json',import.meta.url),{cache:'no-cache'});if(!r.ok)throw Error('Missing identity');identity=await r.json();}
