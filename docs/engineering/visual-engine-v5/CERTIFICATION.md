@@ -19,3 +19,7 @@ Nenhum Core Cubism no Git, evidência não contém vendor. CI mount local /avata
 - Discord worker atual não apresenta player de voz; não simular áudio de Discord. Integrar envelope no produtor real quando existir; testes de Web não certificam Discord.
 - Fonte Web sem interação pode exigir configuração nativa / pareamento alternativo; não colocar token em URL.
 - Avaliar cliente AVKit nativo se Safari PiP suspender JS; Android overlay separadamente, sem aumentar processos do Core.
+
+## Private development staging (candidate on main)
+- Opt-in `/avatar/v5/` requires `AMORA_VISUAL_V5_STAGING_ROOT` pointing to an authorized built bundle and `AMORA_VISUAL_V5_PREVIEW_PASSWORD` (random, separate, >=32 bytes), HTTP Basic user `preview` over HTTPS. All static dependencies are gated; no credential in URL. CI tests denial for HTML, model identity, SDK and both surfaces. Core pairing is still independent. Do not reuse Core master, do not publish password or SDK in public Git/artifacts. If PRISM cannot authenticate a private browser source, mark blocked, do not make it public to bypass.
+- Current deployment tool access does not include Northflank writes. Existing NF_BACKUP_API_TOKEN is for read-only backups. Need owner-authorized deploy access or dashboard configuration of an isolated dev service plus authorized SDK bundle. No change to existing production service.

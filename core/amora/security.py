@@ -322,6 +322,24 @@ class SecurityMiddleware:
             return await respond(400, "invalid host or origin")
         if not self.limits.allow("requests", peer, 600):
             return await respond(429, "request limit reached")
+        # A development SDK bundle is private even though the legacy avatar is public.
+        if not websocket and (path == "/avatar/v5" or path.startswith("/avatar/v5/")):
+            password = os.getenv("AMORA_VISUAL_V5_PREVIEW_PASSWORD", "")
+            if self.worker or not os.getenv("AMORA_VISUAL_V5_STAGING_ROOT"):
+                return await respond(404, "preview not enabled")
+            if scope["method"] not in {"GET", "HEAD"}:
+                return await respond(403, "preview is read only")
+            supplied = headers.get(b"authorization", b"")
+            expected = b"Basic " + base64.b64encode(("preview:" + password).encode("utf-8"))
+            if len(password.encode("utf-8")) < 32 or not hmac.compare_digest(supplied, expected):
+                if not self.limits.allow("auth_fail", peer, 20):
+                    return await respond(429, "authentication limit reached")
+                return await JSONResponse(
+                    {"detail": "private development preview"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Amora V5 preview", charset="UTF-8"'},
+                )(scope, receive, secured_send)
+            return await self.app(scope, receive, secured_send)
         public = (
             path in {"/health", "/ready", "/live", "/v1/pairing/redeem"}
             and not self.worker

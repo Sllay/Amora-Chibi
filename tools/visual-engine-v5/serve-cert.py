@@ -1,5 +1,6 @@
 """CI-only actual Uvicorn/Core server. No provider calls or production data."""
 import os
+import secrets
 from pathlib import Path
 import uvicorn
 from amora.app import AmoraCore
@@ -10,8 +11,13 @@ if __name__ == "__main__":
     os.environ["AMORA_MODE"] = "local"
     os.environ["AMORA_HOME"] = str(Path(".cert-core").resolve())
     os.environ["AMORA_VISUAL_V5_STAGING_ROOT"] = str(Path(".build").resolve())
+    preview_password = secrets.token_hex(24)
+    os.environ["AMORA_VISUAL_V5_PREVIEW_PASSWORD"] = preview_password
     core = AmoraCore.bootstrap()
     try:
+        preview_file = Path(".cert-core/preview-password.txt")
+        preview_file.write_text(preview_password)
+        preview_file.chmod(0o600)
         code = core.pairing.issue().code
         path = Path(".cert-core/pairing-test.txt")
         path.write_text(code)
