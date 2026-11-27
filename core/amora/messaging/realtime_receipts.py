@@ -64,13 +64,16 @@ class RealtimeReceiptStore:
     transactions and row locking. Uncertain commits must be reconciled by read.
     """
 
-    def __init__(self, connection, *, postgres=False):
+    def __init__(self, connection, *, postgres=False, reviewed=False):
         self.conn = connection
         self.postgres = postgres
+        self.reviewed = reviewed
         self.table = PG_TABLE if postgres else SQLITE_TABLE
 
     def install_disposable(self):
         # Explicit test/operator action only. No IF NOT EXISTS adoption.
+        if self.reviewed:
+            raise ValueError("REALTIME_MIGRATION_REQUIRES_OPERATOR")
         self.conn.execute(_DDL.format(table=self.table))
         if not self.postgres:
             self.conn.commit()
@@ -82,6 +85,12 @@ class RealtimeReceiptStore:
         return value.replace("?", "%s") if self.postgres else value
 
     def _execute(self, statement, args=()):
+        if self.reviewed and self.postgres:
+            from amora.storage.postgres_runtime_realtime import RECEIPT_KEYS
+            key=RECEIPT_KEYS.get(statement)
+            if key is None:
+                raise ValueError("REALTIME_SQL_NOT_REVIEWED")
+            return self.conn.execute(key,args)
         return self.conn.execute(self._sql(statement), args)
 
     def _transaction(self):
@@ -96,6 +105,9 @@ class RealtimeReceiptStore:
                 raise
             else:
                 self.conn.commit()
+        if self.reviewed:
+            # Same owned connection and transaction boundary as reply jobs.
+            return self.conn
         return self.conn.transaction() if self.postgres else sqlite_tx()
 
     def _row(self, turn, index, *, lock=False):
@@ -107,7 +119,8 @@ class RealtimeReceiptStore:
         if row is None:
             return None
         return dict(zip(("binding","confirmed_seq","message_id","closed","pending_token",
-                         "pending_seq","pending_digest","pending_terminal","confirmed_digest"),row))
+                         "pending_seq","pending_digest","pending_terminal","confirmed_digest"),
+                        (row[i] for i in range(9))))
 
     @staticmethod
     def _key(turn,index):

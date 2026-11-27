@@ -114,8 +114,9 @@ class PlatformMessagingService:
         return self.durable_replies
 
     async def start_durable_replies(self):
-        from amora.storage.reply_job_rollout import durable_reply_mode
+        from amora.storage.reply_job_rollout import durable_reply_mode,realtime_enabled
         mode = durable_reply_mode()
+        realtime_enabled()
         if mode != "off":
             runtime = self.configure_durable_replies()
             if mode == "drain":

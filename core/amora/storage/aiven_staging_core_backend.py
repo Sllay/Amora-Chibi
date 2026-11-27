@@ -96,6 +96,13 @@ def _tls_pinned_aiven_backend(application_name: str) -> PostgresBackendCandidate
         if registry.keys() & extra.keys():
             raise PostgresRuntimeError("PG_REPLY_REGISTRY_CONFLICT")
         registry.update(extra)
+    from .reply_job_rollout import realtime_enabled
+    if realtime_enabled():
+        from .postgres_runtime_realtime import realtime_statements
+        extra=realtime_statements()
+        if registry.keys() & extra.keys():
+            raise PostgresRuntimeError("PG_REALTIME_REGISTRY_CONFLICT")
+        registry.update(extra)
     return PostgresBackendCandidate(
         connect, registry, target=target,
         max_connections=_MAX_CORE_CONNECTIONS,

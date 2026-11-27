@@ -1789,3 +1789,73 @@ async def test_realtime_bridge_durable_core_preview_final_same_receipt(lab,tmp_p
             await asyncio.gather(task,return_exceptions=True)
         await _stop_runtime(core)
         connection.close()
+
+
+def test_realtime_reviewed_registry_exact_and_explicit_opt_in(monkeypatch):
+    from amora.storage.postgres_runtime_realtime import RECEIPT_KEYS,realtime_statements
+    from amora.storage.reply_job_rollout import realtime_enabled,REALTIME_APPROVAL,APPROVAL
+    pg=realtime_statements()
+    assert set(pg)==set(RECEIPT_KEYS.values())
+    assert not (set(pg)&set(compiled_domain_registry()))
+    for sql,key in RECEIPT_KEYS.items():
+        assert pg[key].parameter_count==sql.count("?")==pg[key].postgres_sql.count("%s")
+    monkeypatch.setenv("AMORA_REALTIME_MODE","off")
+    monkeypatch.delenv("AMORA_REALTIME_APPROVAL",raising=False)
+    assert not realtime_enabled()
+    monkeypatch.setenv("AMORA_REALTIME_MODE","on")
+    monkeypatch.setenv("AMORA_REALTIME_APPROVAL",REALTIME_APPROVAL)
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE","off")
+    monkeypatch.delenv("AMORA_DURABLE_REPLY_APPROVAL",raising=False)
+    with pytest.raises(ValueError,match="REALTIME_EXPLICIT_OPT_IN_REQUIRED"):
+        realtime_enabled()
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE","accept")
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_APPROVAL",APPROVAL)
+    assert realtime_enabled()
+
+
+@pytest.mark.asyncio
+async def test_realtime_operational_receipts_startup_and_restart(lab,monkeypatch):
+    from amora.storage.realtime_receipt_migration import prepare_realtime_schema,APPROVAL as MIGRATE
+    from amora.storage.postgres_runtime_realtime import realtime_statements
+    from amora.storage.reply_job_rollout import REALTIME_APPROVAL,APPROVAL
+    from amora.messaging.realtime_receipts import _DDL,SQLITE_TABLE,binding_digest
+    from hashlib import sha256
+    core,clock,_=lab
+    is_pg=core.database.backend.capabilities.name=="postgres-candidate"
+    # Test fixture registry is explicitly scoped to the disposable backend.
+    if is_pg:
+        core.database.backend._statements.update(realtime_statements())
+        with closing(_raw()) as raw:
+            with pytest.raises(ValueError,match="OPERATOR_APPROVAL"):
+                prepare_realtime_schema(raw,PostgresTargetPolicy(),approval="no")
+            assert prepare_realtime_schema(raw,PostgresTargetPolicy(),approval=MIGRATE)["state"]=="prepared"
+            assert prepare_realtime_schema(raw,PostgresTargetPolicy(),approval=MIGRATE)["state"]=="prepared"
+    else:
+        core.database._conn.execute(_DDL.format(table=SQLITE_TABLE))
+        core.database._conn.commit()
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE","accept")
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_APPROVAL",APPROVAL)
+    monkeypatch.setenv("AMORA_REALTIME_MODE","on")
+    monkeypatch.setenv("AMORA_REALTIME_APPROVAL",REALTIME_APPROVAL)
+    runtime=await _start_runtime(core)
+    try:
+        assert core.messaging.realtime_bridge is not None
+        turn=uuid4()
+        binding=binding_digest("primary","1"*18,"2"*18,1)
+        digest=sha256(b"synthetic").hexdigest()
+        call=runtime._operational_receipt
+        first=await call("prepare",turn,0,binding=binding,seq=1,digest=digest)
+        assert first.operation=="create"
+        assert await call("prepare",turn,0,binding=binding,seq=2,digest=digest) is None
+        await runtime.stop()
+        await core.messaging.stop_storage_lane()
+        await runtime.start(background=False)
+        assert core.messaging.realtime_bridge is not None
+        assert (await call("read",turn,0))["pending_token"]==first.token
+        assert await call("confirm",turn,0,binding=binding,token=first.token,message_id="3"*18,digest=digest)
+        second=await call("prepare",turn,0,binding=binding,seq=2,digest=digest,terminal=True)
+        assert second.operation=="edit" and second.message_id=="3"*18
+        assert await call("confirm",turn,0,binding=binding,token=second.token,message_id="3"*18,digest=digest)
+        assert (await call("read",turn,0))["confirmed_digest"]==digest
+    finally:
+        await _stop_runtime(core)

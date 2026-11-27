@@ -69,6 +69,23 @@ class DurableReplyRuntime:
         self.service.realtime_bridge=RealtimeBridge(self.service,receipt_port)
         return self.service.realtime_bridge
 
+    async def _operational_receipt(self,operation,*args,**kwargs):
+        lane=self.service.storage_lane
+        if lane is not None:
+            return await lane.call("realtime_receipt",operation,*args,**kwargs)
+        db=self.service.store.database
+        if db.backend.capabilities.remote:
+            raise RuntimeError("REALTIME_STORAGE_LANE_REQUIRED")
+        from amora.latency_trace import trace_lock
+        from amora.storage.realtime_receipt_migration import verify_sqlite_receipts
+        from .realtime_receipts import RealtimeReceiptStore
+        with trace_lock(db._lock):
+            if operation=="verify":
+                return verify_sqlite_receipts(db._conn)
+            if operation not in {"read","prepare","confirm","reject_definitive"}:
+                raise ValueError("REALTIME_RECEIPT_OPERATION_NOT_ALLOWED")
+            return getattr(RealtimeReceiptStore(db._conn,reviewed=True),operation)(*args,**kwargs)
+
     async def start(self, *, background=True):
         if self.active:
             return
@@ -76,7 +93,13 @@ class DurableReplyRuntime:
         # Missing candidate table/registry fails closed before accepting a turn.
         await self.call("verify_schema")
         await self.call("counts")
+        from amora.storage.reply_job_rollout import realtime_enabled
+        enable_realtime=realtime_enabled()
+        if enable_realtime:
+            await self._operational_receipt("verify")
         self.active = True
+        if enable_realtime:
+            self.configure_realtime(self._operational_receipt)
         self.wake = asyncio.Event()
         self._next_reconcile = 0.0
         if background:
@@ -89,6 +112,7 @@ class DurableReplyRuntime:
             await asyncio.gather(self.task, return_exceptions=True)
             self.task = None
         self.wake = None
+        self.service.realtime_bridge = None
 
     def notify(self):
         if self.wake is not None:

@@ -328,6 +328,15 @@ class PostgresRuntimeConnection:
                 self._transaction_owner = None
             self._state_lock.release()
 
+    def verify_realtime_component(self):
+        from .realtime_receipt_migration import review_realtime_schema
+        with self._state_lock:
+            self._ensure_ready()
+            report=review_realtime_schema(self._raw,self._target)
+            if report["state"]!="prepared":
+                raise PostgresRuntimeError("PG_REALTIME_SCHEMA_NOT_PREPARED")
+            return report
+
     def verify_reply_component(self):
         """Read-only verification of the opt-in reply-job schema."""
         from .postgres_reply_job_migration import review_reply_schema

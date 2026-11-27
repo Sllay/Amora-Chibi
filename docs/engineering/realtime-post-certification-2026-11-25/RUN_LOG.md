@@ -21,3 +21,6 @@
 
 ### RUN01 C2a — cleanup and reauthorization
 - C1 ed8c89a 10/10 workflows PASS. C2 ee6133d submitted. Inspection found neutral cleanup could reject its own prepared reservation; permit only the matching pending seq/digest during second authorization. Stop authorizing old text at generation end even when final commit is uncertain. Validate target before GET receipt reconciliation and group source revisions before final dispatch. Extend integration test to exercise cleanup reservation/recheck. Latest CI pending. Receipt provisioning and unknown POST remain fail-closed; not production certified.
+
+## RUN01 C3 — recibos no backend operacional com gate explícito
+- Base a3aede5: 10/10 workflows PASS. Registry PG18 separada de seis statements revisados; storage lane existente, sem nova conexão, sem SQL dinâmico no runtime. Verificação read-only da estrutura e migração aditiva com aprovação específica, alvo PG18 fixado e pré-requisito do schema de replies. AMORA_REALTIME_MODE=off padrão; modo on exige aprovação própria e fila durável autorizada. Startup falha antes de aceitar caso schema ausente. Testes de contrato, gate, migração repetida e restart SQLite/PG18. Nenhuma migração executada em produção; backup/restore e drain operacional são pré-requisitos. CI pendente. Recuperação de POST incerto ainda em implementação.
