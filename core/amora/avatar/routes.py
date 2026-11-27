@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import logging
 from typing import Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
@@ -104,13 +105,26 @@ def register_avatar_routes(app: FastAPI, core: object, require_auth: Callable[..
     # Isolated, opt-in staging mount. Never replace the legacy avatar or V4.5.
     # Release packaging and license acceptance are a separate gate.
     v5_root = os.environ.get("AMORA_VISUAL_V5_STAGING_ROOT")
+    # An optional preview failure must never stop the Core or expose unverified files.
+    app.state.visual_preview_status = "disabled"
     if v5_root:
-        if len(os.environ.get("AMORA_VISUAL_V5_PREVIEW_PASSWORD", "").encode("utf-8")) < 32:
-            raise RuntimeError("V5 staging requires a separate preview password of at least 32 bytes")
-        root = Path(v5_root).resolve()
-        from .visual_preview import verify_preview
-        verify_preview(root)
-        app.mount("/avatar/v5", StaticFiles(directory=str(root), html=True), name="visual-v5-staging")
+        reason = "bundle_invalid"
+        try:
+            if len(os.environ.get("AMORA_VISUAL_V5_PREVIEW_PASSWORD", "").encode("utf-8")) < 32:
+                reason = "password_invalid"
+                raise RuntimeError("V5 preview password invalid")
+            root = Path(v5_root).resolve()
+            from .visual_preview import verify_preview
+            if not (root / "manifest.json").is_file():
+                reason = "manifest_missing"
+            verify_preview(root)
+            app.mount("/avatar/v5", StaticFiles(directory=str(root), html=True), name="visual-v5-staging")
+        except (RuntimeError, OSError, ValueError):
+            app.state.visual_preview_status = "unavailable"
+            logging.getLogger(__name__).error("VISUAL_V5_PREVIEW_DISABLED reason=%s; Core and legacy avatar remain available", reason)
+        else:
+            app.state.visual_preview_status = "ready"
+            logging.getLogger(__name__).info("VISUAL_V5_PREVIEW_READY")
     if web_root.is_dir():
         app.mount("/avatar", StaticFiles(directory=str(web_root), html=True), name="avatar")
 

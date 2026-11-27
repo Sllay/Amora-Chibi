@@ -72,3 +72,6 @@ Main 02ce0565 and validated V5 bdcb05d diverged (23 commits behind). Reapply onl
 - Staging CI 46042277927 / 7b4abcc: PASS; Core, Avatar, segurança, containers e Aiven aplicáveis verdes. Preparação de merge: build opcional privado com secrets de SDK e leitura de artefato, verificação do ZIP e manifest, compartilhado com CI; padrão desativado. A licença e a configuração de secrets do host ainda dependem do proprietário. Main pode receber apenas código inativo após novos gates verdes; isso não certifica publicação ou dispositivo.
 
 - Verificação de startup do staging: manifesto obrigatório, SDK/MOC fixados, SHA de cada arquivo, conjunto exato sem symlinks/arquivos inesperados; teste de corrupção. Ajuste de portabilidade Alpine/Docker. Não altera startup padrão sem mount.
+
+## Incident hotfix — 27/11/2026
+After merge 96ca3ae, Northflank runtime reported `V5 preview manifest missing or invalid` and restarted. Optional preview startup failure incorrectly propagated into Core. Isolate integrity/configuration failure, log safe reason and fail closed 503 for preview only; keep legacy surfaces and Core health available. No weakened integrity or auth, no DB mutation. New tests reproduce runtime misconfiguration. Deployment still requires valid private bundle and verified image; root unset is immediate rollback.
