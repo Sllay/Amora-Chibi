@@ -15,6 +15,27 @@ RUN --mount=type=secret,id=proxy_ca \
     /opt/venv/bin/pip install --only-binary=:all: --no-cache-dir -c deploy/python.lock /tmp/wheels/amora_chibi*.whl 'psycopg[binary]==3.3.9' 'cryptography==50.0.2' && \
     /opt/venv/bin/python -m pip uninstall -y pip
 
+# Private development preview: no SDK or model download in the default build.
+# Enabled builds use only pinned public sources; no artifact token or manual SDK file.
+COPY tools/visual-engine-v5 ./tools/visual-engine-v5
+ARG AMORA_VISUAL_V5_BUILD=0
+ARG NF_GIT_SHA
+RUN set -eu; mkdir -p /build/visual-preview; \
+    if [ "$AMORA_VISUAL_V5_BUILD" = "1" ]; then \
+      echo VISUAL_V5_BUILD_ENABLED; \
+      apk add --no-cache git nodejs npm curl; \
+      scratch="$(mktemp -d)"; \
+      trap 'rm -rf "$scratch"' EXIT; \
+      sh tools/visual-engine-v5/fetch-preserved-rig.sh "$scratch/rig"; \
+      sh tools/visual-engine-v5/fetch-hosted-core.sh "$scratch/core.js"; \
+      sh tools/visual-engine-v5/build-preview.sh "$scratch/rig" "$scratch/core.js" /build/visual-preview "$NF_GIT_SHA"; \
+      test -s /build/visual-preview/manifest.json; \
+      echo VISUAL_V5_BUILD_READY; \
+    else \
+      test "$AMORA_VISUAL_V5_BUILD" = "0"; \
+      echo VISUAL_V5_BUILD_DISABLED; \
+    fi
+
 FROM ${PYTHON_BASE} AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     AMORA_MODE=cloud AMORA_HOME=/var/lib/amora AMORA_HOST=0.0.0.0 PORT=8765 \
@@ -30,6 +51,7 @@ RUN python -m pip uninstall -y pip && \
     else useradd --uid 10001 --create-home amora; fi && \
     mkdir -p /var/lib/amora && chown amora:amora /var/lib/amora
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder --chown=10001:10001 /build/visual-preview /opt/amora/visual-v5
 # Preserve editable catalogs at the paths resolved by the installed package.
 COPY --chmod=0444 config/voice_profiles.json /opt/venv/lib/python3.12/config/voice_profiles.json
 COPY --chmod=0444 config/people_profiles.json /opt/venv/lib/python3.12/config/people_profiles.json

@@ -1,0 +1,7 @@
+# Visual Engine V5 / RUN 01
+
+Development-only lab using the official Cubism Web Framework 5-r.5 and hosted Core family 06. The SDK license/download page and AI publication rules must be reviewed by the owner before distribution. No proprietary SDK bytes are committed, bundled in published artifacts, or deployed. This branch is not production. Exact model artifact is from the V4.5 certified exporter, not the manual HTML. The framework commit is fixed; the official hosted Core digest is recorded at validation, must be pinned before subsequent reproducible releases. If the artifact expires, preserve/regenerate the same approved source via a separately verified exporter workflow.
+
+Workflow builds in GitHub Actions and runs native WebGL2 rendering on Chromium SwiftShader. Evidence is diagnostic, not physical iPhone or server benchmarks. Runtime supports three resolution/FPS profiles, original Cubism masks, physics, expressions/motions, parameter overrides, context-loss handling, and visible build/model hash. No browser renderer is added to Northflank. RUN 02 adds routes and presentation modes only after RUN 01 gate; real device and full performance certification deferred to RUN 04 per owner instruction.
+
+References: https://www.live2d.com/en/sdk/download/web/ ; https://www.live2d.com/en/sdk/license/ ; https://github.com/Live2D/CubismWebFramework/tree/198a3769c26ca3d7b600e932590433badd392edd .

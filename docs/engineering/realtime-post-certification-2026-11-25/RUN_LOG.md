@@ -64,3 +64,6 @@
 ### RUN04 — correção da primeira validação
 - fd4f42f: Browser image Chromium smoke PASS; web contracts falharam em dois testes existentes de tema explícito ("pesquisa de novo sobre Blender" foi interpretado como refinamento contextual). O retry contextual agora requer "com foco em"/"focando em", preservando o tema novo introduzido por "sobre". Não alterados os testes anteriores.
 - Messaging workers: 133/139 PASS, 6 falhas de imagem fixture/decodificação; Avatar JS repetiu falhas de screenshot e não instala ffmpeg. Substituída fixture JPEG longa por JPEG 8x8 grayscale de 159 bytes, verificado localmente por ffprobe e ffmpeg com os argumentos usados pelo decoder. Instalação explícita do decoder também no workflow Avatar; sem suprimir testes ou afrouxar segurança. CI integral no novo SHA pendente. Sem merge/deploy.
+
+## Integração pré-publicação — quatro RUNs
+- Candidato 81e133f: 12/12 workflows PASS, incluindo imagem Chromium e teste de screenshot multipart no container Discord. RUN01–04 CI_PASS; LIVE_PENDING. Main avançou três commits até cc5e7fb (motor visual V5); comparação das árvores verificou 47 arquivos modificados na main, zero sobreposição com as RUNs. Merge de main na branch do PR preserva blobs de ambas as linhas; CI integral do candidato combinado obrigatória antes de merge na main. Sem mudança de flags, secrets, schema ou deploy nesta etapa.
