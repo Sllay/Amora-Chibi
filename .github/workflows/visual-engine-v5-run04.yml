@@ -68,6 +68,7 @@ jobs:
           for i in $(seq 1 60); do if curl -fsS http://127.0.0.1:8767/health >/dev/null; then break; fi; sleep 1; done
           curl -fsS http://127.0.0.1:8767/health >/dev/null
           node tools/visual-engine-v5/validate-run04.cjs
+          rm -f .cert-core/pairing-test.txt .cert-core/web-test-token.txt
       - name: Upload evidence only (never proprietary Core)
         if: always()
         uses: actions/upload-artifact@v4

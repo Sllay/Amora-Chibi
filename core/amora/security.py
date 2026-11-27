@@ -358,7 +358,15 @@ class SecurityMiddleware:
                 # Parse the actual handshake header; ASGI adapters may normalize
                 # the subprotocol list differently. Never echo the auth protocol.
                 values = [v for k, v in raw if k.lower() == b"sec-websocket-protocol"]
-                protocols = [p.strip() for p in values[0].decode("ascii", "replace").split(",")] if len(values) == 1 else []
+                # wsproto exposes negotiated offers in ASGI scope, not extra_headers.
+                # Where the original header is present, reject ambiguity rather than
+                # accepting a conflicting normalized representation.
+                parsed_offers = [p.strip() for item in scope.get("subprotocols", []) for p in item.split(",")]
+                protocols = parsed_offers if not values else (
+                    [p.strip() for p in values[0].decode("ascii", "replace").split(",")] if len(values) == 1 else []
+                )
+                if values and parsed_offers and protocols != parsed_offers:
+                    protocols = []
                 if (len(protocols) == 2 and protocols[0] == required_protocol
                         and protocols[1].startswith("auth.") and len(protocols[1]) <= 512
                         and supplied_origin and not scope.get("query_string") and not authorization):
@@ -367,6 +375,8 @@ class SecurityMiddleware:
                     role = None
                 if role != required_role:
                     role = None
+                else:
+                    scope.setdefault("state", {})["visual_credential"] = protocols[1][5:]
             if role is None:
                 if not self.limits.allow("auth_fail", peer, 20):
                     return await respond(429, "authentication limit reached")

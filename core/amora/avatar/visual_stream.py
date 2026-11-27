@@ -15,8 +15,7 @@ def visual_projection(state):
     )}
 
 def valid_socket(ws, core, role):
-    offered = ws.headers.get("sec-websocket-protocol", "").split(",")
-    credential = offered[1].strip()[5:] if len(offered) == 2 else ""
+    credential = getattr(ws.state, "visual_credential", "")
     return token_role(credential, core.secrets.get("LOCAL_API_TOKEN"), core.clock) == role
 
 class AudioRelay:
@@ -108,6 +107,8 @@ def register_visual_stream(app, core):
         wake = asyncio.Event()
         audio_wake = asyncio.Event()
         relay.listeners.add(audio_wake)
+        if relay.current():
+            audio_wake.set()
         async def event(_event):
             wake.set()
         await core.events.subscribe("*", event)
