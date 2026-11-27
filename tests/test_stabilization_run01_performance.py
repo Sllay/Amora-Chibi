@@ -243,3 +243,51 @@ def test_run02_b_byte_ceiling_and_complete_turns_are_preserved():
     assert measure_envelope(projected,payload).body_bytes<=old_size-1500
     assert projected.recent_messages==ctx.recent_messages[2:]
     assert build(ctx)==original
+
+
+def test_run02_b_groq_rebudget_prefers_twenty_percent_but_accepts_material_safe_floor():
+    from amora.cognition.context_budget import (
+        compact_groq_rejected_payload,compact_rejected_payload,measure_envelope,
+        GROQ_REBUDGET_MIN_REDUCTION,GROQ_REBUDGET_MIN_SAVED_BYTES,
+    )
+    ctx=_context("Explique o sistema Vulkan.")
+    # A required 16 KiB envelope with only 1600 removable bytes cannot lose
+    # 20%; it can still reduce both the estimated input and actual body size
+    # materially. The strict helper remains strict for explicit 20% callers.
+    def build(c):
+        return {"text":c.user_text,"required":"é"*8000,
+                "support":c.specialist_support}
+    ctx.specialist_support={"note":"x"*1600}
+    original=build(ctx)
+    assert compact_rejected_payload(ctx,build,original,min_reduction=.2,
+                                    preserve_evidence=True) is None
+    reduced=compact_groq_rejected_payload(ctx,build,original)
+    assert reduced is not None and reduced["support"] is None
+    assert reduced["required"]==original["required"] and reduced["text"]==original["text"]
+    before=measure_envelope(ctx,original).body_bytes
+    after=measure_envelope(ctx,reduced).body_bytes
+    assert before-after>=GROQ_REBUDGET_MIN_SAVED_BYTES
+    assert before-after>=before*GROQ_REBUDGET_MIN_REDUCTION
+    assert before-after<before*.20
+    assert ctx.specialist_support is not None
+    assert compact_groq_rejected_payload(ctx,build,reduced) is None
+    # A genuinely large reduction continues to prefer 20%.
+    ctx.specialist_support={"note":"x"*8000}
+    original=build(ctx)
+    reduced=compact_groq_rejected_payload(ctx,build,original)
+    assert reduced is not None
+    before=measure_envelope(ctx,original).body_bytes
+    after=measure_envelope(ctx,reduced).body_bytes
+    assert after<=before*.8
+    # Reproduce the field incident: even with removable content, a saving
+    # of hundreds of bytes on a large request is not worth another call.
+    ctx.specialist_support={"note":"x"*460}
+    def field(c):
+        return {"text":c.user_text,"required":"z"*45000,"support":c.specialist_support}
+    assert compact_groq_rejected_payload(ctx,field,field(ctx)) is None
+    # Absolute floor also applies on a small envelope even if the
+    # percentage reduction alone would be high.
+    ctx.specialist_support={"note":"x"*500}
+    def small(c):
+        return {"text":c.user_text,"required":"z"*600,"support":c.specialist_support}
+    assert compact_groq_rejected_payload(ctx,small,small(ctx)) is None

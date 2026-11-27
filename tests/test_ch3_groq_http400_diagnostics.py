@@ -292,6 +292,11 @@ async def test_run02_groq_413_sends_only_one_smaller_authorized_request(monkeypa
     assert len(guard_calls) == 1
     assert len(sent) == 2
     assert len(json.dumps(sent[1]).encode()) < len(json.dumps(sent[0]).encode())
+    from amora.cognition.context_budget import measure_envelope, GROQ_REBUDGET_MIN_REDUCTION, GROQ_REBUDGET_MIN_SAVED_BYTES
+    first_size=measure_envelope(ctx,sent[0]).body_bytes
+    second_size=measure_envelope(ctx,sent[1]).body_bytes
+    assert first_size-second_size>=GROQ_REBUDGET_MIN_SAVED_BYTES
+    assert first_size-second_size>=first_size*GROQ_REBUDGET_MIN_REDUCTION
     assert all(ctx.user_text in str(item["input"]) for item in sent)
     assert ctx.recent_messages == history
     # A second rejection is terminal for this candidate; never a third call.
@@ -334,6 +339,11 @@ async def test_stabilization_sync_compact_retry_is_guarded_and_bounded(monkeypat
     assert len(guard_calls)==(1 if authorization in {"valid","revoked"} else 0)
     if authorization=="valid":
         assert len(json.dumps(sent[1]).encode())<len(json.dumps(sent[0]).encode())
+        from amora.cognition.context_budget import measure_envelope, GROQ_REBUDGET_MIN_REDUCTION, GROQ_REBUDGET_MIN_SAVED_BYTES
+        first_size=measure_envelope(ctx,sent[0]).body_bytes
+        second_size=measure_envelope(ctx,sent[1]).body_bytes
+        assert first_size-second_size>=GROQ_REBUDGET_MIN_SAVED_BYTES
+        assert first_size-second_size>=first_size*GROQ_REBUDGET_MIN_REDUCTION
         assert all(ctx.user_text in str(x["input"]) for x in sent)
     assert ctx.recent_messages==original.recent_messages
     assert ctx.user_text==original.user_text

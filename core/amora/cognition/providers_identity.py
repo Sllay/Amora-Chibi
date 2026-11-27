@@ -12,7 +12,7 @@ from .mesh_providers import (
     CloudflareCognitiveProvider as BaseCloudflareCognitiveProvider,
     OpenRouterCognitiveProvider as BaseOpenRouterCognitiveProvider,
 )
-from .context_budget import ensure_payload, fit_provider_payload, estimate_payload, compact_rejected_payload
+from .context_budget import ensure_payload, fit_provider_payload, estimate_payload, compact_groq_rejected_payload
 from .durable_realization import DURABLE_REALIZATION
 from .payload_metrics import log_payload_metrics
 from .models import CognitiveContext
@@ -347,16 +347,17 @@ class GroqCognitiveProvider(_IdentityAwareOpenAIMessages, BaseGroqCognitiveProvi
             # Derive from the actual rejected projection, not a rebuilt larger
             # original. A nearly identical envelope is not a useful retry.
             from amora.latency_trace import increment
-            reduced = compact_rejected_payload(projected, build, payload, descriptor=self.descriptor,
-                                               min_reduction=0.20,preserve_evidence=True)
+            reduced = compact_groq_rejected_payload(projected,build,payload,descriptor=self.descriptor)
+            before_bytes=len(json.dumps(payload,ensure_ascii=False,separators=(",",":")).encode("utf-8"))
+            set_value("provider_rebudget_before_bytes",before_bytes)
             if reduced is None:
                 increment("provider_rebudget_skipped")
                 raise
             increment("provider_rebudget_attempts")
-            set_value("provider_rebudget_before_bytes",len(json.dumps(payload,ensure_ascii=False,
-                separators=(",",":")).encode("utf-8")))
-            set_value("provider_rebudget_after_bytes",len(json.dumps(reduced,ensure_ascii=False,
-                separators=(",",":")).encode("utf-8")))
+            after_bytes=len(json.dumps(reduced,ensure_ascii=False,separators=(",",":")).encode("utf-8"))
+            set_value("provider_rebudget_after_bytes",after_bytes)
+            set_value("provider_rebudget_saved_bytes",before_bytes-after_bytes)
+            set_value("provider_rebudget_saved_pct",round(100*(before_bytes-after_bytes)/before_bytes,3))
             # Projection is synchronous and contains no await between guard and
             # dispatch. A second failed HTTP request is terminal for this route.
             root, response = await self._post_responses(reduced, api_key=api_key, error_label="structured realization compacted")

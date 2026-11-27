@@ -209,35 +209,61 @@ def fit_provider_payload(context, make_payload, *, ceiling=GROQ_PAYLOAD_SOFT_CEI
 
 
 def compact_rejected_payload(context, make_payload, rejected_payload, *, descriptor=None,
-                             min_reduction=0.0, preserve_evidence=False):
-    """One corrective projection for a rejected request, never the same bytes.
+                             min_reduction=0.0, preserve_evidence=False, min_saved_bytes=1):
+    """Find one safe corrective projection, preferring a 20% reduction.
 
-    Keep the original immutable turn, identity, plan and safety instructions.
-    The 20% reduction target is a provisional policy, not a claimed provider
-    limit. If essential context cannot fit, let the orchestrator try a different
-    compatible route. No truncation of the literal user input.
+    A caller's minimum is a hard lower bound, not the preferred target.
+    The optional absolute byte floor rejects tiny savings even on small
+    requests. Both the estimated input and serialized bytes must decrease.
+    No provider limit is inferred from these local policy thresholds.
+    The original literal, identity, plan and safety contract remain intact.
     """
-    previous = estimate_payload(rejected_payload)
-    ceiling = max(1, int(previous * 0.8))
-    def size(item):
-        return len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-    # First seek the preferred reduction. If the irreducible causal exchange
-    # prevents it, a strictly smaller projection is still useful. Neither
-    # path may resend the rejected envelope or cut the protected context.
-    if not 0<=min_reduction<1:
+    if not 0<=min_reduction<1 or type(min_saved_bytes) is not int or min_saved_bytes<1:
         raise ValueError("INVALID_REBUDGET_REDUCTION")
-    targets=(min(ceiling,int(previous*(1-min_reduction))),) if min_reduction else (ceiling,previous-1)
-    for target in dict.fromkeys(targets):
-        if target < 1:
+
+    previous=estimate_payload(rejected_payload)
+    def size(item):
+        return len(json.dumps(item,ensure_ascii=False,separators=(",",":"),
+                              allow_nan=False).encode("utf-8"))
+
+    before=size(rejected_payload)
+    # ceil for savings (round down the allowed total) so that the measured
+    # reduction can never be smaller than the advertised policy.
+    minimum_saved=max(min_saved_bytes,math.ceil(before*min_reduction))
+    maximum_bytes=before-minimum_saved
+    minimum_tokens=previous-max(1,math.ceil(previous*min_reduction))
+    if maximum_bytes<1 or minimum_tokens<1:
+        return None
+    # Two bounded local projections, but at most ONE corrective HTTP call.
+    # If the preferred target cannot be met without cutting protected data,
+    # the configured meaningful-saving floor may still permit a retry.
+    preferred_bytes=min(maximum_bytes,before-math.ceil(before*.20))
+    preferred_tokens=min(minimum_tokens,previous-max(1,math.ceil(previous*.20)))
+    targets=((preferred_tokens,preferred_bytes),(minimum_tokens,maximum_bytes))
+    for target,body_target in dict.fromkeys(targets):
+        if target<1 or body_target<1:
             continue
         try:
-            _, payload = fit_provider_payload(context, make_payload, ceiling=target, strict=True,
-                                             descriptor=descriptor,preserve_evidence=preserve_evidence,
-                                             body_ceiling=max(1, min(size(rejected_payload)-1,
-                                                 int(size(rejected_payload)*(1-min_reduction)))))
+            _,payload=fit_provider_payload(context,make_payload,ceiling=target,
+                strict=True,descriptor=descriptor,preserve_evidence=preserve_evidence,
+                body_ceiling=body_target)
         except ContextBudgetExceeded:
             continue
-        if (estimate_payload(payload) < previous and size(payload) < size(rejected_payload)
-                and size(payload)<=size(rejected_payload)*(1-min_reduction)):
+        if estimate_payload(payload)<=minimum_tokens and size(payload)<=maximum_bytes:
             return payload
     return None
+
+
+# Local recovery policy, not Groq's documented context window or rate limit.
+# Prefer 20%; on an otherwise irreducible envelope, accept only a meaningful
+# saving in BOTH relative and absolute terms. The field incident (about
+# 46 KB -> 45.7 KB) cannot qualify. A second rejection goes to failover.
+GROQ_REBUDGET_MIN_REDUCTION=0.05
+GROQ_REBUDGET_MIN_SAVED_BYTES=1024
+
+
+def compact_groq_rejected_payload(context,make_payload,rejected_payload,*,descriptor=None):
+    return compact_rejected_payload(context,make_payload,rejected_payload,
+        descriptor=descriptor,preserve_evidence=True,
+        min_reduction=GROQ_REBUDGET_MIN_REDUCTION,
+        min_saved_bytes=GROQ_REBUDGET_MIN_SAVED_BYTES)
