@@ -1,0 +1,55 @@
+name: Preserve certified Amora rig (one shot)
+on:
+  push:
+    branches: [ops/visual-v5-preserve-rig]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  preserve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retrieve pinned user-owned rig and verify its exact bytes
+        env:
+          RIG_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          umask 077
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          printf '%s' "$RIG_TOKEN" > "$scratch/token"
+          unset RIG_TOKEN
+          python tools/visual-engine-v5/fetch-rig.py download "$scratch/token" "$scratch/rig.zip"
+          python - "$scratch/rig" "$scratch/preserved" <<'PY'
+          import hashlib,json,sys,shutil
+          from pathlib import Path
+          root=Path(sys.argv[1]); out=Path(sys.argv[2])
+          models=list(root.rglob("AmoraBolinha.model3.json"))
+          assert len(models)==1
+          model=models[0]; refs=json.loads(model.read_text())["FileReferences"]
+          names=[model.name, refs["Moc"],refs["Physics"],*refs["Textures"],*[x["File"] for x in refs["Expressions"]],*[x["File"] for g in refs["Motions"].values() for x in g]]
+          for k in ("Pose","DisplayInfo","UserData"):
+              if k in refs: names.append(refs[k])
+          hashes={}
+          for name in sorted(set(names)):
+              src=(model.parent/name).resolve()
+              assert src.is_relative_to(model.parent.resolve()) and src.is_file()
+              assert src.suffix.lower() in (".json",".png",".moc3")
+              data=src.read_bytes()
+              hashes[name]=hashlib.sha256(data).hexdigest()
+              dest=out/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(data)
+          assert hashes[refs["Moc"]]=="dd23be7602621ea558b3bca17e2a23ebadb4b5d9b5a08eb73b96169b114e5cc0"
+          (out/"rig-integrity.json").write_text(json.dumps({"source":"333b935d12e7b82397efbc4d797c471e1aec05f1","artifact":14986551731,"files":hashes},sort_keys=True,indent=2)+"\n")
+          print("Verified model files:",len(hashes))
+          PY
+          # Existing rig/artwork is from the public source and public Actions artifact.
+          # Preserve model references only; never the SDK, user credentials, or extra sources.
+          git switch --orphan assets/visual-v5-certified-rig
+          mkdir -p model
+          cp -R "$scratch/preserved/." model/
+          git add model
+          git -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -m "Preserve verified Amora V4.5 MOC3 model [skip ci]"
+          git push origin HEAD:refs/heads/assets/visual-v5-certified-rig
+          echo "RIG_COMMIT=$(git rev-parse HEAD)"
