@@ -47,3 +47,28 @@ def test_visual_scoped_snapshot_and_reconnect(tmp_path, monkeypatch):
             assert b["session"]!=a["session"] and b["sequence"]==1
     finally:
         core.close()
+
+
+def test_visual_audio_relay_is_scoped_and_silent_on_disconnect(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMORA_HOME", str(tmp_path / ".amora"))
+    core = AmoraCore.bootstrap(clock=SimulatedClock(datetime(2026,11,26,tzinfo=timezone.utc)))
+    try:
+        with TestClient(create_api(core)) as client:
+            secret = core.secrets.get("LOCAL_API_TOKEN")
+            visual = issue_browser_token(secret,core.clock,"visual")
+            web = issue_browser_token(secret,core.clock,"web")
+            def headers():
+                return {"origin":"http://testserver"}
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/v1/avatar/visual-audio",headers=headers(),subprotocols=["amora.visual.audio.v1","auth."+visual]):
+                    pass
+            with client.websocket_connect("/v1/avatar/visual-stream",headers=headers(),subprotocols=["amora.visual.v1","auth."+visual]) as subscriber:
+                assert subscriber.receive_json()["kind"]=="snapshot"
+                with client.websocket_connect("/v1/avatar/visual-audio",headers=headers(),subprotocols=["amora.visual.audio.v1","auth."+web]) as publisher:
+                    publisher.send_json({"version":1,"level":0.7})
+                    msg=subscriber.receive_json()
+                    assert msg["kind"]=="audio" and msg["level"]==0.7
+                msg=subscriber.receive_json()
+                assert msg["kind"]=="audio" and msg["level"]==0
+    finally:
+        core.close()

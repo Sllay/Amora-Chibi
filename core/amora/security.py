@@ -351,25 +351,38 @@ class SecurityMiddleware:
             if len(authorization) <= 4096 and authorization.startswith("Bearer "):
                 role = self.authenticate(authorization[7:])
             visual_socket = websocket and path == "/v1/avatar/visual-stream"
-            if visual_socket:
+            audio_socket = websocket and path == "/v1/avatar/visual-audio"
+            if visual_socket or audio_socket:
+                required_protocol = "amora.visual.v1" if visual_socket else "amora.visual.audio.v1"
+                required_role = "visual" if visual_socket else "web"
                 # Parse the actual handshake header; ASGI adapters may normalize
                 # the subprotocol list differently. Never echo the auth protocol.
                 values = [v for k, v in raw if k.lower() == b"sec-websocket-protocol"]
-                protocols = [p.strip() for p in values[0].decode("ascii", "replace").split(",")] if len(values) == 1 else []
-                if (len(protocols) == 2 and protocols[0] == "amora.visual.v1"
+                # wsproto exposes negotiated offers in ASGI scope, not extra_headers.
+                # Where the original header is present, reject ambiguity rather than
+                # accepting a conflicting normalized representation.
+                parsed_offers = [p.strip() for item in scope.get("subprotocols", []) for p in item.split(",")]
+                protocols = parsed_offers if not values else (
+                    [p.strip() for p in values[0].decode("ascii", "replace").split(",")] if len(values) == 1 else []
+                )
+                if values and parsed_offers and protocols != parsed_offers:
+                    protocols = []
+                if (len(protocols) == 2 and protocols[0] == required_protocol
                         and protocols[1].startswith("auth.") and len(protocols[1]) <= 512
                         and supplied_origin and not scope.get("query_string") and not authorization):
                     role = self.authenticate(protocols[1][5:])
                 else:
                     role = None
-                if role != "visual":
+                if role != required_role:
                     role = None
+                else:
+                    scope.setdefault("state", {})["visual_credential"] = protocols[1][5:]
             if role is None:
                 if not self.limits.allow("auth_fail", peer, 20):
                     return await respond(429, "authentication limit reached")
                 return await respond(401, "authentication required")
             if role not in {"admin", "service"} and (
-                (websocket and not (visual_socket and role == "visual")) or (not websocket and (not self.web_access or not self.web_access(role, scope)))
+                (websocket and not ((visual_socket and role == "visual") or (audio_socket and role == "web"))) or (not websocket and (not self.web_access or not self.web_access(role, scope)))
             ):
                 return await respond(403, "credential scope denied")
         scope.setdefault("state", {})["security_role"] = role

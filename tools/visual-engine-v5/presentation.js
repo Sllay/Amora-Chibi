@@ -13,6 +13,12 @@ if(mode==='companion'){
  document.querySelector('#exit-pip').onclick=()=>video.exit();
  document.querySelector('#stop-pip').onclick=async()=>{await video.exit();video.stop();};
 }
+// Opt-in setup inside an isolated browser-source profile; no credential in URL.
+if(mode==='overlay'&&new URLSearchParams(location.search).get('setup')==='1'){
+ const panel=document.createElement('section');panel.id='visual-pair';panel.dataset.overlaySetup='true';
+ panel.innerHTML='<h2>Parear fonte de live</h2><form><label>Código <input inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="off"></label><label><input type="checkbox" data-remember checked required> Salvar credencial visual por 1 hora</label><button type="submit">Parear</button></form><button type="button" data-unpair>Desparear</button><p data-visual-status role="status">Desconectado</p>';
+ document.body.append(panel);
+}
 const visual=attachVisual(()=>runtime,{panel:document.querySelector('#visual-pair')});
 async function boot(){if(booting||disposed)return;booting=true;try{
  setStatus('Carregando Cubism','loading');if(!config){config=readConfig(location.search);applyLayout(canvas,config);}

@@ -66,7 +66,7 @@ const state = {
 let visualTap=null;
 const voicePlayer = new WavPlayer(getPlaybackContext, context=>visualTap?.node??context.destination);
 const visualAudioToggle=$('visualAudioToggle');
-visualAudioToggle.onclick=()=>{try{getPlaybackContext();if(!visualTap)throw Error('Web Audio indisponível');if(visualTap.channel)visualTap.disable();else visualTap.enable();visualAudioToggle.textContent='Sincronização visual: '+(visualTap.channel?'ligada':'desligada');visualAudioToggle.setAttribute('aria-pressed',String(!!visualTap.channel));}catch(_){visualAudioToggle.textContent='Sincronização visual indisponível';}};
+visualAudioToggle.onclick=()=>{try{getPlaybackContext();if(!visualTap)throw Error('Web Audio indisponível');if(visualTap.timer)visualTap.disable();else visualTap.enable(state.token);visualAudioToggle.textContent='Sincronização visual: '+(visualTap.timer?'ligada':'desligada');visualAudioToggle.setAttribute('aria-pressed',String(!!visualTap.timer));}catch(_){visualAudioToggle.textContent='Sincronização visual indisponível';}};
 
 const pairPanel = $("pairPanel");
 const appPanel = $("appPanel");
