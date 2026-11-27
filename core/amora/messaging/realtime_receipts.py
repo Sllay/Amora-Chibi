@@ -29,6 +29,10 @@ CREATE TABLE {table} (
     pending_seq INTEGER,
     pending_digest TEXT,
     pending_terminal INTEGER CHECK(pending_terminal IN (0,1)),
+    account_scope TEXT,
+    channel_id TEXT,
+    pending_nonce TEXT UNIQUE,
+    confirmed_token TEXT,
     CHECK ((pending_token IS NULL AND pending_seq IS NULL AND pending_digest IS NULL AND pending_terminal IS NULL)
         OR (pending_token IS NOT NULL AND pending_seq>confirmed_seq AND pending_digest IS NOT NULL AND pending_terminal IS NOT NULL)),
     CHECK (closed=0 OR (pending_token IS NULL AND message_id IS NOT NULL)),
@@ -54,6 +58,11 @@ class Prepared:
     operation: str
     message_id: str | None
     digest: str
+    nonce: str | None = None
+
+
+def receipt_nonce(token: str) -> str:
+    return "r1"+sha256(token.encode("ascii")).hexdigest()[:22]
 
 
 class RealtimeReceiptStore:
@@ -112,15 +121,17 @@ class RealtimeReceiptStore:
 
     def _row(self, turn, index, *, lock=False):
         sql = ("SELECT binding,confirmed_seq,message_id,closed,pending_token,pending_seq,"
-               "pending_digest,pending_terminal,confirmed_digest FROM {table} WHERE turn_id=? AND block_index=?")
+               "pending_digest,pending_terminal,confirmed_digest,account_scope,channel_id,pending_nonce,confirmed_token "
+               "FROM {table} WHERE turn_id=? AND block_index=?")
         if lock and self.postgres:
             sql += " FOR UPDATE"
         row = self._execute(sql,(turn,index)).fetchone()
         if row is None:
             return None
         return dict(zip(("binding","confirmed_seq","message_id","closed","pending_token",
-                         "pending_seq","pending_digest","pending_terminal","confirmed_digest"),
-                        (row[i] for i in range(9))))
+                         "pending_seq","pending_digest","pending_terminal","confirmed_digest",
+                         "account_scope","channel_id","pending_nonce","confirmed_token"),
+                        (row[i] for i in range(13))))
 
     @staticmethod
     def _key(turn,index):
@@ -131,28 +142,34 @@ class RealtimeReceiptStore:
     def read(self,turn,index):
         return self._row(*self._key(turn,index))
 
-    def prepare(self,turn,index,*,binding,seq,digest,terminal=False):
+    def prepare(self,turn,index,*,binding,seq,digest,terminal=False,account=None,channel=None):
         turn,index=self._key(turn,index)
         if (type(seq) is not int or seq<1 or type(terminal) is not bool
                 or not re.fullmatch(r"[0-9a-f]{64}",binding)
                 or not re.fullmatch(r"[0-9a-f]{64}",digest)):
             raise ValueError("REALTIME_PREPARE_INVALID")
         with self._transaction():
-            self._execute("INSERT INTO {table}(turn_id,block_index,binding) VALUES(?,?,?) "
-                          "ON CONFLICT(turn_id,block_index) DO NOTHING",(turn,index,binding))
+            if (account is None)!=(channel is None) or (account is not None and
+                    (not isinstance(account,str) or not 1<=len(account)<=96
+                     or not isinstance(channel,str) or not SNOWFLAKE.fullmatch(channel))):
+                raise ValueError("REALTIME_DESTINATION_INVALID")
+            self._execute("INSERT INTO {table}(turn_id,block_index,binding,account_scope,channel_id) VALUES(?,?,?,?,?) "
+                          "ON CONFLICT(turn_id,block_index) DO NOTHING",(turn,index,binding,account,channel))
             row=self._row(turn,index,lock=True)
             if (row is None or row["binding"]!=binding or row["closed"]
+                    or row["account_scope"]!=account or row["channel_id"]!=channel
                     or row["pending_token"] is not None or seq<=row["confirmed_seq"]):
                 return None
             token=str(uuid4())
+            nonce=None if row["message_id"] else receipt_nonce(token)
             changed=self._execute("UPDATE {table} SET pending_token=?,pending_seq=?,pending_digest=?,"
-                                  "pending_terminal=? WHERE turn_id=? AND block_index=? AND binding=? "
+                                  "pending_terminal=?,pending_nonce=? WHERE turn_id=? AND block_index=? AND binding=? "
                                   "AND pending_token IS NULL AND closed=0 AND confirmed_seq<?",
-                                  (token,seq,digest,int(terminal),turn,index,binding,seq)).rowcount
+                                  (token,seq,digest,int(terminal),nonce,turn,index,binding,seq)).rowcount
             if changed!=1:
                 raise RuntimeError("REALTIME_PREPARE_CONFLICT")
             return Prepared(token,seq,"edit" if row["message_id"] else "create",
-                            row["message_id"],digest)
+                            row["message_id"],digest,nonce)
 
     def confirm(self,turn,index,*,binding,token,message_id,digest):
         """Only call with independently verified physical Discord receipt.
@@ -165,15 +182,34 @@ class RealtimeReceiptStore:
             return False
         with self._transaction():
             row=self._row(turn,index,lock=True)
+            if (row is not None and token and row["binding"]==binding
+                    and row["confirmed_token"]==token and row["confirmed_digest"]==digest
+                    and row["message_id"]==message_id):
+                return True
             if (row is None or not token or row["binding"]!=binding
                     or row["pending_token"]!=token or row["pending_digest"]!=digest
                     or row["message_id"] not in {None,message_id}):
                 return False
             return self._execute("UPDATE {table} SET message_id=?,confirmed_seq=pending_seq,"
-                                 "closed=pending_terminal,confirmed_digest=pending_digest,pending_token=NULL,pending_seq=NULL,"
+                                 "closed=pending_terminal,confirmed_digest=pending_digest,confirmed_token=pending_token,"
+                                 "pending_nonce=NULL,pending_token=NULL,pending_seq=NULL,"
                                  "pending_digest=NULL,pending_terminal=NULL "
                                  "WHERE turn_id=? AND block_index=? AND binding=? AND pending_token=?",
                                  (message_id,turn,index,binding,token)).rowcount==1
+
+    def observe_create(self,*,nonce,account,channel,message_id,digest):
+        """Positive receipt only; absence or similar text is never evidence."""
+        if (not isinstance(nonce,str) or not re.fullmatch(r"r1[0-9a-f]{22}",nonce)
+                or not isinstance(channel,str) or not SNOWFLAKE.fullmatch(channel)
+                or not isinstance(message_id,str) or not SNOWFLAKE.fullmatch(message_id)):
+            return False
+        row=self._execute("SELECT turn_id,block_index,binding,pending_token FROM {table} "
+                          "WHERE pending_nonce=? AND account_scope=? AND channel_id=? "
+                          "AND pending_digest=? AND message_id IS NULL",
+                          (nonce,account,channel,digest)).fetchone()
+        if row is None or receipt_nonce(row[3])!=nonce:
+            return False
+        return self.confirm(row[0],row[1],binding=row[2],token=row[3],message_id=message_id,digest=digest)
 
     def reject_definitive(self,turn,index,*,binding,token):
         """Release only a proven non-executed operation (e.g. HTTP 429).
@@ -185,7 +221,7 @@ class RealtimeReceiptStore:
         if not token:
             return False
         with self._transaction():
-            return self._execute("UPDATE {table} SET pending_token=NULL,pending_seq=NULL,"
+            return self._execute("UPDATE {table} SET pending_nonce=NULL,pending_token=NULL,pending_seq=NULL,"
                                  "pending_digest=NULL,pending_terminal=NULL "
                                  "WHERE turn_id=? AND block_index=? AND binding=? AND pending_token=?",
                                  (turn,index,binding,token)).rowcount==1

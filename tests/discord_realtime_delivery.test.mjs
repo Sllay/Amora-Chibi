@@ -129,3 +129,66 @@ test('worker bridge previews and reconciles final into same message',async()=>{
   assert.deepEqual(calls.map(c=>c.opts.method),['POST','PATCH']);
   assert.equal(calls[1].opts.body.content,'Resposta completa.');
 });
+
+
+test('unknown POST requires exact nonce evidence, then edits recovered ID',async()=>{
+  const {RealtimeWorkerTransport}=await import('../workers/discord/realtime-worker.mjs');
+  const {createHash}=await import('node:crypto');
+  const hash=x=>createHash('sha256').update(x).digest('hex');
+  const binding='c'.repeat(64),token='fixture-create-token';
+  const nonce='r1'+hash(token).slice(0,22),text='Trecho. ▍';
+  const envelope={channelId:channel,sourceId:'4'.repeat(18),revision:1,binding,turnId};
+  let recovered=false,closed=false,acked=false,positive=false;
+  const pending={turnId,index:0,binding,token,digest:hash(text),messageId:null,channelId:channel,nonce};
+  const core={
+    async realtimeFinal(){return recovered?{...envelope,blocks:closed?[{confirmedMessageId:id}]:
+      [{snapshot:snap(2,'Resposta completa.','final')}]}:{blocked:'REALTIME_RECEIPT_UNCERTAIN',pending};},
+    async realtimeOperation(op){
+      if(op.action==='authorize')return {allowed:true};
+      if(op.action==='prepare')return {prepared:{token:'edit-token',seq:op.seq,digest:op.digest,
+        operation:'edit',message_id:id}};
+      if(op.action==='confirm'){
+        if(op.token===token){assert.equal(op.message_id,id);recovered=true;}
+        else {assert.equal(op.token,'edit-token');closed=true;}
+        return {accepted:true};
+      }
+      if(op.action==='ack'){assert.ok(closed);acked=true;return {accepted:true};}
+      throw new Error('unexpected');
+    },
+  };
+  const calls=[];
+  const rest={async request(path,opts){
+    calls.push(opts.method);
+    if(opts.method==='GET'){
+      const exact={id,channel_id:channel,author:{id:bot},nonce,content:text};
+      return positive?[exact,{...exact,id:'9'.repeat(18),nonce:'other'}]:
+        [{...exact,nonce:undefined},{...exact,author:{id:'8'.repeat(18)}}];
+    }
+    assert.equal(opts.method,'PATCH');
+    return {id,channel_id:channel,author:{id:bot},content:opts.body.content};
+  }};
+  const worker=new RealtimeWorkerTransport({core,rest,botUserId:bot,sourceCurrent:()=>true});
+  const item={id:'outbound',conversation_id:channel,source_message_id:envelope.sourceId,
+    metadata:{cognitive_turn_id:turnId}};
+  assert.equal(await worker.final(item),'receipt_uncertain');
+  assert.equal(recovered,false);
+  positive=true;
+  assert.equal(await worker.final(item),'confirmed');
+  assert.ok(acked);assert.deepEqual(calls,['GET','GET','PATCH']);
+});
+
+test('gateway observation forwards only own-bot nonce and digest',async()=>{
+  const {RealtimeWorkerTransport}=await import('../workers/discord/realtime-worker.mjs');
+  const calls=[];
+  const worker=new RealtimeWorkerTransport({core:{async realtimeObserve(x){calls.push(x);return {accepted:true};}},
+    rest:{},botUserId:bot,sourceCurrent:()=>true});
+  const msg={id,channel_id:channel,author:{id:bot},nonce:'r1'+'a'.repeat(22),content:'Secret draft.'};
+  assert.equal(await worker.observeCreate({...msg,author:{id:'8'.repeat(18)}}),false);
+  assert.equal(await worker.observeCreate({...msg,nonce:'unrelated'}),false);
+  assert.equal(await worker.observeCreate(msg),true);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].message_id,id);
+  assert.equal(calls[0].nonce,msg.nonce);
+  assert.equal('content' in calls[0],false);
+  assert.equal(calls[0].digest.length,64);
+});

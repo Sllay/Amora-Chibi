@@ -136,6 +136,12 @@ export class MessagingCoreClient {
     });
   }
 
+  realtimeObserve(receipt) {
+    return this.request('/v1/messaging/worker/realtime/observe',{
+      method:'POST',body:{...receipt,account:this.accountScope},
+    });
+  }
+
   realtimeNext() {
     return this.request('/v1/messaging/worker/realtime/next?'+new URLSearchParams({account:this.accountScope}));
   }

@@ -77,7 +77,12 @@ export class RealtimeDelivery {
       const path=edit?base+'/'+encodeURIComponent(operation.message_id):base;
       const body={content:text,allowed_mentions:{parse:[],replied_user:false}};
       if (!edit) {
-        body.nonce=hash(turnId+':'+index).slice(0,24);
+        const nonce='r1'+hash(token).slice(0,22);
+        if (operation.nonce!=null && operation.nonce!==nonce) {
+          this.blocked=true;
+          return 'journal_invalid';
+        }
+        body.nonce=nonce;
         body.enforce_nonce=true;
       }
       let receipt;

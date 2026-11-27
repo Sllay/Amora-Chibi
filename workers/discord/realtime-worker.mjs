@@ -46,19 +46,43 @@ export class RealtimeWorkerTransport {
     return this.transport(draft,draft.snapshot.turnId).send(draft.snapshot);
   }
 
+  async observeCreate(message) {
+    if (String(message?.author?.id)!==this.botUserId || !idOk(message?.channel_id)
+        || !idOk(message?.id) || typeof message?.content!=='string'
+        || !/^r1[0-9a-f]{22}$/.test(String(message?.nonce||''))
+        || typeof this.core.realtimeObserve!=='function') return false;
+    const result=await this.core.realtimeObserve({channel_id:String(message.channel_id),
+      message_id:String(message.id),nonce:String(message.nonce),digest:hash(message.content)});
+    return result?.accepted===true;
+  }
+
   async final(item) {
     let plan=await this.core.realtimeFinal(item.id);
-    if (plan?.blocked==='REALTIME_RECEIPT_UNCERTAIN' && idOk(plan.pending?.messageId)) {
+    if (plan?.blocked==='REALTIME_RECEIPT_UNCERTAIN' && plan.pending) {
       const p=plan.pending;
       if (p.channelId!==String(item.conversation_id) || p.turnId!==item.metadata?.cognitive_turn_id)
         return 'receipt_uncertain';
-      const receipt=await this.rest.request('/channels/'+encodeURIComponent(p.channelId)+
-        '/messages/'+encodeURIComponent(p.messageId),{method:'GET',maxAttempts:1});
-      if (String(receipt?.id)!==p.messageId || String(receipt?.channel_id)!==p.channelId
+      let receipt;
+      if (idOk(p.messageId)) {
+        receipt=await this.rest.request('/channels/'+encodeURIComponent(p.channelId)+
+          '/messages/'+encodeURIComponent(p.messageId),{method:'GET',maxAttempts:1});
+      } else {
+        if (!/^r1[0-9a-f]{22}$/.test(String(p.nonce||'')) ||
+            p.nonce!=='r1'+hash(p.token).slice(0,22)) return 'receipt_uncertain';
+        const recent=await this.rest.request('/channels/'+encodeURIComponent(p.channelId)+
+          '/messages?limit=100',{method:'GET',maxAttempts:1});
+        const matches=Array.isArray(recent)?recent.filter(m=>String(m?.nonce)===p.nonce
+          && String(m?.author?.id)===this.botUserId && String(m?.channel_id)===p.channelId
+          && idOk(m?.id) && typeof m?.content==='string' && hash(m.content)===p.digest):[];
+        if (matches.length!==1) return 'receipt_uncertain';
+        receipt=matches[0];
+      }
+      if (!idOk(receipt?.id) || (p.messageId && String(receipt.id)!==p.messageId)
+          || String(receipt?.channel_id)!==p.channelId
           || String(receipt?.author?.id)!==this.botUserId || typeof receipt.content!=='string'
           || hash(receipt.content)!==p.digest) return 'receipt_uncertain';
       const confirmed=await this.core.realtimeOperation({action:'confirm',turn_id:p.turnId,
-        binding:p.binding,index:p.index,token:p.token,digest:p.digest,message_id:p.messageId});
+        binding:p.binding,index:p.index,token:p.token,digest:p.digest,message_id:String(receipt.id)});
       if (!confirmed?.accepted) return 'receipt_uncertain';
       plan=await this.core.realtimeFinal(item.id);
     }

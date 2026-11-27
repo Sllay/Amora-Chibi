@@ -771,7 +771,16 @@ export class DiscordWorker {
   }
 
   async handleMessageCreate(message) {
-    if (this.isBotAuthored(message)) return;
+    if (this.isBotAuthored(message)) {
+      if (String(message?.author?.id)===this.botUserId && /^r1[0-9a-f]{22}$/.test(String(message?.nonce||''))) {
+        const realtime=this.getRealtimeTransport();
+        if (realtime) {
+          try { await realtime.observeCreate(message); }
+          catch(error) { safeLog('REALTIME_GATEWAY_RECEIPT_FAILED',errorLabel(error)); }
+        }
+      }
+      return;
+    }
     const entry = this.runtime.recordCreate(message);
     if (!entry || entry.duplicate) return;
     await this.admitDiscordEntry(entry, { revision: entry.revision });

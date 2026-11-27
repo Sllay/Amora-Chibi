@@ -125,3 +125,32 @@ def test_binding_fence_and_definitive_rejection(store):
     assert not journal.reject_definitive(turn,0,binding=binding,token=first.token)
     assert not journal.confirm(turn,0,binding=binding,token=second.token,message_id="3"*18,digest="0"*64)
     assert journal.read(turn,0)["pending_token"]==second.token
+
+
+def test_create_receipt_positive_nonce_recovery_after_restart(store):
+    journal,factory,connect=store
+    turn=uuid4()
+    account="primary"
+    channel="1"*18
+    binding=binding_digest(account,channel,"2"*18,1)
+    digest=sha256(b"fixture draft").hexdigest()
+    args=dict(binding=binding,seq=1,digest=digest,account=account,channel=channel)
+    first=journal.prepare(turn,0,**args)
+    assert first.nonce.startswith("r1") and len(first.nonce)==24
+    with closing(connect()) as c:
+        reopened=factory(c)
+        evidence=dict(nonce=first.nonce,account=account,channel=channel,
+                      message_id="3"*18,digest=digest)
+        for bad in ({"channel":"9"*18},{"account":"other"},{"digest":"0"*64},{"nonce":"r1"+"0"*22}):
+            assert not reopened.observe_create(**(evidence|bad))
+        assert reopened.prepare(turn,0,**(args|{"seq":2})) is None
+        assert reopened.observe_create(**evidence)
+        assert reopened.confirm(turn,0,binding=binding,token=first.token,
+                                message_id="3"*18,digest=digest)
+        assert not reopened.confirm(turn,0,binding=binding,token=first.token,
+                                    message_id="4"*18,digest=digest)
+        second=reopened.prepare(turn,0,**(args|{"seq":2,"terminal":True}))
+        assert second.operation=="edit" and second.nonce is None and second.message_id=="3"*18
+        assert not reopened.observe_create(**evidence)
+        assert reopened.confirm(turn,0,binding=binding,token=second.token,
+                                message_id="3"*18,digest=digest)

@@ -185,7 +185,8 @@ class RealtimeBridge:
                 return {"blocked":"REALTIME_RECEIPT_UNCERTAIN",
                         "pending":{"turnId":turn,"index":i,"binding":binding,
                                    "token":row["pending_token"],"digest":row["pending_digest"],
-                                   "messageId":row["message_id"],"channelId":item.conversation_id}}
+                                   "messageId":row["message_id"],"nonce":row["pending_nonce"],
+                                   "channelId":item.conversation_id}}
             seq=(row["confirmed_seq"] if row else 0)+1
             snapshots.append({"snapshot":{"turnId":turn,"index":i,"seq":seq,
                                            "status":"final","text":text}})
@@ -214,14 +215,30 @@ class RealtimeBridge:
         return (self.sessions.get(draft.turn) is draft and op.seq==draft.seq
                 and digest(draft.text)==op.digest)
 
+    async def observe(self,receipt):
+        accepted=await self.receipts("observe_create",nonce=receipt.nonce,
+            account=receipt.account,channel=receipt.channel_id,
+            message_id=receipt.message_id,digest=receipt.digest)
+        return {"accepted":accepted}
+
     async def operation(self,op):
         if op.action in {"authorize","prepare"}:
             if not await self._expected(op):
                 return {"allowed":False}
             if op.action=="authorize":
                 return {"allowed":True}
+            if op.outbound_id is not None:
+                item=self.final_item(op.outbound_id,op.account)
+                if item is None or self._final_binding(item)!=op.binding:
+                    return {"allowed":False}
+                channel=item.conversation_id
+            else:
+                draft=self.sessions.get(str(op.turn_id))
+                if draft is None or draft.binding!=op.binding:
+                    return {"allowed":False}
+                channel=draft.channel
             prepared=await self.receipts("prepare",op.turn_id,op.index,binding=op.binding,
-                seq=op.seq,digest=op.digest,terminal=op.terminal)
+                seq=op.seq,digest=op.digest,terminal=op.terminal,account=op.account,channel=channel)
             return {"prepared":asdict(prepared) if prepared else None}
         if op.action=="confirm":
             accepted=await self.receipts("confirm",op.turn_id,op.index,binding=op.binding,

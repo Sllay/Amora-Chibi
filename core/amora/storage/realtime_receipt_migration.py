@@ -16,6 +16,8 @@ _COLUMNS=(
     ("confirmed_digest","text","YES"),("closed","integer","NO"),
     ("pending_token","text","YES"),("pending_seq","integer","YES"),
     ("pending_digest","text","YES"),("pending_terminal","integer","YES"),
+    ("account_scope","text","YES"),("channel_id","text","YES"),
+    ("pending_nonce","text","YES"),("confirmed_token","text","YES"),
 )
 _CHECKS={
     "CHECK (((block_index >= 0) AND (block_index <= 31)))",
@@ -55,9 +57,9 @@ def review_realtime_schema(raw,target):
         defaults=dict(raw.execute("""SELECT column_name,column_default FROM information_schema.columns
             WHERE table_schema='amora_pg_v18_lab' AND table_name='realtime_receipts' AND column_default IS NOT NULL""").fetchall())
         if (comment!=COMMENT or cols!=_COLUMNS or defaults!={"confirmed_seq":"0","closed":"0"}
-                or keys!={"PRIMARY KEY (turn_id, block_index)","UNIQUE (message_id)"}
+                or keys!={"PRIMARY KEY (turn_id, block_index)","UNIQUE (message_id)","UNIQUE (pending_nonce)"}
                 or len(checks)!=len(_CHECKS) or set(checks)!=_CHECKS
-                or len(constraints)!=len(_CHECKS)+2
+                or len([c for c in constraints if c[0]!="n"])!=len(_CHECKS)+3
                 or any(not valid or not enforced for _,_,valid,enforced in constraints)):
             raise ValueError("REALTIME_SCHEMA_STRUCTURAL_MISMATCH")
         return {"state":"prepared","version":1}

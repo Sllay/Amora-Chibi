@@ -82,7 +82,7 @@ class DurableReplyRuntime:
         with trace_lock(db._lock):
             if operation=="verify":
                 return verify_sqlite_receipts(db._conn)
-            if operation not in {"read","prepare","confirm","reject_definitive"}:
+            if operation not in {"read","prepare","confirm","reject_definitive","observe_create"}:
                 raise ValueError("REALTIME_RECEIPT_OPERATION_NOT_ALLOWED")
             return getattr(RealtimeReceiptStore(db._conn,reviewed=True),operation)(*args,**kwargs)
 
