@@ -1935,3 +1935,63 @@ async def test_realtime_orphan_cursor_recovers_after_restart(lab,monkeypatch):
         assert later.operation=="edit" and later.message_id=="3"*18
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_run02_multi_fact_natural_correction_and_owner_recall(lab,monkeypatch):
+    from amora.memory.versioned_fact import owner_fact_units
+    from amora.memory.recall_intent import parse_recall_intent
+    core,clock,_=lab
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE","1")
+    try:
+        first=_dm(core,"run02-vexora-a",text="Amora, estou pensando em criar uma criatura chamada Vexora. Ela é quadrúpede e tem uma coloração dourada.")
+        assert len(owner_fact_units(first.text))==2
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(first)).decision.reason_codes
+        assert await service.reflections.process_once()
+        old,_=core.memory.store.recall_owner_records("PERSON_BK","Vexora")
+        assert len(old)==2
+        gold=next(x for x in old if "dourada" in x.content)
+        anatomy=next(x for x in old if "quadrúpede" in x.content)
+        clock.advance(timedelta(seconds=2))
+        second=_dm(core,"run02-vexora-b",text="Na verdade, a cor de Vexora é vermelha. As outras características continuam iguais.")
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(second)).decision.reason_codes
+        assert await service.reflections.process_once()
+        records,_=core.memory.store.recall_owner_records("PERSON_BK","Vexora")
+        assert len(records)==2
+        red=next(x for x in records if "vermelha" in x.content)
+        assert red.metadata["supersedes_memory_id"]==str(gold.id)
+        assert core.memory.get(gold.id).archived_at is not None
+        assert core.memory.get(anatomy.id).archived_at is None
+        await runtime.stop()
+        await service.stop_storage_lane()
+        await runtime.start(background=False)
+        question="Amora, você lembra da Vexora? Quais são as características que eu defini para ela?"
+        assert parse_recall_intent(question).topic=="vexora"
+        out=(await service.receive(_dm(core,"run02-vexora-recall",text=question))).outbound[0]
+        assert out.metadata["cognitive_reason_codes"]==["MEMORY_RECALL_PERSISTENT_FOUND"]
+        assert "quadrúpede" in out.text and "vermelha" in out.text and "dourada" not in out.text
+        assert set(out.metadata["memory_recall_ids"])=={str(anatomy.id),str(red.id)}
+    finally:
+        await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_run02_episode_without_memory_local_only(lab):
+    from amora.memory.owner_evidence import recall_episodes
+    core,clock,_=lab
+    _bind_bk(core)
+    request=_request(marked=False,allowed=False)
+    request.text="O protótipo Zafir usa um mapa de gelo."
+    _record(core,request)
+    assert not core.memory.store.recall_owner_records("PERSON_BK","Zafir")[0]
+    episodes,complete=recall_episodes(core.cognition.store,"PERSON_BK","Zafir")
+    assert complete and list(episodes)==[str(request.turn_id)]
+    assert "mapa de gelo" in episodes[str(request.turn_id)]["user_text"]
+    assert not recall_episodes(core.cognition.store,"PERSON_BK","Zafir",remote=True,
+                               session=request.session_id,before=clock.now()+timedelta(seconds=1))[0]
+    assert not recall_episodes(core.cognition.store,"ENTITY_CHATGPT","Zafir")[0]
+    out=(await core.messaging.receive(_dm(core,"run02-zafir-recall",text="Você lembra de Zafir?"))).outbound[0]
+    assert out.metadata["cognitive_reason_codes"]==["MEMORY_RECALL_EPISODIC_FOUND"]
+    assert "mapa de gelo" in out.text and out.metadata["memory_recall_episode_count"]==1

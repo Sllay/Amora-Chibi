@@ -98,7 +98,7 @@ class MemoryStore:
         if episode_lease is not None and (not insert_only or reflection_lease is not None
                                           or generation_lease is not None):
             raise ValueError("EPISODE_WRITE_REQUIRES_CREATE_ONLY")
-        from .versioned_fact import checked_version_key, link_version, VersionedFactConflict
+        from .versioned_fact import checked_version_key, link_version, VersionedFactConflict, verified_fact_source_matches
         version_key = checked_version_key(record, generation_lease, reflection_lease)
         provenance = record.provenance
         values = (
@@ -176,8 +176,7 @@ class MemoryStore:
                           AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash')
                           AND x.invalidated_through>=COALESCE(json_extract(m.metadata_json,'$.transport_revision'),1))""",
                         (turn_id,token,self.clock.now().isoformat(),provenance.session_id)).fetchone()
-                    if (source is None or not isinstance(source[0],str)
-                            or record.content!="Relato de PERSON_BK: "+source[0].strip()):
+                    if source is None or not verified_fact_source_matches(record,source[0]):
                         raise RuntimeError("REFLECTION_LEASE_LOST")
             if version_key is not None:
                 predecessor = self._conn.execute(

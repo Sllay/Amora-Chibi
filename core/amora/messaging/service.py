@@ -563,8 +563,8 @@ class PlatformMessagingService:
                 and message.privacy_scope==PrivacyScope.PERSONAL
                 and not message.attachments and not message.incoming_images and not message.incoming_image
                 and not request.metadata.get("test_mode")):
-            from amora.memory.versioned_fact import parse_named_fact
-            if parse_named_fact(message.text) and is_verified_owner(
+            from amora.memory.versioned_fact import owner_fact_units
+            if owner_fact_units(message.text) and is_verified_owner(
                     self.attention.profiles,message,decision.speaker_entity_id):
                 request.metadata["owner_fact_assertion"]=True
         durable = bool(
@@ -1222,6 +1222,8 @@ class PlatformMessagingService:
 
         shared = message.channel_type != ChannelType.DM
         records = []
+        episodes = {}
+        episode_complete = True
         complete = True
         if shared and not self.attention.floor.validate_reply(message, decision):
             return InboundResult(decision=decision.model_copy(update={
@@ -1255,7 +1257,7 @@ class PlatformMessagingService:
                         "reason_codes": [*decision.reason_codes, "CONFIDENTIAL_OUTPUT_SUPPRESSED"],
                     }))
                 text = render_memory_reply(excerpts, generic=intent.generic)
-                if not shared:
+                if not shared and not any(r.metadata.get("versioned_fact_key") for r in records):
                     # A memory summary alone can lose context. Reattach the
                     # verified owner DM utterance and the *sent* Amora answer.
                     # Unsent drafts, edited sources and third parties never
@@ -1284,6 +1286,20 @@ class PlatformMessagingService:
                         if len(text) > 1900:
                             text = text[:1899] + "…"
                 reason = "MEMORY_RECALL_PUBLIC_FOUND" if shared else "MEMORY_RECALL_PERSISTENT_FOUND"
+            elif not shared and not intent.generic:
+                from amora.memory.owner_evidence import recall_episodes,render_episodes
+                episodes,episode_complete=recall_episodes(self.cognition.store,OWNER_ENTITY_ID,
+                    intent.topic,exclude_turn=request.turn_id)
+                complete=complete and episode_complete
+                if episodes:
+                    reason="MEMORY_RECALL_EPISODIC_FOUND"
+                    text=render_episodes(episodes)
+                elif not complete:
+                    reason="MEMORY_RECALL_SEARCH_INCOMPLETE"
+                    text="Não encontrei uma correspondência nessa busca limitada. Pode indicar o assunto com mais detalhes?"
+                else:
+                    reason="MEMORY_RECALL_NO_MATCH"
+                    text="Não encontrei uma lembrança correspondente no armazenamento. Isso não significa que você nunca me contou. Pode me dar mais detalhes?"
             elif shared:
                 reason = "MEMORY_RECALL_SHARED_SCOPE_RESTRICTED"
                 text = ("Aqui só consigo consultar lembranças públicas sem uma autorização específica. "
@@ -1312,6 +1328,8 @@ class PlatformMessagingService:
                 "generation_stage": "persistent_recall", "provider": "local_control",
                 "generation_error_code": None, "cognitive_reason_codes": [reason],
                 "memory_recall_count": len(records), "memory_recall_source": "persistent_store",
+                "memory_recall_episode_count": len(episodes) if not shared else 0,
+                "memory_recall_episode_search_complete": episode_complete,
                 "memory_recall_search_complete": complete,
                 # The group receives no private record IDs or status.
                 "memory_recall_ids": [str(r.id) for r in records],

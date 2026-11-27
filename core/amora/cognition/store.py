@@ -320,6 +320,37 @@ class CognitiveStore:
             return self._conn.execute(sql, (owner_id, *turn_ids)).fetchall()
 
 
+    def owner_topic_source_rows(self,owner_id,*,remote=False,session=None,before=None,limit=64,offset=0):
+        if owner_id!="PERSON_BK" or (remote and (not session or before is None)):
+            return []
+        stamp=before.isoformat() if before is not None else None
+        sql = """
+            SELECT m.* FROM conversation_messages m
+            WHERE m.speaker_id=? AND m.addressee_id='ENTITY_AMORA'
+              AND m.dedupe_key='cognitive-input:' || m.turn_id
+              AND m.session_id IS NOT NULL AND m.status='received'
+              AND m.privacy_scope IN ('PERSONAL','PRIVATE')
+              AND json_extract(m.metadata_json,'$.surface')='platform_messaging'
+              AND json_extract(m.metadata_json,'$.platform')='discord'
+              AND json_extract(m.metadata_json,'$.channel_type')='dm'
+              AND COALESCE(json_extract(m.metadata_json,'$.test_mode'),0)=0
+              AND COALESCE(json_extract(m.metadata_json,'$.observed_only'),0)=0
+              AND NOT EXISTS (
+                SELECT 1 FROM memory_reflection_invalidations x
+                WHERE x.session_id=m.session_id
+                  AND x.native_message_hash=json_extract(m.metadata_json,'$.native_message_id_hash')
+                  AND x.invalidated_through>=COALESCE(
+                      json_extract(m.metadata_json,'$.transport_revision'),1)
+              )
+              AND (?=0 OR (m.remote_processing_allowed=1 AND m.privacy_scope='PERSONAL'))
+              AND (? IS NULL OR m.session_id=?)
+              AND (? IS NULL OR julianday(m.started_at)<julianday(?))
+            ORDER BY m.started_at DESC,m.id DESC LIMIT ? OFFSET ?
+        """
+        with trace_lock(self._lock):
+            return self._conn.execute(sql,(owner_id,int(remote),session,session,stamp,stamp,
+                max(1,min(64,int(limit))),max(0,min(448,int(offset))))).fetchall()
+
     def source_invalidated(self, session_id, native_message_hash, revision):
         with trace_lock(self._lock):
             row = self._conn.execute(

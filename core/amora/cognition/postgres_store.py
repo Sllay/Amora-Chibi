@@ -9,7 +9,7 @@ from amora.storage.backend import StorageBackend
 from amora.storage.postgres_runtime_connection import PostgresRuntimeError
 from amora.storage.postgres_runtime_cognition import (
     HISTORY, LATEST_USAGE, MERGE_METADATA, OWNER_DAY_INPUTS, OWNER_DAY_REPLIES,
-    OWNER_EPISODE_SOURCES,
+    OWNER_EPISODE_SOURCES, OWNER_TOPIC_SOURCES,
 )
 from amora.time import Clock
 
@@ -84,3 +84,11 @@ class PostgresCognitiveStore(CognitiveStore):
                 OWNER_EPISODE_SOURCES,
                 (owner_id, json.dumps(list(turn_ids), separators=(",", ":"))),
             ).fetchall()
+
+    def owner_topic_source_rows(self,owner_id,*,remote=False,session=None,before=None,limit=64,offset=0):
+        if owner_id!="PERSON_BK" or (remote and (not session or before is None)):
+            return []
+        stamp=before.isoformat() if before is not None else None
+        with self._lock:
+            return self._conn.execute(OWNER_TOPIC_SOURCES,(owner_id,int(remote),session,session,
+                stamp,stamp,max(1,min(64,int(limit))),max(0,min(448,int(offset))))).fetchall()
