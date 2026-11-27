@@ -15,7 +15,9 @@
     "artifact": 14986551731,
     "artifactSha256": "c0226852c5dfc4260944b7bcfd8f58b0481297407071f5b3f82dd5f642a0f41c",
     "source": "333b935d12e7b82397efbc4d797c471e1aec05f1",
-    "file": "AmoraBolinha.model3.json"
+    "file": "AmoraBolinha.model3.json",
+    "persistentCommit": "de8a319a022ed52371a3de3be235f312279e5345",
+    "persistentBranch": "assets/visual-v5-certified-rig"
   },
   "tools": {
     "esbuild": "0.25.11",

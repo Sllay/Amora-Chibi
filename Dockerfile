@@ -15,24 +15,25 @@ RUN --mount=type=secret,id=proxy_ca \
     /opt/venv/bin/pip install --only-binary=:all: --no-cache-dir -c deploy/python.lock /tmp/wheels/amora_chibi*.whl 'psycopg[binary]==3.3.9' 'cryptography==50.0.2' && \
     /opt/venv/bin/python -m pip uninstall -y pip
 
-# Build-only optional SDK preview. Default image never downloads Cubism or rig.
-# Owner supplies an authorized exact Core JS via BuildKit secret, not an ARG.
+# Private development preview: no SDK or model download in the default build.
+# Enabled builds use only pinned public sources; no artifact token or manual SDK file.
 COPY tools/visual-engine-v5 ./tools/visual-engine-v5
 ARG AMORA_VISUAL_V5_BUILD=0
 ARG NF_GIT_SHA
-RUN --mount=type=secret,id=amora_visual_v5_core,required=false \
-    --mount=type=secret,id=amora_visual_v5_github,required=false \
-    set -eu; mkdir -p /build/visual-preview; \
+RUN set -eu; mkdir -p /build/visual-preview; \
     if [ "$AMORA_VISUAL_V5_BUILD" = "1" ]; then \
-      test -s /run/secrets/amora_visual_v5_core; \
-      test -s /run/secrets/amora_visual_v5_github; \
-      apk add --no-cache git nodejs npm; \
+      echo VISUAL_V5_BUILD_ENABLED; \
+      apk add --no-cache git nodejs npm curl; \
       scratch="$(mktemp -d)"; \
       trap 'rm -rf "$scratch"' EXIT; \
-      python tools/visual-engine-v5/fetch-rig.py download /run/secrets/amora_visual_v5_github "$scratch/rig.zip"; \
-      sh tools/visual-engine-v5/build-preview.sh "$scratch/rig" /run/secrets/amora_visual_v5_core /build/visual-preview "$NF_GIT_SHA"; \
+      sh tools/visual-engine-v5/fetch-preserved-rig.sh "$scratch/rig"; \
+      sh tools/visual-engine-v5/fetch-hosted-core.sh "$scratch/core.js"; \
+      sh tools/visual-engine-v5/build-preview.sh "$scratch/rig" "$scratch/core.js" /build/visual-preview "$NF_GIT_SHA"; \
+      test -s /build/visual-preview/manifest.json; \
+      echo VISUAL_V5_BUILD_READY; \
     else \
       test "$AMORA_VISUAL_V5_BUILD" = "0"; \
+      echo VISUAL_V5_BUILD_DISABLED; \
     fi
 
 FROM ${PYTHON_BASE} AS runtime

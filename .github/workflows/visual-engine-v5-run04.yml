@@ -1,7 +1,7 @@
 name: Visual Engine V5 RUN 04 — native Cubism
 on:
   push:
-    branches: [feat/visual-engine-v5-run04, feat/visual-engine-v5-staging, fix/visual-v5-optional-startup]
+    branches: [feat/visual-engine-v5-run04, feat/visual-engine-v5-staging, fix/visual-v5-optional-startup, fix/visual-v5-persistent-build]
     paths: ['tools/visual-engine-v5/**','core/amora/**','web/**','tests/test_visual_stream_v5.py','tests/test_visual_preview_v5.py','.github/workflows/visual-engine-v5-run04.yml']
   workflow_dispatch:
 permissions:
@@ -22,24 +22,25 @@ jobs:
           pytest tests/test_visual_preview_v5.py tests/test_visual_stream_v5.py tests/test_avatar_v09.py tests/test_avatar_bundle.py tests/test_avatar_rig_v2.py tests/test_emotion_v05.py tests/test_emotion_recovery_v05.py tests/test_security_predeploy.py
           node --experimental-default-type=module --test tools/visual-engine-v5/body-controller.test.mjs
           node --test tests/*.test.mjs
-      - name: Build private-preview-equivalent bundle with pinned inputs (CI only)
+      - name: Build from immutable public model and official hosted Core (CI only)
         shell: bash
-        env:
-          RIG_DOWNLOAD_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          umask 077
           mkdir -p evidence
           scratch="$(mktemp -d)"
           trap 'rm -rf "$scratch"' EXIT
-          printf '%s' "$RIG_DOWNLOAD_TOKEN" > "$scratch/token"
-          unset RIG_DOWNLOAD_TOKEN
-          python tools/visual-engine-v5/fetch-rig.py download "$scratch/token" "$scratch/rig.zip"
-          curl --fail --silent --show-error --location --proto '=https' --max-time 90 https://cubism.live2d.com/sdk-web/core/06/live2dcubismcore.min.js -o "$scratch/core.js"
+          sh tools/visual-engine-v5/fetch-preserved-rig.sh "$scratch/rig"
+          sh tools/visual-engine-v5/fetch-hosted-core.sh "$scratch/core.js"
           sh tools/visual-engine-v5/build-preview.sh "$scratch/rig" "$scratch/core.js" .build "$GITHUB_SHA"
           cp .build/identity.json evidence/identity.json
           cp .build/manifest.json evidence/manifest.json
           npm install --prefix tools/visual-engine-v5 --no-save puppeteer-core@24.24.1
+      - name: Reproduce enabled Northflank Docker build (no secrets)
+        run: |
+          set -euo pipefail
+          docker build --build-arg AMORA_VISUAL_V5_BUILD=1 --build-arg NF_GIT_SHA="$GITHUB_SHA" -t amora-v5-private-test .
+          docker run --rm --entrypoint python amora-v5-private-test -c 'from pathlib import Path; from amora.avatar.visual_preview import verify_preview; verify_preview(Path("/opt/amora/visual-v5")); print("V5_ENABLED_DOCKER_PACKAGE_VERIFIED")'
+          docker image rm amora-v5-private-test
       - name: Validate overlay and Companion using real MOC3
         run: |
           python -m http.server 8766 --bind 127.0.0.1 --directory .build > /tmp/amora-v5-http.log 2>&1 &
