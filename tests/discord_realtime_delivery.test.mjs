@@ -192,3 +192,43 @@ test('gateway observation forwards only own-bot nonce and digest',async()=>{
   assert.equal('content' in calls[0],false);
   assert.equal(calls[0].digest.length,64);
 });
+
+
+test('orphan after worker restart only patches known receipt and never creates a message',async()=>{
+  const {RealtimeWorkerTransport}=await import('../workers/discord/realtime-worker.mjs');
+  const binding='d'.repeat(64);
+  const orphan={orphan:true,turnId,channelId:channel,binding,
+    snapshot:snap(2,'Geração interrompida.','retrying')};
+  let confirmed=false,prepared=null;
+  const calls=[];
+  const core={
+    async realtimeNext(){return {draft:null,orphans:confirmed?[]:[orphan]};},
+    async realtimeOperation(op){
+      assert.equal(op.orphan,true);
+      assert.equal(op.binding,binding);
+      if(op.action==='authorize')return {allowed:true};
+      if(op.action==='prepare'){prepared=op;return {prepared:{token:'cleanup',seq:op.seq,
+        digest:op.digest,operation:'edit',message_id:id}};}
+      if(op.action==='confirm'){assert.equal(op.message_id,id);assert.equal(op.digest,prepared.digest);
+        confirmed=true;return {accepted:true};}
+      throw new Error('unexpected');
+    },
+  };
+  const rest={async request(path,opts){
+    calls.push({path,opts});
+    return {id,channel_id:channel,author:{id:bot},content:opts.body.content};
+  }};
+  const worker=new RealtimeWorkerTransport({core,rest,botUserId:bot,sourceCurrent:()=>false});
+  assert.equal(await worker.poll(),'confirmed');
+  assert.equal(await worker.poll(),'idle');
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].opts.method,'PATCH');
+  assert.equal(calls[0].path,'/channels/'+channel+'/messages/'+id);
+  assert.equal(calls[0].opts.body.content,'Geração interrompida.');
+});
+
+test('cleanup cannot POST even if journal erroneously returns create',async()=>{
+  const f=fixture(),d=f.make();
+  assert.equal(await d.send(snap(1,'Geração interrompida.','retrying')),'journal_invalid');
+  assert.equal(f.calls.length,0);
+});

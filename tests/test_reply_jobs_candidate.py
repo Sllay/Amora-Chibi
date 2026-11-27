@@ -1867,3 +1867,71 @@ async def test_realtime_operational_receipts_startup_and_restart(lab,monkeypatch
         assert (await call("read",turn,0))["confirmed_digest"]==digest
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_realtime_orphan_cursor_recovers_after_restart(lab,monkeypatch):
+    from amora.storage.realtime_receipt_migration import prepare_realtime_schema,APPROVAL as MIGRATE
+    from amora.storage.reply_job_rollout import REALTIME_APPROVAL,APPROVAL
+    from amora.messaging.realtime_receipts import _DDL,SQLITE_TABLE,binding_digest,ORPHAN_DIGEST,ORPHAN_TEXT
+    from amora.messaging.realtime_routes import RealtimeOperation
+    from amora.messaging.realtime_bridge import digest
+    core,clock,_=lab
+    if core.database.backend.capabilities.name=="postgres-candidate":
+        with closing(_raw()) as raw:
+            prepare_realtime_schema(raw,PostgresTargetPolicy(),approval=MIGRATE)
+    else:
+        core.database._conn.execute(_DDL.format(table=SQLITE_TABLE))
+        core.database._conn.commit()
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE","accept")
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_APPROVAL",APPROVAL)
+    monkeypatch.setenv("AMORA_REALTIME_MODE","on")
+    monkeypatch.setenv("AMORA_REALTIME_APPROVAL",REALTIME_APPROVAL)
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    try:
+        message=_dm(core,"1"*18,text="Explique Vulkan.").model_copy(update={"conversation_id":"2"*18})
+        turn=service._turn_id(message)
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(message)).decision.reason_codes
+        claim=await runtime.call("claim")
+        assert str(claim.turn_id)==str(turn)
+        binding=binding_digest("primary",message.conversation_id,message.native_source_message_id,1)
+        call=runtime._operational_receipt
+        dest={"account":"primary","channel":message.conversation_id}
+        content=digest("Trecho em geração. ▍")
+        prepared=await call("prepare",turn,0,binding=binding,seq=1,digest=content,**dest)
+        assert await call("confirm",turn,0,binding=binding,token=prepared.token,message_id="3"*18,digest=content)
+        assert await call("orphan_candidates","primary",clock.now().isoformat())==[]
+        await runtime.stop()
+        await service.stop_storage_lane()
+        await runtime.start(background=False)
+        bridge=service.realtime_bridge
+        assert bridge.sessions=={}
+        assert await call("orphan_candidates","primary",clock.now().isoformat())==[]
+        # The dead process's lease must expire before neutral cleanup.
+        clock.advance(timedelta(seconds=300))
+        assert (await bridge.next("other")).get("orphans",[])==[]
+        envelope=(await bridge.next("primary"))["orphans"][0]
+        assert envelope["snapshot"]["text"]==ORPHAN_TEXT
+        assert envelope["snapshot"]["status"]=="retrying"
+        assert envelope["snapshot"]["seq"]==2
+        base=dict(account="primary",turn_id=turn,binding=binding,index=0,orphan=True)
+        op=RealtimeOperation(action="prepare",**base,seq=2,digest=ORPHAN_DIGEST)
+        assert not (await bridge.operation(op.model_copy(update={"digest":content})))["allowed"]
+        assert not (await bridge.operation(op.model_copy(update={"account":"other"})))["allowed"]
+        edit=(await bridge.operation(op))["prepared"]
+        assert edit["operation"]=="edit" and edit["message_id"]=="3"*18
+        assert (await bridge.operation(op.model_copy(update={"action":"authorize"})))["allowed"]
+        assert (await bridge.operation(RealtimeOperation(action="confirm",**base,token=edit["token"],
+            digest=ORPHAN_DIGEST,message_id="3"*18)))["accepted"]
+        assert await call("orphan_candidates","primary",clock.now().isoformat())==[]
+        row=await call("read",turn,0)
+        assert row["closed"]==0 and row["confirmed_digest"]==ORPHAN_DIGEST
+        # The cleanup never completes the canonical job or records speech.
+        assert not core.cognition.store.list_segments(turn)
+        assert core.messaging_store.get_outbound(service._outbound_id(message)) is None
+        later=await call("prepare",turn,0,binding=binding,seq=3,digest=digest("Resposta final."),
+                         terminal=True,**dest)
+        assert later.operation=="edit" and later.message_id=="3"*18
+    finally:
+        await _stop_runtime(core)

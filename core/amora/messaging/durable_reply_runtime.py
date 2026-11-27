@@ -61,12 +61,12 @@ class DurableReplyRuntime:
             return getattr(self.repo.generations, operation)(*args)
         return getattr(self.repo, operation)(*args, **kwargs)
 
-    def configure_realtime(self, receipt_port):
+    def configure_realtime(self, receipt_port, *, recover_orphans=False):
         """Explicit integration/lab injection; no automatic schema or environment activation."""
         if not self.active or self.service.realtime_bridge is not None:
             raise RuntimeError("REALTIME_CONFIGURATION_NOT_ALLOWED")
         from .realtime_bridge import RealtimeBridge
-        self.service.realtime_bridge=RealtimeBridge(self.service,receipt_port)
+        self.service.realtime_bridge=RealtimeBridge(self.service,receipt_port,recover_orphans=recover_orphans)
         return self.service.realtime_bridge
 
     async def _operational_receipt(self,operation,*args,**kwargs):
@@ -82,7 +82,7 @@ class DurableReplyRuntime:
         with trace_lock(db._lock):
             if operation=="verify":
                 return verify_sqlite_receipts(db._conn)
-            if operation not in {"read","prepare","confirm","reject_definitive","observe_create"}:
+            if operation not in {"read","prepare","confirm","reject_definitive","observe_create","orphan_candidates","orphan_read"}:
                 raise ValueError("REALTIME_RECEIPT_OPERATION_NOT_ALLOWED")
             return getattr(RealtimeReceiptStore(db._conn,reviewed=True),operation)(*args,**kwargs)
 
@@ -99,7 +99,7 @@ class DurableReplyRuntime:
             await self._operational_receipt("verify")
         self.active = True
         if enable_realtime:
-            self.configure_realtime(self._operational_receipt)
+            self.configure_realtime(self._operational_receipt,recover_orphans=True)
         self.wake = asyncio.Event()
         self._next_reconcile = 0.0
         if background:

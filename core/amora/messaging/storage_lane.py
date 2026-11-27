@@ -58,7 +58,7 @@ class MessagingStorageWorker:
             if operation=="verify":
                 return (self.database._conn.verify_realtime_component() if pg
                         else verify_sqlite_receipts(self.database._conn))
-            if operation not in {"read","prepare","confirm","reject_definitive","observe_create"}:
+            if operation not in {"read","prepare","confirm","reject_definitive","observe_create","orphan_candidates","orphan_read"}:
                 raise ValueError("REALTIME_RECEIPT_OPERATION_NOT_ALLOWED")
             if self.realtime_receipts is None:
                 self.realtime_receipts=RealtimeReceiptStore(self.database._conn,postgres=pg,reviewed=True)

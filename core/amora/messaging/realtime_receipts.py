@@ -41,6 +41,25 @@ CREATE TABLE {table} (
 """
 SNOWFLAKE = re.compile(r"^[0-9]{17,20}$", re.ASCII)
 
+ORPHAN_TEXT = "Geração interrompida."
+ORPHAN_DIGEST = sha256(ORPHAN_TEXT.encode("utf-8")).hexdigest()
+_ORPHAN_COLUMNS = ("turn_id","binding","channel_id","message_id","confirmed_seq",
+                   "pending_token","pending_seq","pending_digest","pending_nonce","pending_terminal")
+_ORPHAN_BASE = (
+    "SELECT r.turn_id,r.binding,r.channel_id,r.message_id,r.confirmed_seq,"
+    "r.pending_token,r.pending_seq,r.pending_digest,r.pending_nonce,r.pending_terminal "
+    "FROM {table} r WHERE r.account_scope=? AND r.block_index=0 AND r.closed=0 "
+    "AND r.channel_id IS NOT NULL "
+    "AND (r.pending_token IS NOT NULL OR (r.message_id IS NOT NULL "
+    "AND r.confirmed_digest<>?)) "
+    "AND NOT EXISTS (SELECT 1 FROM messaging_reply_jobs j WHERE j.turn_id=r.turn_id "
+    "AND ( (j.status='running' AND j.lease_until>?) OR "
+    "(j.status='ready' AND EXISTS (SELECT 1 FROM messaging_outbound_queue o "
+    "WHERE o.id=j.outbound_id AND o.status IN ('queued','claimed'))) )) "
+)
+_ORPHAN_LIST = _ORPHAN_BASE + "AND r.turn_id>? ORDER BY r.turn_id LIMIT 8"
+_ORPHAN_ONE = _ORPHAN_BASE + "AND r.turn_id=? LIMIT 1"
+
 
 def binding_digest(account: str, channel: str, source: str, revision: int) -> str:
     if (not isinstance(revision,int) or isinstance(revision,bool) or not 1<=revision<=1_000_000
@@ -91,7 +110,11 @@ class RealtimeReceiptStore:
         # All templates here are static; only the fixed table and parameter
         # notation vary. This lab adapter is not the Core runtime SQL registry.
         value = value.format(table=self.table)
-        return value.replace("?", "%s") if self.postgres else value
+        if self.postgres:
+            value = value.replace("FROM messaging_reply_jobs ", "FROM amora_pg_v18_lab.messaging_reply_jobs ")
+            value = value.replace("FROM messaging_outbound_queue ", "FROM amora_pg_v18_lab.messaging_outbound_queue ")
+            return value.replace("?", "%s")
+        return value
 
     def _execute(self, statement, args=()):
         if self.reviewed and self.postgres:
@@ -142,7 +165,17 @@ class RealtimeReceiptStore:
     def read(self,turn,index):
         return self._row(*self._key(turn,index))
 
-    def prepare(self,turn,index,*,binding,seq,digest,terminal=False,account=None,channel=None):
+    def orphan_candidates(self,account,now,after=""):
+        rows=self._execute(_ORPHAN_LIST,(account,ORPHAN_DIGEST,now,after)).fetchall()
+        return [dict(zip(_ORPHAN_COLUMNS,(row[i] for i in range(len(_ORPHAN_COLUMNS))))) for row in rows]
+
+    def orphan_read(self,turn,account,now):
+        row=self._execute(_ORPHAN_ONE,(account,ORPHAN_DIGEST,now,str(UUID(str(turn))))).fetchone()
+        return (dict(zip(_ORPHAN_COLUMNS,(row[i] for i in range(len(_ORPHAN_COLUMNS)))))
+                if row is not None else None)
+
+    def prepare(self,turn,index,*,binding,seq,digest,terminal=False,account=None,channel=None,
+                require_edit=False):
         turn,index=self._key(turn,index)
         if (type(seq) is not int or seq<1 or type(terminal) is not bool
                 or not re.fullmatch(r"[0-9a-f]{64}",binding)
@@ -159,6 +192,8 @@ class RealtimeReceiptStore:
             if (row is None or row["binding"]!=binding or row["closed"]
                     or row["account_scope"]!=account or row["channel_id"]!=channel
                     or row["pending_token"] is not None or seq<=row["confirmed_seq"]):
+                return None
+            if require_edit and not row["message_id"]:
                 return None
             token=str(uuid4())
             nonce=None if row["message_id"] else receipt_nonce(token)

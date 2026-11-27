@@ -73,6 +73,12 @@ export class RealtimeDelivery {
         return 'revoked';
       }
       const edit=operation.operation==='edit';
+      if (status==='retrying' && !edit) {
+        // A neutral cleanup can only edit a known previous message.
+        await this.journal.rejectDefinitive(context);
+        this.blocked=true;
+        return 'journal_invalid';
+      }
       const base='/channels/'+encodeURIComponent(this.channelId)+'/messages';
       const path=edit?base+'/'+encodeURIComponent(operation.message_id):base;
       const body={content:text,allowed_mentions:{parse:[],replied_user:false}};

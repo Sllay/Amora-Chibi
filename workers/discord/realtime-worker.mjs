@@ -17,7 +17,8 @@ export class RealtimeWorkerTransport {
     if (transport && (transport.channelId!==envelope.channelId || transport.binding!==envelope.binding))
       throw new Error('REALTIME_BINDING_CHANGED');
     const call=(action,x={})=>this.core.realtimeOperation({action,turn_id:turn,
-      binding:envelope.binding,...(outboundId?{outbound_id:outboundId}:{}),...x});
+      binding:envelope.binding,...(outboundId?{outbound_id:outboundId}:{}),
+      ...(envelope.orphan?{orphan:true}:{}),...x});
     const journal={
       prepare:async x=>(await call('prepare',{index:x.index,seq:x.seq,digest:x.digest,terminal:x.terminal})).prepared,
       confirm:async x=>(await call('confirm',{index:x.index,token:x.token,message_id:x.messageId,digest:x.digest})).accepted===true,
@@ -29,7 +30,7 @@ export class RealtimeWorkerTransport {
         terminal:s.status==='final'||s.status==='interrupted'});
       return response?.allowed===true;
     };
-    if (!transport || (transport.blocked && outboundId)) {
+    if (!transport || (transport.blocked && (outboundId || envelope.orphan))) {
       if (!transport && this.transports.size>=8) throw new Error('REALTIME_CAPACITY');
       transport=new RealtimeDelivery({rest:this.rest,journal,authorize,channelId:envelope.channelId,
         botUserId:this.botUserId,binding:envelope.binding,...(this.now?{now:this.now}:{})});
@@ -41,9 +42,32 @@ export class RealtimeWorkerTransport {
   }
 
   async poll() {
-    const {draft}=await this.core.realtimeNext();
-    if (!draft) return 'idle';
-    return this.transport(draft,draft.snapshot.turnId).send(draft.snapshot);
+    const {draft,orphans=[]}=await this.core.realtimeNext();
+    if (draft) return this.transport(draft,draft.snapshot.turnId).send(draft.snapshot);
+    // Only positive receipt reconciliation or neutral PATCH of a known ID.
+    // Never create an orphan message. Bound each sweep and continue past
+    // unresolved receipts instead of blocking unrelated turns.
+    let result='idle';
+    for (const orphan of orphans.slice(0,8)) {
+      if (!orphan.orphan || !idOk(orphan.channelId)) continue;
+      try {
+        if (orphan.pending) {
+          if (orphan.pending.turnId!==orphan.turnId || orphan.pending.channelId!==orphan.channelId ||
+              orphan.pending.binding!==orphan.binding || orphan.pending.index!==0) continue;
+          const accepted=await this.reconcilePending(orphan.pending);
+          if (accepted) {
+            this.transports.delete(orphan.turnId);
+            result='recovered';
+          } else result='receipt_uncertain';
+        } else if (orphan.snapshot?.status==='retrying' && orphan.snapshot?.turnId===orphan.turnId &&
+                   orphan.snapshot?.index===0 && orphan.snapshot?.text==='Geração interrompida.') {
+          const outcome=await this.transport(orphan,orphan.turnId).send(orphan.snapshot);
+          if (outcome==='confirmed') this.transports.delete(orphan.turnId);
+          result=outcome;
+        }
+      } catch { result='receipt_uncertain'; }
+    }
+    return result;
   }
 
   async observeCreate(message) {
@@ -56,34 +80,38 @@ export class RealtimeWorkerTransport {
     return result?.accepted===true;
   }
 
+  async reconcilePending(p) {
+    let receipt;
+    if (idOk(p.messageId)) {
+      receipt=await this.rest.request('/channels/'+encodeURIComponent(p.channelId)+
+        '/messages/'+encodeURIComponent(p.messageId),{method:'GET',maxAttempts:1});
+    } else {
+      if (!/^r1[0-9a-f]{22}$/.test(String(p.nonce||'')) ||
+          p.nonce!=='r1'+hash(p.token).slice(0,22)) return false;
+      const recent=await this.rest.request('/channels/'+encodeURIComponent(p.channelId)+
+        '/messages?limit=100',{method:'GET',maxAttempts:1});
+      const matches=Array.isArray(recent)?recent.filter(m=>String(m?.nonce)===p.nonce
+        && String(m?.author?.id)===this.botUserId && String(m?.channel_id)===p.channelId
+        && idOk(m?.id) && typeof m?.content==='string' && hash(m.content)===p.digest):[];
+      if (matches.length!==1) return false;
+      receipt=matches[0];
+    }
+    if (!idOk(receipt?.id) || (p.messageId && String(receipt.id)!==p.messageId)
+        || String(receipt?.channel_id)!==p.channelId
+        || String(receipt?.author?.id)!==this.botUserId || typeof receipt.content!=='string'
+        || hash(receipt.content)!==p.digest) return false;
+    const confirmed=await this.core.realtimeOperation({action:'confirm',turn_id:p.turnId,
+      binding:p.binding,index:p.index,token:p.token,digest:p.digest,message_id:String(receipt.id)});
+    return confirmed?.accepted===true;
+  }
+
   async final(item) {
     let plan=await this.core.realtimeFinal(item.id);
     if (plan?.blocked==='REALTIME_RECEIPT_UNCERTAIN' && plan.pending) {
       const p=plan.pending;
       if (p.channelId!==String(item.conversation_id) || p.turnId!==item.metadata?.cognitive_turn_id)
         return 'receipt_uncertain';
-      let receipt;
-      if (idOk(p.messageId)) {
-        receipt=await this.rest.request('/channels/'+encodeURIComponent(p.channelId)+
-          '/messages/'+encodeURIComponent(p.messageId),{method:'GET',maxAttempts:1});
-      } else {
-        if (!/^r1[0-9a-f]{22}$/.test(String(p.nonce||'')) ||
-            p.nonce!=='r1'+hash(p.token).slice(0,22)) return 'receipt_uncertain';
-        const recent=await this.rest.request('/channels/'+encodeURIComponent(p.channelId)+
-          '/messages?limit=100',{method:'GET',maxAttempts:1});
-        const matches=Array.isArray(recent)?recent.filter(m=>String(m?.nonce)===p.nonce
-          && String(m?.author?.id)===this.botUserId && String(m?.channel_id)===p.channelId
-          && idOk(m?.id) && typeof m?.content==='string' && hash(m.content)===p.digest):[];
-        if (matches.length!==1) return 'receipt_uncertain';
-        receipt=matches[0];
-      }
-      if (!idOk(receipt?.id) || (p.messageId && String(receipt.id)!==p.messageId)
-          || String(receipt?.channel_id)!==p.channelId
-          || String(receipt?.author?.id)!==this.botUserId || typeof receipt.content!=='string'
-          || hash(receipt.content)!==p.digest) return 'receipt_uncertain';
-      const confirmed=await this.core.realtimeOperation({action:'confirm',turn_id:p.turnId,
-        binding:p.binding,index:p.index,token:p.token,digest:p.digest,message_id:String(receipt.id)});
-      if (!confirmed?.accepted) return 'receipt_uncertain';
+      if (!await this.reconcilePending(p)) return 'receipt_uncertain';
       plan=await this.core.realtimeFinal(item.id);
     }
     if (!plan || plan.blocked) return 'receipt_uncertain';

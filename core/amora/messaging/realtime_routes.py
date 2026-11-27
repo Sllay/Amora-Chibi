@@ -15,6 +15,7 @@ class RealtimeOperation(BaseModel):
     seq: int=Field(default=1,ge=1)
     digest: str | None=Field(default=None,pattern=r"^[0-9a-f]{64}$")
     terminal: bool=False
+    orphan: bool=False
     token: str | None=Field(default=None,max_length=64)
     message_id: str | None=Field(default=None,pattern=r"^[0-9]{17,20}$")
     outbound_id: UUID | None=None

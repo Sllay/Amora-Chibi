@@ -14,7 +14,7 @@ from uuid import UUID
 from .delivery_segments import split_delivery_text
 from .disclosure import public_text_allowed, audience_text_allowed
 from .realtime_contract import utf16_units
-from .realtime_receipts import binding_digest
+from .realtime_receipts import binding_digest, ORPHAN_TEXT, ORPHAN_DIGEST
 
 
 def digest(text):
@@ -76,10 +76,13 @@ class Draft:
 
 
 class RealtimeBridge:
-    def __init__(self,service,receipt_port):
+    def __init__(self,service,receipt_port,*,recover_orphans=False):
         self.service=service
         self.receipts=receipt_port
         self.sessions={}
+        self.recover_orphans=recover_orphans
+        self.orphan_after={}
+        self.orphan_poll_at={}
 
     @staticmethod
     def binding(message):
@@ -149,7 +152,57 @@ class RealtimeBridge:
                     continue
                 if self.sessions.get(draft.turn) is draft:
                     return {"draft":draft.envelope()}
+        if self.recover_orphans:
+            # Bounded round robin: one page every five seconds, even if an
+            # uncertain receipt never becomes recoverable. No draft bytes
+            # survive restart; only a constant neutral cleanup can be sent.
+            now=monotonic()
+            if now>=self.orphan_poll_at.get(account,0):
+                if account not in self.orphan_after and len(self.orphan_after)>=8:
+                    return {"draft":None}
+                self.orphan_poll_at[account]=now+5
+                after=self.orphan_after.get(account,"")
+                rows=await self.receipts("orphan_candidates",account,self.service.clock.now().isoformat(),after)
+                if not rows and after:
+                    rows=await self.receipts("orphan_candidates",account,self.service.clock.now().isoformat(),"")
+                self.orphan_after[account]=rows[-1]["turn_id"] if rows else ""
+                orphans=[]
+                for row in rows:
+                    # A live in-process draft is never handled by this path.
+                    live=self.sessions.get(row["turn_id"])
+                    if live is not None and live.active:
+                        continue
+                    envelope={"orphan":True,"account":account,"binding":row["binding"],
+                              "channelId":row["channel_id"],"turnId":row["turn_id"]}
+                    if row["pending_token"]:
+                        envelope["pending"]={"turnId":row["turn_id"],"index":0,"binding":row["binding"],
+                            "token":row["pending_token"],"digest":row["pending_digest"],
+                            "messageId":row["message_id"],"nonce":row["pending_nonce"],
+                            "channelId":row["channel_id"]}
+                    elif row["message_id"]:
+                        envelope["snapshot"]={"turnId":row["turn_id"],"index":0,
+                            "seq":row["confirmed_seq"]+1,"status":"retrying","text":ORPHAN_TEXT}
+                    else:
+                        continue
+                    orphans.append(envelope)
+                return {"draft":None,"orphans":orphans}
         return {"draft":None}
+
+    async def _orphan_expected(self,op):
+        if (not self.recover_orphans or op.outbound_id is not None or op.index!=0
+                or op.terminal or op.digest!=ORPHAN_DIGEST):
+            return None
+        live=self.sessions.get(str(op.turn_id))
+        if live is not None and live.active:
+            return None
+        row=await self.receipts("orphan_read",op.turn_id,op.account,self.service.clock.now().isoformat())
+        if (row is None or row["binding"]!=op.binding or not row["message_id"]
+                or op.seq!=row["confirmed_seq"]+1):
+            return None
+        if row["pending_token"] and not (op.action=="authorize" and row["pending_seq"]==op.seq
+                and row["pending_digest"]==op.digest and not row["pending_terminal"]):
+            return None
+        return row
 
     def final_item(self,outbound_id,account):
         return self.service.store.realtime_final_item(outbound_id,account)
@@ -223,6 +276,16 @@ class RealtimeBridge:
 
     async def operation(self,op):
         if op.action in {"authorize","prepare"}:
+            if op.orphan:
+                row=await self._orphan_expected(op)
+                if row is None:
+                    return {"allowed":False}
+                if op.action=="authorize":
+                    return {"allowed":True}
+                prepared=await self.receipts("prepare",op.turn_id,0,binding=op.binding,seq=op.seq,
+                    digest=ORPHAN_DIGEST,terminal=False,account=op.account,channel=row["channel_id"],
+                    require_edit=True)
+                return {"prepared":asdict(prepared) if prepared else None}
             if not await self._expected(op):
                 return {"allowed":False}
             if op.action=="authorize":
