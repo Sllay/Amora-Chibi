@@ -17,6 +17,8 @@ MAX_AVATAR_ASSET_BYTES = 12 * 1024 * 1024
 
 
 def register_avatar_routes(app: FastAPI, core: object, require_auth: Callable[..., None]) -> None:
+    from .visual_stream import register_visual_stream
+    register_visual_stream(app, core)
     avatar = core.avatar
 
     @app.get("/v1/avatar/state", dependencies=[Depends(require_auth)])

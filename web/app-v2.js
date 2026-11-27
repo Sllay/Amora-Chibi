@@ -1,3 +1,4 @@
+import {VisualAudioTap} from './visual-audio-tap.mjs';
 import { BrowserState, browserStorage } from "./browser-state.mjs";
 import { PcmStreamPlayer, WavPlayer } from "./audio-player.mjs";
 
@@ -62,7 +63,10 @@ const state = {
   sendingAudio: false,
   textSending: false,
 };
-const voicePlayer = new WavPlayer(getPlaybackContext);
+let visualTap=null;
+const voicePlayer = new WavPlayer(getPlaybackContext, context=>visualTap?.node??context.destination);
+const visualAudioToggle=$('visualAudioToggle');
+visualAudioToggle.onclick=()=>{try{getPlaybackContext();if(!visualTap)throw Error('Web Audio indisponível');if(visualTap.channel)visualTap.disable();else visualTap.enable();visualAudioToggle.textContent='Sincronização visual: '+(visualTap.channel?'ligada':'desligada');visualAudioToggle.setAttribute('aria-pressed',String(!!visualTap.channel));}catch(_){visualAudioToggle.textContent='Sincronização visual indisponível';}};
 
 const pairPanel = $("pairPanel");
 const appPanel = $("appPanel");
@@ -236,6 +240,7 @@ function getPlaybackContext() {
   const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextCtor) throw new Error("Web Audio não disponível neste navegador");
   state.playbackContext = new AudioContextCtor({ latencyHint: "interactive" });
+  if(typeof state.playbackContext.createAnalyser==="function")visualTap=new VisualAudioTap(state.playbackContext);
   return state.playbackContext;
 }
 
@@ -588,6 +593,7 @@ async function prepareStreamedSpeech(record) {
     };
     let sequence = 0;
     const player = new PcmStreamPlayer(context, identity, {
+      destination: visualTap?.node??context.destination,
       minBufferSeconds: 0.06,
       maxBufferSeconds: 2.0,
       onState: (streamState) => {
@@ -1063,6 +1069,9 @@ $("micButton").addEventListener("click", async () => {
 });
 
 window.addEventListener("pagehide", () => {
+  visualTap?.disable();
+  visualAudioToggle.textContent="Sincronização visual: desligada";
+  visualAudioToggle.setAttribute("aria-pressed","false");
   interruptVoice("web_pagehide", null, true);
   disableMicrophone();
 });

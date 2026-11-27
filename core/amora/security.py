@@ -125,10 +125,10 @@ def issue_browser_token(secret: str, clock, role="web") -> str:
     if role == "web":
         version = "v2"
         payload = f"web:{secrets.token_hex(16)}"
-    elif role == "avatar":
+    elif role in {"avatar", "visual"}:
         version = "v1"
         payload = (
-            f"avatar:{int(clock.now().timestamp()) + 43200}:{secrets.token_hex(16)}"
+            f"{role}:{int(clock.now().timestamp()) + (3600 if role == 'visual' else 43200)}:{secrets.token_hex(16)}"
         )
     else:
         raise ValueError("unsupported browser role")
@@ -170,7 +170,7 @@ def token_role(token: str, secret: str, clock) -> str | None:
                 return None
         else:
             role, expiry, nonce = fields
-            if role not in {"web", "avatar"} or int(expiry) <= clock.now().timestamp():
+            if role not in {"web", "avatar", "visual"} or int(expiry) <= clock.now().timestamp():
                 return None
         if not re.fullmatch("[a-f0-9]{32}", nonce):
             return None
@@ -350,12 +350,26 @@ class SecurityMiddleware:
             )
             if len(authorization) <= 4096 and authorization.startswith("Bearer "):
                 role = self.authenticate(authorization[7:])
+            visual_socket = websocket and path == "/v1/avatar/visual-stream"
+            if visual_socket:
+                # Parse the actual handshake header; ASGI adapters may normalize
+                # the subprotocol list differently. Never echo the auth protocol.
+                values = [v for k, v in raw if k.lower() == b"sec-websocket-protocol"]
+                protocols = [p.strip() for p in values[0].decode("ascii", "replace").split(",")] if len(values) == 1 else []
+                if (len(protocols) == 2 and protocols[0] == "amora.visual.v1"
+                        and protocols[1].startswith("auth.") and len(protocols[1]) <= 512
+                        and supplied_origin and not scope.get("query_string") and not authorization):
+                    role = self.authenticate(protocols[1][5:])
+                else:
+                    role = None
+                if role != "visual":
+                    role = None
             if role is None:
                 if not self.limits.allow("auth_fail", peer, 20):
                     return await respond(429, "authentication limit reached")
                 return await respond(401, "authentication required")
             if role not in {"admin", "service"} and (
-                websocket or not self.web_access or not self.web_access(role, scope)
+                (websocket and not (visual_socket and role == "visual")) or (not websocket and (not self.web_access or not self.web_access(role, scope)))
             ):
                 return await respond(403, "credential scope denied")
         scope.setdefault("state", {})["security_role"] = role

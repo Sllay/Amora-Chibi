@@ -6,8 +6,8 @@ Planejamento aprovado: 4 RUNs (1+2; 3+4; 5+6; 7 expandida). Nenhuma implementaç
 | RUN | Estado | Evidência |
 |---|---|---|
 | 01 | PASS (CI de desenvolvimento) | 45829940603 / e65030a |
-| 02 | IN_PROGRESS | Branch feat/visual-engine-v5-run02 |
-| 03 | PLANNED | Pendente |
+| 02 | PASS (CI de desenvolvimento) | 45880113324 / 2224aee |
+| 03 | IN_PROGRESS | feat/visual-engine-v5-run03 |
 | 04 | PLANNED | Pendente |
 
 ## Formato de checkpoint
@@ -38,3 +38,15 @@ CI 45829940603, e65030a: PASS, 22 drawables, 2 máscaras, 22 parâmetros/textura
 - Testes automatizados de composição, layout, perfis, identidade, vídeo real e lifecycle. Testes físicos PRISM/Streamlabs/iOS e métricas reais adiados para RUN 04 por instrução do usuário. PRISM documenta iPhone 12+ para edição de cenas ScreenCast; alternativa Streamlabs se fonte web suportada, composição externa em outro dispositivo (não Northflank) ou cliente AVKit nativo futuro. Nenhuma alternativa certificada.
 - Referências: https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/captureStream ; https://developer.apple.com/documentation/webkitjs/adding_picture_in_picture_to_your_safari_media_controls ; https://guide.prismlive.com/mobile/guides/features/screencast/using-screencast .
 - Gate automatizado pendente; distribuição do Core proprietário não autorizada/certificada; bundle apenas CI temporária.
+
+## RUN 02 — fechamento CI
+45880113324 PASS; transparência 29.971 pixels, 35.170 opacos, 0 erro WebGL, vídeo real mudou com olhos, recovery preservou expressão. Artefato 15145993324. PiP físico, PRISM e Streamlabs pendentes.
+
+## RUN 03 — implementação inicial
+- Projeção read-only de AvatarSemanticState; protocolo v1 snapshot/state/heartbeat, sessão e sequência, eventos coalescidos e leitura limitada. Credencial visual separada de avatar/admin (1h), subprotocol somente no endpoint exato; sem credencial na URL; origem e limites existentes preservados. Sem texto, IDs de pessoas ou eventos privados no payload.
+- Controlador compartilhado nas três superfícies; expressão oficial, gesto, blush e envelope de boca suavizados, idle do rig. Reconexão limitada e preservação do estado. Pareamento explícito; compartilhamento no mesmo perfil por localStorage opcional. Browser source isolado precisa método próprio de pareamento antes da publicação.
+- Tap opt-in no player Web existente (WAV/PCM), mesma reprodução, BroadcastChannel local somente amplitude, silêncio/stale/cancel fecham boca. Não transfere áudio nem envelope entre dispositivos ou Discord; não é integração de voz remota universal. Validação física e medição real adiadas. Falta certificar fonte de live isolada, autorização de distribuição do SDK e conexão com voz de outras plataformas; não declarar gate integral concluído até resolver.
+
+- CI 45881626235: 4 testes avatar legados passaram, handshake visual legítimo negado 4401. CI Avatar tests 45881638609: inicialização Web falhou porque inserção dinâmica usou Element.after ausente no harness. Correção candidata: parse estrito do header de subprotocol real e teste de assinatura; botão declarativo no HTML e cleanup unificado no lifecycle existente. Reexecutar gates sem suprimir testes.
+
+- CI 46025921193: assinatura visual validada, handshake ainda 4401; Avatar Tests (push/PR), segurança e contratos de container passaram. Causa identificada no harness: TestClient.websocket_connect muta o dicionário de headers via setdefault; o primeiro caso negativo grava subprotocol vazio e contamina as tentativas seguintes. Corrigir isolamento dos headers em todas as conexões, adicionar negativos de origem ausente/externa e verificar que o fixture não foi mutado. Não alterar política de autenticação para satisfazer teste. Revalidação pendente.

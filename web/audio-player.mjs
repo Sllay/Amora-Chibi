@@ -2,8 +2,9 @@
 const PCM_SCHEDULE_QUANTUM_SECONDS = 0.25;
 
 export class WavPlayer {
-  constructor(getContext) {
+  constructor(getContext, getDestination = context => context.destination) {
     this.getContext = getContext;
+    this.getDestination = getDestination;
     this.source = null;
   }
 
@@ -18,7 +19,7 @@ export class WavPlayer {
     const context = this.getContext();
     const source = context.createBufferSource();
     source.buffer = buffer;
-    source.connect(context.destination);
+    source.connect(this.getDestination(context));
     this.source = source;
     source.onended = () => {
       source.disconnect();
@@ -45,11 +46,12 @@ export class PcmStreamPlayer {
   // TTS chunks because proxies are free to coalesce transfer boundaries. Keep
   // that unavoidable transport backlog, but only schedule a bounded Web Audio
   // horizon. Small scheduled quanta refill the horizon as playback advances.
-  constructor(context, identity, { minBufferSeconds = 0.06, maxBufferSeconds = 2, onState = () => {}, onEnded = () => {} } = {}) {
+  constructor(context, identity, { minBufferSeconds = 0.06, maxBufferSeconds = 2, onState = () => {}, onEnded = () => {}, destination = context.destination } = {}) {
     if (!identity?.turnId || !identity?.utteranceId || !identity?.sessionId
         || !Number.isFinite(minBufferSeconds) || !Number.isFinite(maxBufferSeconds)
         || !(minBufferSeconds >= 0) || !(maxBufferSeconds > minBufferSeconds)) throw new Error('PCM_CONFIG_INVALID');
     this.context = context;
+    this.destination = destination;
     this.identity = { ...identity };
     this.minBufferSeconds = minBufferSeconds;
     this.maxBufferSeconds = maxBufferSeconds;
@@ -143,7 +145,7 @@ export class PcmStreamPlayer {
 
       const source = this.context.createBufferSource();
       source.buffer = buffer;
-      source.connect(this.context.destination);
+      source.connect(this.destination);
       this.nodes.add(source);
       source.onended = () => {
         source.disconnect();

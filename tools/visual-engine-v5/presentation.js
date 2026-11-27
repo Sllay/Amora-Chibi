@@ -1,3 +1,4 @@
+import {attachVisual} from './body-controller.js';
 import {AmoraModel,initFramework,PROFILES} from './runtime.js';
 import {readConfig,applyLayout} from './presentation-config.js';
 import {CompanionVideo} from './companion-video.js';
@@ -12,10 +13,11 @@ if(mode==='companion'){
  document.querySelector('#exit-pip').onclick=()=>video.exit();
  document.querySelector('#stop-pip').onclick=async()=>{await video.exit();video.stop();};
 }
+const visual=attachVisual(()=>runtime,{panel:document.querySelector('#visual-pair')});
 async function boot(){if(booting||disposed)return;booting=true;try{
  setStatus('Carregando Cubism','loading');if(!config){config=readConfig(location.search);applyLayout(canvas,config);}
  if(!identity){const r=await fetch(new URL('./identity.json',import.meta.url),{cache:'no-cache'});if(!r.ok)throw Error('Missing identity');identity=await r.json();}
- initFramework();runtime=new AmoraModel(canvas,identity);runtime.setProfile(config.profile);runtime.allowHidden=()=>!!video?.active;await runtime.load();
+ initFramework();runtime=new AmoraModel(canvas,identity);runtime.setProfile(config.profile);runtime.allowHidden=()=>!!video?.active;await runtime.load();runtime.beforeFrame=visual.tick;
  if(disposed){runtime.dispose();return;}
  if(restore){runtime.setParameters(restore.parameters);if(restore.expression)runtime.setExpression(restore.expression);runtime.setIdle(restore.idle);restore=null;}
  if(mode==='companion'){const label=document.querySelector('#identity');label.textContent=identity.build.slice(0,12)+' · MOC3 '+runtime.mocHash.slice(0,12);document.querySelector('#prepare-pip').disabled=false;}
