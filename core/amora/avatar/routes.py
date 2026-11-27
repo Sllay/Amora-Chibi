@@ -17,6 +17,8 @@ MAX_AVATAR_ASSET_BYTES = 12 * 1024 * 1024
 
 
 def register_avatar_routes(app: FastAPI, core: object, require_auth: Callable[..., None]) -> None:
+    from .visual_stream import register_visual_stream
+    register_visual_stream(app, core)
     avatar = core.avatar
 
     @app.get("/v1/avatar/state", dependencies=[Depends(require_auth)])
@@ -99,6 +101,14 @@ def register_avatar_routes(app: FastAPI, core: object, require_auth: Callable[..
         return {"deleted": avatar.store.delete_asset(asset_id)}
 
     web_root = Path(os.environ.get("AMORA_AVATAR_ROOT", str(Path(__file__).resolve().parents[3] / "avatar")))
+    # Isolated, opt-in staging mount. Never replace the legacy avatar or V4.5.
+    # Release packaging and license acceptance are a separate gate.
+    v5_root = os.environ.get("AMORA_VISUAL_V5_STAGING_ROOT")
+    if v5_root:
+        root = Path(v5_root).resolve()
+        if not (root / "identity.json").is_file() or not (root / "vendor/live2dcubismcore.min.js").is_file():
+            raise RuntimeError("V5 staging bundle is incomplete")
+        app.mount("/avatar/v5", StaticFiles(directory=str(root), html=True), name="visual-v5-staging")
     if web_root.is_dir():
         app.mount("/avatar", StaticFiles(directory=str(web_root), html=True), name="avatar")
 
