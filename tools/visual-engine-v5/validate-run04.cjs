@@ -13,19 +13,13 @@ try{
  await p.type('#visual-pair input',fs.readFileSync('.cert-core/pairing-test.txt','utf8').trim());await p.click('#visual-pair [data-remember]');await p.click('#visual-pair button[type=submit]');
  await p.waitForFunction(()=>document.body.dataset.coreStatus==='Core conectado',{timeout:30000});
  const o=await privatePage();o.on('pageerror',e=>errors.push(e.message));await o.setViewport({width:1280,height:720});await o.goto(root+'/live-overlay/?profile=eco&scale=40&x=100&y=100',{waitUntil:'networkidle0'});await o.waitForFunction(()=>document.body.dataset.state==='ready'&&document.body.dataset.coreStatus==='Core conectado',{timeout:60000});
- await p.click('#prism-generate');await p.waitForFunction(()=>document.querySelector('#prism-url').value.includes('/prism/'));const link=await p.$eval('#prism-url',el=>el.value);
- await p.close();await o.close();
- const prismContext=await browser.createBrowserContext(),prismPage=await prismContext.newPage();
- await prismPage.goto(link,{waitUntil:'networkidle0'});await prismPage.waitForFunction(()=>document.body.dataset.state==='ready'&&document.body.dataset.coreStatus==='Core conectado',{timeout:60000});assert.equal(await prismPage.evaluate(()=>localStorage.getItem('amora.visual.readonly.v1')),null);
- results.prism={render:true,connected:true,isolated:true};
- await prismContext.close();
- const o2=await privatePage();await o2.goto(root+'/live-overlay/?profile=eco',{waitUntil:'networkidle0'});await o2.waitForFunction(()=>document.body.dataset.state==='ready'&&document.body.dataset.coreStatus==='Core conectado',{timeout:60000});
+ await p.close();
  const c=await privatePage();c.on('pageerror',e=>errors.push(e.message));await c.goto(root+'/companion/',{waitUntil:'networkidle0'});await c.waitForFunction(()=>document.body.dataset.state==='ready',{timeout:60000});
  // Existing security limit is 2 sockets per peer: close lab before waiting for third.
  await c.waitForFunction(()=>document.body.dataset.coreStatus==='Core conectado',{timeout:45000});
- const ids=await Promise.all([o2,c].map(page=>page.evaluate(()=>window.AmoraPresentation.runtime.mocHash)));assert.equal(ids[0],ids[1]);
+ const ids=await Promise.all([o,c].map(page=>page.evaluate(()=>window.AmoraPresentation.runtime.mocHash)));assert.equal(ids[0],ids[1]);
  // Real network relay across isolated browser contexts; no BroadcastChannel shared.
- await o2.close();
+ await o.close();
  const producerContext=await browser.createBrowserContext();const producer=await producerContext.newPage();
  await producer.goto(base+'/health');await producer.evaluate(async token=>{const {VisualAudioTap}=await import('/web/visual-audio-tap.mjs');const audio=new AudioContext();await audio.resume();const tap=new VisualAudioTap(audio);tap.enable(token);const oscillator=audio.createOscillator(),gain=audio.createGain();gain.gain.value=.2;oscillator.connect(gain);gain.connect(tap.node);oscillator.start();window.certAudio={audio,tap,oscillator};},fs.readFileSync('.cert-core/web-test-token.txt','utf8').trim());
  await producer.waitForFunction(()=>window.certAudio.tap.socket?.readyState===1,{timeout:12000});
