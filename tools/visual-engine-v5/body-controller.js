@@ -4,8 +4,9 @@ const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 export class BodyController {
  constructor(getRuntime){this.getRuntime=getRuntime;this.state=null;this.session=null;this.sequence=0;this.level=0;this.audioAt=-Infinity;this.last=0;this.runtime=null;this.expression=null;this.values={};}
  accept(m){if(!m||m.version!==1||typeof m.session!=='string'||!Number.isSafeInteger(m.sequence)||m.sequence<1||!Number.isFinite(Date.parse(m.timestamp)))return false;
-  if(m.kind==='snapshot'){if(m.sequence!==1||m.session===this.session)return false;}else if(m.session!==this.session||m.sequence<=this.sequence||!['state','heartbeat'].includes(m.kind))return false;
-  if(m.kind!=='heartbeat'){const s=m.state;if(!s||!Object.hasOwn(names,s.expression)||typeof s.speaking!=='boolean'||typeof s.blink_allowed!=='boolean'||!['intensity','blush','arousal','valence'].every(k=>Number.isFinite(s[k]))||!(s.intensity>=0&&s.intensity<=1&&s.blush>=0&&s.blush<=1&&Math.abs(s.arousal)<=1&&Math.abs(s.valence)<=1))return false;this.state={...s};}
+  if(m.kind==='snapshot'){if(m.sequence!==1||m.session===this.session)return false;}else if(m.session!==this.session||m.sequence<=this.sequence||!['state','heartbeat','audio'].includes(m.kind))return false;
+  if(m.kind==='audio'){if(!Number.isFinite(m.level)||m.level<0||m.level>1)return false;this.level=m.level;this.audioAt=performance.now();}
+  else if(m.kind!=='heartbeat'){const s=m.state;if(!s||!Object.hasOwn(names,s.expression)||typeof s.speaking!=='boolean'||typeof s.blink_allowed!=='boolean'||!['intensity','blush','arousal','valence'].every(k=>Number.isFinite(s[k]))||!(s.intensity>=0&&s.intensity<=1&&s.blush>=0&&s.blush<=1&&Math.abs(s.arousal)<=1&&Math.abs(s.valence)<=1))return false;this.state={...s};}
   this.session=m.session;this.sequence=m.sequence;return true;}
  audio(m,now=performance.now()){if(!m||m.version!==1||!Number.isFinite(m.level)||m.level<0||m.level>1||!Number.isFinite(m.at)||Math.abs(Date.now()-m.at)>600)return false;this.level=m.level;this.audioAt=now;return true;}
  tick(now=performance.now()){const r=this.getRuntime();if(!r?.ready||!this.state)return;const s=this.state;if(r!==this.runtime){this.runtime=r;this.expression=null;this.values={};this.last=now;}
