@@ -1,7 +1,7 @@
 name: Visual Engine V5 RUN 04 — native Cubism
 on:
   push:
-    branches: [feat/visual-engine-v5-run04, feat/visual-engine-v5-staging, fix/visual-v5-optional-startup, fix/visual-v5-persistent-build]
+    branches: [feat/visual-engine-v5-run04, feat/visual-engine-v5-staging, fix/visual-v5-optional-startup, fix/visual-v5-persistent-build, feat/visual-v5-prism-link]
     paths: ['tools/visual-engine-v5/**','core/amora/**','web/**','tests/test_visual_stream_v5.py','tests/test_visual_preview_v5.py','.github/workflows/visual-engine-v5-run04.yml']
   workflow_dispatch:
 permissions:
@@ -16,6 +16,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Ensure native raster decoder is available for shared Discord tests
+        run: |
+          if ! command -v ffmpeg || ! command -v ffprobe; then
+            sudo apt-get update && sudo apt-get install -y ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
       - name: Core visual transport and authorization
         run: |
           python -m pip install -e '.[dev]'
@@ -56,6 +63,7 @@ jobs:
           trap 'kill "$server" || true' EXIT
           for i in $(seq 1 60); do if curl -fsS http://127.0.0.1:8767/health >/dev/null; then break; fi; sleep 1; done
           curl -fsS http://127.0.0.1:8767/health >/dev/null
+          node tools/visual-engine-v5/validate-prism.cjs
           node tools/visual-engine-v5/validate-run04.cjs
           rm -f .cert-core/pairing-test.txt .cert-core/web-test-token.txt .cert-core/preview-password.txt
       - name: Upload evidence only (never proprietary Core)

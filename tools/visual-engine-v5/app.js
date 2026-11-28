@@ -18,3 +18,10 @@ canvas.addEventListener('webglcontextrestored',()=>{try{runtime?.dispose();}catc
 window.addEventListener('pagehide',()=>runtime?.stop());window.addEventListener('pageshow',()=>runtime?.ready&&runtime.start());
 Object.defineProperty(window,'AmoraVisualEngineV5',{get:()=>runtime});
 boot().catch(fail);
+
+$('prism-generate').onclick=async()=>{const button=$('prism-generate'),output=$('prism-url'),message=$('prism-status');button.disabled=true;output.value='';$('prism-copy').disabled=true;try{
+ const params=new URLSearchParams({profile:$('profile').value});for(const [name,min] of [['scale',10],['x',0],['y',0]]){const field=$('prism-'+name),n=Number(field.value);if(!field.value||!Number.isFinite(n)||n<min||n>100)throw Error('Posição ou tamanho inválido');params.set(name,String(n));}
+ const r=await fetch('/avatar/v5/prism-link',{method:'POST',credentials:'same-origin',headers:{'X-Amora-Prism':'1'},cache:'no-store'});if(!r.ok)throw Error('Não foi possível gerar o link ('+r.status+')');const data=await r.json();if(typeof data.path!=='string'||!data.path.startsWith('/avatar/v5/prism/'))throw Error('Resposta inválida');
+ const url=new URL(data.path,location.origin);url.search=params.toString();output.value=url.href;$('prism-copy').disabled=false;message.textContent='Link válido por 12 horas. Cole no PRISM.';
+ }catch(e){message.textContent=e.message;}finally{button.disabled=false;}};
+$('prism-copy').onclick=async()=>{const field=$('prism-url');try{await navigator.clipboard.writeText(field.value);$('prism-status').textContent='Link copiado.';}catch(_){field.focus();field.select();$('prism-status').textContent='Selecione e copie o link.';}};

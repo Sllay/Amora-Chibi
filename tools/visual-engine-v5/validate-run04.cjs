@@ -6,8 +6,8 @@ try{
  const password=fs.readFileSync('.cert-core/preview-password.txt','utf8').trim();
  const privatePaths=['/','/identity.json','/vendor/live2dcubismcore.min.js','/live-overlay/','/companion/'];
  for(const path of privatePaths){const response=await fetch(root+path);assert.equal(response.status,401);assert.ok(response.headers.get('www-authenticate')?.startsWith('Basic '));}
- assert.equal((await fetch(root+'/',{headers:{Authorization:'Basic '+Buffer.from('preview:wrong').toString('base64')}})).status,401);
- const privatePage=async()=>{const page=await browser.newPage();await page.authenticate({username:'preview',password});return page;};
+ assert.equal((await fetch(root+'/',{headers:{Authorization:'Basic '+Buffer.from('bkxd:wrong').toString('base64')}})).status,401);
+ const privatePage=async()=>{const page=await browser.newPage();await page.authenticate({username:'bkxd',password});return page;};
  const p=await privatePage();p.on('pageerror',e=>errors.push(e.message));await p.setViewport({width:390,height:844});
  await p.goto(root+'/',{waitUntil:'networkidle0'});await p.waitForFunction(()=>window.AmoraVisualEngineV5?.ready,{timeout:60000});
  await p.type('#visual-pair input',fs.readFileSync('.cert-core/pairing-test.txt','utf8').trim());await p.click('#visual-pair [data-remember]');await p.click('#visual-pair button[type=submit]');
