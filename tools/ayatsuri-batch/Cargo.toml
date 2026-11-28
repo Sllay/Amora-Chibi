@@ -1,0 +1,13 @@
+[package]
+name = "amora-ayatsuri-batch"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Pinned Git revision: independent source used as a library, no GUI/desktop required.
+[dependencies]
+ayatsuri-import = { git = "https://github.com/Ayatsuri2D/ayatsuri_2d", rev = "080f72b63a37098ce0f4974699871230beeecb65" }
+ayatsuri-format = { git = "https://github.com/Ayatsuri2D/ayatsuri_2d", rev = "080f72b63a37098ce0f4974699871230beeecb65" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }

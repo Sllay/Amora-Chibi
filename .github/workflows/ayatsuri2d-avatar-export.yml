@@ -1,0 +1,191 @@
+name: Amora Ayatsuri2D headless export (experimental)
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/ayatsuri2d-actions-prototype]
+    paths:
+      - ".github/workflows/ayatsuri2d-avatar-export.yml"
+      - "tools/ayatsuri-batch/**"
+      - "assets/amora-live2d/**"
+  pull_request:
+    paths:
+      - ".github/workflows/ayatsuri2d-avatar-export.yml"
+      - "tools/ayatsuri-batch/**"
+      - "assets/amora-live2d/**"
+concurrency:
+  group: amora-ayatsuri-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+permissions:
+  contents: write
+jobs:
+  ayatsuri-headless:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout Amora
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/ayatsuri-batch
+      - name: Test Ayatsuri2D live parameter exporter
+        run: cargo test --manifest-path tools/ayatsuri-batch/Cargo.toml --all-targets
+      - name: Install Pillow for lossless layer validation
+        run: python -m pip install --disable-pip-version-check --user pillow==11.3.0
+      - name: Verify uploaded 10 layers and prepare original order for preview
+        run: |
+          python tools/ayatsuri-batch/prepare_assets.py \
+            assets/amora-live2d/manifest.json artifacts/amora-prepared
+      - name: Validate technical PNG background and repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          root=Path("artifacts/amora-prepared/layers")
+          with Image.open(root/"05_body_horns.png") as body:
+              assert body.mode == "RGBA"
+              assert body.getpixel((0, 0))[3] == 0, "Opaque white JPEG background remains"
+              assert body.getpixel((625, 925))[3] > 240, "Face interior was cut away"
+          for side in ("L","R"):
+              with Image.open(root/f"skin_patch_{side}.png") as patch:
+                  assert patch.getchannel("A").getbbox(), f"Skin patch {side} empty"
+              with Image.open(root/f"closed_smile_{side}.png") as pose:
+                  bounds=pose.getchannel("A").getbbox()
+                  assert bounds and bounds[2]-bounds[0]>100 and bounds[3]-bounds[1]>30, f"Closure shape {side} invalid"
+          assert Path("assets/amora-live2d/extras/user_closed_eyes_rgba.jsonl").is_file()
+          print("Transparent body and closed-eye keyforms verified.")
+          PY
+      - name: Generate self-contained mobile expression preview
+        run: |
+          python tools/ayatsuri-batch/build_preview.py \
+            assets/amora-live2d/manifest.json artifacts/amora-mobile-preview.html
+      - name: Browser-test animated HTML with Chromium
+        run: |
+          npm install --prefix tools/ayatsuri-batch --no-save puppeteer-core@24.24.1
+          node tools/ayatsuri-batch/validate_preview.cjs artifacts/amora-mobile-preview.html
+      - name: Export actual Amora parameter-bound MOC3 model
+        run: |
+          cargo run --release --manifest-path tools/ayatsuri-batch/Cargo.toml -- \
+            artifacts/amora-prepared/manifest.json artifacts/AmoraBolinha
+      - name: Validate complete model references
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("artifacts/AmoraBolinha")
+          model = json.loads((root / "AmoraBolinha.model3.json").read_text())
+          refs = model["FileReferences"]
+          for key in (refs["Moc"], refs["DisplayInfo"], *refs["Textures"]):
+              assert (root / key).is_file(), f"Missing referenced file: {key}"
+          assert (root / refs["Moc"]).read_bytes()[:4] == b"MOC3"
+          physics=root/refs["Physics"]
+          assert physics.is_file(), "Soft-body and iris physics config missing"
+          rig=json.loads(physics.read_text())
+          assert rig["Meta"]["PhysicsSettingCount"]==7
+          assert sum(len(x["Output"]) for x in rig["PhysicsSettings"])==7
+          destinations={out["Destination"]["Id"] for group in rig["PhysicsSettings"] for out in group["Output"]}
+          assert destinations=={"ParamIrisBounceX","ParamIrisBounceY","ParamBodySquash","ParamBodyAngleX","ParamBodyAngleY","ParamIrisRecoilL","ParamIrisRecoilR"}
+          assert len(refs.get("Expressions", [])) >= 14, "Missing expanded emotion presets"
+          cdi=json.loads((root/refs["DisplayInfo"]).read_text())
+          param_ids={x["Id"] for x in cdi["Parameters"]}
+          assert {"ParamAngleX","ParamAngleY","ParamBodyAngleX","ParamBodyAngleY","ParamIrisRecoilL","ParamIrisRecoilR","ParamMouthPose","ParamBlush","ParamTearL","ParamTearR"}.issubset(param_ids), "Missing 3/4 turn or recoil rig channels"
+          motions=refs.get("Motions",{}).get("Idle",[])
+          assert motions, "Missing idle demonstration motion"
+          for motion in motions:
+              p=root/motion["File"]
+              assert p.is_file(), f"Missing motion {p}"
+              m=json.loads(p.read_text())
+              assert m["Meta"]["Loop"] and m["Meta"]["CurveCount"] >= 5
+          for expression in refs["Expressions"]:
+              exp = root / expression["File"]
+              assert exp.is_file(), f"Expression file missing: {exp}"
+              payload = json.loads(exp.read_text())
+              assert payload["Type"] == "Live2D Expression"
+              assert payload["Parameters"]
+          html = Path("artifacts/amora-mobile-preview.html").read_text()
+          assert "data:image/png;base64," in html, "Offline assets are not embedded"
+          assert html.count("data:image/png;base64,") >= 22, "Missing original and six new emotion layers"
+          assert "__AMORA_PREVIEW_DATA__" not in html
+          prepared=json.loads(Path("artifacts/amora-prepared/manifest.json").read_text())
+          names={x["name"] for x in prepared["layers"]}
+          assert len(names)==22, f"Expected 22 meshes, got {len(names)}"
+          assert {"extra_blush","extra_mouth_talk","extra_mouth_open_wide","extra_mouth_sad","extra_mouth_flat","extra_mouth_bite","extra_tear_L","extra_tear_R"}.issubset(names)
+          assert len(refs["Textures"])>=22, "Missing original + extra art textures"
+          print("Rig bundle, expressions and offline mobile preview verified.")
+          PY
+      - name: Publish self-contained HTML on public GitHub branch for Safari
+        if: github.event_name == 'push' && github.ref_name == 'feat/ayatsuri2d-actions-prototype'
+        run: |
+          mkdir -p preview
+          cp artifacts/amora-mobile-preview.html preview/index.html
+          cp artifacts/amora-browser-neutral.png preview/neutral.png
+          cp artifacts/amora-browser-sleepy.png preview/sleepy.png
+          cp artifacts/amora-browser-surprised.png preview/surprised.png
+          cp artifacts/amora-browser-wink-left.png preview/wink-left.png
+          cp artifacts/amora-browser-half-blink.png preview/half-blink.png
+          cp artifacts/amora-browser-nearly-closed.png preview/nearly-closed.png
+          cp artifacts/amora-browser-closed-smile.png preview/closed-smile.png
+          cp artifacts/amora-browser-head-left.png preview/head-left.png
+          cp artifacts/amora-browser-head-right.png preview/head-right.png
+          cp artifacts/amora-browser-head-up.png preview/head-up.png
+          cp artifacts/amora-browser-head-down.png preview/head-down.png
+          cp artifacts/amora-browser-gaze-left.png preview/gaze-left.png
+          cp artifacts/amora-browser-gaze-right.png preview/gaze-right.png
+          cp artifacts/amora-browser-shy.png preview/shy.png
+          cp artifacts/amora-browser-crying.png preview/crying.png
+          cp artifacts/amora-browser-sobbing.png preview/sobbing.png
+          cp artifacts/amora-browser-laughingtears.png preview/laughingtears.png
+          cp artifacts/amora-browser-deadpan.png preview/deadpan.png
+          cp artifacts/amora-browser-enchanted.png preview/enchanted.png
+          cp artifacts/amora-browser-sad.png preview/sad.png
+          cp artifacts/amora-browser-angry.png preview/angry.png
+          cp artifacts/amora-browser-shouting.png preview/shouting.png
+          cp artifacts/amora-browser-mouth-talk.png preview/mouth-talk.png
+          cp artifacts/amora-browser-mouth-wide.png preview/mouth-wide.png
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add preview/laughingtears.png preview/deadpan.png preview/enchanted.png preview/index.html preview/neutral.png preview/sleepy.png preview/surprised.png preview/wink-left.png preview/half-blink.png preview/nearly-closed.png preview/closed-smile.png preview/head-left.png preview/head-right.png preview/head-up.png preview/head-down.png preview/gaze-left.png preview/gaze-right.png preview/shy.png preview/crying.png preview/sobbing.png preview/sad.png preview/angry.png preview/shouting.png preview/mouth-talk.png preview/mouth-wide.png
+          if ! git diff --cached --quiet; then
+            git commit -m "ci(live2d): publish browser animation test [skip ci]"
+            git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" || echo "Branch advanced while building; keeping artifact only."
+          fi
+      - name: Publish animated-parameter rig, unchanged source files and preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: amora-bolinha-rig-live2d-teste-mobile
+          path: |
+            assets/amora-live2d/manifest.json
+            assets/amora-live2d/layers/
+            assets/amora-live2d/extras/source_rgba.jsonl
+            assets/amora-live2d/extras/user_closed_eyes_rgba.jsonl
+            artifacts/amora-prepared/layers/
+            artifacts/amora-prepared/amora_montada.png
+            artifacts/amora-mobile-preview.html
+            artifacts/amora-eye-coverage.json
+            artifacts/amora-browser-neutral.png
+            artifacts/amora-browser-sleepy.png
+            artifacts/amora-browser-surprised.png
+            artifacts/amora-browser-wink-left.png
+            artifacts/amora-browser-half-blink.png
+            artifacts/amora-browser-nearly-closed.png
+            artifacts/amora-browser-closed-smile.png
+            artifacts/amora-browser-head-left.png
+            artifacts/amora-browser-head-right.png
+            artifacts/amora-browser-head-up.png
+            artifacts/amora-browser-head-down.png
+            artifacts/amora-browser-gaze-left.png
+            artifacts/amora-browser-gaze-right.png
+            artifacts/amora-browser-shy.png
+            artifacts/amora-browser-crying.png
+            artifacts/amora-browser-sobbing.png
+            artifacts/amora-browser-sad.png
+            artifacts/amora-browser-angry.png
+            artifacts/amora-browser-shouting.png
+            artifacts/amora-browser-mouth-talk.png
+            artifacts/amora-browser-mouth-wide.png
+            artifacts/amora-prepared/source_order.json
+            artifacts/AmoraBolinha/
+          if-no-files-found: error
+          retention-days: 7

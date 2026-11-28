@@ -1,0 +1,70 @@
+{
+  "name": "AmoraBolinha",
+  "width": 1254,
+  "height": 1254,
+  "source_layer_order": "original_upload_1_to_10_bottom_to_top",
+  "asset_policy": "only 01 and 03 are newly replaced white-eye PNGs; 02,04,05,06,07,08,09,10 are byte-identical user originals",
+  "composition_note": "05 body JPEG is opaque; render batch previews body first, while preserving source order",
+  "layers": [
+    {
+      "name": "eye_white_L",
+      "file": "layers/01_eye_white_L.png",
+      "group": "Eyes",
+      "sha256": "221d4a78c9dc372467f747b5585917e000b6fb6d81d9e79c62a356a53917809d"
+    },
+    {
+      "name": "iris_L",
+      "file": "layers/02_iris_L.png",
+      "group": "Eyes",
+      "sha256": "7d91716cc29520f02dbb2385a9c3aaeb2b129a9a55aa6cb5590a3e8cb897e9f9"
+    },
+    {
+      "name": "eye_white_R",
+      "file": "layers/03_eye_white_R.png",
+      "group": "Eyes",
+      "sha256": "ebf6643c43e4d2e1ddb2ab29d940560aac3c180d0e628b6b4da39209342d0142"
+    },
+    {
+      "name": "iris_R",
+      "file": "layers/04_iris_R.png",
+      "group": "Eyes",
+      "sha256": "675603239198f736c5d79ad331e03b1b69200e2571e84e19442470fa0f952aa1"
+    },
+    {
+      "name": "body_horns",
+      "file": "layers/05_body_horns.jpeg",
+      "group": "Body",
+      "sha256": "25a94b49cf1872331dd10264a404182439c5a9bfc2b1c644948e10bdddd107c9"
+    },
+    {
+      "name": "lower_lid_L",
+      "file": "layers/06_lower_lid_L.png",
+      "group": "Eyes",
+      "sha256": "4839ce9b598b0a18b1815bf35eb1a5df67ddea07ce758d30cdb6099edb924a25"
+    },
+    {
+      "name": "lower_lid_R",
+      "file": "layers/07_lower_lid_R.png",
+      "group": "Eyes",
+      "sha256": "d85fe2662ae518a562f5f63cb4a12d76bc7012d7ecc0f94c6966a25a39bcb2b0"
+    },
+    {
+      "name": "upper_lid_R",
+      "file": "layers/08_upper_lid_R.png",
+      "group": "Eyes",
+      "sha256": "fa20e487dde65cf997fbc8e50f329609359ec510c46719c04e93f7fc60e191af"
+    },
+    {
+      "name": "upper_lid_L",
+      "file": "layers/09_upper_lid_L.png",
+      "group": "Eyes",
+      "sha256": "e92109d044b8364e3dea2b00426c5e710f0db807e5eac0b8600a20b6124e3888"
+    },
+    {
+      "name": "mouth",
+      "file": "layers/10_mouth.png",
+      "group": "Mouth",
+      "sha256": "6996c40a835a63f5a1e2344c98283d7264927b5644232467f562eed2eb1f84a7"
+    }
+  ]
+}
