@@ -156,13 +156,44 @@ def _current_context(value):
     return _single_context(value)
 
 
+class VisualAttachmentManifest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    number:int=Field(ge=1,le=16)
+    attachment_hash:str=Field(pattern=r"^[a-f0-9]{20}$")
+    preview_hash:str|None=Field(default=None,pattern=r"^[a-f0-9]{64}$")
+    mime:Literal["image/png","image/jpeg","image/webp"]|None=None
+    byte_count:int|None=Field(default=None,ge=1,le=2800000)
+
+    @model_validator(mode="after")
+    def verify_bytes(self):
+        values=(self.preview_hash,self.mime,self.byte_count)
+        if any(v is not None for v in values) and not all(v is not None for v in values):
+            raise ValueError("incomplete visual byte identity")
+        return self
+
+
+class VisualManifest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    message_hash:str=Field(pattern=r"^[a-f0-9]{20}$")
+    revision:int=Field(ge=1,le=1000000)
+    sent_at:datetime
+    images:list[VisualAttachmentManifest]=Field(min_length=1,max_length=16)
+
+    @model_validator(mode="after")
+    def verify_order(self):
+        if (self.sent_at.tzinfo is None or [a.number for a in self.images]!=list(range(1,len(self.images)+1))
+                or len({a.attachment_hash for a in self.images})!=len(self.images)):
+            raise ValueError("invalid source manifest")
+        return self
+
+
 class HistoricalVisualContext(BaseModel):
     """A prior observation, never a claim of newly inspected pixels."""
     model_config = ConfigDict(extra="forbid")
     observation_version: Literal[4]
     source: Literal["visual_reference"]
     status: Literal["analyzed","partial","unavailable"]
-    reference_kind: Literal["reply","latest","unsupported"]
+    reference_kind: Literal["reply","latest","first","first_latest","unsupported"]
     observed_at: datetime | None = None
     historical: dict | None = None
     historical_disputed: Literal[True] | None = None
@@ -170,6 +201,12 @@ class HistoricalVisualContext(BaseModel):
     current: dict | None = None
     reinspection: dict | None = None
     historical_current_pixels: PixelComparison | None = None
+    historical_manifest: VisualManifest | None = None
+    current_manifest: VisualManifest | None = None
+    comparison_latest: dict | None = None
+    latest_manifest: VisualManifest | None = None
+    latest_observed_at: datetime | None = None
+    review_availability: Literal["fresh","partial","preview_missing","sensor_failed","not_attempted"] | None = None
 
     @model_validator(mode="after")
     def validate_reference(self):
@@ -186,15 +223,49 @@ class HistoricalVisualContext(BaseModel):
             if self.current is None:
                 raise ValueError("invalid current visual evidence")
         if self.reinspection is not None:
-            self.reinspection = _single_context(self.reinspection)
+            self.reinspection = _current_context(self.reinspection)
             if self.reinspection is None or not self.review_requested or self.historical is None:
                 raise ValueError("invalid fresh reinspection")
         if self.historical_current_pixels is not None and (self.historical is None or self.current is None):
             raise ValueError("pixel pair requires historical and current image")
-        states = [v["status"] for v in (self.current,self.historical,self.reinspection) if v is not None]
+        if self.comparison_latest is not None:
+            self.comparison_latest=_current_context(self.comparison_latest)
+            if (self.reference_kind!="first_latest" or self.comparison_latest is None
+                    or self.latest_observed_at is None or self.latest_observed_at.tzinfo is None):
+                raise ValueError("invalid latest historical comparison")
+        elif self.latest_observed_at is not None:
+            raise ValueError("timestamp without latest evidence")
+        bindings=[(self.historical,self.historical_manifest),(self.current,self.current_manifest),
+                  (self.comparison_latest,self.latest_manifest)]
+        for observation,manifest in bindings:
+            if manifest is not None:
+                if observation is None:
+                    raise ValueError("manifest without evidence")
+                if observation.get("observation_version")==3 and observation["image_count"]!=len(manifest.images):
+                    raise ValueError("manifest count mismatch")
+        identities=[m for _,m in bindings if m is not None]
+        if len({m.message_hash for m in identities})!=len(identities):
+            raise ValueError("visual role aliases another source")
+        if self.historical_manifest and self.current_manifest and not (
+                self.historical_manifest.sent_at<self.current_manifest.sent_at):
+            raise ValueError("historical source not earlier than current")
+        if self.historical_manifest and self.latest_manifest and not (
+                self.historical_manifest.sent_at<self.latest_manifest.sent_at):
+            raise ValueError("first and latest chronology invalid")
+        if self.review_availability is not None and not self.review_requested:
+            raise ValueError("review status without request")
+        if self.review_availability in {"fresh","partial"} and (
+                self.reinspection is None or self.reinspection.get("status")!=
+                ("analyzed" if self.review_availability=="fresh" else "partial")):
+            raise ValueError("unproven fresh review")
+        if self.reinspection is not None and self.review_availability in {"preview_missing","sensor_failed","not_attempted"}:
+            raise ValueError("failed review cannot assert fresh evidence")
+        states = [v["status"] for v in (self.current,self.historical,self.reinspection,self.comparison_latest) if v is not None]
         expected = ("analyzed" if self.historical is not None and states and all(x=="analyzed" for x in states)
                     else "partial" if any(x in {"analyzed","partial"} for x in states)
                     else "unavailable")
+        if self.reference_kind=="first_latest" and self.comparison_latest is None:
+            expected="partial" if any(x in {"analyzed","partial"} for x in states) else "unavailable"
         if self.status != expected or (self.reference_kind=="unsupported" and self.historical is not None):
             raise ValueError("visual reference outcome mismatch")
         return self

@@ -90,6 +90,12 @@ def lab(request, tmp_path, monkeypatch):
             candidate = reply_job_statements()
             assert not (registry.keys() & candidate.keys())
             registry.update(candidate)
+            # Disposable candidate registry must be assembled BEFORE bootstrap.
+            # The production default registry remains unchanged.
+            from amora.storage.postgres_runtime_realtime import realtime_statements
+            extra=realtime_statements()
+            assert not (registry.keys() & extra.keys())
+            registry.update(extra)
             backend = PostgresBackendCandidate(_raw, registry,
                 target=PostgresTargetPolicy(), max_connections=16)
             core = AmoraCore.bootstrap(clock=clock, storage=backend)
@@ -1634,3 +1640,501 @@ async def test_run04_natural_named_fact_consolidation_and_correction(lab,monkeyp
         assert "vermelha" in new.content
     finally:
         await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalidate_member",[False,True])
+async def test_realtime_opt_in_causal_group_commits_one_outbound(lab,monkeypatch,invalidate_member):
+    core,clock,_=lab
+    monkeypatch.setenv("AMORA_REALTIME_CAUSAL_GROUPING_ENABLED","1")
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    provider=CountingStructuredProvider(name="realtime-group-test")
+    observed=[]
+    async def realize(context):
+        observed.append(context.causal_followups)
+        text="A Vexora continua quadrúpede e agora é vermelha." if context.causal_followups else "Vulkan é uma API gráfica."
+        return {"moves":[{"kind":context.dialogue_plan["response_moves"][0],"text":text}],
+                "closing":"statement","_usage":{"input_tokens":12,"output_tokens":4,"status_code":200}}
+    provider.realize=realize
+    core.cognition.register_provider(provider)
+    first=_dm(core,"realtime-group-first",text="A criatura Vexora é quadrúpede e dourada.")
+    try:
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(first)).decision.reason_codes
+        clock.advance(timedelta(seconds=1))
+        second=_dm(core,"realtime-group-second",text="Na verdade, a cor de Vexora é vermelha.")
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(second)).decision.reason_codes
+        clock.advance(timedelta(seconds=1))
+        third=_dm(core,"realtime-group-third",text="Outra coisa, qual é a diferença entre Vulkan e OpenGL?")
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(third)).decision.reason_codes
+        assert await runtime.run_once()
+        a,b,c=[str(service._turn_id(m)) for m in (first,second,third)]
+        assert len(observed)==1 and [x["turn_id"] for x in observed[0]]==[b]
+        assert observed[0][0]["independent_reply_still_pending"] is False
+        assert (await runtime.call("state",a))["status"]=="ready"
+        assert (await runtime.call("state",b))["status"]=="ready"
+        assert (await runtime.call("state",c))["status"]=="pending"
+        outbound=core.messaging_store.get_outbound(service._outbound_id(first))
+        assert outbound.metadata["causal_group_members"]==[b]
+        assert outbound.metadata["causal_group_sources"]==[{"turn_id":b,
+            "source_message_id":second.native_source_message_id,"transport_revision":1}]
+        assert core.messaging_store.get_outbound(service._outbound_id(second)) is None
+        for msg in (first,second,third):
+            turn=service._turn_id(msg)
+            assert core.cognition.store.get_message_by_dedupe(f"cognitive-input:{turn}").raw_text==msg.text
+        if invalidate_member:
+            service.invalidate_transport(TransportInvalidation(platform=MessagingPlatform.DISCORD,
+                account_scope=second.account_scope,conversation_id=second.conversation_id,
+                native_message_id=second.native_source_message_id,reason="DISCORD_MESSAGE_DELETED",
+                transport_revision=1))
+        claimed=core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,
+            account_scope="primary",limit=1)
+        if invalidate_member:
+            assert not claimed
+            assert core.messaging_store.get_outbound(outbound.id).status.value=="cancelled"
+            return
+        assert len(claimed)==1 and claimed[0].id==outbound.id
+        assert core.messaging_store.ack_outbound(outbound.id,sent=True,external_message_id="1"*18)
+        await runtime.call("reconcile_outbound")
+        assert (await runtime.call("state",a))["status"]=="sent"
+        assert (await runtime.call("state",b))["status"]=="sent"
+        assert await runtime.run_once()
+        assert (await runtime.call("state",c))["status"]=="ready"
+        assert len(observed)==2
+        assert core.messaging_store.get_outbound(service._outbound_id(third)) is not None
+    finally:
+        await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_realtime_bridge_durable_core_preview_final_same_receipt(lab,tmp_path):
+    from amora.cognition.realtime_candidates import CANDIDATE_SINK,CandidateEvent
+    from amora.messaging.realtime_receipts import RealtimeReceiptStore
+    from amora.messaging.realtime_routes import RealtimeOperation
+    from amora.messaging.realtime_bridge import digest
+    import sqlite3
+    core,clock,_=lab
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    is_pg=core.database.backend.capabilities.name=="postgres-candidate"
+    connection=_raw() if is_pg else sqlite3.connect(tmp_path/"realtime-bridge.sqlite3")
+    journal=RealtimeReceiptStore(connection,postgres=is_pg)
+    journal.install_disposable()
+    async def port(operation,*args,**kwargs):
+        return getattr(journal,operation)(*args,**kwargs)
+    bridge=runtime.configure_realtime(port)
+    arrived=asyncio.Event()
+    resume=asyncio.Event()
+    provider=CountingStructuredProvider(name="realtime-bridge-test")
+    async def realize(context):
+        sink=CANDIDATE_SINK.get()
+        assert sink is not None
+        sink(CandidateEvent("attempt-1",1,"candidate","Vulkan oferece controle."))
+        arrived.set()
+        await resume.wait()
+        sink(CandidateEvent("attempt-1",2,"transport_complete"))
+        return {"moves":[{"kind":context.dialogue_plan["response_moves"][0],
+                          "text":"Vulkan oferece controle. OpenGL simplifica o uso."}],
+                "closing":"statement","_usage":{"input_tokens":12,"output_tokens":8,"status_code":200}}
+    provider.realize=realize
+    core.cognition.register_provider(provider)
+    message=_dm(core,"1"*18,text="Explique Vulkan e OpenGL.").model_copy(update={"conversation_id":"2"*18})
+    turn=service._turn_id(message)
+    task=None
+    try:
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(message)).decision.reason_codes
+        task=asyncio.create_task(runtime.run_once())
+        await asyncio.wait_for(arrived.wait(),timeout=10)
+        assert (await bridge.next("wrong"))["draft"] is None
+        draft=(await bridge.next("primary"))["draft"]
+        assert draft["snapshot"]["text"]=="Vulkan oferece controle. ▍"
+        assert not core.cognition.store.list_segments(turn)
+        base=dict(account="primary",turn_id=turn,binding=draft["binding"],index=0)
+        op=RealtimeOperation(action="prepare",**base,seq=draft["snapshot"]["seq"],digest=digest(draft["snapshot"]["text"]))
+        prepared=(await bridge.operation(op))["prepared"]
+        assert prepared["operation"]=="create"
+        assert (await bridge.operation(RealtimeOperation(action="confirm",**base,
+            token=prepared["token"],digest=prepared["digest"],message_id="3"*18)))["accepted"]
+        resume.set()
+        assert await task
+        cleanup=(await bridge.next("primary"))["draft"]
+        assert cleanup["snapshot"]["status"]=="retrying"
+        assert cleanup["snapshot"]["text"]=="Geração interrompida."
+        # A cleanup may be prepared and then reauthorized; the reservation
+        # itself must not cause a false revocation. No extra POST is allowed.
+        clean_op=RealtimeOperation(action="prepare",**base,seq=cleanup["snapshot"]["seq"],
+            digest=digest(cleanup["snapshot"]["text"]))
+        clean=(await bridge.operation(clean_op))["prepared"]
+        assert clean["operation"]=="edit" and clean["message_id"]=="3"*18
+        assert (await bridge.operation(clean_op.model_copy(update={"action":"authorize"})))["allowed"]
+        assert (await bridge.operation(RealtimeOperation(action="reject",**base,token=clean["token"])))["accepted"]
+        oid=service._outbound_id(message)
+        assert not core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,account_scope="primary",limit=1)
+        claimed=core.messaging_store.claim_outbound(platform=MessagingPlatform.DISCORD,account_scope="primary",
+                                                    limit=1,realtime_delivery=True)
+        assert len(claimed)==1 and claimed[0].id==oid and claimed[0].metadata["realtime_v1"] is True
+        plan=await bridge.final(oid,"primary")
+        final=plan["blocks"][0]["snapshot"]
+        assert final["text"]=="Vulkan oferece controle. OpenGL simplifica o uso."
+        op=RealtimeOperation(action="prepare",**base,seq=final["seq"],digest=digest(final["text"]),
+                             terminal=True,outbound_id=oid)
+        edit=(await bridge.operation(op))["prepared"]
+        assert edit["operation"]=="edit" and edit["message_id"]=="3"*18
+        assert not (await bridge.operation(RealtimeOperation(action="ack",**base,
+                                                            outbound_id=oid,message_id="3"*18)))["accepted"]
+        assert (await bridge.operation(RealtimeOperation(action="confirm",**base,
+            token=edit["token"],digest=edit["digest"],message_id="3"*18)))["accepted"]
+        assert (await bridge.final(oid,"primary"))["blocks"]==[{"confirmedMessageId":"3"*18}]
+        assert (await bridge.operation(RealtimeOperation(action="ack",**base,
+                                                        outbound_id=oid,message_id="3"*18)))["accepted"]
+        assert core.messaging_store.get_outbound(oid).status.value=="sent"
+        assert all("▍" not in m.raw_text for m in core.cognition.store.list_messages(turn_id=turn))
+    finally:
+        resume.set()
+        if task is not None:
+            await asyncio.gather(task,return_exceptions=True)
+        await _stop_runtime(core)
+        connection.close()
+
+
+def test_realtime_reviewed_registry_exact_and_explicit_opt_in(monkeypatch):
+    from amora.storage.postgres_runtime_realtime import RECEIPT_KEYS,realtime_statements
+    from amora.storage.reply_job_rollout import realtime_enabled,REALTIME_APPROVAL,APPROVAL
+    pg=realtime_statements()
+    assert set(pg)==set(RECEIPT_KEYS.values())
+    assert not (set(pg)&set(compiled_domain_registry()))
+    for sql,key in RECEIPT_KEYS.items():
+        assert pg[key].parameter_count==sql.count("?")==pg[key].postgres_sql.count("%s")
+    monkeypatch.setenv("AMORA_REALTIME_MODE","off")
+    monkeypatch.delenv("AMORA_REALTIME_APPROVAL",raising=False)
+    assert not realtime_enabled()
+    monkeypatch.setenv("AMORA_REALTIME_MODE","on")
+    monkeypatch.setenv("AMORA_REALTIME_APPROVAL",REALTIME_APPROVAL)
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE","off")
+    monkeypatch.delenv("AMORA_DURABLE_REPLY_APPROVAL",raising=False)
+    with pytest.raises(ValueError,match="REALTIME_EXPLICIT_OPT_IN_REQUIRED"):
+        realtime_enabled()
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE","accept")
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_APPROVAL",APPROVAL)
+    assert realtime_enabled()
+
+
+@pytest.mark.asyncio
+async def test_realtime_operational_receipts_startup_and_restart(lab,monkeypatch):
+    from amora.storage.realtime_receipt_migration import prepare_realtime_schema,APPROVAL as MIGRATE
+    from amora.storage.postgres_runtime_realtime import realtime_statements
+    from amora.storage.reply_job_rollout import REALTIME_APPROVAL,APPROVAL
+    from amora.messaging.realtime_receipts import _DDL,SQLITE_TABLE,binding_digest
+    from hashlib import sha256
+    core,clock,_=lab
+    is_pg=core.database.backend.capabilities.name=="postgres-candidate"
+    # The fixture supplies reviewed receipt SQL at backend construction.
+    if is_pg:
+        with closing(_raw()) as raw:
+            with pytest.raises(ValueError,match="OPERATOR_APPROVAL"):
+                prepare_realtime_schema(raw,PostgresTargetPolicy(),approval="no")
+            assert prepare_realtime_schema(raw,PostgresTargetPolicy(),approval=MIGRATE)["state"]=="prepared"
+            assert prepare_realtime_schema(raw,PostgresTargetPolicy(),approval=MIGRATE)["state"]=="prepared"
+    else:
+        core.database._conn.execute(_DDL.format(table=SQLITE_TABLE))
+        core.database._conn.commit()
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE","accept")
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_APPROVAL",APPROVAL)
+    monkeypatch.setenv("AMORA_REALTIME_MODE","on")
+    monkeypatch.setenv("AMORA_REALTIME_APPROVAL",REALTIME_APPROVAL)
+    runtime=await _start_runtime(core)
+    try:
+        assert core.messaging.realtime_bridge is not None
+        turn=uuid4()
+        binding=binding_digest("primary","1"*18,"2"*18,1)
+        digest=sha256(b"synthetic").hexdigest()
+        call=runtime._operational_receipt
+        destination={"account":"primary","channel":"1"*18}
+        first=await call("prepare",turn,0,binding=binding,seq=1,digest=digest,**destination)
+        assert first.operation=="create"
+        assert await call("prepare",turn,0,binding=binding,seq=2,digest=digest,**destination) is None
+        await runtime.stop()
+        await core.messaging.stop_storage_lane()
+        await runtime.start(background=False)
+        assert core.messaging.realtime_bridge is not None
+        assert (await call("read",turn,0))["pending_token"]==first.token
+        # Recover through the reviewed registry using independent nonce evidence.
+        assert await call("observe_create",nonce=first.nonce,message_id="3"*18,digest=digest,**destination)
+        assert await call("confirm",turn,0,binding=binding,token=first.token,message_id="3"*18,digest=digest)
+        second=await call("prepare",turn,0,binding=binding,seq=2,digest=digest,terminal=True,**destination)
+        assert second.operation=="edit" and second.message_id=="3"*18
+        assert await call("confirm",turn,0,binding=binding,token=second.token,message_id="3"*18,digest=digest)
+        assert (await call("read",turn,0))["confirmed_digest"]==digest
+    finally:
+        await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_realtime_orphan_cursor_recovers_after_restart(lab,monkeypatch):
+    from amora.storage.realtime_receipt_migration import prepare_realtime_schema,APPROVAL as MIGRATE
+    from amora.storage.reply_job_rollout import REALTIME_APPROVAL,APPROVAL
+    from amora.messaging.realtime_receipts import _DDL,SQLITE_TABLE,binding_digest,ORPHAN_DIGEST,ORPHAN_TEXT
+    from amora.messaging.realtime_routes import RealtimeOperation
+    from amora.messaging.realtime_bridge import digest
+    core,clock,_=lab
+    if core.database.backend.capabilities.name=="postgres-candidate":
+        with closing(_raw()) as raw:
+            prepare_realtime_schema(raw,PostgresTargetPolicy(),approval=MIGRATE)
+    else:
+        core.database._conn.execute(_DDL.format(table=SQLITE_TABLE))
+        core.database._conn.commit()
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_MODE","accept")
+    monkeypatch.setenv("AMORA_DURABLE_REPLY_APPROVAL",APPROVAL)
+    monkeypatch.setenv("AMORA_REALTIME_MODE","on")
+    monkeypatch.setenv("AMORA_REALTIME_APPROVAL",REALTIME_APPROVAL)
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    try:
+        message=_dm(core,"1"*18,text="Explique Vulkan.").model_copy(update={"conversation_id":"2"*18})
+        turn=service._turn_id(message)
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(message)).decision.reason_codes
+        claim=await runtime.call("claim")
+        assert str(claim.turn_id)==str(turn)
+        binding=binding_digest("primary",message.conversation_id,message.native_source_message_id,1)
+        call=runtime._operational_receipt
+        dest={"account":"primary","channel":message.conversation_id}
+        content=digest("Trecho em geração. ▍")
+        prepared=await call("prepare",turn,0,binding=binding,seq=1,digest=content,**dest)
+        assert await call("confirm",turn,0,binding=binding,token=prepared.token,message_id="3"*18,digest=content)
+        assert await call("orphan_candidates","primary",clock.now().isoformat())==[]
+        await runtime.stop()
+        await service.stop_storage_lane()
+        await runtime.start(background=False)
+        bridge=service.realtime_bridge
+        assert bridge.sessions=={}
+        assert await call("orphan_candidates","primary",clock.now().isoformat())==[]
+        # The dead process's lease must expire before neutral cleanup.
+        clock.advance(timedelta(seconds=300))
+        assert (await bridge.next("other")).get("orphans",[])==[]
+        envelope=(await bridge.next("primary"))["orphans"][0]
+        assert envelope["snapshot"]["text"]==ORPHAN_TEXT
+        assert envelope["snapshot"]["status"]=="retrying"
+        assert envelope["snapshot"]["seq"]==2
+        base=dict(account="primary",turn_id=turn,binding=binding,index=0,orphan=True)
+        op=RealtimeOperation(action="prepare",**base,seq=2,digest=ORPHAN_DIGEST)
+        assert not (await bridge.operation(op.model_copy(update={"digest":content})))["allowed"]
+        assert not (await bridge.operation(op.model_copy(update={"account":"other"})))["allowed"]
+        edit=(await bridge.operation(op))["prepared"]
+        assert edit["operation"]=="edit" and edit["message_id"]=="3"*18
+        assert (await bridge.operation(op.model_copy(update={"action":"authorize"})))["allowed"]
+        assert (await bridge.operation(RealtimeOperation(action="confirm",**base,token=edit["token"],
+            digest=ORPHAN_DIGEST,message_id="3"*18)))["accepted"]
+        assert await call("orphan_candidates","primary",clock.now().isoformat())==[]
+        row=await call("read",turn,0)
+        assert row["closed"]==0 and row["confirmed_digest"]==ORPHAN_DIGEST
+        # The cleanup never completes the canonical job or records speech.
+        assert not core.cognition.store.list_segments(turn)
+        assert core.messaging_store.get_outbound(service._outbound_id(message)) is None
+        later=await call("prepare",turn,0,binding=binding,seq=3,digest=digest("Resposta final."),
+                         terminal=True,**dest)
+        assert later.operation=="edit" and later.message_id=="3"*18
+    finally:
+        await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_run02_multi_fact_natural_correction_and_owner_recall(lab,monkeypatch):
+    from amora.memory.versioned_fact import owner_fact_units
+    from amora.memory.recall_intent import parse_recall_intent
+    core,clock,_=lab
+    runtime=await _start_runtime(core)
+    service=core.messaging
+    monkeypatch.setenv("AMORA_REFLECTION_REMOTE_REUSE","1")
+    try:
+        first=_dm(core,"run02-vexora-a",text="Amora, estou pensando em criar uma criatura chamada Vexora. Ela é quadrúpede e tem uma coloração dourada.")
+        assert len(owner_fact_units(first.text))==2
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(first)).decision.reason_codes
+        assert await service.reflections.process_once()
+        old,_=core.memory.store.recall_owner_records("PERSON_BK","Vexora")
+        assert len(old)==2
+        gold=next(x for x in old if "dourada" in x.content)
+        anatomy=next(x for x in old if "quadrúpede" in x.content)
+        clock.advance(timedelta(seconds=2))
+        second=_dm(core,"run02-vexora-b",text="Na verdade, a cor de Vexora é vermelha. As outras características continuam iguais.")
+        assert "DURABLE_REPLY_ACCEPTED" in (await service.receive(second)).decision.reason_codes
+        assert await service.reflections.process_once()
+        records,_=core.memory.store.recall_owner_records("PERSON_BK","Vexora")
+        assert len(records)==2
+        red=next(x for x in records if "vermelha" in x.content)
+        assert red.metadata["supersedes_memory_id"]==str(gold.id)
+        assert core.memory.get(gold.id).archived_at is not None
+        assert core.memory.get(anatomy.id).archived_at is None
+        await runtime.stop()
+        await service.stop_storage_lane()
+        await runtime.start(background=False)
+        question="Amora, você lembra da Vexora? Quais são as características que eu defini para ela?"
+        assert parse_recall_intent(question).topic=="vexora"
+        out=(await service.receive(_dm(core,"run02-vexora-recall",text=question))).outbound[0]
+        assert out.metadata["cognitive_reason_codes"]==["MEMORY_RECALL_PERSISTENT_FOUND"]
+        assert "quadrúpede" in out.text and "vermelha" in out.text and "dourada" not in out.text
+        assert set(out.metadata["memory_recall_ids"])=={str(anatomy.id),str(red.id)}
+    finally:
+        await _stop_runtime(core)
+
+
+@pytest.mark.asyncio
+async def test_run02_episode_without_memory_local_only(lab):
+    from amora.memory.owner_evidence import recall_episodes
+    core,clock,_=lab
+    _bind_bk(core)
+    request=_request(marked=False,allowed=False)
+    request.text="O protótipo Zafir usa um mapa de gelo."
+    _record(core,request)
+    assert not core.memory.store.recall_owner_records("PERSON_BK","Zafir")[0]
+    episodes,complete=recall_episodes(core.cognition.store,"PERSON_BK","Zafir")
+    assert complete and list(episodes)==[str(request.turn_id)]
+    assert "mapa de gelo" in episodes[str(request.turn_id)]["user_text"]
+    assert not recall_episodes(core.cognition.store,"PERSON_BK","Zafir",remote=True,
+                               session=request.session_id,before=clock.now()+timedelta(seconds=1))[0]
+    assert not recall_episodes(core.cognition.store,"ENTITY_CHATGPT","Zafir")[0]
+    out=(await core.messaging.receive(_dm(core,"run02-zafir-recall",text="Você lembra de Zafir?"))).outbound[0]
+    assert out.metadata["cognitive_reason_codes"]==["MEMORY_RECALL_EPISODIC_FOUND"]
+    assert "mapa de gelo" in out.text and out.metadata["memory_recall_episode_count"]==1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse",[False,True])
+async def test_run03_directed_raster_identity_review_and_history(lab,reverse):
+    from PIL import Image,ImageDraw
+    from io import BytesIO
+    import base64
+    from amora.messaging.models import AttachmentRef,InboundImageContent
+    from amora.messaging.visual_pixels import VisualPreviewCache,raster
+    from amora.cognition.visual_context import visual_context_for_request
+    from amora.cognition.visual_comparison import directed_comparison
+    from amora.cognition.models import CognitiveContext
+    from test_discord_incoming_vision_ch2 import observation
+    core,clock,_=lab
+    _bind_bk(core)
+    service=core.messaging
+    decision=AttentionDecision(action=RoutingAction.RESPOND,score=1,
+        speaker_entity_id="PERSON_BK",speaker_actor_ref="synthetic",addressee_id="ENTITY_AMORA")
+    def eye(opened,ident):
+        im=Image.new("RGB",(48,32),"white")
+        d=ImageDraw.Draw(im)
+        if opened:
+            d.ellipse((12,7,36,25),fill="red")
+        else:
+            d.line((12,16,36,16),fill="black",width=3)
+        buf=BytesIO()
+        im.save(buf,format="PNG")
+        return InboundImageContent(attachment_id=ident,content_mime="image/png",
+            content_base64=base64.b64encode(buf.getvalue()).decode())
+    calls=[]
+    class RasterOracle:
+        available=True
+        async def analyze(self,image,user_text):
+            _,decoded=raster(image)
+            opened=decoded.getpixel((24,16))[:3]==(255,0,0)
+            calls.append((image.attachment_id,opened))
+            return {**observation(),"description":"Olho aberto vermelho." if opened else "Olho fechado."}
+    service.incoming_vision=RasterOracle()
+    a=eye(not reverse,"987654321098765432")
+    b=eye(reverse,"987654321098765433")
+    def inbound(mid,text,image):
+        msg=_dm(core,mid,text=text)
+        return InboundMessage.model_validate({**msg.model_dump(),
+            "attachments":[AttachmentRef(attachment_id=image.attachment_id,media_type="image/png").model_dump()],
+            "incoming_image":image.model_dump()})
+    first=inbound("r03-a","Descreva a imagem.",a)
+    prior=await service._incoming_visual_observation(first,decision)
+    clock.advance(timedelta(seconds=2))
+    second=inbound("r03-b","Compare com a imagem anterior.",b)
+    result=await service._incoming_visual_observation(second,decision)
+    assert result["historical"]==prior and result["current"]!=prior
+    assert result["historical_manifest"]["images"][0]["preview_hash"]!=result["current_manifest"]["images"][0]["preview_hash"]
+    assert result["historical_current_pixels"]["changed_fraction"]>0
+    ctx=CognitiveContext(turn_id=uuid4(),created_at=clock.now(),speaker_id="PERSON_BK",
+        target_id="ENTITY_AMORA",user_text=second.text,privacy_scope=PrivacyScope.PERSONAL,
+        remote_processing_allowed=True,visual_observation=result)
+    answer=directed_comparison(ctx)
+    assert answer.index(prior["description"])<answer.index(result["current"]["description"])
+    forged={**result,"historical_manifest":result["current_manifest"]}
+    assert visual_context_for_request(forged,remote=True,private=True,mode="reply") is None
+    clock.advance(timedelta(seconds=2))
+    both=_dm(core,"r03-both",text="Compare a primeira imagem com a última imagem.")
+    pair=await service._incoming_visual_observation(both,decision)
+    assert pair["reference_kind"]=="first_latest" and pair["historical"]==prior
+    assert pair["comparison_latest"]==result["current"] and "current" not in pair
+    assert visual_context_for_request(pair,remote=True,private=True,mode="reply")
+    assert directed_comparison(ctx.model_copy(update={"user_text":both.text,"visual_observation":pair}))
+    review=_dm(core,"r03-review",text="Reanalise a primeira imagem.")
+    fresh=await service._incoming_visual_observation(review,decision)
+    assert fresh["review_availability"]=="fresh" and fresh["reinspection"]==prior
+    assert calls[-1][0]==a.attachment_id
+    clock.advance(timedelta(seconds=901))
+    expired=await service._incoming_visual_observation(review.model_copy(update={"timestamp":clock.now()}),decision)
+    assert expired["review_availability"]=="preview_missing" and "reinspection" not in expired
+    service.visual_previews=VisualPreviewCache(clock)
+    assert (await service._incoming_visual_observation(review.model_copy(update={"timestamp":clock.now()}),decision))["historical"]==prior
+    assert len(calls)==3
+    assert await service._incoming_visual_observation(review.model_copy(update={"remote_processing_allowed":False}),decision) is None
+
+
+@pytest.mark.asyncio
+async def test_run03_pending_native_order_revision_and_batch_review(lab):
+    from amora.messaging.models import AttachmentRef,InboundImageItem
+    from amora.messaging.visual_evidence import manifest_for
+    from amora.cognition.visual_context import visual_context_for_request
+    from test_run02_visual_pixels import photo
+    from test_discord_incoming_vision_ch2 import observation
+    core,clock,_=lab
+    _bind_bk(core)
+    service=core.messaging
+    decision=AttentionDecision(action=RoutingAction.RESPOND,score=1,
+        speaker_entity_id="PERSON_BK",speaker_actor_ref="synthetic",addressee_id="ENTITY_AMORA")
+    a=photo((0,0,0,255)).model_copy(update={"attachment_id":"987654321098765432"})
+    b=photo((255,0,0,255)).model_copy(update={"attachment_id":"987654321098765433"})
+    calls=[]
+    started=asyncio.Event()
+    finish=asyncio.Event()
+    class Vision:
+        available=True
+        async def analyze(self,image,user_text):
+            calls.append(image.attachment_id)
+            if user_text=="Primeira imagem lenta.":
+                started.set()
+                await finish.wait()
+            return {**observation(),"description":"Rastro "+("A" if image.attachment_id==a.attachment_id else "B")}
+    service.incoming_vision=Vision()
+    def inbound(mid,text,image):
+        msg=_dm(core,mid,text=text)
+        return InboundMessage.model_validate({**msg.model_dump(),
+            "attachments":[AttachmentRef(attachment_id=image.attachment_id,media_type="image/png").model_dump()],
+            "incoming_image":image.model_dump()})
+    first=inbound("r03-slow","Primeira imagem lenta.",a)
+    work=asyncio.create_task(service._incoming_visual_observation(first,decision))
+    try:
+        await asyncio.wait_for(started.wait(),3)
+        clock.advance(timedelta(seconds=1))
+        pending=await service._incoming_visual_observation(_dm(core,"r03-pending",text="Qual a cor da imagem anterior?"),decision)
+        assert pending["historical"]["status"]=="unavailable"
+        second=inbound("r03-fast","Segunda imagem.",b)
+        await service._incoming_visual_observation(second,decision)
+    finally:
+        finish.set()
+        await work
+    clock.advance(timedelta(seconds=1))
+    latest=await service._incoming_visual_observation(_dm(core,"r03-latest",text="Qual a cor da última imagem?"),decision)
+    assert latest["historical"]["description"]=="Rastro B"
+    assert latest["historical_manifest"]["message_hash"]==manifest_for(second)["message_hash"]
+    # Original attachment order survives review, with independent byte keys.
+    msg=_dm(core,"r03-batch",text="Descreva estas imagens.")
+    batch=InboundMessage.model_validate({**msg.model_dump(),
+        "attachments":[AttachmentRef(attachment_id=x.attachment_id,media_type="image/png").model_dump() for x in (a,b)],
+        "incoming_images":[InboundImageItem(attachment_id=x.attachment_id,image=x).model_dump() for x in (a,b)]})
+    result=await service._incoming_visual_observation(batch,decision)
+    assert [r["observation"]["description"] for r in result["images"]]==["Rastro A","Rastro B"]
+    clock.advance(timedelta(seconds=1))
+    reviewed=await service._incoming_visual_observation(_dm(core,"r03-batch-review",text="Reanalise a imagem anterior."),decision)
+    assert reviewed["review_availability"]=="fresh"
+    assert [r["observation"]["description"] for r in reviewed["reinspection"]["images"]]==["Rastro A","Rastro B"]
+    assert visual_context_for_request(reviewed,remote=True,private=True,mode="reply")
+    session=service._session_ref(batch)
+    service.visual_previews.discard_source(session,service._hash(batch.native_source_message_id),1)
+    assert not any(k[:2]==(session,service._hash(batch.native_source_message_id)) for k in service.visual_previews._entries)

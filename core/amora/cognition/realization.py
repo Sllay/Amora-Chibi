@@ -212,6 +212,13 @@ class RealizationValidator:
     def local_realization(cls, context: CognitiveContext) -> ValidatedRealization | None:
         plan = context.dialogue_plan
         act = str(plan.get("act") or "")
+        from .visual_comparison import directed_comparison
+        comparison=directed_comparison(context)
+        if comparison is not None and "answer_question" in (plan.get("response_moves") or []):
+            frame=RealizationFrame(moves=[RealizationMove(kind="answer_question",text=comparison)],
+                                  closing=RealizationClosing.STATEMENT)
+            return ValidatedRealization(frame,comparison,
+                ("VISUAL_DIRECTED_ROLE_BOUND_COMPARISON","LOCAL_REALIZATION_NO_PROVIDER"))
         if act not in cls._LOCAL_ACTS:
             return None
 
@@ -305,13 +312,17 @@ def realization_instruction(context: CognitiveContext, *, compact_support: bool 
                 " Este turno faz referência explícita a evidência visual registrada anteriormente. "
                 "historical contém somente uma observação textual anterior (observed_at), não pixels atuais; "
                 "latest significa última mensagem de imagem registrada, reply indica a mensagem citada. "
-                "current, se presente, descreve novos anexos. Não confunda épocas ou números de imagem. "
+                "current, se presente, descreve novos anexos. Os manifests fixam identidade, revisão, ordem e horários. "
+                "reference_kind=first indica primeira imagem registrada na janela retida; comparison_latest é outra "
+                "imagem histórica, NÃO atual. Não confunda épocas ou números de imagem. "
                 "Se faltar historical, diga que a referência não foi recuperada e peça reenvio quando necessário. "
                 "Se a pergunta exige detalhes ausentes, não invente nem alegue reanálise. "
                 "Compare apenas o que está nas observações e reconheça limitações ou falhas individuais. "
                 "historical_disputed significa que a leitura anterior foi contestada e suprimida; "
                 "não repita o erro como fato. A correção do usuário é relato, não nova visão. "
-                "review_requested sem current analisado não é reinspeção: peça o reenvio da imagem para examinar os pixels. "
+                "Somente reinspection com review_availability=fresh ou partial representa nova análise dos previews retidos. "
+                "Se preview_missing, peça reenvio; se sensor_failed ou not_attempted, informe indisponibilidade. "
+                "Nunca trate historical ou current como prova de reinspeção. "
             )
         elif context.visual_observation.get("observation_version") == 3:
             visual_cue = (
@@ -418,11 +429,14 @@ def realization_instruction(context: CognitiveContext, *, compact_support: bool 
     section_cue = (
         " Este é um trecho de uma resposta técnica dividida pelo Core. "
         "Consulte detail_section.payload: desenvolva a scope atual, respeitando TODAS as restrições "
-        "da mensagem literal completa. previous_scopes identifica temas já cobertos, não repita a introdução. "
+        "da mensagem literal completa. previous_scopes identifica os temas atribuídos às seções anteriores, "
+        "não é prova de cobertura semântica. Não repita a introdução. "
         "Retorne no máximo dois moves autorizados, sem self_choices nem pergunta final. "
         "Não declare a documentação completa, nem prometa uma entrega futura. "
         if context._detail_section is not None else ""
     )
+    from .task_contract import task_guidance
+    task_cue=task_guidance(context)
     return (
         "Retorne SOMENTE um objeto JSON válido, sem markdown e sem texto fora do objeto. "
         "Formato: {\"moves\":[{\"kind\":\"...\",\"text\":\"...\"}],\"closing\":\"none|statement|question\"}; "
@@ -430,6 +444,7 @@ def realization_instruction(context: CognitiveContext, *, compact_support: bool 
         + choice_instructions
         + detailed_cue
         + section_cue
+        + ((" "+task_cue+" ") if task_cue else "")
         + visual_cue
         + causal_cue
         + web_cue

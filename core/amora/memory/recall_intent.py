@@ -92,6 +92,11 @@ def parse_recall_intent(value: str) -> RecallIntent | None:
 
     if _GENERIC.fullmatch(text):
         return RecallIntent("", generic=True)
+    compound = re.fullmatch(
+        r"(.+?)\?\s*(?:quais (?:sao )?as caracteristicas|quais (?:sao )?os detalhes)"
+        r"(?: que eu (?:defini|disse|falei|contei)(?: para (?:ela|ele))?)?",text)
+    if compound:
+        text=compound.group(1)
     match = _NAMED.fullmatch(text)
     if not match and value.rstrip().endswith("?"):
         match = _SHORT_RECALL.fullmatch(text)

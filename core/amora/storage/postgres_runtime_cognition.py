@@ -11,6 +11,7 @@ HISTORY = "PG_COGNITION_SCOPED_HISTORY"
 OWNER_DAY_INPUTS = "PG_COGNITION_OWNER_DAY_INPUTS"
 OWNER_DAY_REPLIES = "PG_COGNITION_OWNER_DAY_REPLIES"
 OWNER_EPISODE_SOURCES = "PG_COGNITION_OWNER_EPISODE_SOURCES"
+OWNER_TOPIC_SOURCES = "PG_COGNITION_OWNER_TOPIC_SOURCES"
 LATEST_USAGE = "PG_COGNITION_LATEST_USAGE"
 MERGE_METADATA = "PG_COGNITION_MERGE_MESSAGE_METADATA"
 
@@ -121,6 +122,30 @@ def cognition_statements() -> dict[str,ReviewedStatement]:
           )
         ORDER BY m.started_at,m.id LIMIT 6
     """,2,6)
+
+    add(OWNER_TOPIC_SOURCES, """
+        SELECT m.* FROM amora_pg_v18_lab.conversation_messages m
+        WHERE m.speaker_id=%s AND m.addressee_id='ENTITY_AMORA'
+          AND m.dedupe_key='cognitive-input:' || m.turn_id
+          AND m.session_id IS NOT NULL AND m.status='received'
+          AND m.privacy_scope IN ('PERSONAL','PRIVATE')
+          AND m.metadata_json::jsonb ->> 'surface'='platform_messaging'
+          AND m.metadata_json::jsonb ->> 'platform'='discord'
+          AND m.metadata_json::jsonb ->> 'channel_type'='dm'
+          AND COALESCE(m.metadata_json::jsonb ->> 'test_mode','0') NOT IN ('1','true')
+          AND COALESCE(m.metadata_json::jsonb ->> 'observed_only','0') NOT IN ('1','true')
+          AND NOT EXISTS (
+              SELECT 1 FROM amora_pg_v18_lab.memory_reflection_invalidations x
+              WHERE x.session_id=m.session_id
+                AND x.native_message_hash=m.metadata_json::jsonb ->> 'native_message_id_hash'
+                AND x.invalidated_through>=COALESCE(
+                    (m.metadata_json::jsonb ->> 'transport_revision')::bigint,1)
+          )
+          AND (%s=0 OR (m.remote_processing_allowed=1 AND m.privacy_scope='PERSONAL'))
+          AND (%s::text IS NULL OR m.session_id=%s)
+          AND (%s::timestamptz IS NULL OR m.started_at::timestamptz<%s::timestamptz)
+        ORDER BY m.started_at DESC,m.id DESC LIMIT %s OFFSET %s
+    """,8,64)
 
     # UUIDs are read from validated internal turn identifiers and encoded into
     # JSON. A bound jsonb array is a single reviewed query, never dynamic SQL.

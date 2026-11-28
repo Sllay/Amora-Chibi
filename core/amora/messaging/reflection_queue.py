@@ -446,7 +446,7 @@ class ReflectionQueue:
 
     def _store_owner_fact(self,job,item,request):
         from amora.memory import MemoryCandidate,MemoryKind,MemoryProvenance,ProvenanceKind
-        from amora.memory.versioned_fact import version_metadata,VersionedFactConflict
+        from amora.memory.versioned_fact import version_metadata,VersionedFactConflict,owner_fact_units
         from amora.cognition.temporal import observed_timestamp
         if (item.speaker_id!="PERSON_BK" or item.privacy_scope!=PrivacyScope.PERSONAL
                 or not item.session_id or item.metadata.get("surface")!="platform_messaging"
@@ -455,25 +455,32 @@ class ReflectionQueue:
                 or not item.remote_processing_allowed):
             return False
         stamp,_=observed_timestamp(item)
-        version=version_metadata(item.raw_text,stamp,self.clock.now())
-        if not version:
+        units=owner_fact_units(item.raw_text)
+        if not units:
             return False
         turn_id,_,token,_=job
-        candidate=MemoryCandidate(kind=MemoryKind.SEMANTIC,
-            content="Relato de PERSON_BK: "+item.raw_text.strip(),
-            provenance=MemoryProvenance(kind=ProvenanceKind.USER_ASSERTION,
-                source="cognition:verified_owner_fact",actor_id="PERSON_BK",session_id=item.session_id),
-            privacy_scope=PrivacyScope.PERSONAL,owner_entity_id="PERSON_BK",
-            remote_processing_allowed=os.getenv("AMORA_REFLECTION_REMOTE_REUSE","0")=="1",
-            entity_refs={"PERSON_BK":1.0},tags={"owner_versioned_fact"},
-            metadata={"turn_id":turn_id,"owner_fact_assertion":True,**version})
-        try:
-            result=self.cognition.compiler.memory.remember(candidate,
-                record_id=uuid5(NAMESPACE_URL,"amora:owner-fact:"+turn_id),
-                reflection_lease=(turn_id,token),owner_fact_assertion=True)
-        except VersionedFactConflict:
-            result=None
-        ids=[str(result.memory.id)] if result is not None and result.memory is not None else []
+        ids=[]
+        for key,projection,projected in units:
+            version=version_metadata(projection,stamp,self.clock.now())
+            if not version or version["versioned_fact_key"]!=key:
+                raise RuntimeError("OWNER_FACT_PROJECTION_INVALID")
+            candidate=MemoryCandidate(kind=MemoryKind.SEMANTIC,
+                content="Relato de PERSON_BK: "+projection,
+                provenance=MemoryProvenance(kind=ProvenanceKind.USER_ASSERTION,
+                    source="cognition:verified_owner_fact",actor_id="PERSON_BK",session_id=item.session_id),
+                privacy_scope=PrivacyScope.PERSONAL,owner_entity_id="PERSON_BK",
+                remote_processing_allowed=os.getenv("AMORA_REFLECTION_REMOTE_REUSE","0")=="1",
+                entity_refs={"PERSON_BK":1.0},tags={"owner_versioned_fact"},
+                metadata={"turn_id":turn_id,"owner_fact_assertion":True,
+                          **({"owner_fact_projection":True} if projected else {}),**version})
+            ident=uuid5(NAMESPACE_URL,"amora:owner-fact:"+turn_id+(":"+key if projected else ""))
+            try:
+                result=self.cognition.compiler.memory.remember(candidate,record_id=ident,
+                    reflection_lease=(turn_id,token),owner_fact_assertion=True)
+            except VersionedFactConflict:
+                continue
+            if result is not None and result.memory is not None:
+                ids.append(str(result.memory.id))
         # Journal and ACK may be retried; stable memory ID and immutable
         # predecessor checks prevent duplicate or stale writes after a crash.
         self.cognition._journal(request,JournalStage.PROPOSALS_GATED,

@@ -1,6 +1,13 @@
 // Optional external screenshot capture for explicit owner-DM web requests.
-// No Chromium/Playwright process, no binary decode dependency. Never read the
-// target website locally: only the fixed Microlink API receives the public URL.
+// No Chromium process in Discord. Explicit backend selection; the optional
+// authenticated Browser Worker never falls through to a third-party provider.
+import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+const exec = promisify(execFile);
 // Rate-limited, content-typed, bounded, and always fails closed to text links.
 const MAX_IMAGE_BYTES = 2_500_000;
 const MAX_JSON_BYTES = 32_000;
@@ -56,6 +63,51 @@ function looksLikeImage(bytes, mime) {
   return false;
 }
 
+// Verify format, dimensions and an actual frame decode using the existing
+// ffmpeg package in the non-root Discord image. No shell or network protocol.
+export async function verifyScreenshotRaster(bytes, mime) {
+  if (!(bytes instanceof Uint8Array) || !bytes.length || bytes.length > MAX_IMAGE_BYTES
+      || !looksLikeImage(bytes, mime)) return null;
+  const suffix = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[mime];
+  const codec = { 'image/jpeg': 'mjpeg', 'image/png': 'png', 'image/webp': 'webp' }[mime];
+  if (!suffix) return null;
+  let dir;
+  try {
+    dir = await mkdtemp(join(tmpdir(), 'amora-web-raster-'));
+    const path = join(dir, 'capture.' + suffix);
+    await writeFile(path, bytes, { mode: 0o600, flag: 'wx' });
+    const opts = { timeout: 3500, maxBuffer: 16384, windowsHide: true,
+      env: { PATH: process.env.PATH || '/usr/bin:/bin', HOME: tmpdir() } };
+    const input = ['-protocol_whitelist', 'file,pipe', '-f', 'image2', '-pattern_type', 'none', '-i', path];
+    const probe = await exec('ffprobe', ['-v', 'error', ...input, '-show_entries',
+      'stream=codec_name,width,height', '-of', 'json'], opts);
+    const streams = JSON.parse(probe.stdout).streams;
+    const row = streams?.[0];
+    if (streams?.length !== 1 || row?.codec_name !== codec ||
+        !Number.isInteger(row.width) || !Number.isInteger(row.height) ||
+        row.width < 1 || row.height < 1 || row.width > 4096 || row.height > 4096 ||
+        row.width * row.height > 8_000_000) return null;
+    await exec('ffmpeg', ['-v', 'error', '-xerror', '-err_detect', 'explode',
+      '-max_alloc', '67108864', '-threads', '1', ...input,
+      '-frames:v', '1', '-f', 'null', '-'], opts);
+    return { width: row.width, height: row.height,
+      checksum: createHash('sha256').update(bytes).digest('hex') };
+  } catch {
+    return null;
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+function browserEndpoint(value, token, privateHttp) {
+  try {
+    const u = new URL(value);
+    if (!token || token.length < 32 || u.username || u.password || u.search || u.hash ||
+        u.pathname !== '/' || (u.protocol !== 'https:' && !(privateHttp && u.protocol === 'http:'))) return null;
+    return new URL('/capture', u).toString();
+  } catch { return null; }
+}
+
 async function boundedResponse(response, maxBytes) {
   const size = Number(response.headers.get('content-length') || 0);
   if (size > maxBytes || !response.body) return null;
@@ -80,9 +132,15 @@ async function boundedResponse(response, maxBytes) {
 }
 
 export class WebScreenshotService {
-  constructor({ fetchImpl = fetch, enabled = true, apiKey = '', dailyLimit = DEFAULT_DAILY_LIMIT } = {}) {
+  constructor({ fetchImpl = fetch, enabled = true, apiKey = '', dailyLimit = DEFAULT_DAILY_LIMIT,
+    backend = 'microlink', browserUrl = '', browserToken = '', privateHttp = false,
+    verifyRaster = verifyScreenshotRaster } = {}) {
     this.fetchImpl = fetchImpl;
     this.enabled = enabled;
+    this.backend = backend;
+    this.browserToken = browserToken;
+    this.browserEndpoint = browserEndpoint(browserUrl, browserToken, privateHttp);
+    this.verifyRaster = verifyRaster;
     this.apiKey = String(apiKey || '').trim();
     this.dailyLimit = Math.max(0, Math.min(10, Number(dailyLimit) || 0));
     this.day = '';
@@ -98,13 +156,16 @@ export class WebScreenshotService {
     return null;
   }
 
-  async capture(value) {
+  async capture(value, { captureId = '', trace = () => {} } = {}) {
     this.lastFailureCode = null;
     const target = publicScreenshotTarget(value);
     if (!this.enabled) return this._failed('disabled');
     if (!target) return this._failed('invalid_public_url');
+    if (!['microlink', 'browser'].includes(this.backend) ||
+        (this.backend === 'browser' && !this.browserEndpoint)) return this._failed('backend_unavailable');
     const cached = this.recent.get(target);
     if (cached && Date.now() - cached.when < 300_000) {
+      trace('cache_hit', { bytes: cached.image.bytes.length, ...cached.image.raster });
       return cached.image;
     }
     if (cached) this.recent.delete(target);
@@ -112,6 +173,34 @@ export class WebScreenshotService {
     if (today !== this.day) { this.day = today; this.used = 0; }
     if (this.used >= this.dailyLimit) return this._failed('daily_limit');
     this.used += 1; // reserve before async network; no parallel quota escape
+    const started = Date.now();
+    if (this.backend === 'browser') {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 18000);
+      try {
+        const response = await this.fetchImpl(this.browserEndpoint, {
+          method: 'POST', redirect: 'error', signal: controller.signal,
+          headers: { 'Content-Type': 'application/json', 'X-Amora-Browser-Token': this.browserToken,
+            ...(/^[a-f0-9]{24}$/.test(captureId) ? { 'X-Amora-Capture-Id': captureId } : {}) },
+          body: JSON.stringify({ url: target }),
+        });
+        trace('browser_response', { status: response.status, elapsed_ms: Date.now() - started });
+        if (!response.ok) return this._failed(response.status === 422 ? 'navigation_failed' :
+          response.status === 504 ? 'provider_timeout' : 'backend_unavailable');
+        const type = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+        if (type !== 'image/png') return this._failed('image_mime_invalid');
+        const data = await boundedResponse(response, MAX_IMAGE_BYTES);
+        const raster = data && await this.verifyRaster(data, type);
+        if (!raster) return this._failed('image_bytes_invalid');
+        const screenshot = { bytes: data, mime: type, filename: 'amora-web-print.png', raster };
+        trace('raster_validated', { bytes: data.length, mime: type, ...raster, elapsed_ms: Date.now() - started });
+        this.recent.set(target, { when: Date.now(), image: screenshot });
+        while (this.recent.size > 2) this.recent.delete(this.recent.keys().next().value);
+        return screenshot;
+      } catch {
+        return this._failed(controller.signal.aborted ? 'provider_timeout' : 'provider_network_error');
+      } finally { clearTimeout(timer); }
+    }
     const endpoint = new URL(this.apiKey ? PRO_API : API);
     endpoint.searchParams.set('url', target);
     endpoint.searchParams.set('screenshot', 'true');
@@ -129,6 +218,7 @@ export class WebScreenshotService {
         redirect: 'error', signal: controller.signal,
         headers: this.apiKey ? { 'x-api-key': this.apiKey } : {},
       });
+      trace('render_response', { status: answer.status, elapsed_ms: Date.now() - started });
       if (!answer.ok) return this._failed(
         answer.status === 429 ? 'provider_rate_limited'
           : answer.status === 401 || answer.status === 403 ? 'provider_auth_required'
@@ -143,13 +233,16 @@ export class WebScreenshotService {
       const image = await this.fetchImpl(screenshotUrl, {
         method: 'GET', redirect: 'error', signal: controller.signal,
       });
+      trace('download_response', { status: image.status, elapsed_ms: Date.now() - started });
       if (!image.ok) return this._failed('image_cdn_http_error');
       const type = String(image.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
       if (!['image/jpeg', 'image/png', 'image/webp'].includes(type)) return this._failed('image_mime_invalid');
       const data = await boundedResponse(image, MAX_IMAGE_BYTES);
-      if (!data || !looksLikeImage(data, type)) return this._failed('image_bytes_invalid');
+      const raster = data && await this.verifyRaster(data, type);
+      if (!raster) return this._failed('image_bytes_invalid');
+      trace('raster_validated', { bytes: data.length, mime: type, ...raster, elapsed_ms: Date.now() - started });
       const screenshot = {
-        bytes: data,
+        bytes: data, raster,
         // Already verified against the small Microlink-owned CDN allowlist.
         imageUrl: screenshotUrl,
         mime: type,

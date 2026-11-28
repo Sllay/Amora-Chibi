@@ -292,6 +292,11 @@ async def test_run02_groq_413_sends_only_one_smaller_authorized_request(monkeypa
     assert len(guard_calls) == 1
     assert len(sent) == 2
     assert len(json.dumps(sent[1]).encode()) < len(json.dumps(sent[0]).encode())
+    from amora.cognition.context_budget import measure_envelope, GROQ_REBUDGET_MIN_REDUCTION, GROQ_REBUDGET_MIN_SAVED_BYTES
+    first_size=measure_envelope(ctx,sent[0]).body_bytes
+    second_size=measure_envelope(ctx,sent[1]).body_bytes
+    assert first_size-second_size>=GROQ_REBUDGET_MIN_SAVED_BYTES
+    assert first_size-second_size>=first_size*GROQ_REBUDGET_MIN_REDUCTION
     assert all(ctx.user_text in str(item["input"]) for item in sent)
     assert ctx.recent_messages == history
     # A second rejection is terminal for this candidate; never a third call.
@@ -334,6 +339,45 @@ async def test_stabilization_sync_compact_retry_is_guarded_and_bounded(monkeypat
     assert len(guard_calls)==(1 if authorization in {"valid","revoked"} else 0)
     if authorization=="valid":
         assert len(json.dumps(sent[1]).encode())<len(json.dumps(sent[0]).encode())
+        from amora.cognition.context_budget import measure_envelope, GROQ_REBUDGET_MIN_REDUCTION, GROQ_REBUDGET_MIN_SAVED_BYTES
+        first_size=measure_envelope(ctx,sent[0]).body_bytes
+        second_size=measure_envelope(ctx,sent[1]).body_bytes
+        assert first_size-second_size>=GROQ_REBUDGET_MIN_SAVED_BYTES
+        assert first_size-second_size>=first_size*GROQ_REBUDGET_MIN_REDUCTION
         assert all(ctx.user_text in str(x["input"]) for x in sent)
     assert ctx.recent_messages==original.recent_messages
     assert ctx.user_text==original.user_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed",[True,False])
+async def test_run02_b_irreducible_rejection_checks_guard_without_second_request(monkeypatch,allowed):
+    from amora.cognition.durable_realization import (
+        DURABLE_REALIZATION,DURABLE_AUTHORIZATION,DeferredRealization,
+    )
+    from amora.cognition.providers_identity import GroqCognitiveProvider as LiveGroq
+    from amora.cognition.providers import ProviderError
+    ctx=_context()
+    # No optional history, and the evidence is required. Neither the
+    # original user text nor the protected evidence may be sacrificed.
+    ctx.web_research={"status":"read","sources":[{"url":"https://example.invalid","text":"Fonte original."}]}
+    sent=[]
+    checks=[]
+    async def post(payload,**kwargs):
+        sent.append(payload)
+        raise ProviderError("synthetic rejection",status_code=413)
+    async def guard():
+        checks.append(True)
+        return allowed
+    provider=LiveGroq(_Secrets())
+    monkeypatch.setattr(provider,"_post_responses",post)
+    marker=DURABLE_REALIZATION.set(str(ctx.turn_id))
+    auth=DURABLE_AUTHORIZATION.set(guard)
+    try:
+        with pytest.raises(ProviderError if allowed else DeferredRealization):
+            await provider._responses_realize(ctx,api_key="TEST_KEY_DO_NOT_LEAK")
+        assert len(sent)==1 and len(checks)==1
+        assert "Fonte original." in sent[0]["instructions"]
+    finally:
+        DURABLE_AUTHORIZATION.reset(auth)
+        DURABLE_REALIZATION.reset(marker)

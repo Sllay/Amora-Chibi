@@ -339,6 +339,54 @@ class MessagingStore:
             ).fetchone()
         return self._outbound_from_row(row) if row is not None else None
 
+    def _causal_group_delivery_allowed(self, candidate):
+        members=candidate.metadata.get("causal_group_members")
+        sources=candidate.metadata.get("causal_group_sources")
+        if members is None and sources is None:
+            return True
+        if (not isinstance(members,list) or not 1<=len(members)<=3
+                or not isinstance(sources,list) or len(sources)!=len(members)
+                or any(not isinstance(item,dict) for item in sources)):
+            return False
+        anchor=candidate.metadata.get("cognitive_turn_id")
+        if not isinstance(anchor,str) or anchor in members:
+            return False
+        try:
+            expected={anchor:(candidate.source_message_id,int(candidate.metadata["transport_revision"]))}
+            expected.update({item["turn_id"]:(item["source_message_id"],int(item["transport_revision"]))
+                             for item in sources})
+            if len(expected)!=len(members)+1 or set(expected)!={anchor,*members}:
+                return False
+        except (KeyError,TypeError,ValueError):
+            return False
+        from amora.storage.reply_job_sql import SQLITE_STATEMENTS
+        sql=("PG_REPLY_JOB_GROUP_DELIVERY_ROWS" if self.database.backend.capabilities.name=="postgres-candidate"
+             else SQLITE_STATEMENTS["GROUP_DELIVERY_ROWS"])
+        rows=self.database._conn.execute(sql,(str(candidate.id),candidate.account_scope,
+                                              candidate.conversation_id)).fetchall()
+        return expected=={row["turn_id"]:(row["native_id"],int(row["transport_revision"])) for row in rows}
+
+    def realtime_final_item(self, outbound_id, account):
+        """Reauthorize final delivery against the canonical claimed outbox."""
+        with trace_lock(self.database._lock):
+            row=self.database._conn.execute(
+                "SELECT * FROM messaging_outbound_queue WHERE id=?",(str(outbound_id),)).fetchone()
+            if (row is None or row["status"]!="claimed" or not row["claim_expires_at"]
+                    or datetime.fromisoformat(row["claim_expires_at"])<self.clock.now()):
+                return None
+            candidate=self._outbound_from_row(row)
+            if (candidate.platform!=MessagingPlatform.DISCORD or candidate.account_scope!=account
+                    or candidate.target_entity_id!="PERSON_BK" or not candidate.metadata.get("realtime_v1")
+                    or not candidate.metadata.get("durable_native_hash") or CHECKPOINT in candidate.metadata):
+                return None
+            from amora.storage.reply_job_sql import SQLITE_STATEMENTS
+            sql=("PG_REPLY_JOB_DELIVERY_ALLOWED" if self.database.backend.capabilities.name=="postgres-candidate"
+                 else SQLITE_STATEMENTS["DELIVERY_ALLOWED"])
+            if self.database._conn.execute(sql,(str(candidate.id),candidate.account_scope,
+                    candidate.conversation_id,candidate.source_message_id)).fetchone() is None:
+                return None
+            return candidate if self._causal_group_delivery_allowed(candidate) else None
+
     @trace_stage("outbound_claim")
     def claim_outbound(
         self,
@@ -348,6 +396,7 @@ class MessagingStore:
         limit: int = 8,
         lease_seconds: int = 30,
         segmented_delivery: bool = False,
+        realtime_delivery: bool = False,
     ) -> tuple[OutboundMessage, ...]:
         limit = max(1, min(32, int(limit)))
         now = self.clock.now()
@@ -381,6 +430,8 @@ class MessagingStore:
             ).fetchall()
             for row in rows:
                 candidate = self._outbound_from_row(row)
+                if candidate.metadata.get("realtime_v1") and not realtime_delivery:
+                    continue
                 if CHECKPOINT in candidate.metadata and not segmented_delivery:
                     continue
                 if candidate.metadata.get("durable_native_hash"):
@@ -393,7 +444,7 @@ class MessagingStore:
                                    str(candidate.id), candidate.account_scope,
                                    candidate.conversation_id, candidate.source_message_id,
                                )).fetchone() is not None)
-                    if not allowed:
+                    if not allowed or not self._causal_group_delivery_allowed(candidate):
                         self.cancel_outbound(candidate.id, reason="DURABLE_REPLY_STALE_OR_UNAUTHORIZED")
                         continue
                 if candidate.metadata.get("agenda_id"):
@@ -434,7 +485,8 @@ class MessagingStore:
                 )
                 if getattr(cursor, "rowcount", 1) == 0:
                     continue
-                if (segmented_delivery and candidate.platform == MessagingPlatform.DISCORD
+                if (segmented_delivery and not candidate.metadata.get("realtime_v1")
+                        and candidate.platform == MessagingPlatform.DISCORD
                         and candidate.metadata.get("durable_native_hash")
                         and not candidate.metadata.get("transport_expressions")
                         and not candidate.metadata.get("web_capture_requested")
@@ -469,15 +521,21 @@ class MessagingStore:
                             "receipts":checkpoint.receipts}
                         claimed.append(candidate)
                         continue
-                claimed.append(
-                    self._outbound_from_row(
-                        dict(row) | {
-                            "status": OutboundStatus.CLAIMED.value,
-                            "claimed_at": now.isoformat(),
-                            "claim_expires_at": expires.isoformat(),
-                        }
-                    )
+                claimed_candidate = self._outbound_from_row(
+                    dict(row) | {
+                        "status": OutboundStatus.CLAIMED.value,
+                        "claimed_at": now.isoformat(),
+                        "claim_expires_at": expires.isoformat(),
+                    }
                 )
+                # A screenshot POST is an external side effect. An expired
+                # lease cannot prove that it was never sent. Signal recovery
+                # instead of authorizing blind replay after worker restart.
+                if (row["status"] == "claimed" and candidate.platform == MessagingPlatform.DISCORD
+                        and (candidate.metadata.get("web_capture_requested")
+                             or candidate.metadata.get("web_capture_source"))):
+                    claimed_candidate.metadata["web_capture_reclaim"] = True
+                claimed.append(claimed_candidate)
         return tuple(claimed)
 
     @trace_stage("outbound_ack")
@@ -522,6 +580,8 @@ class MessagingStore:
                    else SQLITE_STATEMENTS["DELIVERY_ALLOWED"])
             if self.database._conn.execute(sql,(str(candidate.id),candidate.account_scope,
                     candidate.conversation_id,candidate.source_message_id)).fetchone() is None:
+                return False
+            if not self._causal_group_delivery_allowed(candidate):
                 return False
             cp = DeliveryCheckpoint.model_validate(candidate.metadata[CHECKPOINT])
             if cp.count!=len(split_delivery_text(candidate.text)) or segment.index>=cp.count:

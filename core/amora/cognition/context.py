@@ -489,8 +489,35 @@ class ContextCompiler:
                     evidence = f"\nEvidência de conversa em {at}: o usuário disse: “{user}”"
                     if reply:
                         evidence += f"; Amora respondeu: “{reply}”"
-                    item.content = item.content[:600] + evidence
-                    reasons.append("MEMORY_V2_SOURCE_LINKED_EVIDENCE")
+                    # A versioned property source can contain obsolete values
+                    # of a different property. Do not append its full raw text.
+                    if not any(getattr(h.memory,"metadata",{}).get("versioned_fact_key") for h in hits
+                               if str(h.memory.id)==item.id):
+                        item.content = item.content[:600] + evidence
+                        reasons.append("MEMORY_V2_SOURCE_LINKED_EVIDENCE")
+            if request.speaker_id=="PERSON_BK" and memory_topics:
+                from amora.memory.owner_evidence import recall_episodes
+                target=recall_intent.topic if named_recall else None
+                if target is None:
+                    match=re.fullmatch(r"(?:quais (?:sao )?as caracteristicas|quais os detalhes|o que sabe) (?:de|da|do|sobre) ([\w -]{2,80})[?!.]*",
+                                       normalized_recall)
+                    target=match.group(1) if match else None
+                if target and not any(topic_terms(target)<=topic_terms(m.content) for m in memories) and not any(
+                        row.get("speaker_id")==request.speaker_id and
+                        topic_terms(target)<=topic_terms(row.get("text","")) for row in recent):
+                    anchor=next((m for m in persisted_messages if str(m.turn_id)==str(request.turn_id)
+                                 and m.speaker_id==request.speaker_id),None)
+                    at,_=observed_timestamp(anchor) if anchor is not None else (self.clock.now(),None)
+                    if at is not None:
+                        older,_=recall_episodes(self.store,request.speaker_id,target,
+                            exclude_turn=request.turn_id,remote=True,session=request.session_id,before=at)
+                        if older:
+                            recent=[{"turn_id":ident,"speaker_id":request.speaker_id,
+                                     "addressee_id":request.target_id,"text":row["user_text"][:400],
+                                     "source":"historical_owner_report","status":"received",
+                                     "observed_at":row["at"].isoformat(),"timestamp_source":"owner_source"}
+                                    for ident,row in older.items() if not any(r.get("turn_id")==ident for r in recent)][:2]+recent
+                            reasons.append("MEMORY_V2_HISTORICAL_OWNER_EVIDENCE")
         else:
             recent = recent[-48:]
         reasons.append("CURRENT_TURN_EXCLUDED_FROM_RECENT")

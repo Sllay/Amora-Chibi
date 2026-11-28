@@ -472,7 +472,8 @@ def _topic_terms(query: str) -> list[str]:
     return terms[:20]
 
 
-def _rank_search_results(results: list[dict[str, str]], query: str) -> list[dict[str, str]]:
+def _rank_search_results(results: list[dict[str, str]], query: str, *,
+                         refinement: str = "") -> list[dict[str, str]]:
     """Discard off-topic search listings instead of letting them become cited.
 
     Search providers occasionally return a real but unrelated URL. No public
@@ -480,6 +481,7 @@ def _rank_search_results(results: list[dict[str, str]], query: str) -> list[dict
     """
     topics = _topic_terms(query)
     minimum_matches = min(2, len(topics))
+    focus_terms = _topic_terms(refinement)
     scored = []
     seen_urls: set[str] = set()
     for index, item in enumerate(results[:15]):
@@ -500,6 +502,9 @@ def _rank_search_results(results: list[dict[str, str]], query: str) -> list[dict
         url_norm = _fold_search(urlsplit(url).hostname or "") + " " + _fold_search(urlsplit(url).path)
         matches = sum(1 for term in topics if term in title_norm or term in snippet_norm or term in url_norm)
         if topics and matches < minimum_matches:
+            continue
+        if focus_terms and not any(term in title_norm or term in snippet_norm or term in url_norm
+                                   for term in focus_terms):
             continue
         score = (
             matches * 4
@@ -575,19 +580,35 @@ def parse_web_intent(text: str) -> WebIntent | None:
     if continuation:
         tail = raw[continuation.end():]
         refinement = re.match(
-            r"\s*[,;:]?\s*(?:com\s+foco\s+em|focando\s+em|sobre)\s+(.+)", tail, re.I,
+            r"\s*[,;:]?\s*(?:mas\s+)?(?:agora\s+)?(?:com\s+foco\s+em|focando\s+em|sobre)\s+(.+)", tail, re.I,
         )
         extra = _clean(refinement.group(1), 120) if refinement else ""
         return WebIntent("search", "", "deep" if _DEEP_REQUEST_RE.search(raw) else "quick", extra)
     follow = _FOLLOW_RE.search(raw) or _SCREENSHOT_FOLLOW_RE.search(raw)
     if follow:
         return WebIntent("follow", follow.group(1))
+    reopen = re.fullmatch(
+        r"\s*(?:amora[,\s]+)?(?:tenta(?:r)?\s+|tente\s+)?"
+        r"(?:abre|abra|abrir|reabre|reabra|reabrir|acessa|acesse)\s+"
+        r"(?:(?:a\s+)?(?:[uú]ltima\s+p[aá]gina|p[aá]gina\s+anterior)|de\s+novo|novamente)\s*[.!?]*",
+        raw, re.I,
+    )
+    if reopen:
+        return WebIntent("reopen", "previous")
     search = _SEARCH_RE.search(raw) or _CONTEXT_WEB_RE.search(raw)
     if search:
         # Do not send greetings, 'Okay', user instructions or Amora's name
         # ahead of the actual subject to search engines.
         depth = "deep" if _DEEP_REQUEST_RE.search(raw) else "quick"
         # Strip only explicit research-mode modifiers from the topical query.
+        tail = raw[search.end():]
+        retry_refinement = re.match(
+            r"\s*(?:de\s+novo|novamente|outra\s+vez)\s*[,;:]?\s*(?:mas\s+)?"
+            r"(?:agora\s+)?(?:com\s+foco\s+em|focando\s+em)\s+(.+)",
+            tail, re.I,
+        )
+        if retry_refinement:
+            return WebIntent("search", "", depth, _clean(retry_refinement.group(1), 120))
         subject = _clean_search_query(raw, search)
         if depth == "deep":
             subject = _clean(_DEEP_REQUEST_RE.sub(" ", subject), 240)
@@ -759,6 +780,7 @@ class WebNavigator:
         # URL-only, per-DM short-lived lease for explicit screenshot retry.
         # Not a memory record; no page text or conversation is retained.
         self.last_capture_requests: OrderedDict[str, tuple[float, str]] = OrderedDict()
+        self.last_navigation_attempt: OrderedDict[str, tuple[float, str]] = OrderedDict()
         self._semaphore = asyncio.Semaphore(2)
 
     @staticmethod
@@ -1154,6 +1176,7 @@ class WebNavigator:
         # Resolve anaphora BEFORE invalidating previous delivery evidence.
         # An explicit new topic always wins; an empty generic command alone
         # cannot silently search some random earlier subject.
+        prior_delivery = self.current_delivery(session_id)
         search_topic = intent.argument
         contextual_search = (
             intent.action == "search" and not search_topic
@@ -1180,6 +1203,17 @@ class WebNavigator:
         # A failed NEW navigation must never use a previous turn's links.
         self.last_delivery.pop(session_id, None)
         try:
+            if intent.action == "reopen":
+                attempt = self.last_navigation_attempt.get(session_id)
+                if attempt and asyncio.get_running_loop().time() - attempt[0] < 900:
+                    target = attempt[1]
+                else:
+                    prior_sources = prior_delivery.get("sources") or []
+                    target = prior_sources[0].get("url") if prior_sources else None
+                if not target:
+                    raise WebFetchError("WEB_REFERENCE_NOT_FOUND")
+                return await self._open(target, session_id, "follow",
+                                        force_browser="navegador" in text.casefold())
             if intent.action == "follow":
                 refs = self._refs(session_id)
                 index = int(intent.argument) - 1
@@ -1242,13 +1276,15 @@ class WebNavigator:
                     return self._record_delivery(session_id, result)
             if intent.depth == "deep":
                 from .deep_research import deep_search
-                result = await deep_search(self, search_topic, text, session_id)
+                result = await deep_search(self, search_topic, text, session_id,
+                                           refinement=intent.refinement)
                 if result.get("status") == "failed":
                     self._record_delivery(session_id, {**result, "topic": search_topic})
                     return result
                 return self._record_delivery(session_id, result)
             planned_queries = [search_topic]
-            if self.planner is not None:
+            # A fresh explicit refinement must not be broadened by a planner.
+            if self.planner is not None and not intent.refinement:
                 try:
                     planned = await asyncio.wait_for(
                         self.planner.plan(text[:1200], search_topic), timeout=3.8
@@ -1283,7 +1319,7 @@ class WebNavigator:
                     got_results = True
                     # Rank AGAINST the original request, not merely the
                     # model-generated wording, to stop semantic topic drift.
-                    validated = _rank_search_results(results, search_topic)
+                    validated = _rank_search_results(results, search_topic, refinement=intent.refinement)
                     if validated:
                         used_query = search_query
                         break
@@ -1296,10 +1332,15 @@ class WebNavigator:
                     else "WEB_SEARCH_UNAVAILABLE"
                 )
             self._save_refs(session_id, validated)
-            # Read two independent sources concurrently under the Core turn
-            # timeout. Only actual opened pages are promoted to citations.
+            # Prefer distinct hosts for the two bounded reads. Host diversity
+            # is not evidence of editorial independence. Preserve listing order.
+            chosen = [0]
+            first_host = urlsplit(validated[0]["url"]).hostname
+            if len(validated) > 1:
+                chosen.append(next((i for i, row in enumerate(validated[1:], 1)
+                                    if urlsplit(row["url"]).hostname != first_host), 1))
             fetched = await asyncio.gather(
-                *(self._call(self.fetch_page, item["url"]) for item in validated[:2]),
+                *(self._read_page(validated[i]["url"]) for i in chosen),
                 return_exceptions=True,
             )
             sources = [
@@ -1310,23 +1351,32 @@ class WebNavigator:
                 for page in fetched if isinstance(page, dict) and page.get("status") == "opened"
                 and not self._needs_browser(page)
             ]
-            # If none of the two HTTP reads contains usable content, one
-            # hosted JS read is sufficient. This does not launch local Chrome.
-            if not sources and (self.reader is not None or self.browser is not None):
-                rendered = await self._remote_render(validated[0]["url"])
-                if rendered is not None:
-                    sources.append({
-                        **{key: rendered[key] for key in (
-                            "url", "title", "text", "fetched_at", "status"
-                        )},
-                        **({"retrieval": rendered["retrieval"]} if rendered.get("retrieval") else {}),
-                    })
+            states = {}
+            for i, page in zip(chosen, fetched):
+                if isinstance(page, dict) and page.get("status") == "opened" and not self._needs_browser(page):
+                    states[i] = {"state": "read"}
+                else:
+                    states[i] = {"state": "failed", "failure_reason":
+                                 page.code if isinstance(page, WebFetchError) else
+                                 "WEB_TIMEOUT" if isinstance(page, TimeoutError) else
+                                 "WEB_PAGE_CONTENT_UNAVAILABLE"}
+            # Each selected reference has its own evidence state, including redirects.
+            # Unselected search listings remain found, not read.
             return self._record_delivery(session_id, {
                 "action": "search", "status": "opened" if sources else "results_only",
                 "query": used_query[:240], "topic": search_topic[:240], "sources": sources,
                 "references": [{"number": index, "url": item["url"],
-                                "title": item["title"], "snippet": item.get("snippet", "")}
+                                "title": item["title"], "snippet": item.get("snippet", ""),
+                                **states.get(index - 1, {"state": "found"})}
                                for index, item in enumerate(validated, 1)],
+                "research_progress": {
+                    "read_count": len(sources), "found_count": len(validated),
+                    "read_failures": [{"number": i + 1, "reason": state["failure_reason"]}
+                                      for i, state in states.items() if state["state"] == "failed"],
+                    "cross_source_claims_verified": False,
+                    "distinct_read_hosts": len({urlsplit(s["url"]).hostname for s in sources}),
+                    "comparison_basis": "Compare source excerpts; distinct hosts do not establish independent reporting.",
+                },
             })
         except (WebFetchError, TimeoutError) as exc:
             code = exc.code if isinstance(exc, WebFetchError) else "WEB_TIMEOUT"
@@ -1334,6 +1384,11 @@ class WebNavigator:
                      "sources": [], "references": []}
             if intent.action=="search" and search_topic:
                 self._record_delivery(session_id,{**failure,"topic":search_topic,"depth":intent.depth})
+            elif intent.action in {"follow", "reopen"}:
+                # Preserve topic continuity without projecting previous pages as newly read.
+                self.last_delivery[session_id] = (asyncio.get_running_loop().time(), {
+                    "action": intent.action, "focus": prior_delivery.get("focus", ""),
+                    "depth": prior_delivery.get("depth", "quick"), "sources": [], "references": []})
             return failure
         except Exception:
             # DNS/HTML/parser failures are not evidence. Avoid dumping user
@@ -1346,7 +1401,13 @@ class WebNavigator:
 
     async def _open(self, url: str, session_id: str, action: str,
                     *, force_browser: bool = False) -> dict[str, Any]:
-        page = await self._read_page(url, force_browser=force_browser)
+        # Bounded, session-local attempted target for explicit retry, even if navigation fails.
+        safe = _public_url(url)[0]
+        self.last_navigation_attempt[session_id] = (asyncio.get_running_loop().time(), safe)
+        self.last_navigation_attempt.move_to_end(session_id)
+        while len(self.last_navigation_attempt) > 32:
+            self.last_navigation_attempt.popitem(last=False)
+        page = await self._read_page(safe, force_browser=force_browser)
         refs = page.get("links", []) if page.get("status") == "opened" else []
         # A result page with zero extracted links must not erase the previous
         # numbered search list. The user may still ask "abre o link 3" after

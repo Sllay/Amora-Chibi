@@ -101,6 +101,7 @@ class PlatformMessagingService:
         self.generations = InboundGeneration(store.database, clock)
         self.storage_lane = None
         self.durable_replies = None
+        self.realtime_bridge = None
 
     def configure_durable_replies(self):
         """Explicit opt-in after candidate schema/registry installation.
@@ -113,8 +114,9 @@ class PlatformMessagingService:
         return self.durable_replies
 
     async def start_durable_replies(self):
-        from amora.storage.reply_job_rollout import durable_reply_mode
+        from amora.storage.reply_job_rollout import durable_reply_mode,realtime_enabled
         mode = durable_reply_mode()
+        realtime_enabled()
         if mode != "off":
             runtime = self.configure_durable_replies()
             if mode == "drain":
@@ -561,8 +563,8 @@ class PlatformMessagingService:
                 and message.privacy_scope==PrivacyScope.PERSONAL
                 and not message.attachments and not message.incoming_images and not message.incoming_image
                 and not request.metadata.get("test_mode")):
-            from amora.memory.versioned_fact import parse_named_fact
-            if parse_named_fact(message.text) and is_verified_owner(
+            from amora.memory.versioned_fact import owner_fact_units
+            if owner_fact_units(message.text) and is_verified_owner(
                     self.attention.profiles,message,decision.speaker_entity_id):
                 request.metadata["owner_fact_assertion"]=True
         durable = bool(
@@ -641,6 +643,7 @@ class PlatformMessagingService:
         generation_started = self.clock.monotonic()
         web_capture_source: str | None = None
         web_capture_requested = False
+        web_capture_id = hashlib.sha256(str(self._outbound_id(message)).encode()).hexdigest()[:24]
         plan = None
         set_ms("messaging_pre_cognition_ms", elapsed_ms(ingress_started))
         set_value("_critical_phase", "cognition")
@@ -667,6 +670,14 @@ class PlatformMessagingService:
         )
         retry_token = SYNC_REALIZATION_RETRY.set(
             (str(request.turn_id),retry_guard) if retry_eligible else None)
+        # Observability only: no candidate content crosses the worker boundary.
+        # Keep the verified owner and source lease gates, opt in explicitly.
+        from .realtime_projection import CandidateAudit, shadow_enabled
+        from amora.cognition.realtime_candidates import CANDIDATE_SINK
+        shadow = (CandidateAudit() if shadow_enabled() and retry_eligible
+                  and is_verified_owner(self.attention.profiles,message,decision.speaker_entity_id)
+                  else None)
+        shadow_token = CANDIDATE_SINK.set(shadow) if shadow is not None else None
         try:
             plan = await asyncio.wait_for(
                 self.cognition.respond_observed(request, on_segment=None, fallback_text=fallback),
@@ -674,6 +685,17 @@ class PlatformMessagingService:
             )
             if self._source_invalidated(message):
                 return self._invalidated_result(message)
+            if isinstance(visual_observation,dict) and visual_observation.get("observation_version")==4:
+                for field in ("historical_manifest","latest_manifest"):
+                    source=visual_observation.get(field)
+                    if source is not None:
+                        try:
+                            still_current=await self._visual_checkpoint_call(message,"source_current",
+                                request.session_id,source["message_hash"],source["revision"])
+                        except Exception:
+                            still_current=False
+                        if not still_current or not is_verified_owner(self.attention.profiles,message,decision.speaker_entity_id):
+                            return self._invalidated_result(message)
             provider = plan.provider
             model = plan.model
             fallback_used = bool(plan.fallback_used)
@@ -713,6 +735,9 @@ class PlatformMessagingService:
             )
         finally:
             SYNC_REALIZATION_RETRY.reset(retry_token)
+            if shadow_token is not None:
+                CANDIDATE_SINK.reset(shadow_token)
+                _LOG.info("realtime_shadow", extra={"turn_id":str(request.turn_id), **shadow.finish()})
 
         # Even a *hard* provider timeout can occur AFTER web results arrived.
         # Compose public links outside the generation try/except so a failed
@@ -754,7 +779,9 @@ class PlatformMessagingService:
                 # model-made link or arbitrary unrelated image from chat.
                 core_nav.remember_capture_request(request.session_id, web_capture_source)
             _LOG.info(
-                "web_capture_request kind=%s requested=%s authorized=%s",
+                "web_capture_request capture_id=%s turn_id=%s outbound_id=%s target_hash=%s kind=%s requested=%s authorized=%s",
+                web_capture_id, request.turn_id, self._outbound_id(message),
+                hashlib.sha256(web_capture_source.encode()).hexdigest()[:24] if web_capture_source else "-",
                 intent.action if intent is not None else "none",
                 web_capture_requested, bool(web_capture_source),
             )
@@ -852,7 +879,8 @@ class PlatformMessagingService:
                 "attention_score": decision.score,
                 "transport_revision": message.transport_revision,
                 "delivery_message_id": message.message_id,
-                **({"web_capture_requested": True} if web_capture_requested else {}),
+                **({"web_capture_requested": True, "web_capture_id": web_capture_id,
+                    "web_capture_turn_id": str(request.turn_id)} if web_capture_requested else {}),
                 **({"web_capture_source": web_capture_source,
                     "web_capture_owner_verified": True} if web_capture_source and web_owner_verified else {}),
             },
@@ -1209,6 +1237,8 @@ class PlatformMessagingService:
 
         shared = message.channel_type != ChannelType.DM
         records = []
+        episodes = {}
+        episode_complete = True
         complete = True
         if shared and not self.attention.floor.validate_reply(message, decision):
             return InboundResult(decision=decision.model_copy(update={
@@ -1242,7 +1272,7 @@ class PlatformMessagingService:
                         "reason_codes": [*decision.reason_codes, "CONFIDENTIAL_OUTPUT_SUPPRESSED"],
                     }))
                 text = render_memory_reply(excerpts, generic=intent.generic)
-                if not shared:
+                if not shared and not any(r.metadata.get("versioned_fact_key") for r in records):
                     # A memory summary alone can lose context. Reattach the
                     # verified owner DM utterance and the *sent* Amora answer.
                     # Unsent drafts, edited sources and third parties never
@@ -1271,6 +1301,20 @@ class PlatformMessagingService:
                         if len(text) > 1900:
                             text = text[:1899] + "…"
                 reason = "MEMORY_RECALL_PUBLIC_FOUND" if shared else "MEMORY_RECALL_PERSISTENT_FOUND"
+            elif not shared and not intent.generic:
+                from amora.memory.owner_evidence import recall_episodes,render_episodes
+                episodes,episode_complete=recall_episodes(self.cognition.store,OWNER_ENTITY_ID,
+                    intent.topic,exclude_turn=request.turn_id)
+                complete=complete and episode_complete
+                if episodes:
+                    reason="MEMORY_RECALL_EPISODIC_FOUND"
+                    text=render_episodes(episodes)
+                elif not complete:
+                    reason="MEMORY_RECALL_SEARCH_INCOMPLETE"
+                    text="Não encontrei uma correspondência nessa busca limitada. Pode indicar o assunto com mais detalhes?"
+                else:
+                    reason="MEMORY_RECALL_NO_MATCH"
+                    text="Não encontrei uma lembrança correspondente no armazenamento. Isso não significa que você nunca me contou. Pode me dar mais detalhes?"
             elif shared:
                 reason = "MEMORY_RECALL_SHARED_SCOPE_RESTRICTED"
                 text = ("Aqui só consigo consultar lembranças públicas sem uma autorização específica. "
@@ -1299,6 +1343,8 @@ class PlatformMessagingService:
                 "generation_stage": "persistent_recall", "provider": "local_control",
                 "generation_error_code": None, "cognitive_reason_codes": [reason],
                 "memory_recall_count": len(records), "memory_recall_source": "persistent_store",
+                "memory_recall_episode_count": len(episodes) if not shared else 0,
+                "memory_recall_episode_search_complete": episode_complete,
                 "memory_recall_search_complete": complete,
                 # The group receives no private record IDs or status.
                 "memory_recall_ids": [str(r.id) for r in records],
@@ -1479,6 +1525,9 @@ class PlatformMessagingService:
             session_id, self._hash(invalidation.native_message_id), through_revision=through,
         )
         self.generations.invalidate_prepared(session_id, self._hash(invalidation.native_message_id), through)
+        previews=getattr(self,"visual_previews",None)
+        if previews is not None:
+            previews.discard_source(session_id,self._hash(invalidation.native_message_id),through)
         cancelled = self.store.cancel_outbound_by_source(
             platform=invalidation.platform, account_scope=invalidation.account_scope,
             conversation_id=invalidation.conversation_id, source_message_id=invalidation.native_message_id,

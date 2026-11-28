@@ -76,6 +76,8 @@ def register_messaging_routes(app, core, require_auth) -> None:
     """Register a narrow worker boundary plus operator audit/presence controls."""
 
     register_visual_enrichment_routes(app, core, require_auth)
+    from .realtime_routes import register_realtime_routes
+    register_realtime_routes(app,core,require_auth)
     install_remote_storage_probe()
 
     @app.post("/v1/messaging/worker/inbound", dependencies=[Depends(require_auth)])
@@ -108,12 +110,14 @@ def register_messaging_routes(app, core, require_auth) -> None:
         limit: int = Query(default=1, ge=1, le=32),
         lease_seconds: int = Query(default=120, ge=5, le=120),
         segmented_delivery: bool = Query(default=False),
+        realtime_delivery: bool = Query(default=False),
     ):
         with bind_latency_trace() as trace:
             started = perf_counter()
             items = core.messaging_store.claim_outbound(
                 platform=platform, account_scope=account_scope,
                 limit=limit, lease_seconds=lease_seconds, segmented_delivery=segmented_delivery,
+                **({"realtime_delivery":True} if realtime_delivery and core.messaging.realtime_bridge is not None else {}),
             )
             result = {"messages": [item.model_dump(mode="json") for item in items]}
             set_ms("outbound_claim_total_ms", elapsed_ms(started))
@@ -123,6 +127,11 @@ def register_messaging_routes(app, core, require_auth) -> None:
 
     @app.post("/v1/messaging/worker/outbound/{message_id}/ack", dependencies=[Depends(require_auth)])
     def messaging_outbound_ack(message_id: UUID, payload: OutboundAckRequest):
+        # A disabled bridge or rolling back the worker must not allow an
+        # ordinary ACK to bypass the Realtime receipt protocol.
+        item=core.messaging_store.get_outbound(message_id)
+        if item is not None and item.metadata.get("realtime_v1"):
+            raise HTTPException(status_code=409,detail="REALTIME_RECEIPTS_REQUIRED")
         with bind_latency_trace() as trace:
             started = perf_counter()
             if payload.segment is not None:

@@ -201,6 +201,46 @@ SQLITE_STATEMENTS = {
                 WHERE j.status='ready' AND o.status IN ('sent','failed','cancelled')
                 ORDER BY j.created_at,j.job_seq LIMIT 128
             )"""),
+    "GROUP_PENDING": ("""SELECT a.message_id,
+            COALESCE(json_extract(a.metadata_json,'$.durable_reply_transport.native_message_id'),a.message_id) AS native_id,
+            messaging_reply_jobs.transport_revision
+            FROM messaging_reply_jobs
+            JOIN conversation_messages m ON m.id=messaging_reply_jobs.input_id
+            JOIN messaging_audit a ON a.id=json_extract(m.metadata_json,'$.reply_audit_id')
+            WHERE messaging_reply_jobs.turn_id=? AND messaging_reply_jobs.session_id=?
+              AND messaging_reply_jobs.status='pending' AND messaging_reply_jobs.attempts=0
+              AND a.platform='discord' AND a.channel_type='dm' AND a.direction='inbound'
+              AND a.account_scope=? AND a.conversation_id=? AND a.sender_external_id=?
+              AND a.speaker_entity_id='PERSON_BK' AND m.speaker_id='PERSON_BK'
+              AND NOT EXISTS (SELECT 1 FROM messaging_inbound_generation g
+                  WHERE g.turn_id=messaging_reply_jobs.turn_id AND g.lease_token IS NOT NULL)
+              AND """ + _VALID_SOURCE + " LIMIT 1"),
+    "GROUP_MARK_READY": ("""UPDATE messaging_reply_jobs SET status='ready',outbound_id=?,
+            last_reason=NULL,lease_token=NULL,lease_until=NULL
+            WHERE turn_id=? AND session_id=? AND status='pending' AND attempts=0
+            AND """ + _VALID_SOURCE),
+    "GROUP_DELIVERY_ROWS": ("""SELECT messaging_reply_jobs.turn_id,
+            COALESCE(json_extract(a.metadata_json,'$.durable_reply_transport.native_message_id'),a.message_id) AS native_id,
+            messaging_reply_jobs.transport_revision
+            FROM messaging_reply_jobs
+            JOIN conversation_messages m ON m.id=messaging_reply_jobs.input_id
+            JOIN messaging_audit a ON a.id=json_extract(m.metadata_json,'$.reply_audit_id')
+            WHERE messaging_reply_jobs.outbound_id=? AND messaging_reply_jobs.status='ready'
+              AND a.platform='discord' AND a.channel_type='dm' AND a.direction='inbound'
+              AND a.account_scope=? AND a.conversation_id=?
+              AND a.speaker_entity_id='PERSON_BK' AND m.speaker_id='PERSON_BK'
+              AND EXISTS (SELECT 1 FROM platform_identity_bindings b
+                  WHERE b.platform='discord' AND b.account_scope=a.account_scope
+                    AND b.external_actor_id=a.sender_external_id
+                    AND b.identifier_type IN ('user_id','discord_user_id')
+                    AND b.enabled=1 AND b.entity_id='PERSON_BK'
+                    AND b.trust IN ('operator_verified','platform_authenticated'))
+              AND NOT EXISTS (SELECT 1 FROM platform_identity_bindings b
+                  WHERE b.platform='discord' AND b.account_scope=a.account_scope
+                    AND b.external_actor_id=a.sender_external_id
+                    AND b.identifier_type IN ('user_id','discord_user_id')
+                    AND b.enabled=1 AND b.entity_id<>'PERSON_BK')
+              AND """ + _VALID_SOURCE + " LIMIT 5"),
     "COUNTS": ("SELECT status,COUNT(*) AS count FROM messaging_reply_jobs GROUP BY status"),
     "DELIVERY_ALLOWED": ("""SELECT 1 FROM messaging_reply_jobs
             JOIN conversation_messages m ON m.id=messaging_reply_jobs.input_id

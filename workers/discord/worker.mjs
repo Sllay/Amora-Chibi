@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { MessagingCoreClient, workerConfig } from '../common/core-client.mjs';
 import {
   discordAmoraCommandDefinition,
@@ -19,6 +20,7 @@ import { collectDiscordIncomingImage, collectDiscordIncomingImages, discordImage
 import { transcodeOversizedImage } from './incoming-image-transform.mjs';
 import { WebScreenshotService, screenshotMultipart } from './web-screenshot.mjs';
 import { messagingTurnId, startTypingProgress } from './typing-progress.mjs';
+import { RealtimeWorkerTransport } from './realtime-worker.mjs';
 
 const TRUE = new Set(['1', 'true', 'yes', 'on']);
 const TERMINAL_GATEWAY_CLOSE_CODES = new Set([4004, 4010, 4011, 4013, 4014]);
@@ -52,6 +54,21 @@ function traceUuid(value) {
 function traceDelivery(stage, item, metrics) {
   const values = Object.entries(metrics).map(([key, value]) => `${key}=${Math.round(Math.max(0, value))}`).join(' ');
   safeLog('PERFORMANCE_TRACE', `stage=${stage} outbound_id=${traceUuid(item?.id)} ${values}`);
+}
+
+function screenshotTrace(item, stage, extra = {}) {
+  const meta = item?.metadata || {};
+  if (!meta.web_capture_requested && !meta.web_capture_source &&
+      stage !== 'metadata_missing') return;
+  const target = typeof meta.web_capture_source === 'string' ? meta.web_capture_source : '';
+  const sha = [process.env.AMORA_BUILD_SHA, process.env.NORTHFLANK_GIT_SHA, process.env.GIT_SHA]
+    .find(value => /^[a-f0-9]{7,64}$/i.test(value || '')) || 'unknown';
+  const captureId = createHash('sha256').update(String(item?.id || '')).digest('hex').slice(0,24);
+  const record = { stage, capture_id: captureId, outbound_id: traceUuid(item?.id),
+    turn_id: traceUuid(meta.web_capture_turn_id || meta.cognitive_turn_id), sha,
+    target_hash: target ? createHash('sha256').update(target).digest('hex').slice(0,24) : '-',
+    ...extra };
+  process.stderr.write('[amora-discord] WEB_CAPTURE_TRACE ' + JSON.stringify(record) + '\n');
 }
 
 function errorLabel(error) {
@@ -104,11 +121,16 @@ export class DiscordWorker {
       enabled: enabled('AMORA_WEB_SCREENSHOTS_ENABLED', true),
       apiKey: process.env.AMORA_WEB_SCREENSHOT_MICROLINK_API_KEY || '',
       dailyLimit: Number(process.env.AMORA_WEB_SCREENSHOT_DAILY_LIMIT || 4),
+      backend: process.env.AMORA_WEB_SCREENSHOT_BACKEND || 'microlink',
+      browserUrl: process.env.AMORA_WEB_SCREENSHOT_BROWSER_URL || '',
+      browserToken: process.env.AMORA_WEB_SCREENSHOT_BROWSER_TOKEN || '',
+      privateHttp: enabled('AMORA_WEB_SCREENSHOT_BROWSER_PRIVATE_HTTP', false),
     });
-    safeLog('WEB_SCREENSHOT_PIPELINE_READY', 'version=20261120-r2'
+    safeLog('WEB_SCREENSHOT_PIPELINE_READY', 'version=20261127-r4 backend=' + this.webScreenshots.backend
       + ' enabled=' + this.webScreenshots.enabled
       + ' provider=' + (this.webScreenshots.apiKey ? 'keyed' : 'keyless'));
     this.typingProgress = new Map();
+    this.realtimeTransport = null;
     // Per-DM admission order for the synchronous Core path. No persistent
     // queue activation, no shared global lock, and no coalescing of turns.
     this.dmInboundTails = new Map();
@@ -645,6 +667,20 @@ export class DiscordWorker {
         safeLog('IMAGE_INGEST_SKIPPED', normalized.incoming_image_status);
       }
     }
+    if (normalized.incoming_image || normalized.incoming_images?.length) {
+      const short = value => createHash('sha256').update(String(value),'utf8').digest('hex').slice(0,20);
+      const images=normalized.incoming_images || [];
+      const supplied=normalized.incoming_image ? [{attachment_id:normalized.incoming_image.attachment_id,image:normalized.incoming_image}] : images;
+      const ordered=(normalized.attachments||[]).filter(a=>supplied.some(x=>x.attachment_id===a.attachment_id) ||
+        String(a.media_type||'').toLowerCase().startsWith('image/'));
+      ordered.forEach((a,index)=>{
+        const image=supplied.find(x=>x.attachment_id===a.attachment_id)?.image;
+        const bytes=image ? Buffer.from(image.content_base64,'base64') : null;
+        const digest=bytes ? createHash('sha256').update(bytes).digest('hex').slice(0,20) : '-';
+        const mime=image && ['image/png','image/jpeg','image/webp'].includes(image.content_mime) ? image.content_mime : '-';
+        safeLog('VISUAL_TRACE', `stage=worker_preview msg_hash=${short(normalized.native_message_id||normalized.message_id)} revision=${normalized.transport_revision} number=${index+1} attachment_hash=${short(a.attachment_id)} preview_hash=${digest} bytes=${bytes?.length||0} mime=${mime}`);
+      });
+    }
     const normalizationMs = performance.now() - normalizedStarted;
     const inboundStarted = performance.now();
 
@@ -769,7 +805,16 @@ export class DiscordWorker {
   }
 
   async handleMessageCreate(message) {
-    if (this.isBotAuthored(message)) return;
+    if (this.isBotAuthored(message)) {
+      if (String(message?.author?.id)===this.botUserId && /^r1[0-9a-f]{22}$/.test(String(message?.nonce||''))) {
+        const realtime=this.getRealtimeTransport();
+        if (realtime) {
+          try { await realtime.observeCreate(message); }
+          catch(error) { safeLog('REALTIME_GATEWAY_RECEIPT_FAILED',errorLabel(error)); }
+        }
+      }
+      return;
+    }
     const entry = this.runtime.recordCreate(message);
     if (!entry || entry.duplicate) return;
     await this.admitDiscordEntry(entry, { revision: entry.revision });
@@ -830,21 +875,75 @@ export class DiscordWorker {
     this.runtime.recordReaction(event, added);
   }
 
+  validateCausalGroup(item) {
+    const members=item?.metadata?.causal_group_members;
+    const sources=item?.metadata?.causal_group_sources;
+    if (members===undefined && sources===undefined) return true;
+    if (!Array.isArray(members) || members.length<1 || members.length>3
+        || !Array.isArray(sources) || sources.length!==members.length
+        || new Set(members).size!==members.length) return false;
+    const seen=new Set();
+    for (const source of sources) {
+      if (!source || !members.includes(source.turn_id) || seen.has(source.turn_id)
+          || typeof source.source_message_id!=='string' || !source.source_message_id
+          || !Number.isInteger(source.transport_revision) || source.transport_revision<1) return false;
+      seen.add(source.turn_id);
+      if (!this.runtime.validateOutbound({conversation_id:item.conversation_id,
+          source_message_id:source.source_message_id,
+          metadata:{transport_revision:source.transport_revision}}).ok) return false;
+    }
+    return true;
+  }
+
+  getRealtimeTransport() {
+    if (!enabled('AMORA_DISCORD_REALTIME',false) || !this.botUserId
+        || typeof this.core.realtimeNext!=='function' || typeof this.core.realtimeOperation!=='function')
+      return null;
+    if (!this.realtimeTransport || this.realtimeTransport.botUserId!==this.botUserId) {
+      this.realtimeTransport=new RealtimeWorkerTransport({core:this.core,rest:this.rest,
+        botUserId:this.botUserId,sourceCurrent:e=>this.ready && !this.stopped &&
+          this.runtime.validateOutbound({conversation_id:e.channelId,source_message_id:e.sourceId,
+            metadata:{transport_revision:e.revision}}).ok &&
+          (!Array.isArray(e.groupSources) || e.groupSources.every(s=>
+            this.runtime.validateOutbound({conversation_id:e.channelId,source_message_id:s.source_message_id,
+              metadata:{transport_revision:s.transport_revision}}).ok))});
+    }
+    return this.realtimeTransport;
+  }
+
   async flushOutbound() {
     if (this.processingOutbound) return;
     this.processingOutbound = true;
     try {
+      const realtime=this.getRealtimeTransport();
+      if (realtime) {
+        try { await realtime.poll(); } catch(error) { safeLog('REALTIME_POLL_FAILED',errorLabel(error)); }
+      }
       for (let drained = 0; drained < 8; drained += 1) {
         const claimStarted = performance.now();
-        const claimed = await this.core.claimOutbound(1, OUTBOUND_CLAIM_LEASE_SECONDS, true);
+        const claimed = await this.core.claimOutbound(1, OUTBOUND_CLAIM_LEASE_SECONDS, true,
+          ...(realtime?[true]:[]));
         const messages = claimed?.messages || [];
         if (!messages.length) break;
         safeLog('OUTBOUND_CLAIMED', messages.length);
         const item = messages[0];
         traceDelivery('claim', item, { claim_ms: performance.now() - claimStarted });
         const validation = this.runtime.validateOutbound(item);
-        if (!validation.ok) {
-          await this.core.cancelOutbound(item.id, `DISCORD_${validation.reason}`).catch(() => {});
+        if (!validation.ok || !this.validateCausalGroup(item)) {
+          await this.core.cancelOutbound(item.id, validation.ok ? 'DISCORD_GROUP_SOURCE_STALE' : `DISCORD_${validation.reason}`).catch(() => {});
+          continue;
+        }
+
+        if (item?.metadata?.realtime_v1) {
+          if (!realtime) break;
+          try {
+            const outcome=await realtime.final(item);
+            safeLog('REALTIME_FINAL',outcome);
+            if (outcome!=='confirmed') break;
+          } catch(error) {
+            safeLog('REALTIME_FINAL_PENDING',errorLabel(error));
+            break;
+          }
           continue;
         }
 
@@ -883,11 +982,13 @@ export class DiscordWorker {
           const ackStarted = performance.now();
           await this.core.ackOutbound(item.id, { sent: true, externalMessageId });
           traceDelivery('ack', item, { ack_ms: performance.now() - ackStarted });
+          screenshotTrace(item, 'outbound_ack');
           safeLog('OUTBOUND_SENT');
         } catch (error) {
           // Discord already accepted the message. Never convert an ACK transport
           // failure into sent=false. Leave it claimed and recover by nonce after
           // lease expiry if necessary.
+          screenshotTrace(item, 'ack_uncertain');
           safeLog('OUTBOUND_ACK_FAILED', errorLabel(error));
           break;
         }
@@ -909,6 +1010,10 @@ export class DiscordWorker {
     }
     const path = `/channels/${encodeURIComponent(item.conversation_id)}/messages`;
     for (let index = receipts.length; index < chunks.length; index++) {
+      if (!this.validateCausalGroup(item)) {
+        await this.core.cancelOutbound(item.id,'DISCORD_GROUP_SOURCE_STALE');
+        return;
+      }
       const segment = {lease, index, phase:'prepare'};
       await this.core.ackOutbound(item.id,{sent:false,segment});
       let created;
@@ -936,6 +1041,15 @@ export class DiscordWorker {
   async sendOutbound(item) {
     const chunks = splitDiscordText(item.text, 2000);
     if (!chunks.length) throw new Error('EMPTY_OUTBOUND');
+    if (item.metadata?.web_capture_reclaim) {
+      // A previous lease may have sent the image. Never replay an expired
+      // capture from an unknown state. The user may issue a fresh retry.
+      screenshotTrace(item, 'receipt_uncertain');
+      const error = new Error('WEB_SCREENSHOT_RECEIPT_UNCERTAIN');
+      error.code = 'WEB_SCREENSHOT_RECEIPT_UNCERTAIN';
+      error.retryable = false;
+      throw error;
+    }
     // The Core minted this flag after verified owner DM consent. A user/LLM
     // cannot smuggle screenshot destinations into the worker's text path.
     // Backward-compatible with a previous Core during independent deploys:
@@ -951,14 +1065,18 @@ export class DiscordWorker {
       // A Core capture-status message with no transport metadata must not
       // silently masquerade as a screenshot attempt. Never infer a URL from text.
       safeLog('WEB_SCREENSHOT_METADATA_MISSING');
+      screenshotTrace(item, 'metadata_missing');
       const note = '\n\n(O pedido de print chegou sem autorização de anexo. Nada foi enviado.)';
       if (chunks[0].length + note.length <= 2000) chunks[0] += note;
       else chunks.push(note.trim());
     }
     safeLog('WEB_SCREENSHOT_DISPATCH', 'requested=' + screenshotRequested
       + ' authorized=' + authorizedScreenshot);
+    const trace = (stage, extra) => screenshotTrace(item, stage, extra);
+    trace(authorizedScreenshot ? 'authorized' : 'denied_or_no_target');
     const screenshot = authorizedScreenshot
-      ? await this.webScreenshots.capture(item.metadata.web_capture_source)
+      ? await this.webScreenshots.capture(item.metadata.web_capture_source, {
+          captureId: createHash('sha256').update(String(item.id)).digest('hex').slice(0,24), trace })
       : null;
     if (screenshotRequested && !screenshot) {
       const knownFailures = new Set([
@@ -967,13 +1085,17 @@ export class DiscordWorker {
         'provider_http_error', 'provider_response_invalid', 'provider_refused',
         'provider_image_url_invalid', 'image_cdn_http_error',
         'image_mime_invalid', 'image_bytes_invalid', 'provider_timeout',
-        'provider_network_error', 'provider_unknown',
+        'provider_network_error', 'provider_unknown', 'backend_unavailable', 'navigation_failed',
       ]);
       const rawCode = authorizedScreenshot ? this.webScreenshots.lastFailureCode : null;
       const reason = authorizedScreenshot
         ? (knownFailures.has(rawCode) ? rawCode : 'provider_unknown')
         : 'no_authorized_public_page';
       safeLog('WEB_SCREENSHOT_UNAVAILABLE', 'reason=' + reason);
+      const state = !authorizedScreenshot ? 'no_target' : reason === 'navigation_failed' ? 'nav_failed'
+        : ['image_mime_invalid', 'image_bytes_invalid'].includes(reason) ? 'invalid_raster'
+        : ['image_cdn_http_error', 'provider_network_error'].includes(reason) ? 'transfer_failed' : 'capture_failed';
+      trace(state, { reason });
       const note = authorizedScreenshot
         ? '\n\n(Não consegui capturar o print. Código: ' + reason
           + '. Nenhum anexo foi enviado.)'
@@ -983,6 +1105,7 @@ export class DiscordWorker {
     }
     let firstMessageId = null;
     for (let index = 0; index < chunks.length; index += 1) {
+      if (!this.validateCausalGroup(item)) throw new Error('DISCORD_GROUP_SOURCE_STALE');
       const payload = discordReplyPayload(chunks[index], {
         replyToMessageId: item.reply_to_message_id,
         firstChunk: index === 0,
@@ -992,10 +1115,12 @@ export class DiscordWorker {
       let created;
       let imageUploadRejected = false;
       try {
+        if (index === 0 && screenshot) trace('multipart_request', {
+          bytes: screenshot.bytes.length, mime: screenshot.mime, filename: screenshot.filename });
         created = await this.rest.request(messagePath, {
           method: 'POST',
           ...(index === 0 && screenshot
-            ? { multipart: screenshotMultipart(payload, screenshot) }
+            ? { multipart: screenshotMultipart(payload, screenshot), maxAttempts: 1 }
             : { body: payload }),
         });
       } catch (error) {
@@ -1004,9 +1129,14 @@ export class DiscordWorker {
         // the reply. For uncertain network/5xx outcomes, do NOT duplicate
         // the message: let the existing nonce/ack recovery own retry.
         if (!(index === 0 && screenshot && error?.retryable === false
-            && [400, 413, 415, 422].includes(Number(error?.status)))) throw error;
+            && [400, 413, 415, 422].includes(Number(error?.status)))) {
+          if (index === 0 && screenshot) trace(error?.status === 429 ? 'rate_limited' : 'receipt_uncertain', {
+            status: Number(error?.status) || null });
+          throw error;
+        }
         imageUploadRejected = true;
         safeLog('WEB_SCREENSHOT_UPLOAD_REJECTED', 'status=' + error.status);
+        trace('upload_rejected', { status: Number(error.status) });
         // The raster was fetched successfully, but Discord rejected the
         // multipart. Surface a *verified* Microlink CDN URL when present so
         // the owner can still open the actual screenshot. A link is not an
@@ -1028,14 +1158,15 @@ export class DiscordWorker {
       if (created?.id && created?.channel_id) this.runtime.rememberBotMessage(created);
       if (!firstMessageId) firstMessageId = created?.id || null;
       const attachmentConfirmed = created?.id && String(created?.channel_id) === String(item.conversation_id)
-        && Array.isArray(created.attachments) && created.attachments.some(
+        && Array.isArray(created.attachments) && created.attachments.find(
           (entry) => entry?.id && entry?.filename === screenshot?.filename
-            && (entry.size == null || entry.size === screenshot?.bytes?.byteLength)
+            && entry.size === screenshot?.bytes?.byteLength
         );
       if (index === 0 && screenshot && !imageUploadRejected && !attachmentConfirmed) {
         // Accepted text is not proof of an attached image. Never retry the
         // uncertain image request: send a clearly labeled status instead.
         safeLog('WEB_SCREENSHOT_ATTACHMENT_NOT_CONFIRMED');
+        trace('receipt_uncertain');
         const correction = discordReplyPayload(
           'Não consegui confirmar o anexo do print na resposta do Discord. ' +
           (typeof screenshot.imageUrl === 'string' &&
@@ -1054,6 +1185,9 @@ export class DiscordWorker {
         }
       } else if (index === 0 && screenshot && !imageUploadRejected) {
         safeLog('WEB_SCREENSHOT_ATTACHMENT_CONFIRMED');
+        trace('attachment_confirmed', { message_id: /^[0-9]{17,20}$/.test(String(created.id)) ? String(created.id) : '-',
+          attachment_id: /^[0-9]{17,20}$/.test(String(attachmentConfirmed.id)) ? String(attachmentConfirmed.id) : '-',
+          filename: screenshot.filename, size: attachmentConfirmed.size });
       }
     }
     return firstMessageId;

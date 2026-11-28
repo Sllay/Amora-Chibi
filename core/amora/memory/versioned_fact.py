@@ -89,3 +89,54 @@ def link_version(record,predecessor):
     if previous is None or current is None or current<=previous:
         raise VersionedFactConflict("VERSIONED_FACT_STALE_OR_AMBIGUOUS")
     record.metadata["supersedes_memory_id"]=str(predecessor["id"])
+
+
+# Bounded declarative grammar, not a general inference engine.
+_DESIGN = re.compile(
+    r"^(?i:(?:amora\s*,\s*)?(?:estou pensando em criar uma criatura chamada |a criatura ))"
+    r"([A-ZÀ-ÖØ-Þ][\w-]{1,39})(?i:\.\s+(?:ela|ele)\s+|\s+)(.+)$")
+_TRAITS = re.compile(
+    r"^é\s+(quadrúpede|bípede|hexápode|ápode)\s+e\s+"
+    r"(?:(?:tem|possui)\s+(?:uma\s+)?(?:coloração|cor)\s+)?"
+    r"(dourada|dourado|vermelha|vermelho|azul|verde|branca|branco|preta|preto|"
+    r"cinza|roxa|roxo|rosa|marrom|amarela|amarelo|laranja)$",re.I)
+_UNCHANGED = re.compile(r"\.\s+As outras características continuam iguais[.!]?$",re.I)
+
+
+def owner_fact_units(content):
+    """Reproducible per-property projections; no cross-turn pronoun guessing."""
+    if not isinstance(content,str) or len(content)>1200 or "\n" in content or "?" in content:
+        return ()
+    raw=content.strip()
+    key=parse_named_fact(raw)
+    if key:
+        return ((key,raw,False),)
+    correction=_UNCHANGED.sub("",raw)
+    if correction!=raw:
+        key=parse_named_fact(correction)
+        return ((key,correction,True),) if key else ()
+    parts=re.split(r"\s*;\s*|\.\s+(?=[A-ZÀ-ÖØ-Þ])",raw.rstrip(".!"))
+    if 2<=len(parts)<=4:
+        keys=[parse_named_fact(part) for part in parts]
+        if all(keys) and len(set(keys))==len(keys):
+            return tuple((k,part,True) for k,part in zip(keys,parts))
+    design=_DESIGN.fullmatch(raw.rstrip(".!"))
+    if not design or _UNCERTAIN.search(raw) or re.search(r'["“”<>]',raw):
+        return ()
+    subject,description=design.groups()
+    traits=_TRAITS.fullmatch(description)
+    if not traits:
+        return ()
+    anatomy,color=traits.groups()
+    projections=(f"fato {subject}.anatomia = {anatomy}",f"fato {subject}.cor = {color}")
+    return tuple((parse_named_fact(p),p,True) for p in projections)
+
+
+def verified_fact_source_matches(record, raw):
+    if not isinstance(raw,str):
+        return False
+    if record.metadata.get("owner_fact_projection") is True:
+        return any(projected and key==record.metadata.get("versioned_fact_key")
+                   and record.content=="Relato de PERSON_BK: "+projection
+                   for key,projection,projected in owner_fact_units(raw))
+    return record.content=="Relato de PERSON_BK: "+raw.strip()
